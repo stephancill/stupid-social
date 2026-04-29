@@ -35,3 +35,44 @@ xtool dev run --network -u <device-udid>
 # Run on macOS
 swift run NoFeedSocialMac
 ```
+
+## Release
+
+### Prerequisites
+
+- Apple Developer Program membership
+- App Store Connect app record with bundle ID `tech.stupid.StupidSocial`
+- xtool installed and authenticated (`xtool auth status`)
+
+### Build and Submit
+
+1. **Edit `Info.plist`** for any metadata changes (display name, supported devices, etc.)
+
+2. **Regenerate the Xcode workspace:**
+   ```bash
+   xtool dev run --simulator --no-attach --no-logs
+   ```
+
+3. **Open the workspace in Xcode:**
+   ```bash
+   open xtool/NoFeedSocial.xcworkspace
+   ```
+
+4. **Archive:**
+   - Select the `NoFeedSocial` scheme
+   - Destination: **Any iOS Device (arm64)**
+   - **Product → Archive**
+
+5. **Distribute:**
+   - In the Organizer, select the archive
+   - Click **Distribute App**
+   - Choose **App Store Connect** → **Upload**
+   - Xcode handles signing and provisioning automatically
+
+6. **App Store Connect:**
+   - Uploaded build appears in **TestFlight** within a few minutes
+   - Add internal/external testers under **TestFlight** → **Internal Testing** or **External Testing**
+   - Set category to **Social Networking** under **App Information**
+   - First external build requires Beta App Review approval
+   - When ready: **App Store** tab → select build → fill in metadata → **Submit for Review**
+

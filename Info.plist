@@ -4,8 +4,15 @@
 <dict>
 	<key>CFBundleDisplayName</key>
 	<string>stupid social</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>CFBundleIconName</key>
 	<string>AppIcon</string>
+	<key>UIDeviceFamily</key>
+	<array>
+		<integer>1</integer>
+		<integer>6</integer>
+	</array>
 	<key>CFBundleIcons</key>
 	<dict>
 		<key>CFBundlePrimaryIcon</key>
