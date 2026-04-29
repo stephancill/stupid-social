@@ -54,7 +54,7 @@ Build a universal macOS and iOS app with xtool that shows a combined social noti
 ## Credential Storage
 
 - Store credentials in iCloud Keychain so they sync across the user's Apple devices.
-- If iCloud sync is unavailable, block account setup and show an actionable setup error.
+- If iCloud sync is unavailable, fall back to local-only credential/read-state storage and show an actionable sync status.
 - Do not log raw credentials, cookie headers, tokens, or derived auth values.
 - Show inline reconnect/update controls when credentials are invalid or expired.
 - Security posture for MVP is pragmatic: correct Keychain usage, no secret logging, and clear account status.
@@ -66,6 +66,7 @@ Build a universal macOS and iOS app with xtool that shows a combined social noti
 - Use X unread notification count for background polling.
 - Background polling must avoid fetching the full X notifications timeline because that can mark notifications read server-side.
 - Full X notification fetch should happen only through explicit manual refresh.
+- Manual refresh should make only one X full-notifications request.
 - Opening the feed should show cached X items plus the latest count until the user manually refreshes.
 - Full fetch does not advance app-local read state unless the user explicitly marks notifications as read.
 
@@ -79,6 +80,7 @@ Reference behavior from `docs/CLI_DOCS.md`:
 - Use Hypersnap base URL `https://haatz.quilibrium.com`.
 - Resolve usernames with `GET /v2/farcaster/user/by-username`.
 - Fetch notifications with `GET /v2/farcaster/notifications`.
+- Manual refresh should make only this single Farcaster notifications request; do not enrich each notification with extra cast/feed requests during refresh.
 - Query by resolved `fid`.
 - Supported notification types include:
   - `cast-mention`
@@ -105,13 +107,13 @@ Reference behavior from `docs/CLI_DOCS.md`:
 Read state is explicit only.
 
 - Opening the app does not mark notifications as read.
-- Refreshing the feed does not mark notifications as read.
+- Refreshing the feed marks the loaded notifications as read locally.
 - Opening a notification detail does not mark notifications as read.
-- Only explicit user actions update app-local read state.
+- Manual refresh and explicit user actions update app-local read state.
 
-MVP explicit read action:
+MVP read action:
 
-- `Mark all as read`
+- Manual refresh marks loaded notifications as read after a successful refresh.
 
 Future explicit read actions:
 
@@ -120,7 +122,7 @@ Future explicit read actions:
 
 ## iCloud Read Watermarks
 
-The app syncs read state across devices using per-account read timestamp watermarks stored in iCloud.
+The app syncs read state across devices using per-account read timestamp watermarks stored in iCloud when available. If iCloud is unavailable, the app falls back to local-only read watermarks.
 
 Suggested watermark fields:
 
@@ -133,6 +135,7 @@ iCloud sync mechanism:
 
 - Use `NSUbiquitousKeyValueStore` for read watermark sync.
 - Keep watermark records small and keyed by network/account.
+- Fall back to local `UserDefaults` watermark storage if iCloud KVS is unavailable.
 
 Read evaluation:
 

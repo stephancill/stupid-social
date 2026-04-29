@@ -4,6 +4,8 @@
 
 - Always read `docs/PLAN.md` before making product, architecture, or implementation decisions.
 - Treat `docs/PLAN.md` as the source of truth for current requirements.
+- Always read `docs/TECHNICAL_DESIGN.md` before making architecture or implementation decisions once it exists.
+- Treat `docs/TECHNICAL_DESIGN.md` as the source of truth for planned implementation details.
 - Record implementation decisions, tradeoffs, endpoint discoveries, and notable deviations in `docs/IMPLEMENTATION.md` as work progresses.
 - Keep `docs/IMPLEMENTATION.md` factual and chronological enough that another agent can resume work without re-discovering context.
 
