@@ -6,9 +6,9 @@ import BackgroundTasks
 #endif
 
 public final class BackgroundRefreshScheduler {
-    public static let taskIdentifier = "tech.stupid.NoFeedSocial.refresh"
+    public static let taskIdentifier = "tech.stupid.StupidSocial.refresh"
 
-    private let logger = Logger(subsystem: "tech.stupid.NoFeedSocial", category: "BackgroundRefresh")
+    private let logger = Logger(subsystem: "tech.stupid.StupidSocial", category: "BackgroundRefresh")
 
     public init() {}
 

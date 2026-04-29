@@ -3,7 +3,7 @@ import XCTest
 
 final class KeychainCredentialStoreTests: XCTestCase {
     func testSavesLoadsUpdatesAndDeletesLocalXCredentials() throws {
-        let suiteName = "tech.stupid.NoFeedSocial.tests.\(UUID().uuidString)"
+        let suiteName = "tech.stupid.StupidSocial.tests.\(UUID().uuidString)"
         let fallbackStore = UserDefaults(suiteName: suiteName)!
         let store = KeychainCredentialStore(service: suiteName, fallbackStore: fallbackStore)
         defer {

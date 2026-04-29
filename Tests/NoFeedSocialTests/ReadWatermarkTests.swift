@@ -15,7 +15,7 @@ final class ReadWatermarkTests: XCTestCase {
     }
 
     func testICloudStorePreservesSubsecondWatermarkPrecision() {
-        let suiteName = "tech.stupid.NoFeedSocial.watermarkTests.\(UUID().uuidString)"
+        let suiteName = "tech.stupid.StupidSocial.watermarkTests.\(UUID().uuidString)"
         let localStore = UserDefaults(suiteName: suiteName)!
         defer { UserDefaults.standard.removePersistentDomain(forName: suiteName) }
 

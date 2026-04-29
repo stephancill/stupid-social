@@ -6,7 +6,7 @@ public final class FeedService {
     private let sources: [any NotificationSource]
     private let cacheStore: NotificationCacheStore
     private let watermarkStore: ReadWatermarkProviding
-    private let logger = Logger(subsystem: "tech.stupid.NoFeedSocial", category: "FeedService")
+    private let logger = Logger(subsystem: "tech.stupid.StupidSocial", category: "FeedService")
 
     public init(
         sources: [any NotificationSource],

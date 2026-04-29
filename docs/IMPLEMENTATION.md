@@ -2,7 +2,7 @@
 
 ## 2026-04-27
 
-- Scaffolded an xtool SwiftPM app in the repository root with bundle id `tech.stupid.NoFeedSocial`.
+- Scaffolded an xtool SwiftPM app in the repository root with bundle id `tech.stupid.StupidSocial`.
 - Split reusable implementation into `NoFeedSocialCore` so unit tests can link without the app target's `@main` entry point.
 - Added minimal MVVM app shell with built-in SwiftUI primitives: combined feed tab, settings tab, notification row/detail views, manual refresh, and `Mark All Read` action.
 - Added normalized notification models, SwiftData `CachedNotification`, `NotificationSource` protocol, feed service, feed/settings view models, UserDefaults account metadata store, iCloud KVS read watermark store, synchronizable Keychain credential store, and X cookie header parser.
@@ -16,7 +16,7 @@
 - Fixed Farcaster username setup after discovering Hypersnap `GET /v2/farcaster/user/by-username` returns a `UserResponse` wrapper shaped as `{ "user": { ... } }`, not a flat user object.
 - Farcaster username lookup now strips a leading `@` before request construction.
 - Verified `swift test` passes with 4 tests after the Farcaster decoder fix.
-- Reinstalled and launched the fixed app on the booted iOS Simulator with `xtool dev run --simulator --no-attach --no-logs --launch-timeout 420` and `xcrun simctl launch booted tech.stupid.NoFeedSocial`.
+- Reinstalled and launched the fixed app on the booted iOS Simulator with `xtool dev run --simulator --no-attach --no-logs --launch-timeout 420` and `xcrun simctl launch booted tech.stupid.StupidSocial`.
 - Tested Farcaster username lookup for `stephancill`; Hypersnap returned FID `1689`.
 - Tested Farcaster notifications for FID `1689`; live response shape uses `type` values such as `reply`, a top-level `user`, and an ISO-8601 `timestamp`, with `cast` sometimes `null`.
 - Updated Farcaster notification decoding and normalization to support the observed live Hypersnap response shape while keeping support for the documented `most_recent_timestamp` aggregate shape.

@@ -1,4 +1,4 @@
 version: 1
-bundleID: tech.stupid.NoFeedSocial
+bundleID: tech.stupid.StupidSocial
 infoPath: Info.plist
 iconPath: Resources/AppIcon.appiconset/Icon-1024.png

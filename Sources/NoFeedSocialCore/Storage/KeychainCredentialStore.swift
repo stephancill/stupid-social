@@ -34,7 +34,7 @@ public final class KeychainCredentialStore {
     private let decoder = JSONDecoder()
 
     public init(
-        service: String = "tech.stupid.NoFeedSocial.credentials",
+        service: String = "tech.stupid.StupidSocial.credentials",
         fallbackStore: UserDefaults = .standard
     ) {
         self.service = service
