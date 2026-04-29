@@ -185,14 +185,9 @@ private struct NotificationRow: View {
     @ViewBuilder
     private var summaryView: some View {
         if displayItem.item.actors.first != nil, summaryText.hasPrefix(actorSummary) {
-            HStack(alignment: .top, spacing: 4) {
-                NetworkUsernameBadge(network: displayItem.item.network)
-                    .padding(.top, 3)
-
-                Text(summaryAttributedString)
-                    .font(.body)
-                    .lineLimit(2)
-            }
+            summaryInlineText
+                .font(.body)
+                .lineLimit(2)
         } else {
             Text(summaryText)
                 .font(.body)
@@ -200,11 +195,12 @@ private struct NotificationRow: View {
         }
     }
 
-    private var summaryAttributedString: AttributedString {
-        var summary = AttributedString(summaryText)
-        guard let actorRange = summary.range(of: actorSummary) else { return summary }
-        summary[actorRange].font = .body.bold()
-        return summary
+    private var summaryInlineText: Text {
+        let remainder = String(summaryText.dropFirst(actorSummary.count))
+        if let image = networkBadgeImage(named: displayItem.item.network.badgeAssetName) {
+            return Text(image).baselineOffset(-1) + Text(" ").kerning(-2) + Text(actorSummary).bold() + Text(remainder)
+        }
+        return Text(displayItem.item.network.badgeFallbackText).bold() + Text(" ").kerning(-2) + Text(actorSummary).bold() + Text(remainder)
     }
 
     private var previewText: String? {
