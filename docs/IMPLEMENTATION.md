@@ -49,3 +49,18 @@
 - Removed the feed toolbar buttons for `Mark All Read` and explicit refresh. Pull-to-refresh is now the only feed refresh/read action.
 - Moved the `New` separator to the boundary between unread and read items. It is not shown when there are no unread items.
 - Replaced the single feed table with separate unread and read `List` sections while preserving native inset grouped styling on iOS. The `New` separator sits between sections and is only shown when both sections are present.
+- Added Twitter-style actor avatars to feed rows using the existing normalized `NotificationActor.avatarURL` data. Rows show up to five actor profile images with local text fallbacks and do not perform any additional API enrichment beyond SwiftUI image loading.
+- Feed row usernames now render without a leading `@`; the actor-name portion of the summary is bolded instead of bolding the whole notification row.
+- Removed the feed row network text label and increased the relative timestamp size while keeping it aligned top-right.
+- Removed the remaining circular network badge from feed rows; source network is no longer shown inline for now.
+- Moved the feed row relative timestamp inline with the actor avatar strip, aligned to the trailing edge of the row.
+- Added a leading notification-type icon column in feed rows where the network badge used to be, using heart/reply/@ style icons from the normalized notification type.
+- Updated notification detail People rows to show actor profile images and usernames without a leading `@`.
+- Simplified notification detail People rows to show only a smaller profile image and username, without display names.
+- Generated local X and Farcaster badge assets with ImageMagick and prepend the relevant network badge to username labels in feed summaries and notification detail People rows.
+- `xtool` did not compile/copy standalone imagesets from `Assets.xcassets` into the app bundle, so the badges are also generated as direct PNG resources under `Resources/` and explicitly listed in `xtool.yml`.
+- Badge views now load direct PNGs from `Bundle.main` by filename instead of relying on SwiftUI named image lookup, with visible text fallbacks if the image cannot be loaded.
+- Replaced the placeholder X/F badge art with PNGs generated via ImageMagick from live site favicons. X uses `https://x.com/favicon.ico`; Farcaster uses the current homepage-advertised `https://farcaster.xyz/favicon-v3.png` rather than the stale `/favicon.ico`.
+- Removed the unused badge imagesets/source favicon files after generating the final direct PNG resources, and vertically centered the feed badge+username row.
+- Changed wrapped feed summary titles to align the network badge with the first line instead of centering it across the full wrapped text block.
+- Tuned the feed summary network badge vertical offset so it sits centered on the first title line.

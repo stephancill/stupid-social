@@ -19,3 +19,9 @@ resources:
   - Resources/AppIcon.appiconset/Icon-76.png
   - Resources/AppIcon.appiconset/Icon-76@2x.png
   - Resources/AppIcon.appiconset/Icon-83.5@2x.png
+  - Resources/XBadge.png
+  - Resources/XBadge@2x.png
+  - Resources/XBadge@3x.png
+  - Resources/FarcasterBadge.png
+  - Resources/FarcasterBadge@2x.png
+  - Resources/FarcasterBadge@3x.png

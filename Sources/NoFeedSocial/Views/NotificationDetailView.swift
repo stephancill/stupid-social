@@ -1,6 +1,12 @@
 import NoFeedSocialCore
 import SwiftUI
 
+#if os(iOS)
+import UIKit
+#elseif os(macOS)
+import AppKit
+#endif
+
 struct NotificationDetailView: View {
     let displayItem: DisplayNotificationItem
 
@@ -21,9 +27,11 @@ struct NotificationDetailView: View {
                 Section("People") {
                     ForEach(displayItem.item.actors, id: \.id) { actor in
                         if let url = profileURL(for: actor) {
-                            Link(actor.username.map { "@\($0)" } ?? actor.id, destination: url)
+                            Link(destination: url) {
+                                PersonRow(actor: actor)
+                            }
                         } else {
-                            Text(actor.username.map { "@\($0)" } ?? actor.id)
+                            PersonRow(actor: actor)
                         }
                     }
                 }
@@ -50,7 +58,7 @@ struct NotificationDetailView: View {
 
     private var usernames: String {
         let names = displayItem.item.actors.map { actor in
-            actor.username.map { "@\($0)" } ?? actor.id
+            actor.username ?? actor.id
         }
         return names.isEmpty ? "Unknown" : names.joined(separator: ", ")
     }
@@ -85,5 +93,149 @@ struct NotificationDetailView: View {
         case .x:
             return URL(string: "https://x.com/\(username)")
         }
+    }
+}
+
+private struct PersonRow: View {
+    let actor: NotificationActor
+
+    var body: some View {
+        HStack(spacing: 12) {
+            DetailActorAvatar(actor: actor)
+
+            HStack(spacing: 6) {
+                DetailNetworkUsernameBadge(network: actor.network)
+
+                Text(actor.username ?? actor.id)
+                    .foregroundStyle(.primary)
+            }
+        }
+        .padding(.vertical, 1)
+    }
+}
+
+private struct DetailNetworkUsernameBadge: View {
+    let network: SocialNetwork
+
+    var body: some View {
+        Group {
+            if let image = detailNetworkBadgeImage(named: network.badgeAssetName) {
+                image
+                    .resizable()
+                    .interpolation(.high)
+            } else {
+                Text(network.badgeFallbackText)
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(network.badgeForegroundColor)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(network.badgeBackgroundColor)
+            }
+        }
+        .frame(width: 16, height: 16)
+        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+        .accessibilityHidden(true)
+    }
+}
+
+private extension SocialNetwork {
+    var badgeAssetName: String {
+        switch self {
+        case .x:
+            "XBadge"
+        case .farcaster:
+            "FarcasterBadge"
+        }
+    }
+
+    var badgeFallbackText: String {
+        switch self {
+        case .x:
+            "X"
+        case .farcaster:
+            "F"
+        }
+    }
+
+    var badgeForegroundColor: Color {
+        switch self {
+        case .x:
+            .black
+        case .farcaster:
+            .white
+        }
+    }
+
+    var badgeBackgroundColor: Color {
+        switch self {
+        case .x:
+            .white
+        case .farcaster:
+            Color(red: 0.52, green: 0.36, blue: 0.80)
+        }
+    }
+}
+
+private func detailNetworkBadgeImage(named name: String) -> Image? {
+    guard let path = Bundle.main.path(forResource: name, ofType: "png") else { return nil }
+
+    #if os(iOS)
+    guard let image = UIImage(contentsOfFile: path) else { return nil }
+    return Image(uiImage: image)
+    #elseif os(macOS)
+    guard let image = NSImage(contentsOfFile: path) else { return nil }
+    return Image(nsImage: image)
+    #else
+    return nil
+    #endif
+}
+
+private struct DetailActorAvatar: View {
+    let actor: NotificationActor
+
+    var body: some View {
+        Group {
+            if let avatarURL = actor.avatarURL {
+                AsyncImage(url: avatarURL) { phase in
+                    switch phase {
+                    case let .success(image):
+                        image
+                            .resizable()
+                            .scaledToFill()
+                    case .empty, .failure:
+                        DetailAvatarFallback(actor: actor)
+                    @unknown default:
+                        DetailAvatarFallback(actor: actor)
+                    }
+                }
+            } else {
+                DetailAvatarFallback(actor: actor)
+            }
+        }
+        .frame(width: 24, height: 24)
+        .clipShape(Circle())
+        .overlay {
+            Circle()
+                .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+        }
+    }
+}
+
+private struct DetailAvatarFallback: View {
+    let actor: NotificationActor
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(Color.secondary.opacity(0.18))
+
+            Text(initial)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var initial: String {
+        let value = actor.username ?? actor.displayName ?? actor.id
+        return value.first.map { String($0).uppercased() } ?? "?"
     }
 }
