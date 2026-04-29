@@ -3,48 +3,69 @@ import SwiftUI
 
 struct FeedView: View {
     @ObservedObject var viewModel: FeedViewModel
+    let settingsViewModel: SettingsViewModel
 
     var body: some View {
         NavigationStack {
-            Group {
+            List {
                 if viewModel.items.isEmpty {
-                    ContentUnavailableView(
-                        "No Notifications",
-                        systemImage: "bell.slash",
-                        description: Text("Set up X and Farcaster in Settings, then pull to refresh.")
-                    )
-                } else {
-                    List {
-                        if !unreadItems.isEmpty {
-                            Section {
-                                ForEach(unreadItems) { displayItem in
-                                    NotificationLink(displayItem: displayItem)
-                                }
-                            }
-                        }
-
-                        if !unreadItems.isEmpty && !readItems.isEmpty {
-                            NewSeparatorRow()
-                        }
-
-                        if !readItems.isEmpty {
-                            Section {
-                                ForEach(readItems) { displayItem in
-                                    NotificationLink(displayItem: displayItem)
-                                }
-                            }
-                        }
+                    VStack {
+                        Spacer(minLength: 0)
+                        ContentUnavailableView(
+                            "No Notifications",
+                            systemImage: "bell.slash",
+                            description: Text("Set up X and Farcaster in Settings, then pull to refresh.")
+                        )
+                        Spacer(minLength: 0)
                     }
-                    #if os(iOS)
-                    .listStyle(.insetGrouped)
-                    .listSectionSpacing(6)
-                    #endif
-                    .refreshable {
-                        await viewModel.refresh()
+                    .frame(minHeight: 600)
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
+                } else {
+                    if !unreadItems.isEmpty {
+                        Section {
+                            ForEach(Array(unreadItems.enumerated()), id: \.element.id) { index, displayItem in
+                                NotificationLink(displayItem: displayItem)
+                                    .listRowSeparator(index == 0 ? .hidden : .visible, edges: .top)
+                            }
+                        }
+                        .listSectionSeparator(.hidden)
+                    }
+
+                    if !unreadItems.isEmpty && !readItems.isEmpty {
+                        NewSeparatorRow()
+                    }
+
+                    if !readItems.isEmpty {
+                        Section {
+                            ForEach(Array(readItems.enumerated()), id: \.element.id) { index, displayItem in
+                                NotificationLink(displayItem: displayItem)
+                                    .listRowSeparator(index == 0 ? .hidden : .visible, edges: .top)
+                            }
+                        }
+                        .listSectionSeparator(.hidden)
                     }
                 }
             }
+            #if os(iOS)
+            .listStyle(.plain)
+            .listSectionSpacing(0)
+            .scrollContentBackground(.hidden)
+            .toolbarBackground(.hidden, for: .navigationBar)
+            #endif
+            .refreshable {
+                await viewModel.refresh()
+            }
             .navigationTitle("Notifications")
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    NavigationLink {
+                        SettingsView(viewModel: settingsViewModel)
+                    } label: {
+                        Image(systemName: "gear")
+                    }
+                }
+            }
             .alert("Refresh Issue", isPresented: errorBinding) {
                 Button("OK", role: .cancel) {
                     viewModel.errorMessage = nil
@@ -152,7 +173,10 @@ private struct NotificationRow: View {
     }
 
     private var previewText: String? {
-        if displayItem.item.type == .reaction, let targetText = displayItem.item.target?.text, !targetText.isEmpty {
+        if (displayItem.item.type == .reaction
+            || displayItem.item.type == .reply
+            || displayItem.item.type == .mention),
+           let targetText = displayItem.item.target?.text, !targetText.isEmpty {
             return targetText
         }
 

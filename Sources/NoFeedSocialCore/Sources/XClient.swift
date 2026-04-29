@@ -334,10 +334,10 @@ private enum XNotificationParser {
         case "user_replied_to_your_tweet",
              "user_quoted_your_tweet":
             .reply
-        case "users_liked_your_tweet",
-             "user_liked_multiple_tweets",
-             "users_retweeted_your_tweet":
-            .reaction
+         case "users_liked_your_tweet",
+              "user_liked_multiple_tweets",
+              "users_retweeted_your_tweet":
+             .reaction
         default:
             .unknown
         }

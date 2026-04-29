@@ -10,21 +10,11 @@ public struct ContentView: View {
     public init() {}
 
     public var body: some View {
-        TabView {
-            if let feedViewModel {
-                FeedView(viewModel: feedViewModel)
-                    .tabItem { Label("Feed", systemImage: "bell") }
+        Group {
+            if let feedViewModel, let settingsViewModel {
+                FeedView(viewModel: feedViewModel, settingsViewModel: settingsViewModel)
             } else {
                 ProgressView()
-                    .tabItem { Label("Feed", systemImage: "bell") }
-            }
-
-            if let settingsViewModel {
-                SettingsView(viewModel: settingsViewModel)
-                    .tabItem { Label("Settings", systemImage: "gear") }
-            } else {
-                ProgressView()
-                    .tabItem { Label("Settings", systemImage: "gear") }
             }
         }
         .task {
