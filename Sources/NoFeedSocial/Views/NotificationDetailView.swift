@@ -69,6 +69,10 @@ struct NotificationDetailView: View {
             }
             return URL(string: "https://farcaster.xyz/~/conversations/\(hash)")
         case .x:
+            guard displayItem.item.target?.id != nil,
+                  sourceId.allSatisfy(\.isNumber), !sourceId.isEmpty else {
+                return nil
+            }
             return URL(string: "https://x.com/i/status/\(sourceId)")
         }
     }

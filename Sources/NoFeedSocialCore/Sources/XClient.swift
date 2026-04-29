@@ -303,11 +303,14 @@ private enum XNotificationParser {
         guard !actors.isEmpty else { return nil }
 
         let target: NotificationTarget?
+        let sourceId: String
         if let targetTweetId = notificationRef.targetTweets?.first,
            let tweet = tweets[targetTweetId] {
             target = NotificationTarget(id: tweet.stableId, text: tweet.fullText, url: nil)
+            sourceId = tweet.stableId
         } else {
             target = nil
+            sourceId = notificationRef.id
         }
 
         let text = groupedNotificationText(element: element, actors: actors, tweetText: target?.text)
@@ -316,7 +319,7 @@ private enum XNotificationParser {
             id: "x:\(entryId)",
             network: .x,
             accountId: "x",
-            sourceId: notificationRef.id,
+            sourceId: sourceId,
             type: type,
             timestamp: Date(timeIntervalSince1970: (Double(sortIndex) ?? 0) / 1000),
             text: text,
