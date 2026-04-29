@@ -299,7 +299,7 @@ private enum XNotificationParser {
 
         let actors = notificationRef.fromUsers.compactMap { userId in
             users[userId].map(actor(from:))
-        }
+        }.reversed().map { $0 }
         guard !actors.isEmpty else { return nil }
 
         let target: NotificationTarget?
