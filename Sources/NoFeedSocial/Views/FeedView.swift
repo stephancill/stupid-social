@@ -11,7 +11,7 @@ struct FeedView: View {
                     ContentUnavailableView(
                         "No Notifications",
                         systemImage: "bell.slash",
-                        description: Text("Manual refresh will fetch Farcaster notifications and X once its endpoint spike is complete.")
+                        description: Text("Set up X and Farcaster in Settings, then pull to refresh.")
                     )
                 } else {
                     List {

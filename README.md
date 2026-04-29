@@ -25,15 +25,54 @@ iOS &bull; macOS
 
 Built with [xtool](https://github.com/xtool-org/xtool).
 
+### Prerequisites
+
+- macOS with Xcode 26
+- [xtool](https://github.com/xtool-org/xtool) installed and authenticated (`xtool auth status`)
+- For TestFlight: Apple Developer Program membership and App Store Connect app record
+
+### Clone and configure
+
 ```bash
-# Run on iOS Simulator
+git clone git@github.com:stephancill/stupid-social.git
+cd stupid-social
+```
+
+Add your Apple Developer Team ID to `xtool.yml`:
+```yaml
+teamID: YOUR_TEAM_ID
+```
+
+### Run on iOS Simulator
+
+```bash
 xtool dev run --simulator
+```
 
-# Run on iPhone over Wi-Fi
-xtool dev run --network -u <device-udid>
+### Run on iPhone over Wi-Fi
 
-# Run on macOS
-swift run NoFeedSocialMac
+```bash
+xtool devices --all --no-wait        # find your device UDID
+xtool dev run --network -u <udid>
+```
+
+### Run on macOS
+
+```bash
+# Build and launch via SwiftPM
+swift build
+.xcode-derived/Build/Products/Debug/NoFeedSocialMac
+
+# Or via xcodebuild
+xcodebuild -scheme NoFeedSocialMac -destination 'platform=macOS' -derivedDataPath .xcode-derived build 2>&1 | xcpretty
+open .xcode-derived/Build/Products/Debug/NoFeedSocialMac
+```
+
+### Regenerate Xcode workspace (after changing Info.plist or xtool.yml)
+
+```bash
+xtool dev run --simulator --no-attach --no-logs
+open xtool/NoFeedSocial.xcworkspace
 ```
 
 ## Release
