@@ -9,3 +9,5 @@ DerivedData/
 
 /xtool
 /third-party
+/.sourcekit-lsp
+/.xcode-derived
