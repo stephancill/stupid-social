@@ -50,3 +50,23 @@
 - Moved the `New` separator to the boundary between unread and read items. It is not shown when there are no unread items.
 - Replaced the single feed table with separate unread and read `List` sections while preserving native inset grouped styling on iOS. The `New` separator sits between sections and is only shown when both sections are present.
 - Refined notification actor presentation: feed rows now show notification-type icons, actor avatar strips, inline network favicon badges from direct `Resources/` PNGs generated with ImageMagick (`x.com/favicon.ico` and Farcaster's `favicon-v3.png`), username labels without `@`, bolded actor names, relative timestamps beside avatars, and inline badge/title wrapping that flows under the badge; detail People rows now show smaller actor avatars plus network badge and username only. The direct PNG resources are explicitly listed in `xtool.yml` because standalone imagesets were not copied into the app bundle by `xtool`.
+
+## 2026-05-01
+
+### Settings screen restructure
+
+- Replaced the inline X and Farcaster configuration sections in `SettingsView` with a single `Connections` section showing connection rows (network name on left, status/`@handle` on right).
+- Tapping a connection row navigates to dedicated configuration screens: `XConnectionView` and `FarcasterConnectionView`.
+- `XConnectionView` contains the cookie header text field, status, and save button (extracted from the old settings form).
+- `FarcasterConnectionView` contains the username text field, status, and save button (extracted from the old settings form).
+- `SettingsViewModel` gained `xConnectionLabel`, `farcasterConnectionLabel`, `xHandle`, and `farcasterHandle` computed properties for the connection row display.
+- Removed unused `xIsConnected` and `farcasterIsConnected` properties from `SettingsViewModel`.
+- Settings screen refreshes statuses on appear so connection labels update after returning from a config screen.
+
+### X handle resolution during credential save
+
+- Added `XClient.verifiedUser()` which calls `GET /i/api/1.1/account/multi/list.json` to resolve the authenticated user's `screen_name`.
+- `GET /i/api/1.1/account/verify_credentials.json` is deprecated (returns 404 via the `i/api` path). The `account/multi/list.json` endpoint returns `{"users": [{"screen_name": "...", "user_id": "...", ...}]}`.
+- `saveXCookieHeader()` is now async: it saves credentials to Keychain, then calls `verifiedUser()` to fetch and store the `screen_name` in `XAccountMetadata.handle`.
+- If the handle lookup fails, credentials are still saved but the row shows "Valid" until re-save succeeds.
+- Added `XVerifiedUser`, `XAccountListResponse`, and `XAccountListUser` models to support the endpoint.

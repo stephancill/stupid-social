@@ -19,6 +19,35 @@ public struct XClient {
         return URLSession(configuration: config)
     }()
 
+    public func verifiedUser() async throws -> XVerifiedUser {
+        guard let credentials = try credentialStore.loadXCredentials() else {
+            throw SourceError.notConfigured
+        }
+
+        var request = URLRequest(url: URL(string: "https://x.com/i/api/1.1/account/multi/list.json")!)
+        request.httpMethod = "GET"
+        request.allHTTPHeaderFields = headers(credentials: credentials)
+
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw SourceError.invalidResponse
+        }
+
+        if http.statusCode == 401 || http.statusCode == 403 {
+            throw SourceError.notConfigured
+        }
+
+        guard (200..<300).contains(http.statusCode) else {
+            throw SourceError.invalidResponse
+        }
+
+        let decoded = try JSONDecoder().decode(XAccountListResponse.self, from: data)
+        guard let user = decoded.users.first else {
+            throw SourceError.invalidResponse
+        }
+        return XVerifiedUser(screenName: user.screenName, name: user.name, idStr: user.idStr)
+    }
+
     func hasCredentials() throws -> Bool {
         try credentialStore.loadXCredentials() != nil
     }
@@ -104,6 +133,30 @@ public struct XClient {
             "Accept": "*/*",
             "Accept-Language": "en-US,en;q=0.9",
         ]
+    }
+}
+
+public struct XVerifiedUser {
+    public let screenName: String
+    public let name: String
+    public let idStr: String
+}
+
+private struct XAccountListResponse: Decodable {
+    let users: [XAccountListUser]
+}
+
+private struct XAccountListUser: Decodable {
+    let screenName: String
+    let name: String
+    let userId: String
+
+    var idStr: String { userId }
+
+    enum CodingKeys: String, CodingKey {
+        case screenName = "screen_name"
+        case name
+        case userId = "user_id"
     }
 }
 

@@ -24,7 +24,29 @@ public final class SettingsViewModel: ObservableObject {
         loadStatuses()
     }
 
-    public func saveXCookieHeader() {
+    public var xHandle: String? {
+        metadataStore.xAccount?.handle
+    }
+
+    public var farcasterHandle: String? {
+        metadataStore.farcasterAccount?.username
+    }
+
+    public var xConnectionLabel: String {
+        if let handle = xHandle {
+            return "@\(handle)"
+        }
+        return xStatus.label
+    }
+
+    public var farcasterConnectionLabel: String {
+        if let username = farcasterHandle {
+            return "@\(username)"
+        }
+        return farcasterStatus.label
+    }
+
+    public func saveXCookieHeader() async {
         guard let credentials = CookieHeaderParser.extractXCredentials(from: xCookieHeader) else {
             xStatus = .invalidCredentials
             message = "X cookie header must include auth_token and ct0."
@@ -33,13 +55,23 @@ public final class SettingsViewModel: ObservableObject {
 
         do {
             _ = try keychainStore.saveXCredentials(credentials)
-            metadataStore.xAccount = XAccountMetadata(accountId: "x", handle: nil, status: .valid)
             xCookieHeader = ""
             xStatus = .valid
             message = "X credentials saved."
         } catch {
             xStatus = .serviceError("Could not save credentials")
             message = "Could not save X credentials."
+            return
+        }
+
+        do {
+            let user = try await XClient(credentialStore: keychainStore).verifiedUser()
+            metadataStore.xAccount = XAccountMetadata(accountId: "x", handle: user.screenName, status: .valid)
+            xStatus = .valid
+            message = "Connected as @\(user.screenName)."
+        } catch {
+            metadataStore.xAccount = XAccountMetadata(accountId: "x", handle: nil, status: .valid)
+            message = "X credentials saved, but could not resolve username."
         }
     }
 
@@ -66,7 +98,7 @@ public final class SettingsViewModel: ObservableObject {
         }
     }
 
-    private func loadStatuses() {
+    public func loadStatuses() {
         xStatus = metadataStore.xAccount == nil ? .notConfigured : .valid
         if let farcaster = metadataStore.farcasterAccount {
             farcasterUsername = farcaster.username
