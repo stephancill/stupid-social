@@ -14,7 +14,7 @@
 - This is a universal macOS and iOS app built with xtool.
 - The MVP is notifications-only for X and Farcaster.
 - The app should help users avoid algorithmic feeds while still seeing direct social notifications.
-- Posting, Bluesky, Instagram, multiple accounts, and backend services are future scope unless `docs/PLAN.md` changes.
+- Posting, Bluesky, multiple accounts, and backend services are future scope unless `docs/PLAN.md` changes.
 
 ## Apple App Conventions
 
@@ -56,6 +56,7 @@
 
 - When the user says "install" without specifying a target, default to `xtool dev run --simulator --no-attach --no-logs --launch-timeout 420`.
 - Only target a physical device over USB when the user explicitly says "install to iphone" or similar.
+- After making source or resource changes, run `xtool dev build` for them to take effect in the Xcode workspace. `xtool dev run` also performs a build, but a standalone build is faster for verification.
 
 ## Engineering Style
 
