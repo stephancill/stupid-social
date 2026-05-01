@@ -62,11 +62,11 @@ public struct FarcasterNotificationSource: NotificationSource {
         let timestamp = notification.notificationDate
         let type = normalizeType(notification.type)
         let actors = notificationActors(notification)
-        let sourceId = notification.cast?.hash ?? "\(notification.type)-\(Int(timestamp.timeIntervalSince1970))"
+        let sourceId = stableSourceId(notification, type: notification.type)
         let text = notificationText(notification, type: type, actors: actors)
 
         return NotificationItem(
-            id: "farcaster:\(accountId):\(sourceId):\(Int(timestamp.timeIntervalSince1970))",
+            id: "farcaster:\(accountId):\(sourceId)",
             network: .farcaster,
             accountId: accountId,
             sourceId: sourceId,
@@ -79,6 +79,22 @@ public struct FarcasterNotificationSource: NotificationSource {
             },
             parentTarget: nil
         )
+    }
+
+    private func stableSourceId(_ notification: FarcasterNotificationResponse, type: String) -> String {
+        if let hash = notification.cast?.hash {
+            return hash
+        }
+        if let user = notification.user {
+            return "\(type):\(user.fid)"
+        }
+        if let reaction = notification.reactions?.first, let fid = reaction.fid {
+            return "\(type):\(fid)"
+        }
+        if let follow = notification.follows?.first, let fid = follow.fid {
+            return "\(type):\(fid)"
+        }
+        return "\(type):fallback"
     }
 
     private func normalizeType(_ type: String) -> NotificationType {

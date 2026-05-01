@@ -8,6 +8,9 @@ public final class FeedService {
     private let watermarkStore: ReadWatermarkProviding
     private let logger = Logger(subsystem: "tech.stupid.StupidSocial", category: "FeedService")
 
+    private var pendingIds = Set<String>()
+    private var revealedIds = Set<String>()
+
     public init(
         sources: [any NotificationSource],
         cacheStore: NotificationCacheStore,
@@ -19,25 +22,26 @@ public final class FeedService {
     }
 
     public func loadCachedFeed() throws -> [DisplayNotificationItem] {
-        return try displayItems(from: cacheStore.loadRecentEntries())
+        let items = try cacheStore.loadRecent()
+        return items
+            .filter { !pendingIds.contains($0.id) }
+            .map { DisplayNotificationItem(item: $0, isUnread: revealedIds.contains($0.id)) }
     }
 
-    public func pendingNewCount() throws -> Int {
-        try cacheStore.pendingCount()
+    public func pendingNewCount() -> Int {
+        pendingIds.count
     }
 
     public func manualRefresh() async throws -> [DisplayNotificationItem] {
         logger.info("Manual refresh started")
-        var refreshed: [NotificationItem] = []
+        var incoming: [NotificationItem] = []
         var errors: [String] = []
-
-        try cacheStore.clearPending()
 
         for source in sources {
             do {
                 let items = try await source.fetchNotifications(reason: .manual)
                 logger.info("Source refresh finished: \(source.network.rawValue, privacy: .public) \(items.count, privacy: .public) items")
-                refreshed.append(contentsOf: items)
+                incoming.append(contentsOf: items)
             } catch SourceError.notConfigured {
                 errors.append("\(source.network.displayName) is not configured")
             } catch SourceError.endpointSpikeRequired {
@@ -48,13 +52,19 @@ public final class FeedService {
             }
         }
 
-        if !refreshed.isEmpty {
-            try cacheStore.markAllKnown()
+        let oldIds = Set((try? cacheStore.loadRecent())?.map(\.id) ?? [])
+        let incomingIds = Set(incoming.map(\.id))
+        let freshIds = incomingIds.subtracting(oldIds)
+
+        pendingIds.removeAll()
+        revealedIds = freshIds
+
+        if !incoming.isEmpty {
+            try cacheStore.replaceAll(incoming)
         }
-        try cacheStore.upsert(refreshed, markInsertedAsNew: true)
         try cacheStore.deleteExpired()
         logger.info("Manual refresh finished")
-        if !errors.isEmpty, refreshed.isEmpty {
+        if !errors.isEmpty, incoming.isEmpty {
             throw SourceError.serviceError(errors.joined(separator: ", "))
         }
         return try loadCachedFeed()
@@ -62,18 +72,13 @@ public final class FeedService {
 
     public func foregroundActivationRefresh() async throws {
         logger.info("Foreground activation refresh started")
-        var refreshed: [NotificationItem] = []
+        var incoming: [NotificationItem] = []
 
         for source in sources {
             do {
-                switch source.network {
-                case .x:
-                    _ = try await source.fetchUnreadCount()
-                case .farcaster, .instagram, .debug:
-                    let items = try await source.fetchNotifications(reason: .background)
-                    logger.info("Foreground activation source refresh finished: \(source.network.rawValue, privacy: .public) \(items.count, privacy: .public) items")
-                    refreshed.append(contentsOf: items)
-                }
+                let items = try await source.fetchNotifications(reason: .background)
+                logger.info("Foreground activation source refresh finished: \(source.network.rawValue, privacy: .public) \(items.count, privacy: .public) items")
+                incoming.append(contentsOf: items)
             } catch SourceError.notConfigured, SourceError.endpointSpikeRequired {
                 continue
             } catch {
@@ -81,25 +86,27 @@ public final class FeedService {
             }
         }
 
-        try cacheStore.upsert(refreshed, markInsertedAsNew: true, markInsertedAsPending: true)
-        try cacheStore.deleteExpired()
+        if !incoming.isEmpty {
+            let oldIds = Set((try? cacheStore.loadRecent())?.map(\.id) ?? [])
+            let incomingIds = Set(incoming.map(\.id))
+            let freshIds = incomingIds.subtracting(oldIds)
+            pendingIds.formUnion(freshIds)
+
+            try cacheStore.replaceAll(incoming)
+            try cacheStore.deleteExpired()
+        }
         logger.info("Foreground activation refresh finished")
     }
 
     public func revealPendingNotifications() throws -> [DisplayNotificationItem] {
-        try cacheStore.revealPending()
+        revealedIds.formUnion(pendingIds)
+        pendingIds.removeAll()
         return try loadCachedFeed()
     }
 
     public func markAllRead(items: [DisplayNotificationItem]) -> [DisplayNotificationItem] {
         watermarkStore.markAllRead(items: items.map(\.item), network: nil, accountId: nil)
-        try? cacheStore.markAllKnown()
+        revealedIds.removeAll()
         return items.map { DisplayNotificationItem(item: $0.item, isUnread: false) }
-    }
-
-    private func displayItems(from entries: [CachedNotificationEntry]) -> [DisplayNotificationItem] {
-        entries
-            .sorted { $0.item.timestamp > $1.item.timestamp }
-            .map { DisplayNotificationItem(item: $0.item, isUnread: $0.isNew) }
     }
 }

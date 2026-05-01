@@ -326,7 +326,7 @@ private enum XNotificationParser {
         let text = notificationText(element: element, actorName: user.name, tweetText: tweet.fullText)
 
         return NotificationItem(
-            id: "x:\(entryId)",
+            id: "x:\(tweet.stableId):\(element)",
             network: .x,
             accountId: "x",
             sourceId: tweet.stableId,
@@ -369,7 +369,7 @@ private enum XNotificationParser {
         let text = groupedNotificationText(element: element, actors: actors, tweetText: target?.text)
 
         return NotificationItem(
-            id: "x:\(entryId)",
+            id: "x:\(sourceId):\(element)",
             network: .x,
             accountId: "x",
             sourceId: sourceId,

@@ -20,14 +20,14 @@ final class FeedServiceTests: XCTestCase {
     }
 
     @MainActor
-    func testManualRefreshMarksOnlyNewlyInsertedCacheItemsNew() async throws {
+    func testManualRefreshMarksOnlyNewItemsUnread() async throws {
         let container = try ModelContainer(
             for: CachedNotification.self,
             configurations: ModelConfiguration(isStoredInMemoryOnly: true)
         )
         let cacheStore = NotificationCacheStore(context: container.mainContext)
         let known = item(id: "known", timestamp: Date(timeIntervalSince1970: 200))
-        try cacheStore.upsert([known])
+        try cacheStore.replaceAll([known])
 
         let source = StubNotificationSource(items: [
             known,
@@ -64,12 +64,12 @@ final class FeedServiceTests: XCTestCase {
 
         try await service.foregroundActivationRefresh()
 
-        XCTAssertEqual(try service.pendingNewCount(), 1)
+        XCTAssertEqual(service.pendingNewCount(), 1)
         XCTAssertTrue(try service.loadCachedFeed().isEmpty)
 
         let displayed = try service.revealPendingNotifications()
 
-        XCTAssertEqual(try service.pendingNewCount(), 0)
+        XCTAssertEqual(service.pendingNewCount(), 0)
         XCTAssertEqual(displayed.map(\.id), ["background-new"])
         XCTAssertTrue(displayed[0].isUnread)
     }
@@ -90,10 +90,11 @@ final class FeedServiceTests: XCTestCase {
             watermarkStore: InMemoryReadWatermarkStoreForFeed()
         )
         try await backgroundService.foregroundActivationRefresh()
-        XCTAssertEqual(try backgroundService.pendingNewCount(), 1)
+        XCTAssertEqual(backgroundService.pendingNewCount(), 1)
 
         let manualSource = StubNotificationSource(items: [
             item(id: "manual-new", timestamp: Date(timeIntervalSince1970: 200)),
+            item(id: "background-new", timestamp: Date(timeIntervalSince1970: 100)),
         ])
         let manualService = FeedService(
             sources: [manualSource],
@@ -103,7 +104,7 @@ final class FeedServiceTests: XCTestCase {
 
         let displayed = try await manualService.manualRefresh()
 
-        XCTAssertEqual(try manualService.pendingNewCount(), 0)
+        XCTAssertEqual(manualService.pendingNewCount(), 0)
         XCTAssertEqual(displayed.map(\.id), ["manual-new", "background-new"])
         XCTAssertTrue(displayed[0].isUnread)
         XCTAssertFalse(displayed[1].isUnread)
