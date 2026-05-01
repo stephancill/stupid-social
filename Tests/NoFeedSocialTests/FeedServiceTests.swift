@@ -1,4 +1,5 @@
 import XCTest
+import SwiftData
 @testable import NoFeedSocialCore
 
 final class FeedServiceTests: XCTestCase {
@@ -18,6 +19,96 @@ final class FeedServiceTests: XCTestCase {
         XCTAssertFalse(displayed[1].isUnread)
     }
 
+    @MainActor
+    func testManualRefreshMarksOnlyNewlyInsertedCacheItemsNew() async throws {
+        let container = try ModelContainer(
+            for: CachedNotification.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+        )
+        let cacheStore = NotificationCacheStore(context: container.mainContext)
+        let known = item(id: "known", timestamp: Date(timeIntervalSince1970: 200))
+        try cacheStore.upsert([known])
+
+        let source = StubNotificationSource(items: [
+            known,
+            item(id: "new", timestamp: Date(timeIntervalSince1970: 100)),
+        ])
+        let service = FeedService(
+            sources: [source],
+            cacheStore: cacheStore,
+            watermarkStore: InMemoryReadWatermarkStoreForFeed()
+        )
+
+        let displayed = try await service.manualRefresh()
+
+        XCTAssertEqual(displayed.map(\.id), ["known", "new"])
+        XCTAssertFalse(displayed[0].isUnread)
+        XCTAssertTrue(displayed[1].isUnread)
+    }
+
+    @MainActor
+    func testForegroundActivationRefreshKeepsNewItemsPendingUntilRevealed() async throws {
+        let container = try ModelContainer(
+            for: CachedNotification.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+        )
+        let cacheStore = NotificationCacheStore(context: container.mainContext)
+        let source = StubNotificationSource(items: [
+            item(id: "background-new", timestamp: Date(timeIntervalSince1970: 100)),
+        ])
+        let service = FeedService(
+            sources: [source],
+            cacheStore: cacheStore,
+            watermarkStore: InMemoryReadWatermarkStoreForFeed()
+        )
+
+        try await service.foregroundActivationRefresh()
+
+        XCTAssertEqual(try service.pendingNewCount(), 1)
+        XCTAssertTrue(try service.loadCachedFeed().isEmpty)
+
+        let displayed = try service.revealPendingNotifications()
+
+        XCTAssertEqual(try service.pendingNewCount(), 0)
+        XCTAssertEqual(displayed.map(\.id), ["background-new"])
+        XCTAssertTrue(displayed[0].isUnread)
+    }
+
+    @MainActor
+    func testManualRefreshClearsPendingNewCount() async throws {
+        let container = try ModelContainer(
+            for: CachedNotification.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+        )
+        let cacheStore = NotificationCacheStore(context: container.mainContext)
+        let backgroundSource = StubNotificationSource(items: [
+            item(id: "background-new", timestamp: Date(timeIntervalSince1970: 100)),
+        ])
+        let backgroundService = FeedService(
+            sources: [backgroundSource],
+            cacheStore: cacheStore,
+            watermarkStore: InMemoryReadWatermarkStoreForFeed()
+        )
+        try await backgroundService.foregroundActivationRefresh()
+        XCTAssertEqual(try backgroundService.pendingNewCount(), 1)
+
+        let manualSource = StubNotificationSource(items: [
+            item(id: "manual-new", timestamp: Date(timeIntervalSince1970: 200)),
+        ])
+        let manualService = FeedService(
+            sources: [manualSource],
+            cacheStore: cacheStore,
+            watermarkStore: InMemoryReadWatermarkStoreForFeed()
+        )
+
+        let displayed = try await manualService.manualRefresh()
+
+        XCTAssertEqual(try manualService.pendingNewCount(), 0)
+        XCTAssertEqual(displayed.map(\.id), ["manual-new", "background-new"])
+        XCTAssertTrue(displayed[0].isUnread)
+        XCTAssertFalse(displayed[1].isUnread)
+    }
+
     private func item(id: String, timestamp: Date) -> NotificationItem {
         NotificationItem(
             id: id,
@@ -30,6 +121,31 @@ final class FeedServiceTests: XCTestCase {
             actors: [],
             target: nil
         )
+    }
+}
+
+private final class StubNotificationSource: NotificationSource {
+    let network: SocialNetwork = .farcaster
+    private let items: [NotificationItem]
+
+    init(items: [NotificationItem]) {
+        self.items = items
+    }
+
+    func validateAccount() async throws -> AccountStatus {
+        .valid
+    }
+
+    func fetchUnreadCount() async throws -> Int? {
+        nil
+    }
+
+    func fetchNotifications(reason: RefreshReason) async throws -> [NotificationItem] {
+        items
+    }
+
+    func fetchProfile(id: String) async throws -> NetworkProfile {
+        throw SourceError.unsupported
     }
 }
 

@@ -24,6 +24,16 @@ public struct FarcasterAccountMetadata: Codable, Equatable {
     }
 }
 
+public struct DebugAccountMetadata: Codable, Equatable {
+    public var serverURL: URL
+    public var status: AccountStatusSnapshot
+
+    public init(serverURL: URL, status: AccountStatusSnapshot) {
+        self.serverURL = serverURL
+        self.status = status
+    }
+}
+
 public enum AccountStatusSnapshot: String, Codable, Equatable {
     case notConfigured
     case valid
@@ -37,6 +47,7 @@ public final class AccountMetadataStore {
     private enum Key {
         static let xAccount = "account.x"
         static let farcasterAccount = "account.farcaster"
+        static let debugAccount = "account.debug"
     }
 
     private let defaults: UserDefaults
@@ -55,6 +66,11 @@ public final class AccountMetadataStore {
     public var farcasterAccount: FarcasterAccountMetadata? {
         get { load(FarcasterAccountMetadata.self, key: Key.farcasterAccount) }
         set { save(newValue, key: Key.farcasterAccount) }
+    }
+
+    public var debugAccount: DebugAccountMetadata? {
+        get { load(DebugAccountMetadata.self, key: Key.debugAccount) }
+        set { save(newValue, key: Key.debugAccount) }
     }
 
     private func load<T: Decodable>(_ type: T.Type, key: String) -> T? {

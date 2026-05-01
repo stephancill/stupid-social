@@ -14,8 +14,10 @@ public final class CachedNotification {
     public var targetData: Data?
     public var parentTargetData: Data?
     public var cachedAt: Date
+    public var isNew: Bool = false
+    public var isPending: Bool = false
 
-    init(item: NotificationItem, cachedAt: Date = Date()) throws {
+    init(item: NotificationItem, cachedAt: Date = Date(), isNew: Bool = false, isPending: Bool = false) throws {
         id = item.id
         networkRawValue = item.network.rawValue
         accountId = item.accountId
@@ -27,6 +29,8 @@ public final class CachedNotification {
         targetData = try item.target.map { try JSONEncoder().encode($0) }
         parentTargetData = try item.parentTarget.map { try JSONEncoder().encode($0) }
         self.cachedAt = cachedAt
+        self.isNew = isNew
+        self.isPending = isPending
     }
 
     func update(with item: NotificationItem, cachedAt: Date = Date()) throws {

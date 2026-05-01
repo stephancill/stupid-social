@@ -4,6 +4,7 @@ import SwiftUI
 
 public struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.scenePhase) private var scenePhase
     @State private var feedViewModel: FeedViewModel?
     @State private var settingsViewModel: SettingsViewModel?
 
@@ -22,6 +23,12 @@ public struct ContentView: View {
                 configureDependencies()
             }
         }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active, let feedViewModel else { return }
+            Task {
+                await feedViewModel.refreshOnForegroundActivation()
+            }
+        }
     }
 
     private func configureDependencies() {
@@ -38,6 +45,10 @@ public struct ContentView: View {
             ),
             FarcasterNotificationSource(
                 client: farcasterClient,
+                metadataStore: metadataStore
+            ),
+            DebugNotificationSource(
+                client: DebugNotificationsClient(),
                 metadataStore: metadataStore
             ),
         ]

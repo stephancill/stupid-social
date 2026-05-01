@@ -82,6 +82,8 @@ struct NotificationDetailView: View {
                 return nil
             }
             return URL(string: "https://x.com/i/status/\(sourceId)")
+        case .debug:
+            return nil
         }
     }
 
@@ -92,6 +94,8 @@ struct NotificationDetailView: View {
             return URL(string: "https://farcaster.xyz/\(username)")
         case .x:
             return URL(string: "https://x.com/\(username)")
+        case .debug:
+            return nil
         }
     }
 }
@@ -144,6 +148,8 @@ private extension SocialNetwork {
             "XBadge"
         case .farcaster:
             "FarcasterBadge"
+        case .debug:
+            "DebugBadge"
         }
     }
 
@@ -153,6 +159,8 @@ private extension SocialNetwork {
             "X"
         case .farcaster:
             "F"
+        case .debug:
+            "D"
         }
     }
 
@@ -161,6 +169,8 @@ private extension SocialNetwork {
         case .x:
             .black
         case .farcaster:
+            .white
+        case .debug:
             .white
         }
     }
@@ -171,6 +181,8 @@ private extension SocialNetwork {
             .white
         case .farcaster:
             Color(red: 0.52, green: 0.36, blue: 0.80)
+        case .debug:
+            .orange
         }
     }
 }

@@ -3,6 +3,7 @@ import Foundation
 @MainActor
 public final class FeedViewModel: ObservableObject {
     @Published public private(set) var items: [DisplayNotificationItem] = []
+    @Published public private(set) var pendingNewCount = 0
     @Published public private(set) var isRefreshing = false
     @Published public var errorMessage: String?
 
@@ -15,6 +16,7 @@ public final class FeedViewModel: ObservableObject {
     public func loadCachedFeed() {
         do {
             items = try feedService.loadCachedFeed()
+            pendingNewCount = try feedService.pendingNewCount()
         } catch {
             errorMessage = "Could not load cached notifications."
         }
@@ -26,7 +28,8 @@ public final class FeedViewModel: ObservableObject {
         defer { isRefreshing = false }
 
         do {
-            items = feedService.markAllRead(items: try await feedService.manualRefresh())
+            items = try await feedService.manualRefresh()
+            pendingNewCount = try feedService.pendingNewCount()
             errorMessage = nil
         } catch let error as LocalizedError {
             errorMessage = error.errorDescription ?? "Refresh failed."
@@ -37,5 +40,25 @@ public final class FeedViewModel: ObservableObject {
 
     public func markAllRead() {
         items = feedService.markAllRead(items: items)
+    }
+
+    public func refreshOnForegroundActivation() async {
+        do {
+            try await feedService.foregroundActivationRefresh()
+            items = try feedService.loadCachedFeed()
+            pendingNewCount = try feedService.pendingNewCount()
+            errorMessage = nil
+        } catch {
+            errorMessage = "Foreground refresh failed."
+        }
+    }
+
+    public func revealPendingNotifications() {
+        do {
+            items = try feedService.revealPendingNotifications()
+            pendingNewCount = try feedService.pendingNewCount()
+        } catch {
+            errorMessage = "Could not load new notifications."
+        }
     }
 }

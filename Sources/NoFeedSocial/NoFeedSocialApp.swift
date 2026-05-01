@@ -4,19 +4,24 @@ import SwiftUI
 
 #if !os(macOS)
 @main
+@MainActor
 struct NoFeedSocialApp: App {
-    private let backgroundRefreshScheduler = BackgroundRefreshScheduler()
+    private let modelContainer: ModelContainer
 
     init() {
-        backgroundRefreshScheduler.register()
-        backgroundRefreshScheduler.schedule()
+        do {
+            modelContainer = try ModelContainer(for: CachedNotification.self)
+        } catch {
+            fatalError("Could not create SwiftData model container: \(error)")
+        }
+
     }
 
     var body: some Scene {
         WindowGroup {
             ContentView()
         }
-        .modelContainer(for: CachedNotification.self)
+        .modelContainer(modelContainer)
     }
 }
 #endif

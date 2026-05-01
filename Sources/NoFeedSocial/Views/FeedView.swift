@@ -64,6 +64,16 @@ struct FeedView: View {
             }
             .navigationTitle("Notifications")
             .toolbar {
+                if viewModel.pendingNewCount > 0 {
+                    ToolbarItem(placement: .navigation) {
+                        Button {
+                            viewModel.revealPendingNotifications()
+                        } label: {
+                            Text("\(viewModel.pendingNewCount) New")
+                        }
+                    }
+                }
+
                 ToolbarItem(placement: .primaryAction) {
                     NavigationLink {
                         SettingsView(viewModel: settingsViewModel)
@@ -286,6 +296,8 @@ private extension SocialNetwork {
             "XBadge"
         case .farcaster:
             "FarcasterBadge"
+        case .debug:
+            "DebugBadge"
         }
     }
 
@@ -295,6 +307,8 @@ private extension SocialNetwork {
             "X"
         case .farcaster:
             "F"
+        case .debug:
+            "D"
         }
     }
 
@@ -303,6 +317,8 @@ private extension SocialNetwork {
         case .x:
             .black
         case .farcaster:
+            .white
+        case .debug:
             .white
         }
     }
@@ -313,6 +329,8 @@ private extension SocialNetwork {
             .white
         case .farcaster:
             Color(red: 0.52, green: 0.36, blue: 0.80)
+        case .debug:
+            .orange
         }
     }
 }

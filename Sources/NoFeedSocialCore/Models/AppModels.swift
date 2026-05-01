@@ -3,6 +3,7 @@ import Foundation
 public enum SocialNetwork: String, Codable, CaseIterable, Identifiable, Sendable {
     case x
     case farcaster
+    case debug
 
     public var id: String { rawValue }
 
@@ -10,6 +11,7 @@ public enum SocialNetwork: String, Codable, CaseIterable, Identifiable, Sendable
         switch self {
         case .x: "X"
         case .farcaster: "Farcaster"
+        case .debug: "Debug"
         }
     }
 }

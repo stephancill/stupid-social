@@ -107,13 +107,13 @@ Reference behavior from `docs/CLI_DOCS.md`:
 Read state is explicit only.
 
 - Opening the app does not mark notifications as read.
-- Refreshing the feed marks the loaded notifications as read locally.
+- Refreshing the feed compares incoming notification IDs against the local cache and marks only newly discovered cached items as new locally.
 - Opening a notification detail does not mark notifications as read.
 - Manual refresh and explicit user actions update app-local read state.
 
 MVP read action:
 
-- Manual refresh marks loaded notifications as read after a successful refresh.
+- Manual refresh marks newly discovered notification IDs as new after a successful refresh; previously cached items are treated as known.
 
 Future explicit read actions:
 
@@ -167,13 +167,13 @@ The account detail should show:
 
 The MVP should not attempt to merge or link X and Farcaster actors.
 
-## Background And Refresh Behavior
+## Automatic And Refresh Behavior
 
-- Background polling target is approximately 15 minutes, subject to Apple platform limitations.
 - Manual refresh is always available.
-- X background work should poll count only.
-- Farcaster background work may fetch notifications because Hypersnap read state is app-local and the API does not mark items read.
-- Background work should update local cache and badge/count state where possible.
+- The app refreshes automatically when entering the foreground.
+- X foreground automatic refresh should poll count only and must not full-fetch X notifications.
+- Farcaster foreground automatic refresh may fetch notifications because Hypersnap read state is app-local and the API does not mark items read.
+- Foreground automatic refresh should cache newly discovered items as pending and surface them through a user-controlled new-items badge before inserting them into the visible feed.
 
 ## Future Posting Scope
 

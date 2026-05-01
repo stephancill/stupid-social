@@ -25,6 +25,15 @@ struct SettingsView: View {
                         subtitle: viewModel.farcasterConnectionLabel
                     )
                 }
+
+                NavigationLink {
+                    DebugConnectionView(viewModel: viewModel)
+                } label: {
+                    connectionRow(
+                        name: "Debug",
+                        subtitle: viewModel.debugConnectionLabel
+                    )
+                }
             }
 
             Section("About") {
@@ -69,4 +78,5 @@ struct SettingsView: View {
                 .foregroundStyle(.secondary)
         }
     }
+
 }

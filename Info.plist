@@ -5,11 +5,18 @@
 	<key>CFBundleDisplayName</key>
 	<string>stupid social</string>
 	<key>CFBundleVersion</key>
-	<string>7</string>
+	<string>8</string>
 	<key>CFBundleShortVersionString</key>
 	<string>1.0.0</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Debug builds can connect to a local notifications server for background refresh testing.</string>
 	<key>CFBundleIconName</key>
 	<string>AppIcon</string>
 	<key>UIDeviceFamily</key>

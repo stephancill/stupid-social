@@ -280,14 +280,14 @@ Feed service responsibilities:
 - Normalize and merge source results.
 - Apply 24-hour retention cleanup.
 - Sort by timestamp descending.
-- Derive unread state from `NSUbiquitousKeyValueStore` watermarks.
+- Derive feed `New` presentation from cache identity differences: items inserted into the local cache by refresh are new; previously cached items are known.
 
 Manual refresh behavior:
 
 - Fetch Farcaster notifications.
 - Fetch X full notifications only because the user explicitly requested refresh.
 - Merge results into local SwiftData cache.
-- Do not advance read watermarks.
+- Compare incoming notification IDs against the local cache; mark only newly inserted items as new.
 
 Open/feed-load behavior:
 
@@ -296,19 +296,17 @@ Open/feed-load behavior:
 - Do not full-fetch X automatically.
 - Do not advance read watermarks.
 
-## Background Refresh
+## Foreground Automatic Refresh
 
-Use `BGTaskScheduler` for background refresh where available.
+Use scene phase changes for automatic refresh when the app enters the foreground. Do not use `BGTaskScheduler` for the MVP refresh path.
 
 Design expectations:
 
-- Register an app refresh task.
-- Schedule refresh opportunistically with an approximately 15-minute target, subject to Apple platform behavior.
-- X background refresh performs count-only polling.
-- Farcaster background refresh may fetch notifications because it does not alter server-side read state.
-- Background refresh updates local cache/count state and then reschedules itself.
-
-Platform-specific behavior should be isolated behind a small refresh scheduler adapter if needed.
+- Trigger an automatic refresh on `scenePhase == .active`.
+- X foreground automatic refresh performs count-only polling.
+- Farcaster foreground automatic refresh may fetch notifications because it does not alter server-side read state.
+- Foreground automatic refresh updates local cache/count state and marks newly inserted notification IDs as pending.
+- Pending notification items remain hidden from the visible feed until the user explicitly loads them from the feed's new-items badge/button.
 
 ## Account Status And Errors
 

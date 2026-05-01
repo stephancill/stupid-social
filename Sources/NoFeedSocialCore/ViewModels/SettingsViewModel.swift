@@ -5,8 +5,10 @@ import Security
 public final class SettingsViewModel: ObservableObject {
     @Published public var xCookieHeader = ""
     @Published public var farcasterUsername = ""
+    @Published public var debugServerURL = ""
     @Published public private(set) var xStatus: AccountStatus = .notConfigured
     @Published public private(set) var farcasterStatus: AccountStatus = .notConfigured
+    @Published public private(set) var debugStatus: AccountStatus = .notConfigured
     @Published public var message: String?
 
     private let keychainStore: KeychainCredentialStore
@@ -44,6 +46,10 @@ public final class SettingsViewModel: ObservableObject {
             return "@\(username)"
         }
         return farcasterStatus.label
+    }
+
+    public var debugConnectionLabel: String {
+        metadataStore.debugAccount?.serverURL.absoluteString ?? debugStatus.label
     }
 
     public func saveXCookieHeader() async {
@@ -98,6 +104,19 @@ public final class SettingsViewModel: ObservableObject {
         }
     }
 
+    public func saveDebugServerURL() {
+        let value = debugServerURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: value), url.scheme == "http" || url.scheme == "https" else {
+            debugStatus = .serviceError("Invalid URL")
+            message = "Enter an http or https debug server URL."
+            return
+        }
+
+        metadataStore.debugAccount = DebugAccountMetadata(serverURL: url, status: .valid)
+        debugStatus = .valid
+        message = "Debug notifications server saved."
+    }
+
     public func loadStatuses() {
         xStatus = metadataStore.xAccount == nil ? .notConfigured : .valid
         if let farcaster = metadataStore.farcasterAccount {
@@ -105,6 +124,13 @@ public final class SettingsViewModel: ObservableObject {
             farcasterStatus = .valid
         } else {
             farcasterStatus = .notConfigured
+        }
+
+        if let debug = metadataStore.debugAccount {
+            debugServerURL = debug.serverURL.absoluteString
+            debugStatus = .valid
+        } else {
+            debugStatus = .notConfigured
         }
     }
 }
