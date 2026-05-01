@@ -20,7 +20,6 @@ public struct XNotificationSource: NotificationSource {
     }
 
     public func fetchNotifications(reason: RefreshReason) async throws -> [NotificationItem] {
-        guard reason == .manual else { return [] }
         return try await client.notifications()
     }
 
