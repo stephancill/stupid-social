@@ -65,7 +65,6 @@
 - Add comments only when code is not self-explanatory.
 - Keep secrets out of logs, diagnostics, fixtures, screenshots, and documentation examples.
 - When adding new SwiftData model properties, always provide a default value at the property declaration to avoid migration failures with existing installed caches.
-- Do not use `BGTaskScheduler` for the MVP refresh path; use foreground activation based on `scenePhase` changes instead. Real iOS background refresh delivery is not deterministic enough for MVP testing.
 
 ## Debug Servers And State
 
