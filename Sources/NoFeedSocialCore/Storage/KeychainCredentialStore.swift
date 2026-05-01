@@ -52,12 +52,30 @@ public final class KeychainCredentialStore {
     }
 
     public func deleteXCredentials() throws {
+        try deleteForAccount("x")
+    }
+
+    public func saveInstagramCredentials(_ credentials: InstagramCredentials) throws -> CredentialSaveResult {
+        let data = try encoder.encode(credentials)
+        return try save(data: data, account: "instagram")
+    }
+
+    public func loadInstagramCredentials() throws -> InstagramCredentials? {
+        guard let data = try load(account: "instagram") else { return nil }
+        return try decoder.decode(InstagramCredentials.self, from: data)
+    }
+
+    public func deleteInstagramCredentials() throws {
+        try deleteForAccount("instagram")
+    }
+
+    private func deleteForAccount(_ account: String) throws {
         for synchronizable in synchronizableCandidates {
-            let query = baseQuery(account: "x", synchronizable: synchronizable)
+            let query = baseQuery(account: account, synchronizable: synchronizable)
             let status = SecItemDelete(query as CFDictionary)
             guard status == errSecSuccess || status == errSecItemNotFound else { continue }
         }
-        fallbackStore.removeObject(forKey: fallbackKey(account: "x"))
+        fallbackStore.removeObject(forKey: fallbackKey(account: account))
     }
 
     private func save(data: Data, account: String) throws -> CredentialSaveResult {

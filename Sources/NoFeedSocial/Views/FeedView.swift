@@ -164,17 +164,45 @@ private struct NotificationRow: View {
 
                 summaryView
 
-                if let previewText {
-                    Text(previewText)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                }
+                previewContent
             }
 
             Spacer(minLength: 0)
         }
         .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private var previewContent: some View {
+        if let targetText = displayItem.item.target?.text, !targetText.isEmpty,
+           (displayItem.item.type == .reaction || displayItem.item.type == .reply || displayItem.item.type == .mention) {
+            Text(targetText)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+        } else if let imageUrl = displayItem.item.target?.imageURL,
+                  imageUrl.absoluteString.contains("cdninstagram.com") {
+            AsyncImage(url: imageUrl) { phase in
+                switch phase {
+                case let .success(image):
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: 48, height: 48)
+                        .clipped()
+                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                case .failure, .empty:
+                    Color.clear.frame(width: 48, height: 48)
+                @unknown default:
+                    Color.clear.frame(width: 48, height: 48)
+                }
+            }
+        } else if let actor = displayItem.item.actors.first {
+            Text(actor.username ?? actor.id)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+        }
     }
 
     private var summaryText: String {
@@ -296,6 +324,8 @@ private extension SocialNetwork {
             "XBadge"
         case .farcaster:
             "FarcasterBadge"
+        case .instagram:
+            "InstagramBadge"
         case .debug:
             "DebugBadge"
         }
@@ -307,6 +337,8 @@ private extension SocialNetwork {
             "X"
         case .farcaster:
             "F"
+        case .instagram:
+            "I"
         case .debug:
             "D"
         }
@@ -317,6 +349,8 @@ private extension SocialNetwork {
         case .x:
             .black
         case .farcaster:
+            .white
+        case .instagram:
             .white
         case .debug:
             .white
@@ -329,6 +363,8 @@ private extension SocialNetwork {
             .white
         case .farcaster:
             Color(red: 0.52, green: 0.36, blue: 0.80)
+        case .instagram:
+            Color(red: 0.88, green: 0.21, blue: 0.44)
         case .debug:
             .orange
         }

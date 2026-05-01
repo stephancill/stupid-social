@@ -11,3 +11,4 @@ DerivedData/
 /third-party
 /.sourcekit-lsp
 /.xcode-derived
+logs/

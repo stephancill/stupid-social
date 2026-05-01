@@ -23,6 +23,22 @@ public enum CookieHeaderParser {
 
         return XCredentials(authToken: authToken, ct0: ct0)
     }
+
+    public static func extractInstagramCredentials(from header: String) -> InstagramCredentials? {
+        let cookies = parse(header)
+        guard let sessionId = cookies["sessionid"],
+              let csrfToken = cookies["csrftoken"],
+              let dsUserId = cookies["ds_user_id"] else {
+            return nil
+        }
+
+        return InstagramCredentials(
+            sessionId: sessionId,
+            csrfToken: csrfToken,
+            dsUserId: dsUserId,
+            mid: cookies["mid"]
+        )
+    }
 }
 
 public struct XCredentials: Codable, Equatable, Sendable {
@@ -32,5 +48,19 @@ public struct XCredentials: Codable, Equatable, Sendable {
     public init(authToken: String, ct0: String) {
         self.authToken = authToken
         self.ct0 = ct0
+    }
+}
+
+public struct InstagramCredentials: Codable, Equatable, Sendable {
+    public let sessionId: String
+    public let csrfToken: String
+    public let dsUserId: String
+    public let mid: String?
+
+    public init(sessionId: String, csrfToken: String, dsUserId: String, mid: String?) {
+        self.sessionId = sessionId
+        self.csrfToken = csrfToken
+        self.dsUserId = dsUserId
+        self.mid = mid
     }
 }

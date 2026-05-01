@@ -3,6 +3,7 @@ import Foundation
 public enum SocialNetwork: String, Codable, CaseIterable, Identifiable, Sendable {
     case x
     case farcaster
+    case instagram
     case debug
 
     public var id: String { rawValue }
@@ -11,12 +12,13 @@ public enum SocialNetwork: String, Codable, CaseIterable, Identifiable, Sendable
         switch self {
         case .x: "X"
         case .farcaster: "Farcaster"
+        case .instagram: "Instagram"
         case .debug: "Debug"
         }
     }
 }
 
-public enum NotificationType: String, Codable, Sendable {
+public enum NotificationType: String, Codable, CaseIterable, Sendable {
     case mention
     case reply
     case reaction
@@ -107,11 +109,13 @@ public struct NotificationTarget: Hashable, Codable, Sendable {
     public let id: String
     public let text: String?
     public let url: URL?
+    public let imageURL: URL?
 
-    public init(id: String, text: String?, url: URL?) {
+    public init(id: String, text: String?, url: URL?, imageURL: URL? = nil) {
         self.id = id
         self.text = text
         self.url = url
+        self.imageURL = imageURL
     }
 }
 

@@ -69,7 +69,7 @@ public final class FeedService {
                 switch source.network {
                 case .x:
                     _ = try await source.fetchUnreadCount()
-                case .farcaster, .debug:
+                case .farcaster, .instagram, .debug:
                     let items = try await source.fetchNotifications(reason: .background)
                     logger.info("Foreground activation source refresh finished: \(source.network.rawValue, privacy: .public) \(items.count, privacy: .public) items")
                     refreshed.append(contentsOf: items)

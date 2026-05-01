@@ -47,6 +47,10 @@ public struct ContentView: View {
                 client: farcasterClient,
                 metadataStore: metadataStore
             ),
+            InstagramNotificationSource(
+                client: InstagramClient(credentialStore: keychainStore),
+                metadataStore: metadataStore
+            ),
             DebugNotificationSource(
                 client: DebugNotificationsClient(),
                 metadataStore: metadataStore

@@ -24,6 +24,43 @@ public struct FarcasterAccountMetadata: Codable, Equatable {
     }
 }
 
+public struct InstagramAccountMetadata: Codable, Equatable {
+    public var accountId: String
+    public var username: String?
+    public var status: AccountStatusSnapshot
+    public var enabledCategories: Set<InstagramNotificationCategory>
+
+    public init(accountId: String, username: String?, status: AccountStatusSnapshot, enabledCategories: Set<InstagramNotificationCategory>? = nil) {
+        self.accountId = accountId
+        self.username = username
+        self.status = status
+        self.enabledCategories = enabledCategories ?? Set(InstagramNotificationCategory.allCases)
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        accountId = try container.decode(String.self, forKey: .accountId)
+        username = try container.decodeIfPresent(String.self, forKey: .username)
+        status = try container.decode(AccountStatusSnapshot.self, forKey: .status)
+        enabledCategories = try container.decodeIfPresent(Set<InstagramNotificationCategory>.self, forKey: .enabledCategories) ?? Set(InstagramNotificationCategory.allCases)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(accountId, forKey: .accountId)
+        try container.encodeIfPresent(username, forKey: .username)
+        try container.encode(status, forKey: .status)
+        try container.encode(enabledCategories, forKey: .enabledCategories)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case accountId
+        case username
+        case status
+        case enabledCategories
+    }
+}
+
 public struct DebugAccountMetadata: Codable, Equatable {
     public var serverURL: URL
     public var status: AccountStatusSnapshot
@@ -47,6 +84,7 @@ public final class AccountMetadataStore {
     private enum Key {
         static let xAccount = "account.x"
         static let farcasterAccount = "account.farcaster"
+        static let instagramAccount = "account.instagram"
         static let debugAccount = "account.debug"
     }
 
@@ -66,6 +104,11 @@ public final class AccountMetadataStore {
     public var farcasterAccount: FarcasterAccountMetadata? {
         get { load(FarcasterAccountMetadata.self, key: Key.farcasterAccount) }
         set { save(newValue, key: Key.farcasterAccount) }
+    }
+
+    public var instagramAccount: InstagramAccountMetadata? {
+        get { load(InstagramAccountMetadata.self, key: Key.instagramAccount) }
+        set { save(newValue, key: Key.instagramAccount) }
     }
 
     public var debugAccount: DebugAccountMetadata? {

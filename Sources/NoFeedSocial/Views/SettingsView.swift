@@ -27,6 +27,15 @@ struct SettingsView: View {
                     )
                 }
 
+                NavigationLink {
+                    InstagramConnectionView(viewModel: viewModel)
+                } label: {
+                    connectionRow(
+                        name: "Instagram",
+                        subtitle: viewModel.instagramConnectionLabel
+                    )
+                }
+
                 if devModeEnabled {
                     NavigationLink {
                         DebugConnectionView(viewModel: viewModel)

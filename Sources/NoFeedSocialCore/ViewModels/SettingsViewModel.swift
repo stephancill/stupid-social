@@ -5,9 +5,12 @@ import Security
 public final class SettingsViewModel: ObservableObject {
     @Published public var xCookieHeader = ""
     @Published public var farcasterUsername = ""
+    @Published public var instagramCookieHeader = ""
     @Published public var debugServerURL = ""
     @Published public private(set) var xStatus: AccountStatus = .notConfigured
     @Published public private(set) var farcasterStatus: AccountStatus = .notConfigured
+    @Published public private(set) var instagramStatus: AccountStatus = .notConfigured
+    @Published public var instagramEnabledCategories: Set<InstagramNotificationCategory> = []
     @Published public private(set) var debugStatus: AccountStatus = .notConfigured
     @Published public var message: String?
 
@@ -49,6 +52,17 @@ public final class SettingsViewModel: ObservableObject {
             return "@\(username)"
         }
         return farcasterStatus.label
+    }
+
+    public var instagramHandle: String? {
+        metadataStore.instagramAccount?.username
+    }
+
+    public var instagramConnectionLabel: String {
+        if let username = instagramHandle {
+            return "@\(username)"
+        }
+        return instagramStatus.label
     }
 
     public var debugConnectionLabel: String {
@@ -107,6 +121,49 @@ public final class SettingsViewModel: ObservableObject {
         }
     }
 
+    public func saveInstagramCookieHeader() async {
+        guard let credentials = CookieHeaderParser.extractInstagramCredentials(from: instagramCookieHeader) else {
+            instagramStatus = .invalidCredentials
+            message = "Instagram cookie header must include sessionid, csrftoken, and ds_user_id."
+            return
+        }
+
+        do {
+            _ = try keychainStore.saveInstagramCredentials(credentials)
+            instagramCookieHeader = ""
+            instagramStatus = .valid
+            message = "Instagram credentials saved."
+        } catch {
+            instagramStatus = .serviceError("Could not save credentials")
+            message = "Could not save Instagram credentials."
+            return
+        }
+
+        do {
+            let user = try await InstagramClient(credentialStore: keychainStore).verifiedUser()
+            let categories = Set(InstagramNotificationCategory.allCases)
+            metadataStore.instagramAccount = InstagramAccountMetadata(
+                accountId: String(user.pk),
+                username: user.username,
+                status: .valid,
+                enabledCategories: categories
+            )
+            instagramEnabledCategories = categories
+            instagramStatus = .valid
+            message = "Connected as @\(user.username)."
+        } catch {
+            let categories = Set(InstagramNotificationCategory.allCases)
+            metadataStore.instagramAccount = InstagramAccountMetadata(
+                accountId: "instagram",
+                username: nil,
+                status: .valid,
+                enabledCategories: categories
+            )
+            instagramEnabledCategories = categories
+            message = "Instagram credentials saved, but could not resolve username."
+        }
+    }
+
     public func saveDebugServerURL() {
         let value = debugServerURL.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let url = URL(string: value), url.scheme == "http" || url.scheme == "https" else {
@@ -135,6 +192,28 @@ public final class SettingsViewModel: ObservableObject {
         message = "Farcaster account disconnected."
     }
 
+    public func disconnectInstagram() {
+        try? keychainStore.deleteInstagramCredentials()
+        metadataStore.instagramAccount = nil
+        instagramEnabledCategories = []
+        try? cacheStore.deleteNetwork(.instagram)
+        instagramStatus = .notConfigured
+        message = "Instagram account disconnected."
+    }
+
+    public func toggleInstagramCategory(_ category: InstagramNotificationCategory, enabled: Bool) {
+        if enabled {
+            instagramEnabledCategories.insert(category)
+        } else {
+            instagramEnabledCategories.remove(category)
+        }
+        var account = metadataStore.instagramAccount
+        account?.enabledCategories = instagramEnabledCategories
+        if let account {
+            metadataStore.instagramAccount = account
+        }
+    }
+
     public func disconnectDebug() {
         metadataStore.debugAccount = nil
         try? cacheStore.deleteNetwork(.debug)
@@ -149,6 +228,14 @@ public final class SettingsViewModel: ObservableObject {
             farcasterStatus = .valid
         } else {
             farcasterStatus = .notConfigured
+        }
+
+        if let instagram = metadataStore.instagramAccount {
+            instagramEnabledCategories = instagram.enabledCategories
+            instagramStatus = .valid
+        } else {
+            instagramEnabledCategories = []
+            instagramStatus = .notConfigured
         }
 
         if let debug = metadataStore.debugAccount {

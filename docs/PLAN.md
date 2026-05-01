@@ -19,7 +19,7 @@ Build a universal macOS and iOS app with xtool that shows a combined social noti
 ## Out Of Scope For MVP
 
 - Posting and cross-posting.
-- Bluesky and Instagram support.
+- Bluesky support.
 - Multiple accounts per network.
 - Syncing full notification items across devices.
 - Backend service for polling, normalization, or push notifications.

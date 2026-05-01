@@ -9,16 +9,54 @@ import AppKit
 
 struct NotificationDetailView: View {
     let displayItem: DisplayNotificationItem
+    @Environment(\.openURL) private var openURL
 
     var body: some View {
         Form {
             Section {
                 LabeledContent("Network", value: displayItem.item.network.displayName)
-                LabeledContent("Content") {
+
+                VStack(alignment: .leading, spacing: 8) {
+                    let displayText = displayItem.item.target?.text ?? (displayItem.item.target?.imageURL != nil ? "" : displayItem.item.text)
                     if let targetURL {
-                        Link(content, destination: targetURL)
+                        LabeledContent("Content") {
+                            HStack(spacing: 4) {
+                                if !displayText.isEmpty {
+                                    Text(displayText)
+                                        .foregroundStyle(.primary)
+                                }
+                                Image(systemName: "arrow.up.forward.square")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            openURL(targetURL)
+                        }
                     } else {
-                        Text(content)
+                        LabeledContent("Content") {
+                            if !displayText.isEmpty {
+                                Text(displayText)
+                            }
+                        }
+                    }
+
+                    if let imageURL = displayItem.item.target?.imageURL {
+                        AsyncImage(url: imageURL) { phase in
+                            switch phase {
+                            case let .success(image):
+                                image
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fit)
+                                    .frame(maxWidth: 200, maxHeight: 200)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            case .failure, .empty:
+                                EmptyView()
+                            @unknown default:
+                                EmptyView()
+                            }
+                        }
                     }
                 }
             }
@@ -82,6 +120,8 @@ struct NotificationDetailView: View {
                 return nil
             }
             return URL(string: "https://x.com/i/status/\(sourceId)")
+        case .instagram:
+            return displayItem.item.target?.url
         case .debug:
             return nil
         }
@@ -94,6 +134,8 @@ struct NotificationDetailView: View {
             return URL(string: "https://farcaster.xyz/\(username)")
         case .x:
             return URL(string: "https://x.com/\(username)")
+        case .instagram:
+            return URL(string: "https://www.instagram.com/\(username)/")
         case .debug:
             return nil
         }
@@ -148,6 +190,8 @@ private extension SocialNetwork {
             "XBadge"
         case .farcaster:
             "FarcasterBadge"
+        case .instagram:
+            "InstagramBadge"
         case .debug:
             "DebugBadge"
         }
@@ -159,6 +203,8 @@ private extension SocialNetwork {
             "X"
         case .farcaster:
             "F"
+        case .instagram:
+            "I"
         case .debug:
             "D"
         }
@@ -169,6 +215,8 @@ private extension SocialNetwork {
         case .x:
             .black
         case .farcaster:
+            .white
+        case .instagram:
             .white
         case .debug:
             .white
@@ -181,6 +229,8 @@ private extension SocialNetwork {
             .white
         case .farcaster:
             Color(red: 0.52, green: 0.36, blue: 0.80)
+        case .instagram:
+            Color(red: 0.88, green: 0.21, blue: 0.44)
         case .debug:
             .orange
         }
