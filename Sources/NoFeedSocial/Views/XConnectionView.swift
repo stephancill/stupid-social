@@ -22,6 +22,14 @@ struct XConnectionView: View {
                 }
             }
 
+            if viewModel.xStatus != .notConfigured {
+                Section {
+                    Button("Disconnect", role: .destructive) {
+                        viewModel.disconnectX()
+                    }
+                }
+            }
+
             if let message = viewModel.message {
                 Section {
                     Text(message)

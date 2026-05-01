@@ -19,6 +19,14 @@ struct FarcasterConnectionView: View {
                 }
             }
 
+            if viewModel.farcasterStatus != .notConfigured {
+                Section {
+                    Button("Disconnect", role: .destructive) {
+                        viewModel.disconnectFarcaster()
+                    }
+                }
+            }
+
             if let message = viewModel.message {
                 Section {
                     Text(message)

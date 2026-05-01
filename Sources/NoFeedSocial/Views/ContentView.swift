@@ -65,7 +65,8 @@ public struct ContentView: View {
         settingsViewModel = SettingsViewModel(
             keychainStore: keychainStore,
             metadataStore: metadataStore,
-            farcasterClient: farcasterClient
+            farcasterClient: farcasterClient,
+            cacheStore: cacheStore
         )
     }
 }

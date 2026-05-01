@@ -14,15 +14,18 @@ public final class SettingsViewModel: ObservableObject {
     private let keychainStore: KeychainCredentialStore
     private let metadataStore: AccountMetadataStore
     private let farcasterClient: FarcasterClient
+    private let cacheStore: NotificationCacheStore
 
     public init(
         keychainStore: KeychainCredentialStore,
         metadataStore: AccountMetadataStore,
-        farcasterClient: FarcasterClient
+        farcasterClient: FarcasterClient,
+        cacheStore: NotificationCacheStore
     ) {
         self.keychainStore = keychainStore
         self.metadataStore = metadataStore
         self.farcasterClient = farcasterClient
+        self.cacheStore = cacheStore
         loadStatuses()
     }
 
@@ -115,6 +118,28 @@ public final class SettingsViewModel: ObservableObject {
         metadataStore.debugAccount = DebugAccountMetadata(serverURL: url, status: .valid)
         debugStatus = .valid
         message = "Debug notifications server saved."
+    }
+
+    public func disconnectX() {
+        try? keychainStore.deleteXCredentials()
+        metadataStore.xAccount = nil
+        try? cacheStore.deleteNetwork(.x)
+        xStatus = .notConfigured
+        message = "X account disconnected."
+    }
+
+    public func disconnectFarcaster() {
+        metadataStore.farcasterAccount = nil
+        try? cacheStore.deleteNetwork(.farcaster)
+        farcasterStatus = .notConfigured
+        message = "Farcaster account disconnected."
+    }
+
+    public func disconnectDebug() {
+        metadataStore.debugAccount = nil
+        try? cacheStore.deleteNetwork(.debug)
+        debugStatus = .notConfigured
+        message = "Debug server disconnected."
     }
 
     public func loadStatuses() {

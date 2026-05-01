@@ -110,6 +110,15 @@ public final class NotificationCacheStore {
 
         try context.save()
     }
+
+    func deleteNetwork(_ network: SocialNetwork) throws {
+        let descriptor = FetchDescriptor<CachedNotification>()
+        for item in try context.fetch(descriptor) where item.networkRawValue == network.rawValue {
+            context.delete(item)
+        }
+
+        try context.save()
+    }
 }
 
 struct CachedNotificationEntry {

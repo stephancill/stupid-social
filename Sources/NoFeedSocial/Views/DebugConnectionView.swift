@@ -17,6 +17,14 @@ struct DebugConnectionView: View {
                 Text("Use this only for local testing. Background refresh will fetch /notifications from this server.")
             }
 
+            if viewModel.debugStatus != .notConfigured {
+                Section {
+                    Button("Disconnect", role: .destructive) {
+                        viewModel.disconnectDebug()
+                    }
+                }
+            }
+
             Section("Status") {
                 Text(viewModel.debugStatus.label)
                 if let message = viewModel.message {

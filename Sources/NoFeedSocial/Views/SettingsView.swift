@@ -4,6 +4,7 @@ import SwiftUI
 struct SettingsView: View {
     @ObservedObject var viewModel: SettingsViewModel
     @Environment(\.openURL) private var openURL
+    @AppStorage("devModeEnabled") private var devModeEnabled = false
 
     var body: some View {
         Form {
@@ -26,17 +27,19 @@ struct SettingsView: View {
                     )
                 }
 
-                NavigationLink {
-                    DebugConnectionView(viewModel: viewModel)
-                } label: {
-                    connectionRow(
-                        name: "Debug",
-                        subtitle: viewModel.debugConnectionLabel
-                    )
+                if devModeEnabled {
+                    NavigationLink {
+                        DebugConnectionView(viewModel: viewModel)
+                    } label: {
+                        connectionRow(
+                            name: "Debug",
+                            subtitle: viewModel.debugConnectionLabel
+                        )
+                    }
                 }
             }
 
-            Section("About") {
+            Section {
                 Button {
                     openURL(URL(string: "https://stupidtech.net")!)
                 } label: {
@@ -60,6 +63,11 @@ struct SettingsView: View {
                     }
                 }
                 .buttonStyle(.plain)
+            } header: {
+                Text("About")
+                    .onTapGesture(count: 4) {
+                        devModeEnabled.toggle()
+                    }
             }
         }
         .navigationTitle("Settings")
