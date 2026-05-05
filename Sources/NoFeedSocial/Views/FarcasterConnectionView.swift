@@ -4,12 +4,27 @@ import SwiftUI
 struct FarcasterConnectionView: View {
     @ObservedObject var viewModel: SettingsViewModel
     @FocusState private var isFocused: Bool
+    @AppStorage("FarcasterBaseURL") private var farcasterBaseURL: String = ""
 
     var body: some View {
         Form {
             Section {
                 farcasterUsernameField
                 LabeledContent("Status", value: viewModel.farcasterStatus.label)
+            }
+
+            Section {
+                #if os(iOS)
+                TextField("Server URL (optional)", text: $farcasterBaseURL)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .focused($isFocused)
+                #else
+                TextField("Server URL (optional)", text: $farcasterBaseURL)
+                    .focused($isFocused)
+                #endif
+            } footer: {
+                Text("Override the Farcaster API server. Leave empty for default.")
             }
 
             Section {

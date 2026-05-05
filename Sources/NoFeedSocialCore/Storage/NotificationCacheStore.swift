@@ -25,7 +25,9 @@ public final class NotificationCacheStore {
             context.delete(existing)
         }
 
+        var seenIds = Set<String>()
         for item in items {
+            guard seenIds.insert(item.id).inserted else { continue }
             context.insert(try CachedNotification(item: item, cachedAt: now))
         }
 

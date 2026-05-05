@@ -2,10 +2,14 @@ import Foundation
 
 @MainActor
 public struct FarcasterClient {
-    private let baseURL = URL(string: "https://haatz.quilibrium.com")!
+    private let baseURL: URL
     private let session: URLSession
 
-    public init(session: URLSession = defaultSession) {
+    public init(
+        baseURL: URL = URL(string: "https://haatz.quilibrium.com")!,
+        session: URLSession = defaultSession
+    ) {
+        self.baseURL = baseURL
         self.session = session
     }
 

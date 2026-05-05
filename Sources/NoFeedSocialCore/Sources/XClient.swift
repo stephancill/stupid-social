@@ -363,7 +363,7 @@ private enum XNotificationParser {
             sourceId = tweet.stableId
         } else {
             target = nil
-            sourceId = notificationRef.id
+            sourceId = notificationRef.fromUsers.sorted().joined(separator: ",")
         }
 
         let text = groupedNotificationText(element: element, actors: actors, tweetText: target?.text)

@@ -5,6 +5,7 @@ public final class FeedViewModel: ObservableObject {
     @Published public private(set) var items: [DisplayNotificationItem] = []
     @Published public private(set) var pendingNewCount = 0
     @Published public private(set) var isRefreshing = false
+    @Published public private(set) var isForegroundRefreshing = false
     @Published public var errorMessage: String?
 
     private let feedService: FeedService
@@ -43,6 +44,9 @@ public final class FeedViewModel: ObservableObject {
     }
 
     public func refreshOnForegroundActivation() async {
+        isForegroundRefreshing = true
+        defer { isForegroundRefreshing = false }
+
         do {
             try await feedService.foregroundActivationRefresh()
             items = try feedService.loadCachedFeed()

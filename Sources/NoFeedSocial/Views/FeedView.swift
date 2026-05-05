@@ -64,12 +64,20 @@ struct FeedView: View {
             }
             .navigationTitle("Notifications")
             .toolbar {
-                if viewModel.pendingNewCount > 0 {
+                if viewModel.isForegroundRefreshing || viewModel.pendingNewCount > 0 {
                     ToolbarItem(placement: .navigation) {
-                        Button {
-                            viewModel.revealPendingNotifications()
-                        } label: {
-                            Text("\(viewModel.pendingNewCount) New")
+                        HStack(spacing: 8) {
+                            if viewModel.isForegroundRefreshing {
+                                ProgressView()
+                                    .controlSize(.small)
+                            }
+                            if viewModel.pendingNewCount > 0 {
+                                Button {
+                                    viewModel.revealPendingNotifications()
+                                } label: {
+                                    Text("\(viewModel.pendingNewCount) New")
+                                }
+                            }
                         }
                     }
                 }
