@@ -118,3 +118,8 @@
 - Added `"likes"` → `.reaction` and `"follows"` → `.follow` mappings. Added decoding tests for the new PR format: likes with hydrated casts and follows with null cast.
 - Removed the temporary Cloudflare Worker Farcaster base URL override from `ContentView` and `FarcasterConnectionView` since the Hypersnap endpoint is now operational.
 - Follow notification rows no longer show a redundant content preview line (actor username was repeated below the summary text).
+
+### Instagram priority_stories fix
+
+- Instagram's news inbox returns three story arrays: `new_stories`, `old_stories`, and `priority_stories`. The app was only processing `new_stories + old_stories`, causing latest story likes (which land in `priority_stories`) to never appear in the feed.
+- Added `priorityStories` to `InstagramNewsInboxResponse` and included it in the merge (prepended first since they are the most recent).
