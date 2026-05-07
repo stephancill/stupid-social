@@ -182,8 +182,10 @@ private struct NotificationRow: View {
 
     @ViewBuilder
     private var previewContent: some View {
-        if let targetText = displayItem.item.target?.text, !targetText.isEmpty,
-           (displayItem.item.type == .reaction || displayItem.item.type == .reply || displayItem.item.type == .mention) {
+        if displayItem.item.type == .follow {
+            EmptyView()
+        } else if let targetText = displayItem.item.target?.text, !targetText.isEmpty,
+                  (displayItem.item.type == .reaction || displayItem.item.type == .reply || displayItem.item.type == .mention) {
             Text(targetText)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)

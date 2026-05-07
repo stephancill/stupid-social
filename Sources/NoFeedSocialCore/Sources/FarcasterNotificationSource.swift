@@ -99,12 +99,10 @@ public struct FarcasterNotificationSource: NotificationSource {
 
     private func normalizeType(_ type: String) -> NotificationType {
         switch type {
-        case "reply": .reply
-        case "mention": .mention
-        case "cast-mention": .mention
-        case "cast-reply": .reply
-        case "reaction": .reaction
-        case "follow": .follow
+        case "reply", "cast-reply": .reply
+        case "mention", "cast-mention": .mention
+        case "reaction", "likes": .reaction
+        case "follow", "follows": .follow
         default: .unknown
         }
     }

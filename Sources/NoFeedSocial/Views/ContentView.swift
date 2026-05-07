@@ -34,11 +34,7 @@ public struct ContentView: View {
     private func configureDependencies() {
         let metadataStore = AccountMetadataStore()
         let keychainStore = KeychainCredentialStore()
-        let farcasterBaseURL = UserDefaults.standard
-            .string(forKey: "FarcasterBaseURL")
-            .flatMap(URL.init(string:))
-            ?? URL(string: "https://haatz.quilibrium.com")!
-        let farcasterClient = FarcasterClient(baseURL: farcasterBaseURL)
+        let farcasterClient = FarcasterClient()
         let cacheStore = NotificationCacheStore(context: modelContext)
         let watermarkStore = ICloudReadWatermarkStore()
 

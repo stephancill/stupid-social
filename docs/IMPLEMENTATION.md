@@ -108,3 +108,13 @@
 - Comment content (text after `:` in `rich_text`) is placed in `target.text` and shown as the feed row subtitle. Story likes display no content text — just the thumbnail.
 - Actor profile links on detail view: `https://www.instagram.com/{username}/`.
 - Instagram notifications are fetched on foreground activation (like Farcaster) since there is no separate count-only endpoint. Read state uses the same app-local watermark system.
+
+## 2026-05-07
+
+### Hypersnap PR #17 deployed — normalization fix
+
+- Hypersnap PR #17 merged and deployed to `https://haatz.quilibrium.com`. The endpoint now returns `likes` (with hydrated target casts), `follows` (cast=null), and `reply` notification types with opaque base64-JSON cursor pagination.
+- `FarcasterNotificationSource.normalizeType` was missing mappings for the new PR type strings `"likes"` and `"follows"` (only had `"reaction"` and `"follow"`). All likes and follows were falling through to `.unknown`, rendering as generic gray bell icons in the feed.
+- Added `"likes"` → `.reaction` and `"follows"` → `.follow` mappings. Added decoding tests for the new PR format: likes with hydrated casts and follows with null cast.
+- Removed the temporary Cloudflare Worker Farcaster base URL override from `ContentView` and `FarcasterConnectionView` since the Hypersnap endpoint is now operational.
+- Follow notification rows no longer show a redundant content preview line (actor username was repeated below the summary text).
