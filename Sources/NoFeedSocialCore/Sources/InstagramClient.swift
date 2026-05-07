@@ -107,7 +107,7 @@ public struct InstagramClient {
         }
 
         let decoded = try JSONDecoder().decode(InstagramNewsInboxResponse.self, from: data)
-        let allStories = (decoded.newStories ?? []) + (decoded.oldStories ?? [])
+        let allStories = (decoded.priorityStories ?? []) + (decoded.newStories ?? []) + (decoded.oldStories ?? [])
         return InstagramNotificationParser.parse(
             stories: allStories,
             accountId: credentials.dsUserId,
@@ -184,10 +184,12 @@ private struct InstagramCurrentUserResponse: Decodable {
 struct InstagramNewsInboxResponse: Decodable {
     let newStories: [InstagramNewsStory]?
     let oldStories: [InstagramNewsStory]?
+    let priorityStories: [InstagramNewsStory]?
 
     enum CodingKeys: String, CodingKey {
         case newStories = "new_stories"
         case oldStories = "old_stories"
+        case priorityStories = "priority_stories"
     }
 }
 
