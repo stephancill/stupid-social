@@ -26,7 +26,8 @@ public struct FarcasterNotificationSource: NotificationSource {
         }
 
         let response = try await client.notifications(fid: account.fid)
-        return response.notifications.count
+        let items = response.notifications.map { normalize($0, accountId: String(account.fid)) }
+        return groupItems(items, accountId: String(account.fid)).count
     }
 
     public func fetchNotifications(reason: RefreshReason) async throws -> [NotificationItem] {
@@ -35,7 +36,8 @@ public struct FarcasterNotificationSource: NotificationSource {
         }
 
         let response = try await client.notifications(fid: account.fid)
-        return response.notifications.map { normalize($0, accountId: String(account.fid)) }
+        let items = response.notifications.map { normalize($0, accountId: String(account.fid)) }
+        return groupItems(items, accountId: String(account.fid))
     }
 
     public func fetchProfile(id: String) async throws -> NetworkProfile {
@@ -173,5 +175,59 @@ public struct FarcasterNotificationSource: NotificationSource {
         case .follow: "\(actorName) followed you"
         case .unknown: notification.cast?.text ?? "New Farcaster notification"
         }
+    }
+
+    // ── Grouping ──
+
+    private func groupItems(_ items: [NotificationItem], accountId: String) -> [NotificationItem] {
+        var reactionGroups: [String: [NotificationItem]] = [:]
+        var ungrouped: [NotificationItem] = []
+
+        for item in items {
+            if item.type == .reaction, let targetId = item.target?.id {
+                reactionGroups[targetId, default: []].append(item)
+            } else {
+                ungrouped.append(item)
+            }
+        }
+
+        let groupedReactions: [NotificationItem] = reactionGroups.compactMap { _, group in
+            mergeReactionGroup(group, accountId: accountId)
+        }
+
+        return (ungrouped + groupedReactions).sorted { $0.timestamp > $1.timestamp }
+    }
+
+    private func mergeReactionGroup(_ group: [NotificationItem], accountId: String) -> NotificationItem? {
+        guard let first = group.first else { return nil }
+
+        var seenIds: Set<String> = []
+        var mergedActors: [NotificationActor] = []
+        for item in group {
+            for actor in item.actors where seenIds.insert(actor.id).inserted {
+                mergedActors.append(actor)
+            }
+        }
+
+        let newestTimestamp = group.map(\.timestamp).max() ?? first.timestamp
+
+        let actorName = mergedActors.first?.username.map { "@\($0)" } ?? "Someone"
+        let suffix = mergedActors.count > 1
+            ? " and \(mergedActors.count - 1) other\(mergedActors.count == 2 ? "" : "s")"
+            : ""
+        let text = "\(actorName)\(suffix) reacted to your cast"
+
+        return NotificationItem(
+            id: first.id,
+            network: first.network,
+            accountId: first.accountId,
+            sourceId: first.sourceId,
+            type: first.type,
+            timestamp: newestTimestamp,
+            text: text,
+            actors: mergedActors,
+            target: first.target,
+            parentTarget: first.parentTarget
+        )
     }
 }
