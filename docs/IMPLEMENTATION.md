@@ -123,3 +123,9 @@
 
 - Instagram's news inbox returns three story arrays: `new_stories`, `old_stories`, and `priority_stories`. The app was only processing `new_stories + old_stories`, causing latest story likes (which land in `priority_stories`) to never appear in the feed.
 - Added `priorityStories` to `InstagramNewsInboxResponse` and included it in the merge (prepended first since they are the most recent).
+
+### Farcaster reaction grouping
+
+- Added a post-normalization grouping step in `FarcasterNotificationSource` that merges multiple reaction (likes) notifications sharing the same target cast hash into a single `NotificationItem`.
+- Merged actors are deduplicated by FID, the most recent timestamp is used, and text uses the `"@alice and 2 others reacted to your cast"` pattern matching the X and Instagram grouping style.
+- Replies and follows remain ungrouped (replies are unique per cast, follows have no common grouping key).
