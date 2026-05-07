@@ -181,24 +181,31 @@ public struct FarcasterNotificationSource: NotificationSource {
 
     private func groupItems(_ items: [NotificationItem], accountId: String) -> [NotificationItem] {
         var reactionGroups: [String: [NotificationItem]] = [:]
+        var followItems: [NotificationItem] = []
         var ungrouped: [NotificationItem] = []
 
         for item in items {
             if item.type == .reaction, let targetId = item.target?.id {
                 reactionGroups[targetId, default: []].append(item)
+            } else if item.type == .follow {
+                followItems.append(item)
             } else {
                 ungrouped.append(item)
             }
         }
 
         let groupedReactions: [NotificationItem] = reactionGroups.compactMap { _, group in
-            mergeReactionGroup(group, accountId: accountId)
+            mergeGroup(group, type: .reaction, accountId: accountId)
         }
 
-        return (ungrouped + groupedReactions).sorted { $0.timestamp > $1.timestamp }
+        let groupedFollows: [NotificationItem] = followItems.isEmpty
+            ? []
+            : [mergeGroup(followItems, type: .follow, accountId: accountId)].compactMap { $0 }
+
+        return (ungrouped + groupedReactions + groupedFollows).sorted { $0.timestamp > $1.timestamp }
     }
 
-    private func mergeReactionGroup(_ group: [NotificationItem], accountId: String) -> NotificationItem? {
+    private func mergeGroup(_ group: [NotificationItem], type: NotificationType, accountId: String) -> NotificationItem? {
         guard let first = group.first else { return nil }
 
         var seenIds: Set<String> = []
@@ -215,7 +222,11 @@ public struct FarcasterNotificationSource: NotificationSource {
         let suffix = mergedActors.count > 1
             ? " and \(mergedActors.count - 1) other\(mergedActors.count == 2 ? "" : "s")"
             : ""
-        let text = "\(actorName)\(suffix) reacted to your cast"
+        let text: String = switch type {
+        case .reaction: "\(actorName)\(suffix) reacted to your cast"
+        case .follow: "\(actorName)\(suffix) followed you"
+        default: first.text
+        }
 
         return NotificationItem(
             id: first.id,

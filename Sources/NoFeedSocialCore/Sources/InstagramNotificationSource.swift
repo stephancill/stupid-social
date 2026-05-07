@@ -31,7 +31,8 @@ public final class InstagramNotificationSource: NotificationSource {
     public func fetchUnreadCount() async throws -> Int? {
         do {
             let categories = metadataStore.instagramAccount?.enabledCategories ?? []
-            let items = try await client.notifications(enabledCategories: categories)
+            let username = metadataStore.instagramAccount?.username
+            let items = try await client.notifications(enabledCategories: categories, accountUsername: username)
             return items.count
         } catch SourceError.notConfigured {
             return nil
@@ -40,7 +41,8 @@ public final class InstagramNotificationSource: NotificationSource {
 
     public func fetchNotifications(reason: RefreshReason) async throws -> [NotificationItem] {
         let categories = metadataStore.instagramAccount?.enabledCategories ?? Set(InstagramNotificationCategory.allCases)
-        return try await client.notifications(enabledCategories: categories)
+        let username = metadataStore.instagramAccount?.username
+        return try await client.notifications(enabledCategories: categories, accountUsername: username)
     }
 
     public func fetchProfile(id: String) async throws -> NetworkProfile {

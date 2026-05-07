@@ -129,3 +129,10 @@
 - Added a post-normalization grouping step in `FarcasterNotificationSource` that merges multiple reaction (likes) notifications sharing the same target cast hash into a single `NotificationItem`.
 - Merged actors are deduplicated by FID, the most recent timestamp is used, and text uses the `"@alice and 2 others reacted to your cast"` pattern matching the X and Instagram grouping style.
 - Replies and follows remain ungrouped (replies are unique per cast, follows have no common grouping key).
+
+### Farcaster follow grouping and Instagram story URL fix
+
+- Extended Farcaster grouping to also collapse all follow notifications from a single fetch batch into one item with `"@alice and N others followed you"` text.
+- Refactored `mergeReactionGroup` into a generic `mergeGroup` that handles both `.reaction` and `.follow` types.
+- Fixed Instagram story URL generation for active (non-archived) stories. When `reel_id` matches the user's own FID, the URL now uses the active story pattern `https://www.instagram.com/stories/{username}/{media_id}/` instead of the archive pattern.
+- `parseStoryURL` now accepts `accountId` and `accountUsername` parameters. The username is threaded from `InstagramNotificationSource` through `InstagramClient.notifications` to the parser.

@@ -84,7 +84,10 @@ public struct InstagramClient {
         try credentialStore.loadInstagramCredentials() != nil
     }
 
-    func notifications(enabledCategories: Set<InstagramNotificationCategory>) async throws -> [NotificationItem] {
+    func notifications(
+        enabledCategories: Set<InstagramNotificationCategory>,
+        accountUsername: String? = nil
+    ) async throws -> [NotificationItem] {
         guard let credentials = try credentialStore.loadInstagramCredentials() else {
             throw SourceError.notConfigured
         }
@@ -111,6 +114,7 @@ public struct InstagramClient {
         return InstagramNotificationParser.parse(
             stories: allStories,
             accountId: credentials.dsUserId,
+            accountUsername: accountUsername,
             enabledCategories: enabledCategories
         )
     }
@@ -266,13 +270,23 @@ public struct InstagramUserInfoResponse: Decodable {
 // MARK: - Parser
 
 private enum InstagramNotificationParser {
-    static func parse(stories: [InstagramNewsStory], accountId: String, enabledCategories: Set<InstagramNotificationCategory>) -> [NotificationItem] {
+    static func parse(
+        stories: [InstagramNewsStory],
+        accountId: String,
+        accountUsername: String?,
+        enabledCategories: Set<InstagramNotificationCategory>
+    ) -> [NotificationItem] {
         stories.compactMap { story in
-            parseSingle(story: story, accountId: accountId, enabledCategories: enabledCategories)
+            parseSingle(story: story, accountId: accountId, accountUsername: accountUsername, enabledCategories: enabledCategories)
         }
     }
 
-    private static func parseSingle(story: InstagramNewsStory, accountId: String, enabledCategories: Set<InstagramNotificationCategory>) -> NotificationItem? {
+    private static func parseSingle(
+        story: InstagramNewsStory,
+        accountId: String,
+        accountUsername: String?,
+        enabledCategories: Set<InstagramNotificationCategory>
+    ) -> NotificationItem? {
         guard let category = InstagramNotificationCategory.category(for: story.notifName),
               enabledCategories.contains(category) else {
             return nil
@@ -289,7 +303,7 @@ private enum InstagramNotificationParser {
 
         let mediaImageUrl = story.args.media?.first?.image ?? story.args.images?.first?.image
         let imageURL = mediaImageUrl.flatMap(URL.init)
-        let storyURL = parseStoryURL(from: story.args.destination)
+        let storyURL = parseStoryURL(from: story.args.destination, accountId: accountId, accountUsername: accountUsername)
         let linkURL = storyURL ?? imageURL
 
         let target: NotificationTarget?
@@ -428,7 +442,11 @@ private enum InstagramNotificationParser {
         return "\(firstName) and \(remainingCount) other\(remainingCount == 1 ? "" : "s")"
     }
 
-    private static func parseStoryURL(from destination: String?) -> URL? {
+    private static func parseStoryURL(
+        from destination: String?,
+        accountId: String,
+        accountUsername: String?
+    ) -> URL? {
         guard let destination else { return nil }
         guard let questionIndex = destination.firstIndex(of: "?") else { return nil }
         let query = String(destination[destination.index(after: questionIndex)...])
@@ -440,14 +458,21 @@ private enum InstagramNotificationParser {
         guard let reelId = parsedQuery.first(where: { $0.name == "reel_id" })?.value?.removingPercentEncoding else { return nil }
         guard let feedItemId = parsedQuery.first(where: { $0.name == "feeditem_id" })?.value else { return nil }
 
-        let hash: String
-        if reelId.hasPrefix("archiveDay:") {
-            hash = String(reelId.dropFirst("archiveDay:".count))
-        } else {
-            hash = reelId
+        let mediaId = feedItemId.split(separator: "_").first.map(String.init) ?? feedItemId
+
+        // Active stories: reel_id is the user's own numeric FID (e.g. "70150151668")
+        if reelId == accountId {
+            let profile = accountUsername ?? reelId
+            return URL(string: "https://www.instagram.com/stories/\(profile)/\(mediaId)/")
         }
 
-        let mediaId = feedItemId.split(separator: "_").first.map(String.init) ?? feedItemId
-        return URL(string: "https://www.instagram.com/stories/archive/\(hash)/?initial_media_id=\(mediaId)")
+        // Archived stories: reel_id has "archiveDay:" prefix
+        if reelId.hasPrefix("archiveDay:") {
+            let hash = String(reelId.dropFirst("archiveDay:".count))
+            return URL(string: "https://www.instagram.com/stories/archive/\(hash)/?initial_media_id=\(mediaId)")
+        }
+
+        // Highlight stories or other reel types
+        return URL(string: "https://www.instagram.com/stories/archive/\(reelId)/?initial_media_id=\(mediaId)")
     }
 }
