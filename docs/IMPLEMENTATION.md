@@ -156,3 +156,13 @@
 
 - Hypersnap returns `type: "reply"` for all `CastAdd` notification messages (both replies and mentions). `normalizeType` now checks `parentAuthor.fid` against the account FID: matching → `.reply`, null/mismatched → `.mention`.
 - `FarcasterCastResponse` gained `mentionedProfiles` and `mentionedProfilesRanges` fields from the Hypersnap response. The cast `text` field stores mention-stripped text with zero-length ranges; `displayText` reconstructs the full text by inserting `@username` at each range position. Used in `NotificationTarget` for feed row preview content.
+
+## 2026-05-08
+
+### X webview login
+
+- Added `XLoginWebView` — a `WKWebView`-based browser login flow that opens `https://x.com/i/flow/login` in a sheet. Uses a non-persistent cookie store and impersonates Chrome via custom user agent.
+- After each page load, the coordinator checks the webview's cookie store for `auth_token` cookie; on finding it extracts `auth_token` + `ct0` and triggers credential save.
+- Added `saveXCookies(_ credentials: XCredentials)` to `SettingsViewModel` — saves credentials directly (no header parsing needed) then resolves username via `verifiedUser()`.
+- Webview login is now the primary method in `XConnectionView`; the manual cookie header paste is hidden behind the dev mode toggle (4 taps on Settings > About header).
+- Fixed a row separator rendering issue between the login button and status by splitting them into separate Form sections.

@@ -69,6 +69,28 @@ public final class SettingsViewModel: ObservableObject {
         metadataStore.debugAccount?.serverURL.absoluteString ?? debugStatus.label
     }
 
+    public func saveXCookies(_ credentials: XCredentials) async {
+        do {
+            _ = try keychainStore.saveXCredentials(credentials)
+            xStatus = .valid
+            message = "X credentials saved."
+        } catch {
+            xStatus = .serviceError("Could not save credentials")
+            message = "Could not save X credentials."
+            return
+        }
+
+        do {
+            let user = try await XClient(credentialStore: keychainStore).verifiedUser()
+            metadataStore.xAccount = XAccountMetadata(accountId: "x", handle: user.screenName, status: .valid)
+            xStatus = .valid
+            message = "Connected as @\(user.screenName)."
+        } catch {
+            metadataStore.xAccount = XAccountMetadata(accountId: "x", handle: nil, status: .valid)
+            message = "X credentials saved, but could not resolve username."
+        }
+    }
+
     public func saveXCookieHeader() async {
         guard let credentials = CookieHeaderParser.extractXCredentials(from: xCookieHeader) else {
             xStatus = .invalidCredentials
