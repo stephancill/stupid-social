@@ -166,3 +166,10 @@
 - Added `saveXCookies(_ credentials: XCredentials)` to `SettingsViewModel` — saves credentials directly (no header parsing needed) then resolves username via `verifiedUser()`.
 - Webview login is now the primary method in `XConnectionView`; the manual cookie header paste is hidden behind the dev mode toggle (4 taps on Settings > About header).
 - Fixed a row separator rendering issue between the login button and status by splitting them into separate Form sections.
+
+### Instagram webview login
+
+- Added `InstagramLoginWebView` — `WKWebView`-based browser login for `https://www.instagram.com/accounts/login/`. Same non-persistent cookie store and Chrome user agent approach.
+- Cookie extraction watches for `sessionid` cookie, then extracts `sessionid`, `csrftoken`, `ds_user_id`, and optionally `mid`.
+- Added `saveInstagramCookies(_ credentials: InstagramCredentials)` to `SettingsViewModel`.
+- Updated `InstagramConnectionView` with same layout: webview login button as primary, manual cookie header paste hidden behind dev mode toggle.

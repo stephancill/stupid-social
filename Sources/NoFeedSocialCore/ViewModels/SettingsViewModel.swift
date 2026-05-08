@@ -143,6 +143,42 @@ public final class SettingsViewModel: ObservableObject {
         }
     }
 
+    public func saveInstagramCookies(_ credentials: InstagramCredentials) async {
+        do {
+            _ = try keychainStore.saveInstagramCredentials(credentials)
+            instagramStatus = .valid
+            message = "Instagram credentials saved."
+        } catch {
+            instagramStatus = .serviceError("Could not save credentials")
+            message = "Could not save Instagram credentials."
+            return
+        }
+
+        do {
+            let user = try await InstagramClient(credentialStore: keychainStore).verifiedUser()
+            let categories = Set(InstagramNotificationCategory.allCases)
+            metadataStore.instagramAccount = InstagramAccountMetadata(
+                accountId: String(user.pk),
+                username: user.username,
+                status: .valid,
+                enabledCategories: categories
+            )
+            instagramEnabledCategories = categories
+            instagramStatus = .valid
+            message = "Connected as @\(user.username)."
+        } catch {
+            let categories = Set(InstagramNotificationCategory.allCases)
+            metadataStore.instagramAccount = InstagramAccountMetadata(
+                accountId: "instagram",
+                username: nil,
+                status: .valid,
+                enabledCategories: categories
+            )
+            instagramEnabledCategories = categories
+            message = "Instagram credentials saved, but could not resolve username."
+        }
+    }
+
     public func saveInstagramCookieHeader() async {
         guard let credentials = CookieHeaderParser.extractInstagramCredentials(from: instagramCookieHeader) else {
             instagramStatus = .invalidCredentials

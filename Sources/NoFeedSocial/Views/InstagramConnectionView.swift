@@ -4,21 +4,43 @@ import SwiftUI
 struct InstagramConnectionView: View {
     @ObservedObject var viewModel: SettingsViewModel
     @FocusState private var isFocused: Bool
+    @State private var showingLoginSheet = false
+    @AppStorage("devModeEnabled") private var devModeEnabled = false
 
     var body: some View {
         Form {
             Section {
-                TextField("Cookie header", text: $viewModel.instagramCookieHeader, axis: .vertical)
-                    .lineLimit(2...4)
-                    .textFieldStyle(.plain)
-                    .focused($isFocused)
-                LabeledContent("Status", value: viewModel.instagramStatus.label)
+                Button {
+                    showingLoginSheet = true
+                } label: {
+                    HStack {
+                        Spacer()
+                        Label("Log in to Instagram", systemImage: "safari")
+                        Spacer()
+                    }
+                }
             }
 
             Section {
-                Button("Save Instagram Credentials") {
-                    isFocused = false
-                    Task { await viewModel.saveInstagramCookieHeader() }
+                HStack {
+                    Text("Status")
+                    Spacer()
+                    Text(viewModel.instagramStatus.label)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if devModeEnabled {
+                Section("Manual (Dev)") {
+                    TextField("Cookie header", text: $viewModel.instagramCookieHeader, axis: .vertical)
+                        .lineLimit(2...4)
+                        .textFieldStyle(.plain)
+                        .focused($isFocused)
+
+                    Button("Save Instagram Credentials") {
+                        isFocused = false
+                        Task { await viewModel.saveInstagramCookieHeader() }
+                    }
                 }
             }
 
@@ -46,6 +68,11 @@ struct InstagramConnectionView: View {
             }
         }
         .navigationTitle("Instagram")
+        .sheet(isPresented: $showingLoginSheet) {
+            InstagramLoginWebView { credentials in
+                Task { await viewModel.saveInstagramCookies(credentials) }
+            }
+        }
     }
 
     private func binding(for category: InstagramNotificationCategory) -> Binding<Bool> {
