@@ -151,3 +151,8 @@
 ### Hypersnap PR #24 — parent-based reply lookup
 
 - Opened PR to add `get_casts_by_parent` lookup to `GET /v2/farcaster/notifications` in Hypersnap so replies via `parent_cast_id` (without explicit @mention) also appear in notifications. Uses same `cast_targets` list already collected for reactions, with `REPLIES_PER_CAST_CAP = 10` per shard. Added 2 tests for parent-based replies and self-reply exclusion.
+
+### Farcaster mention vs reply distinction and mention text reconstruction
+
+- Hypersnap returns `type: "reply"` for all `CastAdd` notification messages (both replies and mentions). `normalizeType` now checks `parentAuthor.fid` against the account FID: matching → `.reply`, null/mismatched → `.mention`.
+- `FarcasterCastResponse` gained `mentionedProfiles` and `mentionedProfilesRanges` fields from the Hypersnap response. The cast `text` field stores mention-stripped text with zero-length ranges; `displayText` reconstructs the full text by inserting `@username` at each range position. Used in `NotificationTarget` for feed row preview content.

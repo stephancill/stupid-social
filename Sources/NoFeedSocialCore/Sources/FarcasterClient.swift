@@ -178,6 +178,32 @@ struct FarcasterCastResponse: Decodable {
     let parentUrl: String?
     let parentAuthor: FarcasterParentAuthorResponse?
     let author: FarcasterUserResponse?
+    let mentionedProfiles: [FarcasterMentionedProfile]?
+    let mentionedProfilesRanges: [FarcasterMentionRange]?
+
+    var displayText: String? {
+        guard let text, let profiles = mentionedProfiles, let ranges = mentionedProfilesRanges,
+              profiles.count == ranges.count else { return text }
+        var result = text
+        for (profile, range) in zip(profiles, ranges).reversed() {
+            let username = profile.username ?? "user\(profile.fid)"
+            let mention = "@\(username)"
+            let start = result.index(result.startIndex, offsetBy: min(range.start, result.count))
+            let end = result.index(result.startIndex, offsetBy: min(range.end, result.count))
+            result.replaceSubrange(start..<end, with: mention)
+        }
+        return result
+    }
+}
+
+struct FarcasterMentionedProfile: Decodable {
+    let fid: UInt64
+    let username: String?
+}
+
+struct FarcasterMentionRange: Decodable {
+    let start: Int
+    let end: Int
 }
 
 struct FarcasterParentAuthorResponse: Decodable {

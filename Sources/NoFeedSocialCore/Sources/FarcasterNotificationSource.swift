@@ -63,7 +63,7 @@ public struct FarcasterNotificationSource: NotificationSource {
         accountId: String
     ) -> NotificationItem {
         let timestamp = notification.notificationDate
-        let type = normalizeType(notification.type)
+        let type = normalizeType(notification.type, notification: notification, accountFid: accountId)
         let actors = notificationActors(notification)
         let sourceId = stableSourceId(notification, type: notification.type)
         let text = notificationText(notification, type: type, actors: actors)
@@ -78,7 +78,7 @@ public struct FarcasterNotificationSource: NotificationSource {
             text: text,
             actors: actors,
             target: notification.cast.map {
-                NotificationTarget(id: $0.hash, text: $0.text, url: nil)
+                NotificationTarget(id: $0.hash, text: $0.displayText ?? $0.text, url: nil)
             },
             parentTarget: nil
         )
@@ -100,13 +100,20 @@ public struct FarcasterNotificationSource: NotificationSource {
         return "\(type):fallback"
     }
 
-    private func normalizeType(_ type: String) -> NotificationType {
+    private func normalizeType(_ type: String, notification: FarcasterNotificationResponse, accountFid: String) -> NotificationType {
         switch type {
-        case "reply", "cast-reply": .reply
-        case "mention", "cast-mention": .mention
-        case "reaction", "likes": .reaction
-        case "follow", "follows": .follow
-        default: .unknown
+        case "reply":
+            // Hypersnap returns "reply" for all CastAdd messages.
+            // Distinguish: replies have parent_author.fid == accountFid, mentions do not.
+            if let parentFid = notification.cast?.parentAuthor?.fid, String(parentFid) == accountFid {
+                return .reply
+            }
+            return .mention
+        case "mention", "cast-mention": return .mention
+        case "cast-reply": return .reply
+        case "reaction", "likes": return .reaction
+        case "follow", "follows": return .follow
+        default: return .unknown
         }
     }
 
