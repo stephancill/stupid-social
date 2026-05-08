@@ -252,6 +252,12 @@ public struct InstagramUserInfoResponse: Decodable {
         public let profilePicUrl: String?
         public let followerCount: Int?
         public let followingCount: Int?
+        public let biography: String?
+        public let mediaCount: Int?
+        public let isVerified: Bool?
+        public let isPrivate: Bool?
+        public let externalUrl: String?
+        public let friendshipStatus: InstagramFriendshipStatus?
 
         enum CodingKeys: String, CodingKey {
             case pk
@@ -260,7 +266,19 @@ public struct InstagramUserInfoResponse: Decodable {
             case profilePicUrl = "profile_pic_url"
             case followerCount = "follower_count"
             case followingCount = "following_count"
+            case biography
+            case mediaCount = "media_count"
+            case isVerified = "is_verified"
+            case isPrivate = "is_private"
+            case externalUrl = "external_url"
+            case friendshipStatus = "friendship_status"
         }
+    }
+
+    public struct InstagramFriendshipStatus: Decodable {
+        public let following: Bool?
+        public let followedBy: Bool?
+        public let isBestie: Bool?
     }
 
     public let user: InfoUser

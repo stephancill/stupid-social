@@ -9,6 +9,7 @@ import AppKit
 
 struct NotificationDetailView: View {
     let displayItem: DisplayNotificationItem
+    let feedService: FeedService
     @Environment(\.openURL) private var openURL
 
     var body: some View {
@@ -64,11 +65,9 @@ struct NotificationDetailView: View {
             if !displayItem.item.actors.isEmpty {
                 Section("People") {
                     ForEach(displayItem.item.actors, id: \.id) { actor in
-                        if let url = profileURL(for: actor) {
-                            Link(destination: url) {
-                                PersonRow(actor: actor)
-                            }
-                        } else {
+                        NavigationLink {
+                            ProfileDetailView(actor: actor, feedService: feedService)
+                        } label: {
                             PersonRow(actor: actor)
                         }
                     }
@@ -126,21 +125,8 @@ struct NotificationDetailView: View {
             return nil
         }
     }
-
-    private func profileURL(for actor: NotificationActor) -> URL? {
-        guard let username = actor.username else { return nil }
-        switch actor.network {
-        case .farcaster:
-            return URL(string: "https://farcaster.xyz/\(username)")
-        case .x:
-            return URL(string: "https://x.com/\(username)")
-        case .instagram:
-            return URL(string: "https://www.instagram.com/\(username)/")
-        case .debug:
-            return nil
-        }
-    }
 }
+
 
 private struct PersonRow: View {
     let actor: NotificationActor

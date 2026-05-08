@@ -53,9 +53,14 @@ public final class InstagramNotificationSource: NotificationSource {
                 network: .instagram,
                 username: response.user.username,
                 displayName: response.user.fullName,
+                bio: response.user.biography,
                 avatarURL: response.user.profilePicUrl.flatMap(URL.init),
                 followerCount: response.user.followerCount,
-                followingCount: response.user.followingCount
+                followingCount: response.user.followingCount,
+                postsCount: response.user.mediaCount,
+                websiteURL: response.user.externalUrl.flatMap(URL.init),
+                isVerified: response.user.isVerified,
+                isMutualFollow: (response.user.friendshipStatus?.following == true && response.user.friendshipStatus?.followedBy == true) ? true : nil
             )
         } catch {
             throw SourceError.serviceError("Could not fetch profile.")

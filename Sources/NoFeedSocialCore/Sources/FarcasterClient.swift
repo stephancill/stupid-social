@@ -36,6 +36,31 @@ public struct FarcasterClient {
         return response.user
     }
 
+    func user(byFid fid: UInt64) async throws -> FarcasterUserResponse {
+        var components = URLComponents(
+            url: baseURL.appending(path: "/v2/farcaster/user"),
+            resolvingAgainstBaseURL: false
+        )!
+        components.queryItems = [URLQueryItem(name: "fid", value: String(fid))]
+
+        let response: FarcasterUserWrapperResponse = try await get(components.url!)
+        return response.user
+    }
+
+    func interactions(fid: UInt64, targetFid: UInt64) async throws -> FarcasterInteractions {
+        var components = URLComponents(
+            url: baseURL.appending(path: "/v2/farcaster/user/interactions"),
+            resolvingAgainstBaseURL: false
+        )!
+        components.queryItems = [
+            URLQueryItem(name: "fid", value: String(fid)),
+            URLQueryItem(name: "target_fid", value: String(targetFid)),
+        ]
+
+        let response: FarcasterInteractionsResponse = try await get(components.url!)
+        return response.interactions
+    }
+
     func notifications(fid: UInt64, limit: Int = 50, cursor: String? = nil) async throws -> FarcasterNotificationsResponse {
         var components = URLComponents(
             url: baseURL.appending(path: "/v2/farcaster/notifications"),
@@ -91,10 +116,30 @@ public struct FarcasterUserResponse: Decodable {
     public let pfpUrl: URL?
     public let followerCount: Int?
     public let followingCount: Int?
+    public let profile: FarcasterProfile?
+    public let registeredAt: Date?
+
+    public var bio: String? { profile?.bio?.text }
+}
+
+public struct FarcasterProfile: Decodable {
+    public let bio: FarcasterBio?
+}
+
+public struct FarcasterBio: Decodable {
+    public let text: String
 }
 
 private struct FarcasterUserWrapperResponse: Decodable {
     let user: FarcasterUserResponse
+}
+
+struct FarcasterInteractionsResponse: Decodable {
+    let interactions: FarcasterInteractions
+}
+
+struct FarcasterInteractions: Decodable {
+    let mutualFollow: Bool
 }
 
 struct FarcasterNotificationsResponse: Decodable {

@@ -24,18 +24,26 @@ public struct XNotificationSource: NotificationSource {
     }
 
     public func fetchProfile(id: String) async throws -> NetworkProfile {
-        guard let account = metadataStore.xAccount else {
-            throw SourceError.notConfigured
+        // id is either a screen_name (from actor.username) or numeric user_id
+        // Try as screen name first via GraphQL UserByScreenName
+        if let profile = try? await client.userProfile(screenName: id) {
+            return NetworkProfile(
+                id: profile.idStr,
+                network: .x,
+                username: profile.screenName,
+                displayName: profile.name,
+                bio: profile.description,
+                avatarURL: profile.profileImageUrlHttps.flatMap { urlString in
+                    URL(string: urlString.replacingOccurrences(of: "_normal", with: ""))
+                },
+                followerCount: profile.followersCount,
+                followingCount: profile.friendsCount,
+                postsCount: profile.statusesCount,
+                joinedAt: profile.createdAt,
+                isVerified: profile.verified,
+                isMutualFollow: (profile.isFollowing == true && profile.isFollowedBy == true) ? true : nil
+            )
         }
-
-        return NetworkProfile(
-            id: account.accountId,
-            network: .x,
-            username: account.handle,
-            displayName: account.handle,
-            avatarURL: nil,
-            followerCount: nil,
-            followingCount: nil
-        )
+        throw SourceError.serviceError("X profile lookup failed for @\(id).")
     }
 }

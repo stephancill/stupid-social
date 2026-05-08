@@ -10,6 +10,8 @@ public final class FeedViewModel: ObservableObject {
 
     private let feedService: FeedService
 
+    public var service: FeedService { feedService }
+
     public init(feedService: FeedService) {
         self.feedService = feedService
     }

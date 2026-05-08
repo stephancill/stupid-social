@@ -31,7 +31,7 @@ struct FeedView: View {
                     if !unreadItems.isEmpty {
                         Section {
                             ForEach(Array(unreadItems.enumerated()), id: \.element.id) { index, displayItem in
-                                NotificationLink(displayItem: displayItem)
+                                NotificationLink(displayItem: displayItem, feedService: viewModel.service)
                                     .listRowSeparator(index == 0 ? .hidden : .visible, edges: .top)
                             }
                         }
@@ -45,7 +45,7 @@ struct FeedView: View {
                     if !readItems.isEmpty {
                         Section {
                             ForEach(Array(readItems.enumerated()), id: \.element.id) { index, displayItem in
-                                NotificationLink(displayItem: displayItem)
+                                NotificationLink(displayItem: displayItem, feedService: viewModel.service)
                                     .listRowSeparator(index == 0 ? .hidden : .visible, edges: .top)
                             }
                         }
@@ -118,10 +118,11 @@ struct FeedView: View {
 
 private struct NotificationLink: View {
     let displayItem: DisplayNotificationItem
+    let feedService: FeedService
 
     var body: some View {
         NavigationLink {
-            NotificationDetailView(displayItem: displayItem)
+            NotificationDetailView(displayItem: displayItem, feedService: feedService)
         } label: {
             NotificationRow(displayItem: displayItem)
         }

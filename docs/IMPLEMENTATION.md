@@ -136,3 +136,18 @@
 - Refactored `mergeReactionGroup` into a generic `mergeGroup` that handles both `.reaction` and `.follow` types.
 - Fixed Instagram story URL generation for active (non-archived) stories. When `reel_id` matches the user's own FID, the URL now uses the active story pattern `https://www.instagram.com/stories/{username}/{media_id}/` instead of the archive pattern.
 - `parseStoryURL` now accepts `accountId` and `accountUsername` parameters. The username is threaded from `InstagramNotificationSource` through `InstagramClient.notifications` to the parser.
+
+### Profile detail page
+
+- Added `ProfileDetailView` accessible by tapping an actor in the notification detail People section. Shows profile image, display name with verified badge, @username, bio, follower/following/post counts, join date, website link, and "View on Network" button.
+- `NetworkProfile` gained `bio`, `postsCount`, `joinedAt`, `websiteURL`, `isVerified`, and `isMutualFollow` fields. All `*NotificationSource.fetchProfile` implementations updated to populate the new fields.
+- **Farcaster** (`FarcasterNotificationSource`): Uses `GET /v2/farcaster/user?fid=N` (new `FarcasterClient.user(byFid:)`) to look up any user by FID. `FarcasterUserResponse` now decodes `profile.bio.text` as a computed `bio` property and `registered_at` as `registeredAt`.
+- **X** (`XNotificationSource`): Uses X's GraphQL `UserByScreenName` endpoint (query ID `IGgvgiOx4QZndDHuD3x9TQ`, same as twitter-cli) since the v1.1 REST `users/show.json` is deprecated. The GraphQL response structure was mapped from real API data: `screen_name`/`name` from `result.core`, `following`/`followed_by` from `result.relationship_perspectives`, avatar from `result.avatar.image_url`, verified from `result.is_blue_verified`, and counts/bio from `result.legacy`. The `id` parameter is the actor's screen name (routed through `FeedService.fetchProfile`).
+- **Instagram** (`InstagramNotificationSource`): Extended `InfoUser` to decode `biography`, `media_count`, `is_verified`, `is_private`, `external_url`, and `friendship_status` (with `following`/`followed_by`) from the `/api/v1/users/{uid}/info/` response.
+- Avatar decoding fixed: `FarcasterUserResponse` uses `.convertFromSnakeCase` with auto-synthesized `Decodable` (removed conflicting custom `CodingKeys`); added decoding tests for real API user responses.
+- `NotificationDetailView` People rows now navigate to `ProfileDetailView` instead of opening external web links. `FeedService.fetchProfile` accepts optional `username` parameter for X screen name lookup.
+- Follow notification rows in the feed no longer show a redundant content preview line.
+
+### Hypersnap PR #24 — parent-based reply lookup
+
+- Opened PR to add `get_casts_by_parent` lookup to `GET /v2/farcaster/notifications` in Hypersnap so replies via `parent_cast_id` (without explicit @mention) also appear in notifications. Uses same `cast_targets` list already collected for reactions, with `REPLIES_PER_CAST_CAP = 10` per shard. Added 2 tests for parent-based replies and self-reply exclusion.

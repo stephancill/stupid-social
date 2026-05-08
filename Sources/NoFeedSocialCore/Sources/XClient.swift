@@ -19,6 +19,81 @@ public struct XClient {
         return URLSession(configuration: config)
     }()
 
+    public func userProfile(screenName: String) async throws -> XProfileResponse {
+        guard let credentials = try credentialStore.loadXCredentials() else {
+            throw SourceError.notConfigured
+        }
+
+        let queryId = "IGgvgiOx4QZndDHuD3x9TQ"
+        let variables: [String: Any] = ["screen_name": screenName, "withSafetyModeUserFields": true]
+        let features: [String: Any] = [
+            "hidden_profile_subscriptions_enabled": true,
+            "rweb_tipjar_consumption_enabled": true,
+            "responsive_web_graphql_exclude_directive_enabled": true,
+            "highlights_tweets_tab_ui_enabled": true,
+            "responsive_web_twitter_article_notes_tab_enabled": true,
+            "creator_subscriptions_tweet_preview_api_enabled": true,
+            "responsive_web_graphql_timeline_navigation_enabled": true,
+        ]
+
+        guard
+            let varsData = try? JSONSerialization.data(withJSONObject: variables),
+            let featData = try? JSONSerialization.data(withJSONObject: features),
+            let varsJSON = String(data: varsData, encoding: .utf8),
+            let featJSON = String(data: featData, encoding: .utf8)
+        else {
+            throw SourceError.invalidResponse
+        }
+
+        let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+        let varsEncoded = varsJSON.addingPercentEncoding(withAllowedCharacters: allowed) ?? varsJSON
+        let featEncoded = featJSON.addingPercentEncoding(withAllowedCharacters: allowed) ?? featJSON
+
+        guard let url = URL(string: "https://x.com/i/api/graphql/\(queryId)/UserByScreenName?variables=\(varsEncoded)&features=\(featEncoded)") else {
+            throw SourceError.invalidResponse
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.allHTTPHeaderFields = headers(credentials: credentials)
+
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw SourceError.invalidResponse
+        }
+
+        if http.statusCode == 401 || http.statusCode == 403 {
+            throw SourceError.notConfigured
+        }
+
+        guard (200..<300).contains(http.statusCode) else {
+            throw SourceError.invalidResponse
+        }
+
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let decoded = try decoder.decode(XGraphQLUserResponse.self, from: data)
+        let result = decoded.data?.user?.result
+        guard let legacy = result?.legacy else {
+            throw SourceError.invalidResponse
+        }
+        return XProfileResponse(
+            idStr: result?.restId ?? "",
+            screenName: result?.core?.screenName ?? screenName,
+            name: result?.core?.name ?? "",
+            description: legacy.description,
+            followersCount: legacy.followersCount,
+            friendsCount: legacy.friendsCount,
+            statusesCount: legacy.statusesCount,
+            createdAt: result?.core?.createdAt.flatMap(Self.twitterDate(from:)),
+            verified: result?.isBlueVerified,
+            profileImageUrlHttps: result?.avatar?.imageUrl,
+            profileBannerUrl: legacy.profileBannerUrl,
+            isFollowing: result?.relationshipPerspectives?.following,
+            isFollowedBy: result?.relationshipPerspectives?.followedBy
+        )
+    }
+
     public func verifiedUser() async throws -> XVerifiedUser {
         guard let credentials = try credentialStore.loadXCredentials() else {
             throw SourceError.notConfigured
@@ -119,6 +194,13 @@ public struct XClient {
         return decoded.unreadCount
     }
 
+    private static func twitterDate(from value: String) -> Date? {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "EEE MMM dd HH:mm:ss Z yyyy"
+        return formatter.date(from: value)
+    }
+
     private func headers(credentials: XCredentials) -> [String: String] {
         [
             "Authorization": "Bearer \(Self.bearerToken)",
@@ -140,6 +222,66 @@ public struct XVerifiedUser {
     public let screenName: String
     public let name: String
     public let idStr: String
+}
+
+public struct XProfileResponse {
+    public let idStr: String
+    public let screenName: String
+    public let name: String
+    public let description: String?
+    public let followersCount: Int?
+    public let friendsCount: Int?
+    public let statusesCount: Int?
+    public let createdAt: Date?
+    public let verified: Bool?
+    public let profileImageUrlHttps: String?
+    public let profileBannerUrl: String?
+    public let isFollowing: Bool?
+    public let isFollowedBy: Bool?
+}
+
+private struct XGraphQLUserResponse: Decodable {
+    let data: XGraphQLData?
+
+    struct XGraphQLData: Decodable {
+        let user: XGraphQLUser?
+    }
+
+    struct XGraphQLUser: Decodable {
+        let result: XGraphQLResult?
+    }
+
+    struct XGraphQLResult: Decodable {
+        let restId: String?
+        let core: XGraphQLCore?
+        let legacy: XGraphQLLegacy?
+        let isBlueVerified: Bool?
+        let relationshipPerspectives: XGraphQLRelationship?
+        let avatar: XGraphQLAvatar?
+    }
+
+    struct XGraphQLAvatar: Decodable {
+        let imageUrl: String?
+    }
+
+    struct XGraphQLCore: Decodable {
+        let screenName: String?
+        let name: String?
+        let createdAt: String?
+    }
+
+    struct XGraphQLLegacy: Decodable {
+        let description: String?
+        let followersCount: Int?
+        let friendsCount: Int?
+        let statusesCount: Int?
+        let profileBannerUrl: String?
+    }
+
+    struct XGraphQLRelationship: Decodable {
+        let following: Bool?
+        let followedBy: Bool?
+    }
 }
 
 private struct XAccountListResponse: Decodable {

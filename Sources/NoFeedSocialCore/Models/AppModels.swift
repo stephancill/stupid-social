@@ -136,26 +136,44 @@ public struct NetworkProfile: Identifiable, Hashable, Codable, Sendable {
     public let network: SocialNetwork
     public let username: String?
     public let displayName: String?
+    public let bio: String?
     public let avatarURL: URL?
     public let followerCount: Int?
     public let followingCount: Int?
+    public let postsCount: Int?
+    public let joinedAt: Date?
+    public let websiteURL: URL?
+    public let isVerified: Bool?
+    public let isMutualFollow: Bool?
 
     public init(
         id: String,
         network: SocialNetwork,
         username: String?,
         displayName: String?,
+        bio: String? = nil,
         avatarURL: URL?,
         followerCount: Int?,
-        followingCount: Int?
+        followingCount: Int?,
+        postsCount: Int? = nil,
+        joinedAt: Date? = nil,
+        websiteURL: URL? = nil,
+        isVerified: Bool? = nil,
+        isMutualFollow: Bool? = nil
     ) {
         self.id = id
         self.network = network
         self.username = username
         self.displayName = displayName
+        self.bio = bio
         self.avatarURL = avatarURL
         self.followerCount = followerCount
         self.followingCount = followingCount
+        self.postsCount = postsCount
+        self.joinedAt = joinedAt
+        self.websiteURL = websiteURL
+        self.isVerified = isVerified
+        self.isMutualFollow = isMutualFollow
     }
 }
 

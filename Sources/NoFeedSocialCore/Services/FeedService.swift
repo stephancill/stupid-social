@@ -104,6 +104,15 @@ public final class FeedService {
         return try loadCachedFeed()
     }
 
+    public func fetchProfile(for actorId: String, network: SocialNetwork, username: String? = nil) async throws -> NetworkProfile {
+        guard let source = sources.first(where: { $0.network == network }) else {
+            throw SourceError.serviceError("No source for network \(network)")
+        }
+        // For X, pass the username as the id (GraphQL uses screen_name)
+        let lookupId = (network == .x) ? (username ?? actorId) : actorId
+        return try await source.fetchProfile(id: lookupId)
+    }
+
     public func markAllRead(items: [DisplayNotificationItem]) -> [DisplayNotificationItem] {
         watermarkStore.markAllRead(items: items.map(\.item), network: nil, accountId: nil)
         revealedIds.removeAll()

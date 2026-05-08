@@ -41,19 +41,20 @@ public struct FarcasterNotificationSource: NotificationSource {
     }
 
     public func fetchProfile(id: String) async throws -> NetworkProfile {
-        guard let username = metadataStore.farcasterAccount?.username else {
-            throw SourceError.notConfigured
+        guard let fid = UInt64(id) else {
+            throw SourceError.serviceError("Invalid FID")
         }
-
-        let user = try await client.user(byUsername: username)
+        let user = try await client.user(byFid: fid)
         return NetworkProfile(
             id: String(user.fid),
             network: .farcaster,
             username: user.username,
             displayName: user.displayName,
+            bio: user.bio,
             avatarURL: user.pfpUrl,
             followerCount: user.followerCount,
-            followingCount: user.followingCount
+            followingCount: user.followingCount,
+            joinedAt: user.registeredAt
         )
     }
 
