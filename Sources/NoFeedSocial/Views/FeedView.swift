@@ -20,7 +20,7 @@ struct FeedView: View {
                         ContentUnavailableView(
                             "No Notifications",
                             systemImage: "bell.slash",
-                            description: Text("Set up X and Farcaster in Settings, then pull to refresh.")
+                            description: Text("Connect social accounts to get started.")
                         )
                         Spacer(minLength: 0)
                     }
