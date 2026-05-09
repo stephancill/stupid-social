@@ -6,11 +6,15 @@ public final class SettingsViewModel: ObservableObject {
     @Published public var xCookieHeader = ""
     @Published public var farcasterUsername = ""
     @Published public var instagramCookieHeader = ""
+    @Published public var spotifyBearerToken = ""
+    @Published public var spotifyClientToken = ""
+    @Published public var spotifySpDC = ""
     @Published public var debugServerURL = ""
     @Published public private(set) var xStatus: AccountStatus = .notConfigured
     @Published public private(set) var farcasterStatus: AccountStatus = .notConfigured
     @Published public private(set) var instagramStatus: AccountStatus = .notConfigured
     @Published public var instagramEnabledCategories: Set<InstagramNotificationCategory> = []
+    @Published public private(set) var spotifyStatus: AccountStatus = .notConfigured
     @Published public private(set) var debugStatus: AccountStatus = .notConfigured
     @Published public var message: String?
 
@@ -67,6 +71,17 @@ public final class SettingsViewModel: ObservableObject {
 
     public var debugConnectionLabel: String {
         metadataStore.debugAccount?.serverURL.absoluteString ?? debugStatus.label
+    }
+
+    public var spotifyHandle: String? {
+        metadataStore.spotifyAccount?.username
+    }
+
+    public var spotifyConnectionLabel: String {
+        if let username = spotifyHandle {
+            return "@\(username)"
+        }
+        return spotifyStatus.label
     }
 
     public func saveXCookies(_ credentials: XCredentials) async {
@@ -272,6 +287,94 @@ public final class SettingsViewModel: ObservableObject {
         }
     }
 
+    public func saveSpotifyCredentials(_ credentials: SpotifyCredentials) async {
+        do {
+            _ = try keychainStore.saveSpotifyCredentials(credentials)
+            spotifyStatus = .valid
+            message = "Spotify credentials saved."
+        } catch {
+            spotifyStatus = .serviceError("Could not save credentials")
+            message = "Could not save Spotify credentials."
+            return
+        }
+
+        do {
+            let username = try await SpotifyClient(credentialStore: keychainStore).validateAccount()
+            metadataStore.spotifyAccount = SpotifyAccountMetadata(
+                accountId: "spotify",
+                username: username,
+                status: .valid
+            )
+            spotifyStatus = .valid
+            message = "Connected as @\(username)."
+        } catch {
+            metadataStore.spotifyAccount = SpotifyAccountMetadata(
+                accountId: "spotify",
+                username: nil,
+                status: .valid
+            )
+            message = "Spotify credentials saved, but could not resolve username."
+        }
+    }
+
+    public func saveSpotifyManualCredentials() async {
+        let bearer = spotifyBearerToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        let client = spotifyClientToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        let spDC = spotifySpDC.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !bearer.isEmpty, !client.isEmpty else {
+            spotifyStatus = .invalidCredentials
+            message = "Bearer token and client token are required."
+            return
+        }
+
+        let credentials = SpotifyCredentials(
+            bearerToken: bearer,
+            clientToken: client,
+            spDC: spDC,
+            username: nil
+        )
+
+        do {
+            _ = try keychainStore.saveSpotifyCredentials(credentials)
+            spotifyBearerToken = ""
+            spotifyClientToken = ""
+            spotifySpDC = ""
+            spotifyStatus = .valid
+            message = "Spotify credentials saved."
+        } catch {
+            spotifyStatus = .serviceError("Could not save credentials")
+            message = "Could not save Spotify credentials."
+            return
+        }
+
+        do {
+            let username = try await SpotifyClient(credentialStore: keychainStore).validateAccount()
+            metadataStore.spotifyAccount = SpotifyAccountMetadata(
+                accountId: "spotify",
+                username: username,
+                status: .valid
+            )
+            spotifyStatus = .valid
+            message = "Connected as @\(username)."
+        } catch {
+            metadataStore.spotifyAccount = SpotifyAccountMetadata(
+                accountId: "spotify",
+                username: nil,
+                status: .valid
+            )
+            message = "Spotify credentials saved, but could not resolve username."
+        }
+    }
+
+    public func disconnectSpotify() {
+        try? keychainStore.deleteSpotifyCredentials()
+        metadataStore.spotifyAccount = nil
+        try? cacheStore.deleteNetwork(.spotify)
+        spotifyStatus = .notConfigured
+        message = "Spotify account disconnected."
+    }
+
     public func disconnectDebug() {
         metadataStore.debugAccount = nil
         try? cacheStore.deleteNetwork(.debug)
@@ -294,6 +397,12 @@ public final class SettingsViewModel: ObservableObject {
         } else {
             instagramEnabledCategories = []
             instagramStatus = .notConfigured
+        }
+
+        if metadataStore.spotifyAccount != nil {
+            spotifyStatus = .valid
+        } else {
+            spotifyStatus = .notConfigured
         }
 
         if let debug = metadataStore.debugAccount {

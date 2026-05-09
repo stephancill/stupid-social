@@ -51,6 +51,10 @@ public struct ContentView: View {
                 client: InstagramClient(credentialStore: keychainStore),
                 metadataStore: metadataStore
             ),
+            SpotifyNotificationSource(
+                client: SpotifyClient(credentialStore: keychainStore),
+                metadataStore: metadataStore
+            ),
             DebugNotificationSource(
                 client: DebugNotificationsClient(),
                 metadataStore: metadataStore

@@ -25,4 +25,11 @@ final class CookieHeaderParserTests: XCTestCase {
 
         XCTAssertNil(CookieHeaderParser.extractXCredentials(from: header))
     }
+
+    func testSpotifyWebPlayerTokenMatchesCurrentWebPlayerAlgorithm() {
+        let date = Date(timeIntervalSince1970: 1_777_993_436)
+
+        XCTAssertEqual(SpotifyWebPlayerToken.current(date: date), "031750")
+        XCTAssertEqual(SpotifyWebPlayerToken.version, "61")
+    }
 }

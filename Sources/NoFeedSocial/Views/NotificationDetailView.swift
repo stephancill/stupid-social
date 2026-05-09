@@ -89,6 +89,7 @@ struct NotificationDetailView: View {
         case .reaction:
             displayItem.item.text.localizedCaseInsensitiveContains("retweet") ? "Retweet" : "Like"
         case .follow: "Follow"
+        case .music: "Listening"
         case .unknown: "Notification"
         }
     }
@@ -120,6 +121,8 @@ struct NotificationDetailView: View {
             }
             return URL(string: "https://x.com/i/status/\(sourceId)")
         case .instagram:
+            return displayItem.item.target?.url
+        case .spotify:
             return displayItem.item.target?.url
         case .debug:
             return nil
@@ -178,6 +181,8 @@ private extension SocialNetwork {
             "FarcasterBadge"
         case .instagram:
             "InstagramBadge"
+        case .spotify:
+            "SpotifyBadge"
         case .debug:
             "DebugBadge"
         }
@@ -191,6 +196,8 @@ private extension SocialNetwork {
             "F"
         case .instagram:
             "I"
+        case .spotify:
+            "S"
         case .debug:
             "D"
         }
@@ -204,6 +211,8 @@ private extension SocialNetwork {
             .white
         case .instagram:
             .white
+        case .spotify:
+            .black
         case .debug:
             .white
         }
@@ -217,6 +226,8 @@ private extension SocialNetwork {
             Color(red: 0.52, green: 0.36, blue: 0.80)
         case .instagram:
             Color(red: 0.88, green: 0.21, blue: 0.44)
+        case .spotify:
+            Color(red: 0.12, green: 0.73, blue: 0.26)
         case .debug:
             .orange
         }

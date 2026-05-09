@@ -36,6 +36,15 @@ struct SettingsView: View {
                     )
                 }
 
+                NavigationLink {
+                    SpotifyConnectionView(viewModel: viewModel)
+                } label: {
+                    connectionRow(
+                        name: "Spotify",
+                        subtitle: viewModel.spotifyConnectionLabel
+                    )
+                }
+
                 if devModeEnabled {
                     NavigationLink {
                         DebugConnectionView(viewModel: viewModel)

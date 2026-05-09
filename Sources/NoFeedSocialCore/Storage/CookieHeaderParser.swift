@@ -64,3 +64,39 @@ public struct InstagramCredentials: Codable, Equatable, Sendable {
         self.mid = mid
     }
 }
+
+public struct SpotifyCredentials: Codable, Equatable, Sendable {
+    public let bearerToken: String
+    public let clientToken: String
+    public let spDC: String
+    public let spT: String?
+    public let accessTokenExpiresAt: Date?
+    public let username: String?
+
+    public init(
+        bearerToken: String,
+        clientToken: String,
+        spDC: String,
+        spT: String? = nil,
+        accessTokenExpiresAt: Date? = nil,
+        username: String?
+    ) {
+        self.bearerToken = bearerToken
+        self.clientToken = clientToken
+        self.spDC = spDC
+        self.spT = spT
+        self.accessTokenExpiresAt = accessTokenExpiresAt
+        self.username = username
+    }
+
+    public func updatingWebPlayerToken(_ token: String, expiresAt: Date?) -> SpotifyCredentials {
+        SpotifyCredentials(
+            bearerToken: token,
+            clientToken: clientToken,
+            spDC: spDC,
+            spT: spT,
+            accessTokenExpiresAt: expiresAt,
+            username: username
+        )
+    }
+}

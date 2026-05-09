@@ -94,6 +94,12 @@ Reference behavior from `docs/CLI_DOCS.md`:
 ## Combined Feed
 
 - Default layout is a single combined chronological list.
+- A horizontal stories bar appears above the list for story-like activity.
+- The stories bar currently shows Spotify listening activity; Instagram stories are planned for the bar later.
+- Instagram story likes remain in the main notifications feed.
+- Spotify listening activity is not shown in the main notifications list.
+- Spotify listening story tiles show the album/track artwork as the thumbnail with the listener's avatar overlaid in the bottom-right corner.
+- Tapping a Spotify listening story opens the Listening detail screen.
 - Each item shows a network badge.
 - The feed shows unread items plus recent cached items.
 - Recent notification cache retention is 24 hours.

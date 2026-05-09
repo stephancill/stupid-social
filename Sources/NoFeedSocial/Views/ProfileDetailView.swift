@@ -209,6 +209,8 @@ struct ProfileDetailView: View {
             return URL(string: "https://x.com/\(username)")
         case .instagram:
             return URL(string: "https://www.instagram.com/\(username)/")
+        case .spotify:
+            return URL(string: "https://open.spotify.com/user/\(username)")
         case .debug:
             return nil
         }

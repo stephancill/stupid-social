@@ -28,3 +28,6 @@ resources:
   - Resources/InstagramBadge.png
   - Resources/InstagramBadge@2x.png
   - Resources/InstagramBadge@3x.png
+  - Resources/SpotifyBadge.png
+  - Resources/SpotifyBadge@2x.png
+  - Resources/SpotifyBadge@3x.png

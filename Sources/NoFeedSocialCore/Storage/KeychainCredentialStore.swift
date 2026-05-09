@@ -69,6 +69,20 @@ public final class KeychainCredentialStore {
         try deleteForAccount("instagram")
     }
 
+    public func saveSpotifyCredentials(_ credentials: SpotifyCredentials) throws -> CredentialSaveResult {
+        let data = try encoder.encode(credentials)
+        return try save(data: data, account: "spotify")
+    }
+
+    public func loadSpotifyCredentials() throws -> SpotifyCredentials? {
+        guard let data = try load(account: "spotify") else { return nil }
+        return try decoder.decode(SpotifyCredentials.self, from: data)
+    }
+
+    public func deleteSpotifyCredentials() throws {
+        try deleteForAccount("spotify")
+    }
+
     private func deleteForAccount(_ account: String) throws {
         for synchronizable in synchronizableCandidates {
             let query = baseQuery(account: account, synchronizable: synchronizable)

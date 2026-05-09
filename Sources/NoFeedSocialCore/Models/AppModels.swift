@@ -4,6 +4,7 @@ public enum SocialNetwork: String, Codable, CaseIterable, Identifiable, Sendable
     case x
     case farcaster
     case instagram
+    case spotify
     case debug
 
     public var id: String { rawValue }
@@ -13,6 +14,7 @@ public enum SocialNetwork: String, Codable, CaseIterable, Identifiable, Sendable
         case .x: "X"
         case .farcaster: "Farcaster"
         case .instagram: "Instagram"
+        case .spotify: "Spotify"
         case .debug: "Debug"
         }
     }
@@ -23,6 +25,7 @@ public enum NotificationType: String, Codable, CaseIterable, Sendable {
     case reply
     case reaction
     case follow
+    case music
     case unknown
 }
 
@@ -110,12 +113,34 @@ public struct NotificationTarget: Hashable, Codable, Sendable {
     public let text: String?
     public let url: URL?
     public let imageURL: URL?
+    public let musicAnimation: MusicAnimationMetadata?
 
-    public init(id: String, text: String?, url: URL?, imageURL: URL? = nil) {
+    public init(
+        id: String,
+        text: String?,
+        url: URL?,
+        imageURL: URL? = nil,
+        musicAnimation: MusicAnimationMetadata? = nil
+    ) {
         self.id = id
         self.text = text
         self.url = url
         self.imageURL = imageURL
+        self.musicAnimation = musicAnimation
+    }
+}
+
+public struct MusicAnimationMetadata: Hashable, Codable, Sendable {
+    public let tempo: Double?
+    public let tempoConfidence: Double?
+    public let loudness: Double?
+    public let mode: Int?
+
+    public init(tempo: Double?, tempoConfidence: Double?, loudness: Double?, mode: Int?) {
+        self.tempo = tempo
+        self.tempoConfidence = tempoConfidence
+        self.loudness = loudness
+        self.mode = mode
     }
 }
 

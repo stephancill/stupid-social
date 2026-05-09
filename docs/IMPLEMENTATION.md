@@ -173,3 +173,22 @@
 - Cookie extraction watches for `sessionid` cookie, then extracts `sessionid`, `csrftoken`, `ds_user_id`, and optionally `mid`.
 - Added `saveInstagramCookies(_ credentials: InstagramCredentials)` to `SettingsViewModel`.
 - Updated `InstagramConnectionView` with same layout: webview login button as primary, manual cookie header paste hidden behind dev mode toggle.
+
+## 2026-05-09
+
+### Spotify endpoint research
+
+- Current auth uses WebPlayer credentials captured by `SpotifyLoginWebView`: Bearer token, `client-token`, `sp_dc`, and `sp_t`. `SpotifyClient` refreshes the Bearer token through `GET https://open.spotify.com/api/token?reason=transport&productType=web-player&totp=...&totpServer=...&totpVer=61` using the persisted `sp_dc` cookie and saves the returned expiry.
+- `GET https://spclient.wg.spotify.com/presence-view/v1/buddylist` returns friend listening activity with `user`, `track`, `album`, `artist`, and Unix-ms `timestamp` fields. Live simulator probes returned 13 friends. The app renders all returned buddylist entries rather than filtering to Spotify's 15-minute now-playing threshold because valid responses can have zero entries inside that threshold.
+- `GET https://spclient.wg.spotify.com/audio-attributes/v1/audio-analysis/{track_id}` works with refreshed WebPlayer credentials for bare track IDs. It returns audio-analysis-style JSON (`meta`, `track`, `bars`, `beats`, `sections`, `segments`, `tatums`); `track` includes `tempo`, `tempo_confidence`, `loudness`, `key`, `mode`, and confidence values. It does not return deprecated public audio-features fields such as `danceability`, `energy`, `valence`, `acousticness`, `instrumentalness`, or `speechiness`.
+- URI forms for audio analysis failed (`400`/`404`), `/audio-features/...` returned `404`, and GET requests to `extended-metadata/v0/extended-metadata` returned `405`. The useful HTTP surface is the direct `audio-attributes/v1/audio-analysis/{track_id}` endpoint.
+- Gander notification endpoints (`gander/v2/GetUserHasUnreadNotification`, `gander/v2/GetNotifications`) work with `accept-language: en`, but live responses were marketing/concert notifications only. Social notifications likely require Dealer WebSocket integration and remain out of scope.
+
+### Spotify integration
+
+- Added Spotify as a source for friend listening activity. `SpotifyLoginWebView` captures WebPlayer Bearer/client-token headers and `sp_dc`/`sp_t`; `SpotifyCredentials` stores those values plus optional token expiry for refresh.
+- `SpotifyClient` currently uses `presence-view/v1/buddylist`, `audio-attributes/v1/audio-analysis/{track_id}`, user profile/follow endpoints, and `api-partner` `profileAttributes` for username resolution. Gander marketing notifications were probed but are not part of the current source path.
+- `SpotifyNotificationSource` normalizes buddylist entries into `.music` `NotificationItem`s with actor avatar, album art, track text, and open.spotify.com track links. `NotificationTarget.musicAnimation` stores only derived audio-analysis fields (`tempo`, `tempoConfidence`, `loudness`, `mode`) needed for rendering.
+- `FeedView` renders Spotify listening activity only in the top stories bar, not the main notification list. It intentionally does not filter by Spotify's 15-minute now-playing threshold because live buddylist responses can have valid activity while `now_playing_count` is zero.
+- Spotify story tiles spin album art and emit layered gray pulse rings from the outer artwork border. Tempo controls spin/pulse timing, tempo confidence controls opacity, and loudness controls pulse scale. Reduce Motion disables rotation and pulse expansion.
+- Added Spotify connection/settings views, Spotify badge resources in `xtool.yml`, `.spotify` network support, `.music` notification type support, and Spotify profile/detail URL handling.

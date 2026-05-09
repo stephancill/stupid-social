@@ -14,7 +14,11 @@ struct FeedView: View {
     var body: some View {
         NavigationStack {
             List {
-                if viewModel.items.isEmpty {
+                if !storyItems.isEmpty {
+                    StoriesBar(items: storyItems, feedService: viewModel.service)
+                }
+
+                if notificationItems.isEmpty && storyItems.isEmpty {
                     VStack {
                         Spacer(minLength: 0)
                         ContentUnavailableView(
@@ -100,12 +104,20 @@ struct FeedView: View {
         }
     }
 
+    private var storyItems: [DisplayNotificationItem] {
+        viewModel.items.filter(\.isStoryBarItem)
+    }
+
+    private var notificationItems: [DisplayNotificationItem] {
+        viewModel.items.filter { !$0.isStoryBarItem }
+    }
+
     private var unreadItems: [DisplayNotificationItem] {
-        viewModel.items.filter(\.isUnread)
+        notificationItems.filter(\.isUnread)
     }
 
     private var readItems: [DisplayNotificationItem] {
-        viewModel.items.filter { !$0.isUnread }
+        notificationItems.filter { !$0.isUnread }
     }
 
     private var errorBinding: Binding<Bool> {
@@ -113,6 +125,278 @@ struct FeedView: View {
             get: { viewModel.errorMessage != nil },
             set: { if !$0 { viewModel.errorMessage = nil } }
         )
+    }
+}
+
+private struct StoriesBar: View {
+    let items: [DisplayNotificationItem]
+    let feedService: FeedService
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(alignment: .top, spacing: 12) {
+                ForEach(items) { displayItem in
+                    NavigationLink {
+                        NotificationDetailView(displayItem: displayItem, feedService: feedService)
+                    } label: {
+                        StoryBubble(displayItem: displayItem)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+        }
+        .listRowInsets(EdgeInsets())
+        .listRowSeparator(.hidden)
+    }
+}
+
+private struct StoryBubble: View {
+    let displayItem: DisplayNotificationItem
+
+    var body: some View {
+        VStack(spacing: 6) {
+            ZStack(alignment: .bottomTrailing) {
+                StoryThumbnail(
+                    url: displayItem.item.target?.imageURL,
+                    network: displayItem.item.network,
+                    musicAnimation: displayItem.item.target?.musicAnimation
+                )
+                    .overlay {
+                        storyThumbnailShape
+                            .stroke(displayItem.item.network.storyAccentColor, lineWidth: 2)
+                    }
+
+                if let actor = displayItem.item.actors.first {
+                    StoryActorAvatar(actor: actor)
+                        .offset(x: 3, y: 3)
+                }
+            }
+
+            Text(label)
+                .font(.caption2)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .frame(width: 70)
+        }
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    private var label: String {
+        guard let actor = displayItem.item.actors.first else { return displayItem.item.network.displayName }
+        return actor.username ?? actor.displayName ?? actor.id
+    }
+
+    private var accessibilityLabel: String {
+        switch displayItem.item.network {
+        case .spotify:
+            "Listening activity from \(label)"
+        case .instagram:
+            "Instagram story activity from \(label)"
+        case .x, .farcaster, .debug:
+            displayItem.item.text
+        }
+    }
+
+    private var storyThumbnailShape: AnyShape {
+        if displayItem.item.network == .spotify {
+            return AnyShape(Circle())
+        }
+        return AnyShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+}
+
+private struct StoryThumbnail: View {
+    let url: URL?
+    let network: SocialNetwork
+    let musicAnimation: MusicAnimationMetadata?
+
+    var body: some View {
+        if network == .spotify {
+            SpotifyAnimatedStoryThumbnail(url: url, musicAnimation: musicAnimation)
+        } else {
+            staticThumbnail
+        }
+    }
+
+    private var staticThumbnail: some View {
+        AsyncImage(url: url) { phase in
+            switch phase {
+            case let .success(image):
+                image
+                    .resizable()
+                    .scaledToFill()
+            case .failure, .empty:
+                ZStack {
+                    network.storyAccentColor.opacity(0.18)
+                    Image(systemName: network == .spotify ? "music.note" : "camera")
+                        .font(.title2)
+                        .foregroundStyle(network.storyAccentColor)
+                }
+            @unknown default:
+                Color.clear
+            }
+        }
+        .frame(width: 70, height: 70)
+        .clipShape(thumbnailShape)
+    }
+
+    private var thumbnailShape: AnyShape {
+        if network == .spotify {
+            return AnyShape(Circle())
+        }
+        return AnyShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+}
+
+private struct SpotifyAnimatedStoryThumbnail: View {
+    let url: URL?
+    let musicAnimation: MusicAnimationMetadata?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isAnimating = false
+
+    var body: some View {
+        ZStack {
+            if !reduceMotion {
+                SpotifyPulseRing(
+                    delay: 0,
+                    isAnimating: isAnimating,
+                    duration: pulseDuration,
+                    scale: pulseScale,
+                    opacity: pulseOpacity
+                )
+                SpotifyPulseRing(
+                    delay: pulseDuration * 0.48,
+                    isAnimating: isAnimating,
+                    duration: pulseDuration,
+                    scale: pulseScale * 1.08,
+                    opacity: pulseOpacity * 0.72
+                )
+            }
+
+            albumArt
+                .frame(width: 70, height: 70)
+                .clipShape(Circle())
+                .overlay {
+                    Circle()
+                        .stroke(Color.spotifyActivityBorder, lineWidth: 2)
+                }
+                .rotationEffect(.degrees(reduceMotion || !isAnimating ? 0 : 360))
+                .animation(
+                    reduceMotion ? nil : .linear(duration: rotationDuration).repeatForever(autoreverses: false),
+                    value: isAnimating
+                )
+        }
+        .frame(width: 70, height: 70)
+        .onAppear { isAnimating = true }
+    }
+
+    private var albumArt: some View {
+        AsyncImage(url: url) { phase in
+            switch phase {
+            case let .success(image):
+                image
+                    .resizable()
+                    .scaledToFill()
+            case .failure, .empty:
+                ZStack {
+                    Color.spotifyActivityBorder.opacity(0.18)
+                    Image(systemName: "music.note")
+                        .font(.title2)
+                        .foregroundStyle(Color.spotifyActivityBorder)
+                }
+            @unknown default:
+                Color.clear
+            }
+        }
+    }
+
+    private var tempo: Double {
+        guard let tempo = musicAnimation?.tempo, tempo > 0 else { return 108 }
+        return min(max(tempo, 60), 190)
+    }
+
+    private var confidence: Double {
+        min(max(musicAnimation?.tempoConfidence ?? 0.55, 0.3), 1)
+    }
+
+    private var loudnessIntensity: Double {
+        guard let loudness = musicAnimation?.loudness else { return 0.58 }
+        return min(max((loudness + 24) / 18, 0.22), 1)
+    }
+
+    private var rotationDuration: TimeInterval {
+        // One revolution spans roughly sixteen beats, making faster tracks spin faster without becoming frantic.
+        (60 / tempo) * 16
+    }
+
+    private var pulseDuration: TimeInterval {
+        min(max((60 / tempo) * 2, 0.65), 1.55)
+    }
+
+    private var pulseScale: Double {
+        0.98 + loudnessIntensity * 0.36
+    }
+
+    private var pulseOpacity: Double {
+        min((0.72 + loudnessIntensity * 0.28) * confidence, 1)
+    }
+}
+
+private struct SpotifyPulseRing: View {
+    let delay: TimeInterval
+    let isAnimating: Bool
+    let duration: TimeInterval
+    let scale: Double
+    let opacity: Double
+
+    var body: some View {
+        Circle()
+            .stroke(Color.spotifyActivityBorder.opacity(opacity), lineWidth: 7)
+            .frame(width: 70, height: 70)
+            .scaleEffect(isAnimating ? scale : 1)
+            .opacity(isAnimating ? 0 : opacity)
+            .animation(
+                .easeOut(duration: duration)
+                    .delay(delay)
+                    .repeatForever(autoreverses: false),
+                value: isAnimating
+            )
+    }
+}
+
+private struct StoryActorAvatar: View {
+    let actor: NotificationActor
+
+    var body: some View {
+        AsyncImage(url: actor.avatarURL) { phase in
+            switch phase {
+            case let .success(image):
+                image
+                    .resizable()
+                    .scaledToFill()
+            case .failure, .empty:
+                ZStack {
+                    Color.secondary.opacity(0.18)
+                    Text(initial)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+            @unknown default:
+                Color.clear
+            }
+        }
+        .frame(width: 28, height: 28)
+        .clipShape(Circle())
+        .overlay {
+            Circle().stroke(Color.storyAvatarBorder, lineWidth: 2)
+        }
+    }
+
+    private var initial: String {
+        let name = actor.username ?? actor.displayName ?? actor.id
+        return name.first.map { String($0).uppercased() } ?? "?"
     }
 }
 
@@ -186,13 +470,13 @@ private struct NotificationRow: View {
         if displayItem.item.type == .follow {
             EmptyView()
         } else if let targetText = displayItem.item.target?.text, !targetText.isEmpty,
-                  (displayItem.item.type == .reaction || displayItem.item.type == .reply || displayItem.item.type == .mention) {
+                   (displayItem.item.type == .reaction || displayItem.item.type == .reply || displayItem.item.type == .mention || displayItem.item.type == .music) {
             Text(targetText)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
         } else if let imageUrl = displayItem.item.target?.imageURL,
-                  imageUrl.absoluteString.contains("cdninstagram.com") {
+                  (imageUrl.absoluteString.contains("cdninstagram.com") || displayItem.item.type == .music) {
             AsyncImage(url: imageUrl) { phase in
                 switch phase {
                 case let .success(image):
@@ -226,6 +510,8 @@ private struct NotificationRow: View {
             sanitizedItemText
         case .follow:
             "\(actorSummary) followed you"
+        case .music:
+            sanitizedItemText
         case .unknown:
             sanitizedItemText
         }
@@ -255,7 +541,8 @@ private struct NotificationRow: View {
     private var previewText: String? {
         if (displayItem.item.type == .reaction
             || displayItem.item.type == .reply
-            || displayItem.item.type == .mention),
+            || displayItem.item.type == .mention
+            || displayItem.item.type == .music),
            let targetText = displayItem.item.target?.text, !targetText.isEmpty {
             return targetText
         }
@@ -305,6 +592,32 @@ private struct NotificationRow: View {
     }
 }
 
+private extension DisplayNotificationItem {
+    var isStoryBarItem: Bool {
+        item.network == .spotify && item.type == .music
+    }
+}
+
+private extension Color {
+    static var spotifyGreen: Color {
+        Color(red: 0.12, green: 0.73, blue: 0.26)
+    }
+
+    static var spotifyActivityBorder: Color {
+        Color.secondary
+    }
+
+    static var storyAvatarBorder: Color {
+        #if os(iOS)
+        Color(uiColor: .systemBackground)
+        #elseif os(macOS)
+        Color(nsColor: .windowBackgroundColor)
+        #else
+        Color.white
+        #endif
+    }
+}
+
 private struct NetworkUsernameBadge: View {
     let network: SocialNetwork
 
@@ -337,6 +650,8 @@ private extension SocialNetwork {
             "FarcasterBadge"
         case .instagram:
             "InstagramBadge"
+        case .spotify:
+            "SpotifyBadge"
         case .debug:
             "DebugBadge"
         }
@@ -350,6 +665,8 @@ private extension SocialNetwork {
             "F"
         case .instagram:
             "I"
+        case .spotify:
+            "S"
         case .debug:
             "D"
         }
@@ -363,6 +680,8 @@ private extension SocialNetwork {
             .white
         case .instagram:
             .white
+        case .spotify:
+            .black
         case .debug:
             .white
         }
@@ -376,8 +695,21 @@ private extension SocialNetwork {
             Color(red: 0.52, green: 0.36, blue: 0.80)
         case .instagram:
             Color(red: 0.88, green: 0.21, blue: 0.44)
+        case .spotify:
+            Color(red: 0.12, green: 0.73, blue: 0.26)
         case .debug:
             .orange
+        }
+    }
+
+    var storyAccentColor: Color {
+        switch self {
+        case .instagram:
+            Color(red: 0.88, green: 0.21, blue: 0.44)
+        case .spotify:
+            Color(red: 0.12, green: 0.73, blue: 0.26)
+        case .x, .farcaster, .debug:
+            badgeBackgroundColor
         }
     }
 }
@@ -417,6 +749,8 @@ private struct NotificationTypeIcon: View {
             "at"
         case .follow:
             "person.fill.badge.plus"
+        case .music:
+            "music.note"
         case .unknown:
             "bell.fill"
         }
@@ -432,6 +766,8 @@ private struct NotificationTypeIcon: View {
             .purple
         case .follow:
             .green
+        case .music:
+            Color(red: 0.12, green: 0.73, blue: 0.26)
         case .unknown:
             .secondary
         }
@@ -447,6 +783,8 @@ private struct NotificationTypeIcon: View {
             "Mention"
         case .follow:
             "Follow"
+        case .music:
+            "Music"
         case .unknown:
             "Notification"
         }
