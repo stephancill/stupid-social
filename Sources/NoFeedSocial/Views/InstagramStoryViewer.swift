@@ -44,8 +44,7 @@ struct InstagramStoryViewer: View {
                     Color.gray.opacity(0.3)
                 }
 
-                progressBar
-                header
+                topBar
                 footer
             }
         }
@@ -96,8 +95,8 @@ struct InstagramStoryViewer: View {
         )
     }
 
-    private var progressBar: some View {
-        VStack {
+    private var topBar: some View {
+        VStack(spacing: 12) {
             HStack(spacing: 4) {
                 ForEach(Array(reels[currentReelIndex].slides.enumerated()), id: \.offset) { index, _ in
                     GeometryReader { geo in
@@ -124,15 +123,7 @@ struct InstagramStoryViewer: View {
                 }
             }
             .padding(.horizontal, 8)
-            .padding(.top, 10)
-            .padding(.bottom, 4)
 
-            Spacer()
-        }
-    }
-
-    private var header: some View {
-        VStack {
             HStack(spacing: 10) {
                 AsyncImage(url: reels[currentReelIndex].user.avatarURL) { phase in
                     switch phase {
@@ -170,10 +161,9 @@ struct InstagramStoryViewer: View {
                 }
             }
             .padding(.horizontal, 16)
-            .padding(.top, 10)
-
-            Spacer()
         }
+        .padding(.top, 10)
+        .frame(maxHeight: .infinity, alignment: .top)
     }
 
     private var footer: some View {
