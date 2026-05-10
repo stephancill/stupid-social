@@ -373,8 +373,21 @@
 - Spotify story progress now starts only after the preview audio begins playing. While the preview URL/player is loading, the full progress bar pulses gray as a loading indicator.
 - Removed tap/press-to-pause from `SpotifyStoryViewer`; taps are reserved for navigating between Spotify user slides.
 - Replaced `SpotifyStoryViewer` album-art `.repeatForever` rotation with timer-driven rotation phase updates so navigation and playback state changes do not restart or slow the rotation animation.
+- Increased the Spotify story viewer animation tick from 20 fps to 60 fps so timer-driven album-art rotation remains smooth in full-screen playback.
 
 ### Instagram story seen state
 
 - Instagram story bubbles now treat the tray `seen` field as a timestamp rather than a boolean. A reel is seen only when `seen` is greater than or equal to the newest fetched slide's `takenAt`, so users correctly return to the unseen ring when they post a newer story after their previous stories were seen.
 - Instagram story viewer presentation now uses a snapshot of the story reels captured at tap time and marks reels seen by stable reel id. This prevents the live stories bar re-sort after marking the tapped reel seen from changing which reel appears at the viewer's current index.
+- Instagram story presentation now uses a single identifiable selection payload for the full-screen cover/sheet, instead of separate boolean/index/snapshot state. This prevents the viewer from presenting against an empty snapshot during state update ordering, which could show a blank modal for already-seen stories.
+
+### Spotify activity seen state
+
+- Added local seen tracking for Spotify activity stories using `UserDefaults` timestamps keyed by Spotify `userURI`. A user's latest activity is considered seen only when the stored timestamp is greater than or equal to that activity timestamp, so new listening activity becomes unseen again.
+- Spotify activity bubbles now render unseen users with the green ring and seen users with a gray ring. Activity is sorted unseen-first, then newest-first.
+- Spotify story presentation now uses a snapshot payload and marks activity seen by stable `userURI`, avoiding live stories-bar reordering from changing the currently presented user.
+- Spotify activity story rings now use the same simple 3px circle stroke style as Instagram story borders, with green for unseen activity and gray for seen activity.
+- Spotify full-screen album art is keyed by image URL and shows a loading placeholder during `AsyncImage.empty`, preventing the previous user's album art from lingering after navigation.
+- Fixed Spotify unseen story rings using gray by restoring `Color.spotifyActivityBorder` to Spotify green; seen rings remain the same gray as Instagram seen stories.
+- Removed the spinner from Spotify full-screen album-art loading; the image area now pulses gray while `AsyncImage` is loading.
+- Replaced Spotify full-screen album art `AsyncImage` with a small in-memory cache-backed loader. Previously loaded album images render immediately when revisiting a Spotify story; uncached images still show the pulsing gray loading placeholder.

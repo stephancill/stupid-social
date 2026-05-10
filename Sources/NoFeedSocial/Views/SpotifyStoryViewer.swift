@@ -3,13 +3,25 @@ import Combine
 import NoFeedSocialCore
 import SwiftUI
 
+#if os(iOS)
+    import UIKit
+
+    typealias PlatformImage = UIImage
+#elseif os(macOS)
+    import AppKit
+
+    typealias PlatformImage = NSImage
+#endif
+
 struct SpotifyStoryViewer: View {
     let items: [SpotifyActivityItem]
     let startIndex: Int
     let spotifyClient: SpotifyClient
+    let onItemSeen: (Int) -> Void
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var currentIndex: Int
+    @State private var seenItemIndexes: Set<Int>
     @State private var elapsedTime: Double = 0
     @State private var isPaused: Bool = false
     @State private var player: AVPlayer?
@@ -19,6 +31,7 @@ struct SpotifyStoryViewer: View {
     @State private var pulsePhase: Double = 0
     @State private var rotationPhase: Double = 0
     @State private var loadingProgressPulse = false
+    @State private var loadingArtworkPulse = false
 
     enum PlayerStatus: Equatable {
         case idle
@@ -29,11 +42,13 @@ struct SpotifyStoryViewer: View {
         case unavailable
     }
 
-    init(items: [SpotifyActivityItem], startIndex: Int = 0, spotifyClient: SpotifyClient) {
+    init(items: [SpotifyActivityItem], startIndex: Int = 0, spotifyClient: SpotifyClient, onItemSeen: @escaping (Int) -> Void = { _ in }) {
         self.items = items
         self.startIndex = startIndex
         self.spotifyClient = spotifyClient
+        self.onItemSeen = onItemSeen
         _currentIndex = State(initialValue: startIndex)
+        _seenItemIndexes = State(initialValue: [startIndex])
     }
 
     private var slideDuration: Double {
@@ -56,6 +71,8 @@ struct SpotifyStoryViewer: View {
                 try? AVAudioSession.sharedInstance().setActive(true)
             #endif
             loadingProgressPulse = true
+            loadingArtworkPulse = true
+            onItemSeen(startIndex)
             loadPreviewURL(for: startIndex)
         }
         .onChange(of: currentIndex) { _, newIndex in
@@ -63,9 +80,13 @@ struct SpotifyStoryViewer: View {
             audioDuration = 5
             pulsePhase = 0
             stopPlayback()
+            if !seenItemIndexes.contains(newIndex) {
+                seenItemIndexes.insert(newIndex)
+                onItemSeen(newIndex)
+            }
             loadPreviewURL(for: newIndex)
         }
-        .onReceive(Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()) { _ in
+        .onReceive(Timer.publish(every: frameInterval, on: .main, in: .common).autoconnect()) { _ in
             guard !isPaused else { return }
             guard items.indices.contains(currentIndex) else { return }
             if playerStatus == .loading, player?.timeControlStatus == .playing {
@@ -74,21 +95,21 @@ struct SpotifyStoryViewer: View {
             }
             guard playerStatus == .playing else { return }
 
-            elapsedTime += 0.05
+            elapsedTime += frameInterval
             if elapsedTime >= slideDuration {
                 elapsedTime = 0
                 goForward()
             }
             let item = items[currentIndex]
             let pd = pulseDuration(item.musicAnimation)
-            pulsePhase += 0.05
+            pulsePhase += frameInterval
             if pulsePhase >= pd {
                 pulsePhase = 0
             }
 
             if !reduceMotion {
                 let rd = rotationDuration(item.musicAnimation)
-                rotationPhase += 0.05
+                rotationPhase += frameInterval
                 if rotationPhase >= rd {
                     rotationPhase.formTruncatingRemainder(dividingBy: rd)
                 }
@@ -144,30 +165,14 @@ struct SpotifyStoryViewer: View {
                 size: 280
             )
 
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case let .success(image):
-                    image
-                        .resizable()
-                        .scaledToFill()
-                case .failure, .empty:
-                    ZStack {
-                        Color.white.opacity(0.08)
-                        Image(systemName: "music.note")
-                            .font(.system(size: 60))
-                            .foregroundStyle(.white.opacity(0.3))
-                    }
-                @unknown default:
-                    Color.clear
+            CachedAlbumArtImage(url: url, loadingPulse: loadingArtworkPulse)
+                .frame(width: 280, height: 280)
+                .clipShape(Circle())
+                .overlay {
+                    Circle()
+                        .stroke(.white.opacity(0.15), lineWidth: 1)
                 }
-            }
-            .frame(width: 280, height: 280)
-            .clipShape(Circle())
-            .overlay {
-                Circle()
-                    .stroke(.white.opacity(0.15), lineWidth: 1)
-            }
-            .rotationEffect(.degrees(reduceMotion ? 0 : rotationDegrees(animation)))
+                .rotationEffect(.degrees(reduceMotion ? 0 : rotationDegrees(animation)))
         }
     }
 
@@ -405,6 +410,8 @@ struct SpotifyStoryViewer: View {
 
     // MARK: - Animation parameters
 
+    private let frameInterval: TimeInterval = 1.0 / 60.0
+
     private func tempo(_ animation: MusicAnimationMetadata?) -> Double {
         guard let tempo = animation?.tempo, tempo > 0 else { return 108 }
         return min(max(tempo, 60), 190)
@@ -439,5 +446,91 @@ struct SpotifyStoryViewer: View {
 
     private func pulseOpacity(_ animation: MusicAnimationMetadata?) -> Double {
         min((0.72 + loudnessIntensity(animation) * 0.28) * confidence(animation), 1)
+    }
+}
+
+private struct CachedAlbumArtImage: View {
+    let url: URL?
+    let loadingPulse: Bool
+    @State private var image: PlatformImage?
+    @State private var failedURL: URL?
+
+    var body: some View {
+        Group {
+            if let image {
+                platformImage(image)
+                    .resizable()
+                    .scaledToFill()
+            } else if failedURL == url {
+                ZStack {
+                    Color.white.opacity(0.08)
+                    Image(systemName: "music.note")
+                        .font(.system(size: 60))
+                        .foregroundStyle(.white.opacity(0.3))
+                }
+            } else {
+                Color.gray.opacity(loadingPulse ? 0.26 : 0.12)
+                    .animation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true), value: loadingPulse)
+            }
+        }
+        .task(id: url) {
+            await loadImage()
+        }
+    }
+
+    private func loadImage() async {
+        guard let url else {
+            image = nil
+            failedURL = nil
+            return
+        }
+
+        if let cached = SpotifyAlbumArtCache.shared.image(for: url) {
+            image = cached
+            failedURL = nil
+            return
+        }
+
+        image = nil
+        failedURL = nil
+
+        do {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            guard let loadedImage = PlatformImage(data: data) else {
+                failedURL = url
+                return
+            }
+            SpotifyAlbumArtCache.shared.setImage(loadedImage, for: url)
+            image = loadedImage
+        } catch {
+            failedURL = url
+        }
+    }
+
+    private func platformImage(_ image: PlatformImage) -> Image {
+        #if os(iOS)
+            Image(uiImage: image)
+        #elseif os(macOS)
+            Image(nsImage: image)
+        #endif
+    }
+}
+
+@MainActor
+private final class SpotifyAlbumArtCache {
+    static let shared = SpotifyAlbumArtCache()
+
+    private let cache = NSCache<NSURL, PlatformImage>()
+
+    private init() {
+        cache.countLimit = 80
+    }
+
+    func image(for url: URL) -> PlatformImage? {
+        cache.object(forKey: url as NSURL)
+    }
+
+    func setImage(_ image: PlatformImage, for url: URL) {
+        cache.setObject(image, forKey: url as NSURL)
     }
 }

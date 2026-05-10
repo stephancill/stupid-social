@@ -270,6 +270,7 @@ public struct SpotifyActivityItem: Identifiable, Hashable, Sendable {
     public let trackURL: URL?
     public let imageURL: URL?
     public let musicAnimation: MusicAnimationMetadata?
+    public let isSeen: Bool
 
     public init(
         id: String,
@@ -283,7 +284,8 @@ public struct SpotifyActivityItem: Identifiable, Hashable, Sendable {
         trackURI: String,
         trackURL: URL?,
         imageURL: URL?,
-        musicAnimation: MusicAnimationMetadata?
+        musicAnimation: MusicAnimationMetadata?,
+        isSeen: Bool = false
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -297,5 +299,6 @@ public struct SpotifyActivityItem: Identifiable, Hashable, Sendable {
         self.trackURL = trackURL
         self.imageURL = imageURL
         self.musicAnimation = musicAnimation
+        self.isSeen = isSeen
     }
 }

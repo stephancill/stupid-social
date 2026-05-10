@@ -14,6 +14,7 @@ public final class FeedViewModel: ObservableObject {
     private let feedService: FeedService
     private let instagramSource: InstagramNotificationSource?
     private let spotifyActivitySource: SpotifyActivitySource?
+    private let spotifySeenDefaultsKey = "spotifyActivitySeenTimestamps"
 
     public var service: FeedService {
         feedService
@@ -131,8 +132,51 @@ public final class FeedViewModel: ObservableObject {
                 .filter { item in
                     seenUserURIs.insert(item.userURI).inserted
                 }
+                .map(spotifyItemWithSeenState)
+                .sorted { a, b in
+                    if a.isSeen != b.isSeen {
+                        return !a.isSeen
+                    }
+                    return a.timestamp > b.timestamp
+                }
         } catch {
             return []
+        }
+    }
+
+    private func spotifyItemWithSeenState(_ item: SpotifyActivityItem) -> SpotifyActivityItem {
+        let seenTimestamps = UserDefaults.standard.dictionary(forKey: spotifySeenDefaultsKey) as? [String: Double] ?? [:]
+        let seenTimestamp = seenTimestamps[item.userURI] ?? 0
+        return SpotifyActivityItem(
+            id: item.id,
+            timestamp: item.timestamp,
+            userName: item.userName,
+            userURI: item.userURI,
+            userAvatarURL: item.userAvatarURL,
+            trackName: item.trackName,
+            artistName: item.artistName,
+            albumName: item.albumName,
+            trackURI: item.trackURI,
+            trackURL: item.trackURL,
+            imageURL: item.imageURL,
+            musicAnimation: item.musicAnimation,
+            isSeen: seenTimestamp >= item.timestamp.timeIntervalSince1970
+        )
+    }
+
+    public func markSpotifyActivityAsSeen(userURI: String) {
+        guard let itemIndex = spotifyActivityItems.firstIndex(where: { $0.userURI == userURI }) else { return }
+        let item = spotifyActivityItems[itemIndex]
+        var seenTimestamps = UserDefaults.standard.dictionary(forKey: spotifySeenDefaultsKey) as? [String: Double] ?? [:]
+        seenTimestamps[userURI] = max(seenTimestamps[userURI] ?? 0, item.timestamp.timeIntervalSince1970)
+        UserDefaults.standard.set(seenTimestamps, forKey: spotifySeenDefaultsKey)
+
+        spotifyActivityItems[itemIndex] = spotifyItemWithSeenState(item)
+        spotifyActivityItems.sort { a, b in
+            if a.isSeen != b.isSeen {
+                return !a.isSeen
+            }
+            return a.timestamp > b.timestamp
         }
     }
 

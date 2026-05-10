@@ -11,11 +11,8 @@ struct FeedView: View {
     @ObservedObject var viewModel: FeedViewModel
     let settingsViewModel: SettingsViewModel
     let spotifyClient: SpotifyClient
-    @State private var selectedInstagramReelIndex: Int?
-    @State private var selectedInstagramReels: [InstagramStoryReel] = []
-    @State private var showStoryViewer = false
-    @State private var selectedSpotifyItemIndex: Int?
-    @State private var showSpotifyViewer = false
+    @State private var instagramStorySelection: InstagramStorySelection?
+    @State private var spotifyActivitySelection: SpotifyActivitySelection?
 
     var body: some View {
         NavigationStack {
@@ -26,13 +23,16 @@ struct FeedView: View {
                         instagramReels: viewModel.instagramStoryReels,
                         feedService: viewModel.service,
                         onInstagramReelTap: { index in
-                            selectedInstagramReels = viewModel.instagramStoryReels
-                            selectedInstagramReelIndex = index
-                            showStoryViewer = true
+                            instagramStorySelection = InstagramStorySelection(
+                                reels: viewModel.instagramStoryReels,
+                                startIndex: index
+                            )
                         },
                         onSpotifyItemTap: { index in
-                            selectedSpotifyItemIndex = index
-                            showSpotifyViewer = true
+                            spotifyActivitySelection = SpotifyActivitySelection(
+                                items: viewModel.spotifyActivityItems,
+                                startIndex: index
+                            )
                         }
                     )
                 }
@@ -122,39 +122,47 @@ struct FeedView: View {
             }
         }
         #if os(iOS)
-        .fullScreenCover(isPresented: $showStoryViewer) {
+        .fullScreenCover(item: $instagramStorySelection) { selection in
             InstagramStoryViewer(
-                reels: selectedInstagramReels,
-                startIndex: selectedInstagramReelIndex ?? 0,
+                reels: selection.reels,
+                startIndex: selection.startIndex,
                 onReelSeen: { index in
-                    guard selectedInstagramReels.indices.contains(index) else { return }
-                    viewModel.markInstagramReelAsSeen(reelId: selectedInstagramReels[index].id)
+                    guard selection.reels.indices.contains(index) else { return }
+                    viewModel.markInstagramReelAsSeen(reelId: selection.reels[index].id)
                 }
             )
         }
-        .fullScreenCover(isPresented: $showSpotifyViewer) {
+        .fullScreenCover(item: $spotifyActivitySelection) { selection in
             SpotifyStoryViewer(
-                items: viewModel.spotifyActivityItems,
-                startIndex: selectedSpotifyItemIndex ?? 0,
-                spotifyClient: spotifyClient
+                items: selection.items,
+                startIndex: selection.startIndex,
+                spotifyClient: spotifyClient,
+                onItemSeen: { index in
+                    guard selection.items.indices.contains(index) else { return }
+                    viewModel.markSpotifyActivityAsSeen(userURI: selection.items[index].userURI)
+                }
             )
         }
         #else
-        .sheet(isPresented: $showStoryViewer) {
+        .sheet(item: $instagramStorySelection) { selection in
                     InstagramStoryViewer(
-                        reels: selectedInstagramReels,
-                        startIndex: selectedInstagramReelIndex ?? 0,
+                        reels: selection.reels,
+                        startIndex: selection.startIndex,
                         onReelSeen: { index in
-                            guard selectedInstagramReels.indices.contains(index) else { return }
-                            viewModel.markInstagramReelAsSeen(reelId: selectedInstagramReels[index].id)
+                            guard selection.reels.indices.contains(index) else { return }
+                            viewModel.markInstagramReelAsSeen(reelId: selection.reels[index].id)
                         }
                     )
                 }
-                .sheet(isPresented: $showSpotifyViewer) {
+                .sheet(item: $spotifyActivitySelection) { selection in
                     SpotifyStoryViewer(
-                        items: viewModel.spotifyActivityItems,
-                        startIndex: selectedSpotifyItemIndex ?? 0,
-                        spotifyClient: spotifyClient
+                        items: selection.items,
+                        startIndex: selection.startIndex,
+                        spotifyClient: spotifyClient,
+                        onItemSeen: { index in
+                            guard selection.items.indices.contains(index) else { return }
+                            viewModel.markSpotifyActivityAsSeen(userURI: selection.items[index].userURI)
+                        }
                     )
                 }
         #endif
@@ -182,6 +190,18 @@ struct FeedView: View {
             set: { if !$0 { viewModel.errorMessage = nil } }
         )
     }
+}
+
+private struct InstagramStorySelection: Identifiable {
+    let id = UUID()
+    let reels: [InstagramStoryReel]
+    let startIndex: Int
+}
+
+private struct SpotifyActivitySelection: Identifiable {
+    let id = UUID()
+    let items: [SpotifyActivityItem]
+    let startIndex: Int
 }
 
 private struct StoriesBar: View {
@@ -299,7 +319,7 @@ private struct SpotifyStoryBubble: View {
                 )
                 .overlay {
                     Circle()
-                        .stroke(Color(red: 0.12, green: 0.73, blue: 0.26), lineWidth: 2)
+                        .stroke(item.isSeen ? Color.gray.opacity(0.4) : Color.spotifyActivityBorder, lineWidth: 3)
                 }
 
                 AsyncImage(url: item.userAvatarURL) { phase in
@@ -344,10 +364,6 @@ private struct SpotifyAnimatedStoryThumbnail: View {
             albumArt
                 .frame(width: 70, height: 70)
                 .clipShape(Circle())
-                .overlay {
-                    Circle()
-                        .stroke(Color.spotifyActivityBorder, lineWidth: 2)
-                }
                 .rotationEffect(.degrees(reduceMotion || !isAnimating ? 0 : 360))
                 .animation(
                     reduceMotion ? nil : .linear(duration: rotationDuration).repeatForever(autoreverses: false),
@@ -560,7 +576,7 @@ private struct NotificationRow: View {
 
 private extension Color {
     static var spotifyActivityBorder: Color {
-        Color.secondary
+        Color(red: 0.12, green: 0.73, blue: 0.26)
     }
 }
 
