@@ -117,23 +117,6 @@ struct SpotifyStoryViewer: View {
         let url = item.target?.imageURL
 
         return ZStack {
-            SpotifyPulseRing(
-                delay: 0,
-                isAnimating: playerStatus == .playing && !isPaused,
-                duration: pulseDuration(animation),
-                scale: pulseScale(animation),
-                opacity: pulseOpacity(animation),
-                size: 280
-            )
-            SpotifyPulseRing(
-                delay: pulseDuration(animation) * 0.48,
-                isAnimating: playerStatus == .playing && !isPaused,
-                duration: pulseDuration(animation),
-                scale: pulseScale(animation) * 1.08,
-                opacity: pulseOpacity(animation) * 0.72,
-                size: 280
-            )
-
             AsyncImage(url: url) { phase in
                 switch phase {
                 case let .success(image):
@@ -163,6 +146,23 @@ struct SpotifyStoryViewer: View {
                     ? .linear(duration: rotationDuration(animation)).repeatForever(autoreverses: false)
                     : nil,
                 value: playerStatus
+            )
+
+            SpotifyPulseRing(
+                delay: 0,
+                isAnimating: playerStatus == .playing && !isPaused,
+                duration: pulseDuration(animation),
+                scale: pulseScale(animation),
+                opacity: pulseOpacity(animation),
+                size: 280
+            )
+            SpotifyPulseRing(
+                delay: pulseDuration(animation) * 0.48,
+                isAnimating: playerStatus == .playing && !isPaused,
+                duration: pulseDuration(animation),
+                scale: pulseScale(animation) * 1.08,
+                opacity: pulseOpacity(animation) * 0.72,
+                size: 280
             )
         }
     }

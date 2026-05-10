@@ -303,3 +303,4 @@
 ### Circular album art
 
 - Changed album art and pulse rings from `RoundedRectangle` to `Circle` to match the Spotify feed thumbnail shape.
+- Moved pulse rings in front of album art (higher ZStack layer) so they visually originate from the album art border rather than from behind.
