@@ -82,19 +82,21 @@ public final class FeedViewModel: ObservableObject {
     }
 
     public func fetchInstagramStories() async {
-        instagramStoryReels = await instagramReels()
+        await fetchStoryBarContent()
     }
 
     public func fetchSpotifyActivity() async {
-        spotifyActivityItems = await spotifyItems()
+        await fetchStoryBarContent()
     }
 
-    private func fetchStoryBarContent() async {
+    public func fetchStoryBarContent() async {
         storyBarLoading = true
         async let reels = instagramReels()
         async let items = spotifyItems()
-        instagramStoryReels = await reels
-        spotifyActivityItems = await items
+        let fetchedReels = await reels
+        let fetchedItems = await items
+        instagramStoryReels = fetchedReels
+        spotifyActivityItems = fetchedItems
         storyBarLoading = false
     }
 
@@ -123,8 +125,12 @@ public final class FeedViewModel: ObservableObject {
     private func spotifyItems() async -> [SpotifyActivityItem] {
         guard let spotifyActivitySource else { return [] }
         do {
+            var seenUserURIs = Set<String>()
             return try await spotifyActivitySource.fetchActivity(reason: .manual)
                 .sorted { $0.timestamp > $1.timestamp }
+                .filter { item in
+                    seenUserURIs.insert(item.userURI).inserted
+                }
         } catch {
             return []
         }

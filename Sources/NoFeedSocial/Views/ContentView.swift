@@ -86,7 +86,7 @@ public struct ContentView: View {
         spotifyClient = spotifyClientRef
 
         Task {
-            await feed.fetchInstagramStories()
+            await feed.fetchStoryBarContent()
         }
     }
 }

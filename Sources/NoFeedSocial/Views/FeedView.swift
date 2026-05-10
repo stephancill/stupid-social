@@ -19,7 +19,7 @@ struct FeedView: View {
     var body: some View {
         NavigationStack {
             List {
-                if !viewModel.storyBarLoading, !viewModel.spotifyActivityItems.isEmpty || !viewModel.instagramStoryReels.isEmpty {
+                if hasStoryBarContent {
                     StoriesBar(
                         spotifyItems: viewModel.spotifyActivityItems,
                         instagramReels: viewModel.instagramStoryReels,
@@ -35,7 +35,7 @@ struct FeedView: View {
                     )
                 }
 
-                if notificationItems.isEmpty && viewModel.spotifyActivityItems.isEmpty && viewModel.instagramStoryReels.isEmpty {
+                if notificationItems.isEmpty && !hasStoryBarContent && !viewModel.storyBarLoading {
                     VStack {
                         Spacer(minLength: 0)
                         ContentUnavailableView(
@@ -166,6 +166,10 @@ struct FeedView: View {
 
     private var readItems: [DisplayNotificationItem] {
         notificationItems.filter { !$0.isUnread }
+    }
+
+    private var hasStoryBarContent: Bool {
+        !viewModel.spotifyActivityItems.isEmpty || !viewModel.instagramStoryReels.isEmpty
     }
 
     private var errorBinding: Binding<Bool> {

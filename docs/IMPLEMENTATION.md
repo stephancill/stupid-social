@@ -360,3 +360,14 @@
 ### Instagram story viewer timestamp
 
 - Replaced Apple's `RelativeDateTimeFormatter` (yielding localized strings like `"3 min. ago"`) with the shared `Date.compactRelativeTime` extension (yielding compact strings like `"3m"`), matching the Spotify story viewer and feed rows.
+
+### StoriesBar refresh behavior
+
+- Initial story bar loading now fetches Instagram stories and Spotify activity together before publishing either result, preventing a partial one-source stories bar from flashing first.
+- Pull-to-refresh and foreground refresh no longer hide the existing stories bar while replacement story content is loading. The previous stories remain visible until both refreshed sources have completed and are swapped in together.
+
+### Spotify story user slides
+
+- Spotify story activity is now deduplicated by `userURI` after sorting newest-first, so each Spotify user contributes at most one story bubble/slide.
+- `SpotifyStoryViewer` now shows a single progress segment for the current user's slide instead of rendering every Spotify user as a stop in one combined progress bar. Taps/swipes still advance between users.
+- Spotify story progress now starts only after the preview audio begins playing. While the preview URL/player is loading, the full progress bar pulses gray as a loading indicator.

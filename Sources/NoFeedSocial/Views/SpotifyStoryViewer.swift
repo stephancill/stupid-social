@@ -16,6 +16,7 @@ struct SpotifyStoryViewer: View {
     @State private var previewURLs: [String: URL?] = [:]
     @State private var audioDuration: Double = 5
     @State private var pulsePhase: Double = 0
+    @State private var loadingProgressPulse = false
 
     enum PlayerStatus: Equatable {
         case idle
@@ -52,6 +53,7 @@ struct SpotifyStoryViewer: View {
                 try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
                 try? AVAudioSession.sharedInstance().setActive(true)
             #endif
+            loadingProgressPulse = true
             loadPreviewURL(for: startIndex)
         }
         .onChange(of: currentIndex) { _, newIndex in
@@ -64,14 +66,17 @@ struct SpotifyStoryViewer: View {
         .onReceive(Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()) { _ in
             guard !isPaused else { return }
             guard items.indices.contains(currentIndex) else { return }
+            if playerStatus == .loading, player?.timeControlStatus == .playing {
+                elapsedTime = 0
+                playerStatus = .playing
+            }
+            guard playerStatus == .playing else { return }
 
             elapsedTime += 0.05
             if elapsedTime >= slideDuration {
                 elapsedTime = 0
                 goForward()
             }
-
-            guard playerStatus == .playing else { return }
             let item = items[currentIndex]
             let pd = pulseDuration(item.musicAnimation)
             pulsePhase += 0.05
@@ -220,29 +225,28 @@ struct SpotifyStoryViewer: View {
     private var topBar: some View {
         VStack(spacing: 12) {
             HStack(spacing: 4) {
-                ForEach(Array(items.enumerated()), id: \.offset) { index, _ in
-                    GeometryReader { geo in
-                        ZStack(alignment: .leading) {
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        if playerStatus == .loading || playerStatus == .idle {
+                            Capsule()
+                                .fill(Color.gray.opacity(loadingProgressPulse ? 0.45 : 0.18))
+                                .frame(height: 3)
+                                .animation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true), value: loadingProgressPulse)
+                        } else {
                             Capsule()
                                 .fill(Color.white.opacity(0.3))
                                 .frame(height: 3)
 
-                            if index == currentIndex {
-                                Capsule()
-                                    .fill(Color.white)
-                                    .frame(
-                                        width: geo.size.width * min(elapsedTime / slideDuration, 1.0),
-                                        height: 3
-                                    )
-                            } else if index < currentIndex {
-                                Capsule()
-                                    .fill(Color.white)
-                                    .frame(height: 3)
-                            }
+                            Capsule()
+                                .fill(Color.white)
+                                .frame(
+                                    width: geo.size.width * min(elapsedTime / slideDuration, 1.0),
+                                    height: 3
+                                )
                         }
                     }
-                    .frame(height: 3)
                 }
+                .frame(height: 3)
             }
             .padding(.horizontal, 8)
 
@@ -341,8 +345,16 @@ struct SpotifyStoryViewer: View {
             playerStatus = .unavailable
             return
         }
-        if previewURLs[trackId] != nil { return }
+        if let cachedURL = previewURLs[trackId] {
+            if let cachedURL {
+                startPlayback(url: cachedURL, trackId: trackId)
+            } else {
+                playerStatus = .unavailable
+            }
+            return
+        }
 
+        playerStatus = .loading
         Task {
             let url = await spotifyClient.trackPreviewURL(trackId: trackId)
             previewURLs[trackId] = url
@@ -379,7 +391,6 @@ struct SpotifyStoryViewer: View {
             }
         }
 
-        playerStatus = .playing
         newPlayer.play()
     }
 
