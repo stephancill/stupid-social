@@ -35,7 +35,8 @@ struct InstagramLoginWebView: View {
         let cookieDict = Dictionary(uniqueKeysWithValues: cookies.map { ($0.name, $0.value) })
         guard let sessionId = cookieDict["sessionid"],
               let csrfToken = cookieDict["csrftoken"],
-              let dsUserId = cookieDict["ds_user_id"] else {
+              let dsUserId = cookieDict["ds_user_id"]
+        else {
             return nil
         }
         return InstagramCredentials(
@@ -64,7 +65,7 @@ private struct InstagramLoginWKWebView: UIViewRepresentable {
         return webView
     }
 
-    func updateUIView(_ uiView: WKWebView, context: Context) {}
+    func updateUIView(_: WKWebView, context _: Context) {}
 
     func makeCoordinator() -> Coordinator {
         Coordinator(onCookiesFound: onCookiesFound)
@@ -78,7 +79,7 @@ private struct InstagramLoginWKWebView: UIViewRepresentable {
             self.onCookiesFound = onCookiesFound
         }
 
-        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        func webView(_ webView: WKWebView, didFinish _: WKNavigation!) {
             guard !hasNotified else { return }
             checkForAuthCookies(webView: webView)
         }

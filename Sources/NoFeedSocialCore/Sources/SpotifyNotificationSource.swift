@@ -41,7 +41,7 @@ public final class SpotifyNotificationSource: NotificationSource {
         return nil
     }
 
-    public func fetchNotifications(reason: RefreshReason) async throws -> [NotificationItem] {
+    public func fetchNotifications(reason _: RefreshReason) async throws -> [NotificationItem] {
         let accountId = metadataStore.spotifyAccount?.accountId ?? "spotify"
         return try await normalizeFriendActivity(accountId: accountId)
     }

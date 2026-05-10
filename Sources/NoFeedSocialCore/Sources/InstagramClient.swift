@@ -99,7 +99,7 @@ public struct InstagramClient {
             throw SourceError.notConfigured
         }
 
-        guard (200..<300).contains(http.statusCode) else {
+        guard (200 ..< 300).contains(http.statusCode) else {
             throw SourceError.invalidResponse
         }
 
@@ -137,7 +137,7 @@ public struct InstagramClient {
             throw SourceError.notConfigured
         }
 
-        guard (200..<300).contains(http.statusCode) else {
+        guard (200 ..< 300).contains(http.statusCode) else {
             throw SourceError.invalidResponse
         }
 
@@ -173,7 +173,7 @@ public struct InstagramClient {
         if http.statusCode == 401 || http.statusCode == 403 {
             throw SourceError.notConfigured
         }
-        guard (200..<300).contains(http.statusCode) else {
+        guard (200 ..< 300).contains(http.statusCode) else {
             throw SourceError.invalidResponse
         }
 
@@ -198,7 +198,7 @@ public struct InstagramClient {
         if http.statusCode == 401 || http.statusCode == 403 {
             throw SourceError.notConfigured
         }
-        guard (200..<300).contains(http.statusCode) else {
+        guard (200 ..< 300).contains(http.statusCode) else {
             throw SourceError.invalidResponse
         }
 
@@ -233,7 +233,7 @@ public struct InstagramClient {
         if http.statusCode == 401 || http.statusCode == 403 {
             throw SourceError.notConfigured
         }
-        guard (200..<300).contains(http.statusCode) else {
+        guard (200 ..< 300).contains(http.statusCode) else {
             throw SourceError.invalidResponse
         }
 
@@ -259,7 +259,7 @@ public struct InstagramClient {
             throw SourceError.notConfigured
         }
 
-        guard (200..<300).contains(http.statusCode) else {
+        guard (200 ..< 300).contains(http.statusCode) else {
             throw SourceError.invalidResponse
         }
 
@@ -319,7 +319,7 @@ public struct InstagramClient {
         guard let http = response as? HTTPURLResponse else {
             throw SourceError.invalidResponse
         }
-        guard (200..<300).contains(http.statusCode) else {
+        guard (200 ..< 300).contains(http.statusCode) else {
             throw SourceError.invalidResponse
         }
     }
@@ -367,7 +367,8 @@ public struct InstagramClient {
 
     private func jsonString(_ value: [String]) -> String {
         guard let data = try? JSONSerialization.data(withJSONObject: value, options: []),
-              let string = String(data: data, encoding: .utf8) else {
+              let string = String(data: data, encoding: .utf8)
+        else {
             return "[]"
         }
         return string
@@ -537,7 +538,7 @@ struct InstagramTrayItem: Decodable {
         case reelType = "reel_type"
     }
 
-    public init(from decoder: Decoder) throws {
+    init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         if let intId = try? container.decode(UInt64.self, forKey: .id) {
             id = String(intId)
@@ -652,7 +653,8 @@ private enum InstagramNotificationParser {
         enabledCategories: Set<InstagramNotificationCategory>
     ) -> NotificationItem? {
         guard let category = InstagramNotificationCategory.category(for: story.notifName),
-              enabledCategories.contains(category) else {
+              enabledCategories.contains(category)
+        else {
             return nil
         }
         let type = notificationType(from: story.notifName)

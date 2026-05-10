@@ -1,5 +1,5 @@
-import Foundation
 import CryptoKit
+import Foundation
 
 @MainActor
 public struct SpotifyClient {
@@ -71,7 +71,7 @@ public struct SpotifyClient {
             throw SourceError.serviceError("Invalid credentials")
         }
 
-        guard (200...299).contains(httpResponse.statusCode) else {
+        guard (200 ... 299).contains(httpResponse.statusCode) else {
             throw SourceError.serviceError("HTTP \(httpResponse.statusCode)")
         }
 
@@ -91,7 +91,7 @@ public struct SpotifyClient {
             URLQueryItem(name: "productType", value: "web-player"),
             URLQueryItem(name: "totp", value: token),
             URLQueryItem(name: "totpServer", value: serverToken),
-            URLQueryItem(name: "totpVer", value: SpotifyWebPlayerToken.version)
+            URLQueryItem(name: "totpVer", value: SpotifyWebPlayerToken.version),
         ]
 
         var request = URLRequest(url: components.url!)
@@ -103,7 +103,7 @@ public struct SpotifyClient {
         guard let httpResponse = response as? HTTPURLResponse else {
             throw SourceError.serviceError("Invalid response")
         }
-        guard (200...299).contains(httpResponse.statusCode) else {
+        guard (200 ... 299).contains(httpResponse.statusCode) else {
             throw SourceError.serviceError("Spotify token refresh failed")
         }
 
@@ -143,15 +143,16 @@ public struct SpotifyClient {
             "extensions": [
                 "persistedQuery": [
                     "version": 1,
-                    "sha256Hash": "53bcb064f6cd18c23f752bc324a791194d20df612d8e1239c735144ab0399ced"
-                ]
-            ]
+                    "sha256Hash": "53bcb064f6cd18c23f752bc324a791194d20df612d8e1239c735144ab0399ced",
+                ],
+            ],
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let (data, response) = try await session.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse,
-              (200...299).contains(httpResponse.statusCode) else {
+              (200 ... 299).contains(httpResponse.statusCode)
+        else {
             throw SourceError.serviceError("Could not resolve username")
         }
 
@@ -214,7 +215,7 @@ enum SpotifyWebPlayerToken {
         do {
             let (data, response) = try await session.data(from: URL(string: "https://open.spotify.com/api/server-time")!)
             guard let httpResponse = response as? HTTPURLResponse,
-                  (200...299).contains(httpResponse.statusCode) else { return nil }
+                  (200 ... 299).contains(httpResponse.statusCode) else { return nil }
             let decoded = try JSONDecoder().decode(SpotifyServerTimeResponse.self, from: data)
             return generate(timestamp: decoded.serverTime)
         } catch {
@@ -228,12 +229,12 @@ enum SpotifyWebPlayerToken {
         let key = SymmetricKey(data: secret)
         let hash = HMAC<Insecure.SHA1>.authenticationCode(for: counterData, using: key)
         let bytes = Array(hash)
-        let offset = Int(bytes[bytes.count - 1] & 0x0f)
+        let offset = Int(bytes[bytes.count - 1] & 0x0F)
         let truncated =
-            (UInt32(bytes[offset] & 0x7f) << 24) |
-            (UInt32(bytes[offset + 1] & 0xff) << 16) |
-            (UInt32(bytes[offset + 2] & 0xff) << 8) |
-            UInt32(bytes[offset + 3] & 0xff)
+            (UInt32(bytes[offset] & 0x7F) << 24) |
+            (UInt32(bytes[offset + 1] & 0xFF) << 16) |
+            (UInt32(bytes[offset + 2] & 0xFF) << 8) |
+            UInt32(bytes[offset + 3] & 0xFF)
         return String(format: "%06u", truncated % 1_000_000)
     }
 
@@ -292,12 +293,15 @@ struct SpotifyFriendContext: Decodable {
 struct SpotifyProfileAttributesResponse: Decodable {
     let data: SpotifyProfileAttributesData
 }
+
 struct SpotifyProfileAttributesData: Decodable {
     let me: SpotifyProfileAttributesMe
 }
+
 struct SpotifyProfileAttributesMe: Decodable {
     let profile: SpotifyProfileAttributesProfile
 }
+
 struct SpotifyProfileAttributesProfile: Decodable {
     let username: String
 }

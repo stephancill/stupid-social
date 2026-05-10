@@ -42,7 +42,7 @@ public final class InstagramNotificationSource: NotificationSource {
         }
     }
 
-    public func fetchNotifications(reason: RefreshReason) async throws -> [NotificationItem] {
+    public func fetchNotifications(reason _: RefreshReason) async throws -> [NotificationItem] {
         let categories = metadataStore.instagramAccount?.enabledCategories ?? Set(InstagramNotificationCategory.allCases)
         let username = metadataStore.instagramAccount?.username
         return try await client.notifications(enabledCategories: categories, accountUsername: username)
@@ -102,7 +102,8 @@ public final class InstagramNotificationSource: NotificationSource {
                 for media in reel.items ?? [] {
                     if let candidates = media.imageVersions2?.candidates,
                        let best = candidates.sorted(by: { (a: InstagramMediaCandidate, b: InstagramMediaCandidate) in (a.width ?? 0) > (b.width ?? 0) }).first,
-                       let imageURL = URL(string: best.url) {
+                       let imageURL = URL(string: best.url)
+                    {
                         let videoVersion = media.videoVersions?.first
                         let videoURL: URL? = videoVersion.flatMap { URL(string: $0.url) }
                         slides.append(InstagramStorySlide(

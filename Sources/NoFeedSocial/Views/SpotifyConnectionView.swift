@@ -33,14 +33,14 @@ struct SpotifyConnectionView: View {
             if devModeEnabled {
                 Section("Manual (Dev)") {
                     TextField("Bearer token", text: $viewModel.spotifyBearerToken, axis: .vertical)
-                        .lineLimit(2...4)
+                        .lineLimit(2 ... 4)
                         .textFieldStyle(.plain)
                         .focused($isFocused)
                     TextField("Client token", text: $viewModel.spotifyClientToken, axis: .vertical)
-                        .lineLimit(2...4)
+                        .lineLimit(2 ... 4)
                         .textFieldStyle(.plain)
                     TextField("sp_dc cookie", text: $viewModel.spotifySpDC, axis: .vertical)
-                        .lineLimit(1...2)
+                        .lineLimit(1 ... 2)
                         .textFieldStyle(.plain)
                     Button("Save Spotify Credentials") {
                         isFocused = false

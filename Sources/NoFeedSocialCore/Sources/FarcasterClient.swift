@@ -80,7 +80,7 @@ public struct FarcasterClient {
 
     private func get<T: Decodable>(_ url: URL) async throws -> T {
         let (data, response) = try await session.data(from: url)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+        guard let http = response as? HTTPURLResponse, (200 ..< 300).contains(http.statusCode) else {
             throw SourceError.invalidResponse
         }
 
@@ -119,7 +119,9 @@ public struct FarcasterUserResponse: Decodable {
     public let profile: FarcasterProfile?
     public let registeredAt: Date?
 
-    public var bio: String? { profile?.bio?.text }
+    public var bio: String? {
+        profile?.bio?.text
+    }
 }
 
 public struct FarcasterProfile: Decodable {
@@ -190,7 +192,7 @@ struct FarcasterCastResponse: Decodable {
             let mention = "@\(username)"
             let start = result.index(result.startIndex, offsetBy: min(range.start, result.count))
             let end = result.index(result.startIndex, offsetBy: min(range.end, result.count))
-            result.replaceSubrange(start..<end, with: mention)
+            result.replaceSubrange(start ..< end, with: mention)
         }
         return result
     }

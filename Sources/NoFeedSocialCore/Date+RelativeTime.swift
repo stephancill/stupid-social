@@ -1,7 +1,7 @@
 import Foundation
 
-extension Date {
-    public var compactRelativeTime: String {
+public extension Date {
+    var compactRelativeTime: String {
         let seconds = max(0, Int(Date().timeIntervalSince(self)))
         if seconds < 60 { return "now" }
 

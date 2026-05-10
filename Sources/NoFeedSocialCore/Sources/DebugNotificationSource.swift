@@ -19,7 +19,7 @@ public final class DebugNotificationSource: NotificationSource {
         nil
     }
 
-    public func fetchNotifications(reason: RefreshReason) async throws -> [NotificationItem] {
+    public func fetchNotifications(reason _: RefreshReason) async throws -> [NotificationItem] {
         guard let account = metadataStore.debugAccount else {
             throw SourceError.notConfigured
         }

@@ -52,7 +52,7 @@ private struct XLoginWKWebView: UIViewRepresentable {
         return webView
     }
 
-    func updateUIView(_ uiView: WKWebView, context: Context) {}
+    func updateUIView(_: WKWebView, context _: Context) {}
 
     func makeCoordinator() -> Coordinator {
         Coordinator(onCookiesFound: onCookiesFound)
@@ -66,7 +66,7 @@ private struct XLoginWKWebView: UIViewRepresentable {
             self.onCookiesFound = onCookiesFound
         }
 
-        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        func webView(_ webView: WKWebView, didFinish _: WKNavigation!) {
             guard !hasNotified else { return }
             checkForAuthCookies(webView: webView)
         }

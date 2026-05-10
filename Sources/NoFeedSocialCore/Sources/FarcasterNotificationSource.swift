@@ -37,7 +37,7 @@ public struct FarcasterNotificationSource: NotificationSource {
         return groupItems(items, accountId: String(account.fid)).count
     }
 
-    public func fetchNotifications(reason: RefreshReason) async throws -> [NotificationItem] {
+    public func fetchNotifications(reason _: RefreshReason) async throws -> [NotificationItem] {
         guard let account = metadataStore.farcasterAccount else {
             throw SourceError.notConfigured
         }
@@ -224,7 +224,7 @@ public struct FarcasterNotificationSource: NotificationSource {
         return (ungrouped + groupedReactions + groupedFollows).sorted { $0.timestamp > $1.timestamp }
     }
 
-    private func mergeGroup(_ group: [NotificationItem], type: NotificationType, accountId: String) -> NotificationItem? {
+    private func mergeGroup(_ group: [NotificationItem], type: NotificationType, accountId _: String) -> NotificationItem? {
         guard let first = group.first else { return nil }
 
         var seenIds: Set<String> = []

@@ -29,12 +29,14 @@ public final class ICloudReadWatermarkStore: ReadWatermarkProviding {
         var candidates: [ReadWatermark] = []
 
         if let data = cloudStore.data(forKey: key),
-           let watermark = decodeWatermark(from: data) {
+           let watermark = decodeWatermark(from: data)
+        {
             candidates.append(watermark)
         }
 
         if let data = localStore.data(forKey: key),
-           let watermark = decodeWatermark(from: data) {
+           let watermark = decodeWatermark(from: data)
+        {
             candidates.append(watermark)
         }
 

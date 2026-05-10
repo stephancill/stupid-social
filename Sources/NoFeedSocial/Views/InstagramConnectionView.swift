@@ -33,7 +33,7 @@ struct InstagramConnectionView: View {
             if devModeEnabled {
                 Section("Manual (Dev)") {
                     TextField("Cookie header", text: $viewModel.instagramCookieHeader, axis: .vertical)
-                        .lineLimit(2...4)
+                        .lineLimit(2 ... 4)
                         .textFieldStyle(.plain)
                         .focused($isFocused)
 

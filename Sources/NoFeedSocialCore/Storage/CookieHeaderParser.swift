@@ -28,7 +28,8 @@ public enum CookieHeaderParser {
         let cookies = parse(header)
         guard let sessionId = cookies["sessionid"],
               let csrfToken = cookies["csrftoken"],
-              let dsUserId = cookies["ds_user_id"] else {
+              let dsUserId = cookies["ds_user_id"]
+        else {
             return nil
         }
 

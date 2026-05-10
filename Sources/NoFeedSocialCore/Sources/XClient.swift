@@ -66,7 +66,7 @@ public struct XClient {
             throw SourceError.notConfigured
         }
 
-        guard (200..<300).contains(http.statusCode) else {
+        guard (200 ..< 300).contains(http.statusCode) else {
             throw SourceError.invalidResponse
         }
 
@@ -112,7 +112,7 @@ public struct XClient {
             throw SourceError.notConfigured
         }
 
-        guard (200..<300).contains(http.statusCode) else {
+        guard (200 ..< 300).contains(http.statusCode) else {
             throw SourceError.invalidResponse
         }
 
@@ -159,7 +159,7 @@ public struct XClient {
             throw SourceError.notConfigured
         }
 
-        guard (200..<300).contains(http.statusCode) else {
+        guard (200 ..< 300).contains(http.statusCode) else {
             throw SourceError.invalidResponse
         }
 
@@ -186,7 +186,7 @@ public struct XClient {
             throw SourceError.notConfigured
         }
 
-        guard (200..<300).contains(http.statusCode) else {
+        guard (200 ..< 300).contains(http.statusCode) else {
             throw SourceError.invalidResponse
         }
 
@@ -293,7 +293,9 @@ private struct XAccountListUser: Decodable {
     let name: String
     let userId: String
 
-    var idStr: String { userId }
+    var idStr: String {
+        userId
+    }
 
     enum CodingKeys: String, CodingKey {
         case screenName = "screen_name"
@@ -451,8 +453,8 @@ private enum XNotificationParser {
     }
 
     private static func parseTweetEntry(
-        entryId: String,
-        sortIndex: String,
+        entryId _: String,
+        sortIndex _: String,
         tweetRef: XTweetRef,
         element: String,
         type: NotificationType,
@@ -482,7 +484,7 @@ private enum XNotificationParser {
     }
 
     private static func parseNotificationEntry(
-        entryId: String,
+        entryId _: String,
         sortIndex: String,
         notificationRef: XNotificationRef,
         element: String,
@@ -500,7 +502,8 @@ private enum XNotificationParser {
         let target: NotificationTarget?
         let sourceId: String
         if let targetTweetId = notificationRef.targetTweets?.first,
-           let tweet = tweets[targetTweetId] {
+           let tweet = tweets[targetTweetId]
+        {
             target = NotificationTarget(id: tweet.stableId, text: tweet.fullText, url: nil)
             sourceId = tweet.stableId
         } else {
@@ -532,10 +535,10 @@ private enum XNotificationParser {
         case "user_replied_to_your_tweet",
              "user_quoted_your_tweet":
             .reply
-         case "users_liked_your_tweet",
-              "user_liked_multiple_tweets",
-              "users_retweeted_your_tweet":
-             .reaction
+        case "users_liked_your_tweet",
+             "user_liked_multiple_tweets",
+             "users_retweeted_your_tweet":
+            .reaction
         default:
             .unknown
         }

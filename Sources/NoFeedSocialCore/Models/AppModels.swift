@@ -7,7 +7,9 @@ public enum SocialNetwork: String, Codable, CaseIterable, Identifiable, Sendable
     case spotify
     case debug
 
-    public var id: String { rawValue }
+    public var id: String {
+        rawValue
+    }
 
     public var displayName: String {
         switch self {
@@ -150,7 +152,9 @@ public struct DisplayNotificationItem: Identifiable, Hashable {
     public let item: NotificationItem
     public let isUnread: Bool
 
-    public var id: String { item.id }
+    public var id: String {
+        item.id
+    }
 
     public init(item: NotificationItem, isUnread: Bool) {
         self.item = item

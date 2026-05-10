@@ -1,6 +1,6 @@
-import XCTest
-import SwiftData
 @testable import NoFeedSocialCore
+import SwiftData
+import XCTest
 
 final class FeedServiceTests: XCTestCase {
     func testDisplayItemsSortDescendingAndDeriveUnread() {
@@ -141,11 +141,11 @@ private final class StubNotificationSource: NotificationSource {
         nil
     }
 
-    func fetchNotifications(reason: RefreshReason) async throws -> [NotificationItem] {
+    func fetchNotifications(reason _: RefreshReason) async throws -> [NotificationItem] {
         items
     }
 
-    func fetchProfile(id: String) async throws -> NetworkProfile {
+    func fetchProfile(id _: String) async throws -> NetworkProfile {
         throw SourceError.unsupported
     }
 }
@@ -153,11 +153,11 @@ private final class StubNotificationSource: NotificationSource {
 private final class InMemoryReadWatermarkStoreForFeed: ReadWatermarkProviding {
     private var watermark: ReadWatermark?
 
-    func watermark(for network: SocialNetwork, accountId: String) -> ReadWatermark? {
+    func watermark(for _: SocialNetwork, accountId _: String) -> ReadWatermark? {
         watermark
     }
 
-    func markAllRead(items: [NotificationItem], network: SocialNetwork?, accountId: String?) {
+    func markAllRead(items: [NotificationItem], network _: SocialNetwork?, accountId _: String?) {
         guard let newest = items.map(\.timestamp).max(), let first = items.first else { return }
         watermark = ReadWatermark(
             network: first.network,

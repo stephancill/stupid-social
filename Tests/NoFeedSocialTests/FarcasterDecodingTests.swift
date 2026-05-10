@@ -1,5 +1,5 @@
-import XCTest
 @testable import NoFeedSocialCore
+import XCTest
 
 final class FarcasterDecodingTests: XCTestCase {
     func testDecodesCurrentHypersnapNotificationShape() throws {
@@ -93,7 +93,7 @@ final class FarcasterDecodingTests: XCTestCase {
         XCTAssertEqual(response.notifications.count, 1)
         let n = response.notifications[0]
         XCTAssertEqual(n.type, "likes")
-        XCTAssertEqual(n.user?.fid, 806935)
+        XCTAssertEqual(n.user?.fid, 806_935)
         XCTAssertEqual(n.user?.username, "l1ghtyear18")
         XCTAssertEqual(n.cast?.hash, "0x49bfa72e6d453ccf38f47048fdd5745f8b2a18ec")
         XCTAssertEqual(n.cast?.text, "deepseek v4 pro is good")
@@ -184,7 +184,7 @@ final class FarcasterDecodingTests: XCTestCase {
         let wrapper = try decoder.decode(_FarcasterUserWrapperTest.self, from: json)
         let user = wrapper.user
 
-        XCTAssertEqual(user.fid, 806935)
+        XCTAssertEqual(user.fid, 806_935)
         XCTAssertEqual(user.username, "l1ghtyear18")
         XCTAssertEqual(user.displayName, "L1ghtyear18")
         XCTAssertEqual(user.bio, "Investment guru and gamer. I trade and play.")
@@ -248,7 +248,7 @@ final class FarcasterDecodingTests: XCTestCase {
         let n = response.notifications[0]
 
         // Notification user (actor)
-        XCTAssertEqual(n.user?.fid, 2023878)
+        XCTAssertEqual(n.user?.fid, 2_023_878)
         XCTAssertEqual(n.user?.username, "lasm")
         XCTAssertNotNil(n.user?.pfpUrl)
         XCTAssertEqual(n.user?.followerCount, 42)
@@ -258,7 +258,7 @@ final class FarcasterDecodingTests: XCTestCase {
         XCTAssertEqual(n.cast?.author?.fid, 1689)
         XCTAssertEqual(n.cast?.author?.username, "stephancill")
         XCTAssertNotNil(n.cast?.author?.pfpUrl)
-        XCTAssertEqual(n.cast?.author?.followerCount, 359641)
+        XCTAssertEqual(n.cast?.author?.followerCount, 359_641)
         XCTAssertEqual(n.cast?.author?.followingCount, 2620)
     }
 }

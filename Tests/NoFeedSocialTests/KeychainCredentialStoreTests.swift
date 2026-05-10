@@ -1,10 +1,10 @@
-import XCTest
 @testable import NoFeedSocialCore
+import XCTest
 
 final class KeychainCredentialStoreTests: XCTestCase {
     func testSavesLoadsUpdatesAndDeletesLocalXCredentials() throws {
         let suiteName = "tech.stupid.StupidSocial.tests.\(UUID().uuidString)"
-        let fallbackStore = UserDefaults(suiteName: suiteName)!
+        let fallbackStore = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         let store = KeychainCredentialStore(service: suiteName, fallbackStore: fallbackStore)
         defer {
             try? store.deleteXCredentials()

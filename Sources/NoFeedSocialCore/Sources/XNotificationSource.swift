@@ -31,7 +31,7 @@ public struct XNotificationSource: NotificationSource {
         try await client.unreadCount()
     }
 
-    public func fetchNotifications(reason: RefreshReason) async throws -> [NotificationItem] {
+    public func fetchNotifications(reason _: RefreshReason) async throws -> [NotificationItem] {
         return try await client.notifications()
     }
 

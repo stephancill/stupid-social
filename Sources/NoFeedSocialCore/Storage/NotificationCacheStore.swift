@@ -9,7 +9,7 @@ public final class NotificationCacheStore {
         self.context = context
     }
 
-    func loadRecent(now: Date = Date(), retention: TimeInterval = 86_400) throws -> [NotificationItem] {
+    func loadRecent(now: Date = Date(), retention: TimeInterval = 86400) throws -> [NotificationItem] {
         let cutoff = now.addingTimeInterval(-retention)
         let descriptor = FetchDescriptor<CachedNotification>(
             predicate: #Predicate { $0.cachedAt >= cutoff },
@@ -28,13 +28,13 @@ public final class NotificationCacheStore {
         var seenIds = Set<String>()
         for item in items {
             guard seenIds.insert(item.id).inserted else { continue }
-            context.insert(try CachedNotification(item: item, cachedAt: now))
+            try context.insert(CachedNotification(item: item, cachedAt: now))
         }
 
         try context.save()
     }
 
-    func deleteExpired(now: Date = Date(), retention: TimeInterval = 86_400) throws {
+    func deleteExpired(now: Date = Date(), retention: TimeInterval = 86400) throws {
         let cutoff = now.addingTimeInterval(-retention)
         let descriptor = FetchDescriptor<CachedNotification>(
             predicate: #Predicate { $0.cachedAt < cutoff }

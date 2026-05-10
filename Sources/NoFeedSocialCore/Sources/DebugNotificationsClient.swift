@@ -16,7 +16,8 @@ public final class DebugNotificationsClient {
         let (data, response) = try await session.data(from: url)
 
         guard let httpResponse = response as? HTTPURLResponse,
-              (200..<300).contains(httpResponse.statusCode) else {
+              (200 ..< 300).contains(httpResponse.statusCode)
+        else {
             throw SourceError.serviceError("Debug server request failed")
         }
 

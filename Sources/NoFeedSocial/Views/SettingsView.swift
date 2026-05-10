@@ -104,5 +104,4 @@ struct SettingsView: View {
                 .foregroundStyle(.secondary)
         }
     }
-
 }

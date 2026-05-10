@@ -12,7 +12,9 @@ public final class FeedViewModel: ObservableObject {
     private let feedService: FeedService
     private let instagramSource: InstagramNotificationSource?
 
-    public var service: FeedService { feedService }
+    public var service: FeedService {
+        feedService
+    }
 
     public init(feedService: FeedService, instagramSource: InstagramNotificationSource?) {
         self.feedService = feedService

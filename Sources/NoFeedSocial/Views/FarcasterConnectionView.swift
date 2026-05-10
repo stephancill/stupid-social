@@ -40,13 +40,13 @@ struct FarcasterConnectionView: View {
     @ViewBuilder
     private var farcasterUsernameField: some View {
         #if os(iOS)
-        TextField("Username", text: $viewModel.farcasterUsername)
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled()
-            .focused($isFocused)
+            TextField("Username", text: $viewModel.farcasterUsername)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .focused($isFocused)
         #else
-        TextField("Username", text: $viewModel.farcasterUsername)
-            .focused($isFocused)
+            TextField("Username", text: $viewModel.farcasterUsername)
+                .focused($isFocused)
         #endif
     }
 }

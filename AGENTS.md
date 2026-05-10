@@ -68,6 +68,11 @@
 - Keep secrets out of logs, diagnostics, fixtures, screenshots, and documentation examples.
 - When adding new SwiftData model properties, always provide a default value at the property declaration to avoid migration failures with existing installed caches.
 
+## Formatting
+
+- Run `swiftformat Sources/ Tests/` to auto-correct formatting violations.
+- Run `xtool dev build` after formatting to verify the build still passes.
+
 ## Debug Servers And State
 
 - Debug server scripts should persist generated state to disk so IDs and timestamps survive restarts and are not reissued with fresh timestamps.

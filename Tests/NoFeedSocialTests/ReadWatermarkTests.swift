@@ -1,5 +1,5 @@
-import XCTest
 @testable import NoFeedSocialCore
+import XCTest
 
 final class ReadWatermarkTests: XCTestCase {
     func testMarkAllReadAdvancesWatermarkToNewestItem() {
@@ -14,9 +14,9 @@ final class ReadWatermarkTests: XCTestCase {
         XCTAssertTrue(store.isUnread(item(id: "future", timestamp: Date(timeIntervalSince1970: 300))))
     }
 
-    func testICloudStorePreservesSubsecondWatermarkPrecision() {
+    func testICloudStorePreservesSubsecondWatermarkPrecision() throws {
         let suiteName = "tech.stupid.StupidSocial.watermarkTests.\(UUID().uuidString)"
-        let localStore = UserDefaults(suiteName: suiteName)!
+        let localStore = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { UserDefaults.standard.removePersistentDomain(forName: suiteName) }
 
         let store = ICloudReadWatermarkStore(localStore: localStore)

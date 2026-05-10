@@ -2,9 +2,9 @@ import NoFeedSocialCore
 import SwiftUI
 
 #if os(iOS)
-import UIKit
+    import UIKit
 #elseif os(macOS)
-import AppKit
+    import AppKit
 #endif
 
 struct NotificationDetailView: View {
@@ -116,7 +116,8 @@ struct NotificationDetailView: View {
             return URL(string: "https://farcaster.xyz/~/conversations/\(hash)")
         case .x:
             guard displayItem.item.target?.id != nil,
-                  sourceId.allSatisfy(\.isNumber), !sourceId.isEmpty else {
+                  sourceId.allSatisfy(\.isNumber), !sourceId.isEmpty
+            else {
                 return nil
             }
             return URL(string: "https://x.com/i/status/\(sourceId)")
@@ -129,7 +130,6 @@ struct NotificationDetailView: View {
         }
     }
 }
-
 
 private struct PersonRow: View {
     let actor: NotificationActor
@@ -246,13 +246,13 @@ private func detailNetworkBadgeImage(named name: String) -> Image? {
     guard let path = Bundle.main.path(forResource: name, ofType: "png") else { return nil }
 
     #if os(iOS)
-    guard let image = UIImage(contentsOfFile: path) else { return nil }
-    return Image(uiImage: image)
+        guard let image = UIImage(contentsOfFile: path) else { return nil }
+        return Image(uiImage: image)
     #elseif os(macOS)
-    guard let image = NSImage(contentsOfFile: path) else { return nil }
-    return Image(nsImage: image)
+        guard let image = NSImage(contentsOfFile: path) else { return nil }
+        return Image(nsImage: image)
     #else
-    return nil
+        return nil
     #endif
 }
 

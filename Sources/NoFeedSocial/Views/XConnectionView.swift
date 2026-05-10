@@ -33,7 +33,7 @@ struct XConnectionView: View {
             if devModeEnabled {
                 Section("Manual (Dev)") {
                     TextField("Cookie header", text: $viewModel.xCookieHeader, axis: .vertical)
-                        .lineLimit(2...4)
+                        .lineLimit(2 ... 4)
                         .textFieldStyle(.plain)
                         .focused($isFocused)
 

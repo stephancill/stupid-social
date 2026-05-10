@@ -1,6 +1,6 @@
-import XCTest
-import SwiftData
 @testable import NoFeedSocialCore
+import SwiftData
+import XCTest
 
 @MainActor
 final class LiveServiceTests: XCTestCase {
@@ -18,7 +18,8 @@ final class LiveServiceTests: XCTestCase {
         guard let authToken = ProcessInfo.processInfo.environment["TWITTER_AUTH_TOKEN"],
               let ct0 = ProcessInfo.processInfo.environment["TWITTER_CT0"],
               !authToken.isEmpty,
-              !ct0.isEmpty else {
+              !ct0.isEmpty
+        else {
             throw XCTSkip("Set TWITTER_AUTH_TOKEN and TWITTER_CT0 to run the live X service test.")
         }
 
@@ -140,7 +141,8 @@ final class LiveServiceTests: XCTestCase {
         }
         if let session = env("INSTAGRAM_SESSION_ID"),
            let csrf = env("INSTAGRAM_CSRF_TOKEN"),
-           let uid = env("INSTAGRAM_DS_USER_ID") {
+           let uid = env("INSTAGRAM_DS_USER_ID")
+        {
             return InstagramCredentials(
                 sessionId: session,
                 csrfToken: csrf,
@@ -168,11 +170,11 @@ final class LiveServiceTests: XCTestCase {
 private final class InMemoryReadWatermarkStore: ReadWatermarkProviding {
     private var watermark: ReadWatermark?
 
-    func watermark(for network: SocialNetwork, accountId: String) -> ReadWatermark? {
+    func watermark(for _: SocialNetwork, accountId _: String) -> ReadWatermark? {
         watermark
     }
 
-    func markAllRead(items: [NotificationItem], network: SocialNetwork?, accountId: String?) {
+    func markAllRead(items: [NotificationItem], network _: SocialNetwork?, accountId _: String?) {
         guard let newest = items.map(\.timestamp).max(), let first = items.first else { return }
         watermark = ReadWatermark(
             network: first.network,

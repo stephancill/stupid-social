@@ -2,9 +2,9 @@ import NoFeedSocialCore
 import SwiftUI
 
 #if os(iOS)
-import UIKit
+    import UIKit
 #elseif os(macOS)
-import AppKit
+    import AppKit
 #endif
 
 struct FeedView: View {
@@ -260,10 +260,10 @@ private struct StoryBubble: View {
                     network: displayItem.item.network,
                     musicAnimation: displayItem.item.target?.musicAnimation
                 )
-                    .overlay {
-                        storyThumbnailShape
-                            .stroke(displayItem.item.network.storyAccentColor, lineWidth: 2)
-                    }
+                .overlay {
+                    storyThumbnailShape
+                        .stroke(displayItem.item.network.storyAccentColor, lineWidth: 2)
+                }
 
                 if let actor = displayItem.item.actors.first {
                     StoryActorAvatar(actor: actor)
@@ -530,7 +530,6 @@ private struct NewSeparatorRow: View {
     }
 }
 
-
 private struct NotificationRow: View {
     let displayItem: DisplayNotificationItem
 
@@ -567,13 +566,15 @@ private struct NotificationRow: View {
         if displayItem.item.type == .follow {
             EmptyView()
         } else if let targetText = displayItem.item.target?.text, !targetText.isEmpty,
-                   (displayItem.item.type == .reaction || displayItem.item.type == .reply || displayItem.item.type == .mention || displayItem.item.type == .music) {
+                  displayItem.item.type == .reaction || displayItem.item.type == .reply || displayItem.item.type == .mention || displayItem.item.type == .music
+        {
             Text(targetText)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
         } else if let imageUrl = displayItem.item.target?.imageURL,
-                  (imageUrl.absoluteString.contains("cdninstagram.com") || displayItem.item.type == .music) {
+                  imageUrl.absoluteString.contains("cdninstagram.com") || displayItem.item.type == .music
+        {
             AsyncImage(url: imageUrl) { phase in
                 switch phase {
                 case let .success(image):
@@ -636,11 +637,12 @@ private struct NotificationRow: View {
     }
 
     private var previewText: String? {
-        if (displayItem.item.type == .reaction
+        if displayItem.item.type == .reaction
             || displayItem.item.type == .reply
             || displayItem.item.type == .mention
-            || displayItem.item.type == .music),
-           let targetText = displayItem.item.target?.text, !targetText.isEmpty {
+            || displayItem.item.type == .music,
+            let targetText = displayItem.item.target?.text, !targetText.isEmpty
+        {
             return targetText
         }
 
@@ -684,11 +686,11 @@ private extension Color {
 
     static var storyAvatarBorder: Color {
         #if os(iOS)
-        Color(uiColor: .systemBackground)
+            Color(uiColor: .systemBackground)
         #elseif os(macOS)
-        Color(nsColor: .windowBackgroundColor)
+            Color(nsColor: .windowBackgroundColor)
         #else
-        Color.white
+            Color.white
         #endif
     }
 }
@@ -793,13 +795,13 @@ private func networkBadgeImage(named name: String) -> Image? {
     guard let path = Bundle.main.path(forResource: name, ofType: "png") else { return nil }
 
     #if os(iOS)
-    guard let image = UIImage(contentsOfFile: path) else { return nil }
-    return Image(uiImage: image)
+        guard let image = UIImage(contentsOfFile: path) else { return nil }
+        return Image(uiImage: image)
     #elseif os(macOS)
-    guard let image = NSImage(contentsOfFile: path) else { return nil }
-    return Image(nsImage: image)
+        guard let image = NSImage(contentsOfFile: path) else { return nil }
+        return Image(nsImage: image)
     #else
-    return nil
+        return nil
     #endif
 }
 

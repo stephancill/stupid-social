@@ -2,9 +2,9 @@ import NoFeedSocialCore
 import SwiftUI
 
 #if os(iOS)
-import UIKit
+    import UIKit
 #elseif os(macOS)
-import AppKit
+    import AppKit
 #endif
 
 struct ProfileDetailView: View {
@@ -193,8 +193,8 @@ struct ProfileDetailView: View {
             let millions = Double(count) / 1_000_000.0
             return String(format: "%.1fM", millions)
         }
-        if count >= 1_000 {
-            let thousands = Double(count) / 1_000.0
+        if count >= 1000 {
+            let thousands = Double(count) / 1000.0
             return String(format: "%.1fK", thousands)
         }
         return "\(count)"

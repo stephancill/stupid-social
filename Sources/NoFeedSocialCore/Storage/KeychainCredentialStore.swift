@@ -172,9 +172,9 @@ public final class KeychainCredentialStore {
 
     private var preferredSynchronizable: Bool {
         #if targetEnvironment(simulator)
-        false
+            false
         #else
-        true
+            true
         #endif
     }
 

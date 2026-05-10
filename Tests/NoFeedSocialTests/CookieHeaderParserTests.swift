@@ -1,5 +1,5 @@
-import XCTest
 @testable import NoFeedSocialCore
+import XCTest
 
 final class CookieHeaderParserTests: XCTestCase {
     func testExtractsRequiredXCredentials() {
