@@ -117,6 +117,7 @@ public struct NotificationTarget: Hashable, Codable, Sendable {
     public let text: String?
     public let url: URL?
     public let imageURL: URL?
+    public let album: String?
     public let musicAnimation: MusicAnimationMetadata?
 
     public init(
@@ -124,12 +125,14 @@ public struct NotificationTarget: Hashable, Codable, Sendable {
         text: String?,
         url: URL?,
         imageURL: URL? = nil,
+        album: String? = nil,
         musicAnimation: MusicAnimationMetadata? = nil
     ) {
         self.id = id
         self.text = text
         self.url = url
         self.imageURL = imageURL
+        self.album = album
         self.musicAnimation = musicAnimation
     }
 }

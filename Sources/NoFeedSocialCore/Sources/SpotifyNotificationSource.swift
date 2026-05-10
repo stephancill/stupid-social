@@ -77,6 +77,7 @@ public final class SpotifyNotificationSource: NotificationSource {
                 text: "\(friend.track.name) — \(friend.track.artist?.name ?? "Unknown")",
                 url: trackURL,
                 imageURL: imageURL,
+                album: friend.track.album?.name,
                 musicAnimation: animation
             )
 

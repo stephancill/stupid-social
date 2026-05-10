@@ -175,8 +175,8 @@ struct SpotifyStoryViewer: View {
                 .lineLimit(2)
                 .multilineTextAlignment(.center)
 
-            if let actor = item.actors.first {
-                Text(actor.displayName ?? actor.username ?? "")
+            if let album = item.target?.album {
+                Text(album)
                     .font(.subheadline)
                     .foregroundStyle(.white.opacity(0.6))
             }
