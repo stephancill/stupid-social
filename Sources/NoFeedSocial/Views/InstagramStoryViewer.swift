@@ -9,6 +9,8 @@ struct InstagramStoryViewer: View {
     @State private var currentReelIndex: Int
     @State private var currentSlideIndex: Int = 0
     @State private var seenReels: Set<Int>
+    @State private var elapsedTime: Double = 0
+    @State private var isPaused: Bool = false
 
     init(reels: [InstagramStoryReel], startIndex: Int = 0, onReelSeen: @escaping (Int) -> Void) {
         self.reels = reels
@@ -25,7 +27,7 @@ struct InstagramStoryViewer: View {
             if reels.indices.contains(currentReelIndex) {
                 let reel = reels[currentReelIndex]
 
-                if !reel.slides.isEmpty {
+                if !reel.slides.isEmpty, reel.slides.indices.contains(currentSlideIndex) {
                     AsyncImage(url: reel.slides[currentSlideIndex].imageURL) { phase in
                         switch phase {
                         case let .success(image):
@@ -51,11 +53,33 @@ struct InstagramStoryViewer: View {
             onReelSeen(startIndex)
         }
         .onChange(of: currentReelIndex) { _, newIndex in
+            elapsedTime = 0
             guard !seenReels.contains(newIndex) else { return }
             seenReels.insert(newIndex)
             onReelSeen(newIndex)
         }
+        .onChange(of: currentSlideIndex) { _, _ in
+            elapsedTime = 0
+        }
+        .onReceive(Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()) { _ in
+            guard !isPaused else { return }
+            guard reels.indices.contains(currentReelIndex) else { return }
+            elapsedTime += 0.05
+            if elapsedTime >= slideDuration {
+                elapsedTime = 0
+                goForward()
+            }
+        }
         .contentShape(Rectangle())
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in
+                    isPaused = true
+                }
+                .onEnded { _ in
+                    isPaused = false
+                }
+        )
         .gesture(
             DragGesture(minimumDistance: 30, coordinateSpace: .local)
                 .onEnded { value in
@@ -85,8 +109,10 @@ struct InstagramStoryViewer: View {
                             if index == currentSlideIndex {
                                 Capsule()
                                     .fill(Color.white)
-                                    .frame(width: geo.size.width * 0.5, height: 3)
-                                    .animation(.linear(duration: 5), value: currentSlideIndex)
+                                    .frame(
+                                        width: geo.size.width * min(elapsedTime / slideDuration, 1.0),
+                                        height: 3
+                                    )
                             } else if index < currentSlideIndex {
                                 Capsule()
                                     .fill(Color.white)
@@ -127,7 +153,7 @@ struct InstagramStoryViewer: View {
                     Text(reels[currentReelIndex].user.username ?? "")
                         .font(.headline)
                         .foregroundStyle(.white)
-                    Text(reels[currentReelIndex].user.displayName ?? "")
+                    Text(relativeTimeString)
                         .font(.caption)
                         .foregroundStyle(.white.opacity(0.7))
                 }
@@ -175,6 +201,22 @@ struct InstagramStoryViewer: View {
             }
         }
     }
+
+    private static let relativeFormatter: RelativeDateTimeFormatter = {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .abbreviated
+        return f
+    }()
+
+    private var relativeTimeString: String {
+        guard reels.indices.contains(currentReelIndex) else { return "" }
+        let slides = reels[currentReelIndex].slides
+        guard slides.indices.contains(currentSlideIndex) else { return "" }
+        let date = Date(timeIntervalSince1970: slides[currentSlideIndex].takenAt)
+        return Self.relativeFormatter.localizedString(for: date, relativeTo: .now)
+    }
+
+    private let slideDuration: Double = 5
 
     private func goForward() {
         let reel = reels[currentReelIndex]

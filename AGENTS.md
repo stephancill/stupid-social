@@ -57,6 +57,7 @@
 - When the user says "install" without specifying a target, default to `xtool dev run --simulator --no-attach --no-logs --launch-timeout 420`.
 - Only target a physical device over USB when the user explicitly says "install to iphone" or similar.
 - After making source or resource changes, run `xtool dev build` for them to take effect in the Xcode workspace. `xtool dev run` also performs a build, but a standalone build is faster for verification.
+- When asked to bump the build number, increment `CFBundleVersion` in `Info.plist` by 1, then run `xtool dev build` to regenerate the Xcode workspace.
 
 ## Engineering Style
 
