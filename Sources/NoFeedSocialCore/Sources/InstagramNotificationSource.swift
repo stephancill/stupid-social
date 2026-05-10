@@ -60,9 +60,14 @@ public final class InstagramNotificationSource: NotificationSource {
         }
 
         var reels: [InstagramStoryReel] = []
+        var seenUserIds: Set<UInt64> = []
         for item in tray {
+            let userId = item.user.pk
+            if seenUserIds.contains(userId) { continue }
+            seenUserIds.insert(userId)
+
             let actor = NotificationActor(
-                id: String(item.user.pk),
+                id: String(userId),
                 network: .instagram,
                 username: item.user.username,
                 displayName: item.user.fullName,
@@ -70,8 +75,7 @@ public final class InstagramNotificationSource: NotificationSource {
             )
 
             var slides: [InstagramStorySlide] = []
-            let userId = String(item.user.pk)
-            if let reel = try? await client.userStory(userId: userId).reel {
+            if let reel = try? await client.userStory(userId: String(userId)).reel {
                 for media in reel.items ?? [] {
                     if let candidates = media.imageVersions2?.candidates,
                        let best = candidates.sorted(by: { (a: InstagramMediaCandidate, b: InstagramMediaCandidate) in (a.width ?? 0) > (b.width ?? 0) }).first,
