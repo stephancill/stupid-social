@@ -76,12 +76,32 @@ public final class FeedViewModel: ObservableObject {
     }
 
     public func fetchInstagramStories() async {
-        guard let instagramSource else { return }
+        guard let instagramSource, instagramSource.storiesEnabled else {
+            instagramStoryReels = []
+            return
+        }
         do {
-            instagramStoryReels = try await instagramSource.fetchStoryReels()
+            var reels = try await instagramSource.fetchStoryReels()
+            reels.sort { $0.isSeen == false && $1.isSeen == true }
+            instagramStoryReels = reels
         } catch {
             // Non-critical: stories silently fail
         }
+    }
+
+    public func markInstagramReelAsSeen(reelIndex: Int) {
+        guard let instagramSource,
+              instagramStoryReels.indices.contains(reelIndex) else { return }
+        let reel = instagramStoryReels[reelIndex]
+        guard !reel.isSeen else { return }
+
+        Task {
+            await instagramSource.markReelAsSeen(slides: reel.slides)
+        }
+
+        let updated = InstagramStoryReel(id: reel.id, user: reel.user, slides: reel.slides, isSeen: true)
+        instagramStoryReels[reelIndex] = updated
+        instagramStoryReels.sort { $0.isSeen == false && $1.isSeen == true }
     }
 
     public func performCredentialHealthCheck() async {

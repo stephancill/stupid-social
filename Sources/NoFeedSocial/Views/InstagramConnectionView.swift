@@ -45,6 +45,13 @@ struct InstagramConnectionView: View {
             }
 
             if viewModel.instagramStatus != .notConfigured {
+                Section("Stories") {
+                    Toggle("Show Stories", isOn: $viewModel.instagramStoriesEnabled)
+                        .onChange(of: viewModel.instagramStoriesEnabled) { _, enabled in
+                            viewModel.toggleInstagramStories(enabled: enabled)
+                        }
+                }
+
                 Section("Notification Types") {
                     ForEach(InstagramNotificationCategory.allCases, id: \.self) { category in
                         Toggle(isOn: binding(for: category)) {

@@ -29,12 +29,14 @@ public struct InstagramAccountMetadata: Codable, Equatable {
     public var username: String?
     public var status: AccountStatusSnapshot
     public var enabledCategories: Set<InstagramNotificationCategory>
+    public var storiesEnabled: Bool
 
-    public init(accountId: String, username: String?, status: AccountStatusSnapshot, enabledCategories: Set<InstagramNotificationCategory>? = nil) {
+    public init(accountId: String, username: String?, status: AccountStatusSnapshot, enabledCategories: Set<InstagramNotificationCategory>? = nil, storiesEnabled: Bool = true) {
         self.accountId = accountId
         self.username = username
         self.status = status
         self.enabledCategories = enabledCategories ?? Set(InstagramNotificationCategory.allCases)
+        self.storiesEnabled = storiesEnabled
     }
 
     public init(from decoder: Decoder) throws {
@@ -43,6 +45,7 @@ public struct InstagramAccountMetadata: Codable, Equatable {
         username = try container.decodeIfPresent(String.self, forKey: .username)
         status = try container.decode(AccountStatusSnapshot.self, forKey: .status)
         enabledCategories = try container.decodeIfPresent(Set<InstagramNotificationCategory>.self, forKey: .enabledCategories) ?? Set(InstagramNotificationCategory.allCases)
+        storiesEnabled = try container.decodeIfPresent(Bool.self, forKey: .storiesEnabled) ?? true
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -51,6 +54,7 @@ public struct InstagramAccountMetadata: Codable, Equatable {
         try container.encodeIfPresent(username, forKey: .username)
         try container.encode(status, forKey: .status)
         try container.encode(enabledCategories, forKey: .enabledCategories)
+        try container.encode(storiesEnabled, forKey: .storiesEnabled)
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -58,6 +62,7 @@ public struct InstagramAccountMetadata: Codable, Equatable {
         case username
         case status
         case enabledCategories
+        case storiesEnabled
     }
 }
 

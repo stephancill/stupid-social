@@ -206,11 +206,13 @@ public struct InstagramStoryReel: Identifiable, Hashable, Sendable {
     public let id: String
     public let user: NotificationActor
     public let slides: [InstagramStorySlide]
+    public let isSeen: Bool
 
-    public init(id: String, user: NotificationActor, slides: [InstagramStorySlide]) {
+    public init(id: String, user: NotificationActor, slides: [InstagramStorySlide], isSeen: Bool = false) {
         self.id = id
         self.user = user
         self.slides = slides
+        self.isSeen = isSeen
     }
 }
 
@@ -219,12 +221,16 @@ public struct InstagramStorySlide: Identifiable, Hashable, Sendable {
     public let imageURL: URL
     public let videoURL: URL?
     public let isVideo: Bool
+    public let ownerId: String
+    public let takenAt: Double
 
-    public init(id: String, imageURL: URL, videoURL: URL?, isVideo: Bool) {
+    public init(id: String, imageURL: URL, videoURL: URL?, isVideo: Bool, ownerId: String = "", takenAt: Double = 0) {
         self.id = id
         self.imageURL = imageURL
         self.videoURL = videoURL
         self.isVideo = isVideo
+        self.ownerId = ownerId
+        self.takenAt = takenAt
     }
 }
 

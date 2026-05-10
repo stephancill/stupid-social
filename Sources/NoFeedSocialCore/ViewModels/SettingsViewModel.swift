@@ -14,6 +14,7 @@ public final class SettingsViewModel: ObservableObject {
     @Published public private(set) var farcasterStatus: AccountStatus = .notConfigured
     @Published public private(set) var instagramStatus: AccountStatus = .notConfigured
     @Published public var instagramEnabledCategories: Set<InstagramNotificationCategory> = []
+    @Published public var instagramStoriesEnabled = true
     @Published public private(set) var spotifyStatus: AccountStatus = .notConfigured
     @Published public private(set) var debugStatus: AccountStatus = .notConfigured
     @Published public var message: String?
@@ -269,6 +270,7 @@ public final class SettingsViewModel: ObservableObject {
         try? keychainStore.deleteInstagramCredentials()
         metadataStore.instagramAccount = nil
         instagramEnabledCategories = []
+        instagramStoriesEnabled = true
         try? cacheStore.deleteNetwork(.instagram)
         instagramStatus = .notConfigured
         message = "Instagram account disconnected."
@@ -282,6 +284,15 @@ public final class SettingsViewModel: ObservableObject {
         }
         var account = metadataStore.instagramAccount
         account?.enabledCategories = instagramEnabledCategories
+        if let account {
+            metadataStore.instagramAccount = account
+        }
+    }
+
+    public func toggleInstagramStories(enabled: Bool) {
+        instagramStoriesEnabled = enabled
+        var account = metadataStore.instagramAccount
+        account?.storiesEnabled = enabled
         if let account {
             metadataStore.instagramAccount = account
         }
@@ -393,9 +404,11 @@ public final class SettingsViewModel: ObservableObject {
 
         if let instagram = metadataStore.instagramAccount {
             instagramEnabledCategories = instagram.enabledCategories
+            instagramStoriesEnabled = instagram.storiesEnabled
             instagramStatus = accountStatus(from: instagram.status)
         } else {
             instagramEnabledCategories = []
+            instagramStoriesEnabled = true
             instagramStatus = .notConfigured
         }
 

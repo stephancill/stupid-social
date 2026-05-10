@@ -115,7 +115,10 @@ struct FeedView: View {
         .fullScreenCover(isPresented: $showStoryViewer) {
             InstagramStoryViewer(
                 reels: viewModel.instagramStoryReels,
-                startIndex: selectedInstagramReelIndex ?? 0
+                startIndex: selectedInstagramReelIndex ?? 0,
+                onReelSeen: { index in
+                    viewModel.markInstagramReelAsSeen(reelIndex: index)
+                }
             )
         }
     }
@@ -207,13 +210,24 @@ private struct InstagramStoryBubble: View {
                 .overlay {
                     Circle()
                         .stroke(
-                            LinearGradient(
-                                colors: [.purple, .pink, .orange],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            ),
-                            lineWidth: 3
+                            reel.isSeen
+                                ? Color.gray.opacity(0.4)
+                                : Color.clear,
+                            lineWidth: reel.isSeen ? 3 : 0
                         )
+                        .overlay {
+                            if !reel.isSeen {
+                                Circle()
+                                    .stroke(
+                                        LinearGradient(
+                                            colors: [.purple, .pink, .orange],
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
+                                        ),
+                                        lineWidth: 3
+                                    )
+                            }
+                        }
                 }
             }
 
@@ -885,7 +899,7 @@ private struct AvatarStrip: View {
             }
 
             if actors.count > 5 {
-                Text("+")
+                Text("+\(actors.count - 5)")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                     .frame(width: 32, height: 32)

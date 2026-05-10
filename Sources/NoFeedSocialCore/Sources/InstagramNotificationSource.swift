@@ -12,6 +12,10 @@ public final class InstagramNotificationSource: NotificationSource {
         self.metadataStore = metadataStore
     }
 
+    public var storiesEnabled: Bool {
+        metadataStore.instagramAccount?.storiesEnabled ?? true
+    }
+
     public func validateAccount() async throws -> AccountStatus {
         do {
             let user = try await client.verifiedUser()
@@ -59,12 +63,29 @@ public final class InstagramNotificationSource: NotificationSource {
             metadataStore.instagramAccount = account
         }
 
-        var reels: [InstagramStoryReel] = []
+        struct TrayEntry {
+            let item: InstagramTrayItem
+            let reelId: String
+        }
+
+        var trayEntries: [TrayEntry] = []
         var seenUserIds: Set<UInt64> = []
         for item in tray {
             let userId = item.user.pk
+            let reelId = item.id
+            guard reelId == String(userId) else { continue }
             if seenUserIds.contains(userId) { continue }
             seenUserIds.insert(userId)
+
+            trayEntries.append(TrayEntry(item: item, reelId: reelId))
+        }
+
+        let mediaByReelId = try await client.reelsMedia(reelIds: trayEntries.map(\.reelId))
+
+        var reels: [InstagramStoryReel] = []
+        for entry in trayEntries {
+            let item = entry.item
+            let userId = item.user.pk
 
             let actor = NotificationActor(
                 id: String(userId),
@@ -74,8 +95,10 @@ public final class InstagramNotificationSource: NotificationSource {
                 avatarURL: item.user.profilePicUrl.flatMap(URL.init)
             )
 
+            let isSeen = item.seen != 0
+
             var slides: [InstagramStorySlide] = []
-            if let reel = try? await client.userStory(userId: String(userId)).reel {
+            if let reel = mediaByReelId[entry.reelId] {
                 for media in reel.items ?? [] {
                     if let candidates = media.imageVersions2?.candidates,
                        let best = candidates.sorted(by: { (a: InstagramMediaCandidate, b: InstagramMediaCandidate) in (a.width ?? 0) > (b.width ?? 0) }).first,
@@ -86,7 +109,9 @@ public final class InstagramNotificationSource: NotificationSource {
                             id: media.id,
                             imageURL: imageURL,
                             videoURL: videoURL,
-                            isVideo: media.mediaType == 2
+                            isVideo: media.mediaType == 2,
+                            ownerId: String(reel.user?.pk ?? userId),
+                            takenAt: media.takenAt ?? 0
                         ))
                     }
                 }
@@ -94,9 +119,10 @@ public final class InstagramNotificationSource: NotificationSource {
 
             if !slides.isEmpty {
                 reels.append(InstagramStoryReel(
-                    id: String(item.id),
+                    id: entry.reelId,
                     user: actor,
-                    slides: slides
+                    slides: slides,
+                    isSeen: isSeen
                 ))
             }
         }
@@ -108,6 +134,13 @@ public final class InstagramNotificationSource: NotificationSource {
         guard var account = metadataStore.instagramAccount else { return }
         account.status = .invalidCredentials
         metadataStore.instagramAccount = account
+    }
+
+    public func markReelAsSeen(slides: [InstagramStorySlide]) async {
+        let items = slides.map { slide in
+            (mediaId: slide.id, ownerId: slide.ownerId, takenAt: slide.takenAt)
+        }
+        try? await client.markStorySeen(mediaItems: items)
     }
 
     public func fetchProfile(id: String) async throws -> NetworkProfile {

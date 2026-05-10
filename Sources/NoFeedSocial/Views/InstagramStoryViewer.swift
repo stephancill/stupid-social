@@ -4,14 +4,18 @@ import SwiftUI
 struct InstagramStoryViewer: View {
     let reels: [InstagramStoryReel]
     let startIndex: Int
+    let onReelSeen: (Int) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var currentReelIndex: Int
     @State private var currentSlideIndex: Int = 0
+    @State private var seenReels: Set<Int>
 
-    init(reels: [InstagramStoryReel], startIndex: Int = 0) {
+    init(reels: [InstagramStoryReel], startIndex: Int = 0, onReelSeen: @escaping (Int) -> Void) {
         self.reels = reels
         self.startIndex = startIndex
+        self.onReelSeen = onReelSeen
         _currentReelIndex = State(initialValue: startIndex)
+        _seenReels = State(initialValue: [startIndex])
     }
 
     var body: some View {
@@ -42,6 +46,14 @@ struct InstagramStoryViewer: View {
                 header
                 footer
             }
+        }
+        .onAppear {
+            onReelSeen(startIndex)
+        }
+        .onChange(of: currentReelIndex) { _, newIndex in
+            guard !seenReels.contains(newIndex) else { return }
+            seenReels.insert(newIndex)
+            onReelSeen(newIndex)
         }
         .contentShape(Rectangle())
         .gesture(

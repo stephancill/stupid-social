@@ -78,3 +78,53 @@
 - Update `docs/IMPLEMENTATION.md` when implementation choices are made or changed.
 - Keep API endpoint assumptions, response quirks, and side effects documented.
 - If behavior differs from the plan, record the reason and whether it is temporary or intentional.
+
+## Reading Simulator Credentials For API Testing
+
+The `sim-prefs` skill provides a script to read app preferences from a booted simulator without launching the app.
+
+```bash
+# Read Instagram credentials for curl testing
+python3 ~/.config/opencode/skills/sim-prefs/sim-prefs/scripts/read_prefs.py --raw-key "tech.stupid.StupidSocial.credentials.instagram.localFallback"
+```
+
+Typical output:
+```json
+{
+  "csrfToken": "MZ5Rlef2Xa4gi_VJ3W_7Cm",
+  "mid": "af-i4QAEAAE3WI_GYFY1GbhwnpHI",
+  "sessionId": "70150151668%3AbRdSZLSgsYuNCb%3A28%3AAYjenJEIf-Oj50Qahe3jXKl80ttRA0Q60VkhkIiMgw",
+  "dsUserId": "70150151668",
+  "rur": "FRC,70150151668,1809898590:01fe6d5b21ac89e9cf47fa...",
+  "igDid": "2BD14C47-5D7C-45A6-9AAD-B6919359748C"
+}
+```
+
+Use the extracted values directly in curl:
+
+```bash
+SESSIONID='...' CSRF='...' USERID='...' MID='...'
+# Verify session is valid
+curl -s -H "Cookie: ds_user_id=$USERID; csrftoken=$CSRF; sessionid=$SESSIONID; mid=$MID" \
+  -H "X-CSRFToken: $CSRF" \
+  -H "X-IG-App-ID: 567067343352427" \
+  -H "User-Agent: Instagram 416.0.0.47.66 Android (35/35; 480dpi; 1080x2400; samsung; SM-S938U; qcom; en_US; 718621835)" \
+  "https://i.instagram.com/api/v1/accounts/current_user/"
+
+# Fetch stories tray
+curl -s -X POST \
+  -H "Cookie: ds_user_id=$USERID; csrftoken=$CSRF; sessionid=$SESSIONID; mid=$MID" \
+  -H "X-CSRFToken: $CSRF" \
+  -H "X-IG-App-ID: 567067343352427" \
+  -H "User-Agent: Instagram 416.0.0.47.66 Android ..." \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  --data-urlencode "_csrftoken=$CSRF" \
+  "https://i.instagram.com/api/v1/feed/reels_tray/"
+
+# Check account status
+python3 ~/.config/opencode/skills/sim-prefs/sim-prefs/scripts/read_prefs.py --accounts
+```
+
+Other useful flags: `--credentials` (field presence only), `--keychain` (raw keychain dump), `--bundle-id <id>` for non-default apps.
+
+The simulator must be booted (`xcrun simctl list devices booted`). The app must have been run at least once to populate credentials. Credentials are stored in iCloud Keychain with UserDefaults fallback; the fallback key is `tech.stupid.StupidSocial.credentials.<network>.localFallback`.
