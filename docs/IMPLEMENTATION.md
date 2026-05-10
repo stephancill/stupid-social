@@ -192,3 +192,39 @@
 - `FeedView` renders Spotify listening activity only in the top stories bar, not the main notification list. It intentionally does not filter by Spotify's 15-minute now-playing threshold because live buddylist responses can have valid activity while `now_playing_count` is zero.
 - Spotify story tiles spin album art and emit layered gray pulse rings from the outer artwork border. Tempo controls spin/pulse timing, tempo confidence controls opacity, and loudness controls pulse scale. Reduce Motion disables rotation and pulse expansion.
 - Added Spotify connection/settings views, Spotify badge resources in `xtool.yml`, `.spotify` network support, `.music` notification type support, and Spotify profile/detail URL handling.
+
+### Instagram stories viewer
+
+- Added `GET /api/v1/feed/user/{userId}/story/` and `POST /api/v1/feed/reels_tray/` to `InstagramClient` using the same cookie-based auth as the news/inbox endpoint.
+- Added response models: `InstagramReelsTrayResponse`, `InstagramTrayItem`, `InstagramUserStoryResponse`, `InstagramReel`, `InstagramStoryMedia`, `InstagramImageVersions`, `InstagramMediaCandidate`, `InstagramVideoVersion`.
+- Added `InstagramStoryReel` and `InstagramStorySlide` public types to `AppModels` for rendering.
+- `InstagramNotificationSource.fetchStoryReels()` calls the tray endpoint, then fetches each user's story media (image URLs via `image_versions2.candidates`, video URLs via `video_versions`).
+- `FeedViewModel` now holds `@Published var instagramStoryReels` and a reference to the instagram source; `fetchInstagramStories()` is called after dependency setup in `ContentView`.
+- `FeedView` shows Instagram reels as tappable tiles in the `StoriesBar` alongside Spotify items. Tapping opens a full-screen `InstagramStoryViewer` with slide navigation.
+- `InstagramStoryViewer` renders story images with a progress bar indicator, user header (avatar, username, display name), close button, and swipe-down/left/right navigation.
+- Instagram story tiles show the user's profile picture with a gradient ring (purple → pink → orange).
+- MVP is image-only; video support is deferred.
+
+### Credential health check
+
+- On startup, `FeedViewModel.performCredentialHealthCheck()` calls `validateAccount()` on every configured source.
+- Each source's `validateAccount()` now updates its stored `AccountStatusSnapshot` to `.invalidCredentials` when validation fails (e.g. session expired, token revoked) while preserving `.notConfigured` for accounts that were never set up.
+- `SettingsViewModel.loadStatuses()` now reads the stored status snapshot to display the correct connection state.
+- `AccountStatusSnapshot` gained `.networkUnavailable` and `.serviceError` cases. `accountStatus(from:)` maps all existing snapshot cases.
+
+### Instagram API auth fixes (2026-05-09)
+
+- Analyzed Instagram's web client GraphQL auth and stories tray fetching from saved page captures.
+- Web client uses `POST www.instagram.com/api/graphql` with compiled document IDs that change per build. The stories tray root field is `xdt_api__v1__feed__reels_tray`. Auth is cookie-based (`sessionid`, `csrftoken`, `ds_user_id`, `mid`, `rur`, `ig_did`) plus CSRF tokens embedded in the page source (`fb_dtsg`, `lsd`).
+- Document IDs cannot be hardcoded — they change with each `instagram_web_pkg` build. The `bulk-route-definitions` endpoint could provide them at runtime but requires the full CSRF token set from a freshly loaded page.
+- Discovered the mobile REST API (`i.instagram.com/api/v1/`) requires: (a) the `rur` cookie in addition to `sessionid`/`csrftoken`/`ds_user_id`, (b) the Android user agent matching the session's issuance, and (c) an explicit `Cookie:` header (not just `HTTPCookieStorage` delegation). `current_user` was more permissive than `reels_tray`/`news/inbox`/`user/story`.
+- `InstagramLoginWebView` user agent changed from desktop Chrome to Android Mobile (`Nexus 5 / Chrome 147`) so the login issues mobile-compatible session cookies.
+- `InstagramCredentials` now includes optional `rur` and `igDid` fields, extracted from the login WebView's full cookie set.
+- `InstagramClient.headers()` now constructs and sends an explicit `Cookie:` header with all available credential cookies (`ds_user_id`, `csrftoken`, `sessionid`, `mid`, `rur`, `ig_did`).
+- The Android user agent in `headers()` must match the login WebView user agent for the session to be valid against the mobile API.
+- URLSession's default cookie handling was stripping manually-set `Cookie` headers and blocking programmatic cookie insertion due to `cookieAcceptPolicy = .onlyFromMainDocumentDomain`. Fixed by using `URLSessionConfiguration.ephemeral` with `httpShouldSetCookies = false`, `httpCookieAcceptPolicy = .never`, and `httpCookieStorage = nil`, plus setting `request.httpShouldHandleCookies = false` on every request.
+- `InstagramTrayItem` uses a custom `init(from:)` that tries `UInt64` for `id` first, falling back to `String`, because highlight rewind items have string-prefixed IDs like `highlightRewind:3022481654`.
+- Removed `mediaIds` from `InstagramTrayItem` — the API returns an array of integers but the model declared `[String]?`, causing `decodeIfPresent` to throw a `DecodingError.typeMismatch` which crashed the entire tray array decode and triggered false `invalidateAccount()`.
+- `fetchStoryReels()` re-validates the account to `.valid` on successful tray fetch, fixing accounts stuck at `.invalidCredentials` after a transient decode failure.
+- `fetchInstagramStories()` added to `refresh()` and `refreshOnForegroundActivation()` so stories are re-fetched on pull-to-refresh and foreground activation, not just on initial app launch.
+- `InstagramStoryViewer` replaced `TabView` (`.page`) with a flat `AsyncImage` + swipe gesture navigation. The `TabView` was consuming the dismiss drag gesture and could produce untappable empty states when `selectedInstagramReelIndex` was nil during the `fullScreenCover` lifecycle.

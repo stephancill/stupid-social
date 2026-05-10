@@ -12,7 +12,19 @@ public struct XNotificationSource: NotificationSource {
     }
 
     public func validateAccount() async throws -> AccountStatus {
-        try client.hasCredentials() ? .valid : .notConfigured
+        guard (try? client.hasCredentials()) == true else {
+            return .notConfigured
+        }
+        do {
+            _ = try await client.verifiedUser()
+            return .valid
+        } catch {
+            if var account = metadataStore.xAccount {
+                account.status = .invalidCredentials
+                metadataStore.xAccount = account
+            }
+            return .serviceError(error.localizedDescription)
+        }
     }
 
     public func fetchUnreadCount() async throws -> Int? {

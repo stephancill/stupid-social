@@ -1,0 +1,187 @@
+import NoFeedSocialCore
+import SwiftUI
+
+struct InstagramStoryViewer: View {
+    let reels: [InstagramStoryReel]
+    let startIndex: Int
+    @Environment(\.dismiss) private var dismiss
+    @State private var currentReelIndex: Int
+    @State private var currentSlideIndex: Int = 0
+
+    init(reels: [InstagramStoryReel], startIndex: Int = 0) {
+        self.reels = reels
+        self.startIndex = startIndex
+        _currentReelIndex = State(initialValue: startIndex)
+    }
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+
+            if reels.indices.contains(currentReelIndex) {
+                let reel = reels[currentReelIndex]
+
+                if !reel.slides.isEmpty {
+                    AsyncImage(url: reel.slides[currentSlideIndex].imageURL) { phase in
+                        switch phase {
+                        case let .success(image):
+                            image
+                                .resizable()
+                                .scaledToFit()
+                        case .failure, .empty:
+                            Color.gray.opacity(0.3)
+                        @unknown default:
+                            Color.clear
+                        }
+                    }
+                } else {
+                    Color.gray.opacity(0.3)
+                }
+
+                progressBar
+                header
+                footer
+            }
+        }
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 30, coordinateSpace: .local)
+                .onEnded { value in
+                    let hTranslation = value.translation.width
+                    let vTranslation = value.translation.height
+                    if vTranslation > 80 {
+                        dismiss()
+                    } else if hTranslation < -50 {
+                        goForward()
+                    } else if hTranslation > 50 {
+                        goBack()
+                    }
+                }
+        )
+    }
+
+    private var progressBar: some View {
+        VStack {
+            HStack(spacing: 4) {
+                ForEach(Array(reels[currentReelIndex].slides.enumerated()), id: \.offset) { index, _ in
+                    GeometryReader { geo in
+                        ZStack(alignment: .leading) {
+                            Capsule()
+                                .fill(Color.white.opacity(0.3))
+                                .frame(height: 3)
+
+                            if index == currentSlideIndex {
+                                Capsule()
+                                    .fill(Color.white)
+                                    .frame(width: geo.size.width * 0.5, height: 3)
+                                    .animation(.linear(duration: 5), value: currentSlideIndex)
+                            } else if index < currentSlideIndex {
+                                Capsule()
+                                    .fill(Color.white)
+                                    .frame(height: 3)
+                            }
+                        }
+                    }
+                    .frame(height: 3)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.top, 10)
+            .padding(.bottom, 4)
+
+            Spacer()
+        }
+    }
+
+    private var header: some View {
+        VStack {
+            HStack(spacing: 10) {
+                AsyncImage(url: reels[currentReelIndex].user.avatarURL) { phase in
+                    switch phase {
+                    case let .success(image):
+                        image
+                            .resizable()
+                            .scaledToFill()
+                    case .failure, .empty:
+                        Circle().fill(Color.white.opacity(0.2))
+                    @unknown default:
+                        Color.clear
+                    }
+                }
+                .frame(width: 36, height: 36)
+                .clipShape(Circle())
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(reels[currentReelIndex].user.username ?? "")
+                        .font(.headline)
+                        .foregroundStyle(.white)
+                    Text(reels[currentReelIndex].user.displayName ?? "")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.7))
+                }
+
+                Spacer()
+
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(8)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 10)
+
+            Spacer()
+        }
+    }
+
+    private var footer: some View {
+        GeometryReader { geo in
+            VStack(spacing: 0) {
+                Spacer()
+
+                HStack(spacing: 20) {
+                    Button {
+                        goBack()
+                    } label: {
+                        Color.clear
+                            .frame(width: geo.size.width * 0.35, height: geo.size.height * 0.7)
+                    }
+
+                    Spacer()
+
+                    Button {
+                        goForward()
+                    } label: {
+                        Color.clear
+                            .frame(width: geo.size.width * 0.35, height: geo.size.height * 0.7)
+                    }
+                }
+            }
+        }
+    }
+
+    private func goForward() {
+        let reel = reels[currentReelIndex]
+        if currentSlideIndex + 1 < reel.slides.count {
+            currentSlideIndex += 1
+        } else if currentReelIndex + 1 < reels.count {
+            currentReelIndex += 1
+            currentSlideIndex = 0
+        } else {
+            dismiss()
+        }
+    }
+
+    private func goBack() {
+        if currentSlideIndex > 0 {
+            currentSlideIndex -= 1
+        } else if currentReelIndex > 0 {
+            currentReelIndex -= 1
+            currentSlideIndex = max(0, reels[currentReelIndex].slides.count - 1)
+        }
+    }
+}

@@ -36,7 +36,9 @@ public enum CookieHeaderParser {
             sessionId: sessionId,
             csrfToken: csrfToken,
             dsUserId: dsUserId,
-            mid: cookies["mid"]
+            mid: cookies["mid"],
+            rur: cookies["rur"],
+            igDid: cookies["ig_did"]
         )
     }
 }
@@ -56,12 +58,16 @@ public struct InstagramCredentials: Codable, Equatable, Sendable {
     public let csrfToken: String
     public let dsUserId: String
     public let mid: String?
+    public let rur: String?
+    public let igDid: String?
 
-    public init(sessionId: String, csrfToken: String, dsUserId: String, mid: String?) {
+    public init(sessionId: String, csrfToken: String, dsUserId: String, mid: String?, rur: String? = nil, igDid: String? = nil) {
         self.sessionId = sessionId
         self.csrfToken = csrfToken
         self.dsUserId = dsUserId
         self.mid = mid
+        self.rur = rur
+        self.igDid = igDid
     }
 }
 

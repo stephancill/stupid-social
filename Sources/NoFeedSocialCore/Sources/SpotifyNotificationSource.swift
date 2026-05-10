@@ -23,12 +23,18 @@ public final class SpotifyNotificationSource: NotificationSource {
             )
             return .valid
         } catch SourceError.notConfigured {
+            if var account = metadataStore.spotifyAccount {
+                account.status = .invalidCredentials
+                metadataStore.spotifyAccount = account
+            }
             return .notConfigured
         } catch {
+            if var account = metadataStore.spotifyAccount {
+                account.status = .invalidCredentials
+                metadataStore.spotifyAccount = account
+            }
             return .serviceError(error.localizedDescription)
         }
-
-        return .valid
     }
 
     public func fetchUnreadCount() async throws -> Int? {

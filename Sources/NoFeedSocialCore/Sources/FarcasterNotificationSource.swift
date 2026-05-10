@@ -16,8 +16,15 @@ public struct FarcasterNotificationSource: NotificationSource {
             return .notConfigured
         }
 
-        _ = try await client.user(byUsername: account.username)
-        return .valid
+        do {
+            _ = try await client.user(byUsername: account.username)
+            return .valid
+        } catch {
+            var updated = account
+            updated.status = .invalidCredentials
+            metadataStore.farcasterAccount = updated
+            return .serviceError(error.localizedDescription)
+        }
     }
 
     public func fetchUnreadCount() async throws -> Int? {

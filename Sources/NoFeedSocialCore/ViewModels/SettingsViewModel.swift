@@ -383,33 +383,63 @@ public final class SettingsViewModel: ObservableObject {
     }
 
     public func loadStatuses() {
-        xStatus = metadataStore.xAccount == nil ? .notConfigured : .valid
+        xStatus = accountStatus(from: metadataStore.xAccount?.status ?? .notConfigured)
         if let farcaster = metadataStore.farcasterAccount {
             farcasterUsername = farcaster.username
-            farcasterStatus = .valid
+            farcasterStatus = accountStatus(from: farcaster.status)
         } else {
             farcasterStatus = .notConfigured
         }
 
         if let instagram = metadataStore.instagramAccount {
             instagramEnabledCategories = instagram.enabledCategories
-            instagramStatus = .valid
+            instagramStatus = accountStatus(from: instagram.status)
         } else {
             instagramEnabledCategories = []
             instagramStatus = .notConfigured
         }
 
-        if metadataStore.spotifyAccount != nil {
-            spotifyStatus = .valid
+        if let spotify = metadataStore.spotifyAccount {
+            spotifyStatus = accountStatus(from: spotify.status)
         } else {
             spotifyStatus = .notConfigured
         }
 
         if let debug = metadataStore.debugAccount {
             debugServerURL = debug.serverURL.absoluteString
-            debugStatus = .valid
+            debugStatus = accountStatus(from: debug.status)
         } else {
             debugStatus = .notConfigured
+        }
+    }
+
+    private func accountStatus(from snapshot: AccountStatusSnapshot) -> AccountStatus {
+        switch snapshot {
+        case .valid: return .valid
+        case .invalidCredentials: return .invalidCredentials
+        case .iCloudUnavailable: return .iCloudUnavailable
+        case .notConfigured: return .notConfigured
+        case .networkUnavailable: return .networkUnavailable
+        case .serviceError: return .serviceError("Invalid credentials")
+        }
+    }
+
+    public func revalidateInstagram() async {
+        guard metadataStore.instagramAccount != nil else { return }
+        do {
+            let client = InstagramClient(credentialStore: keychainStore)
+            _ = try await client.verifiedUser()
+            instagramStatus = .valid
+            if var account = metadataStore.instagramAccount {
+                account.status = .valid
+                metadataStore.instagramAccount = account
+            }
+        } catch {
+            instagramStatus = .invalidCredentials
+            if var account = metadataStore.instagramAccount {
+                account.status = .invalidCredentials
+                metadataStore.instagramAccount = account
+            }
         }
     }
 }

@@ -73,6 +73,9 @@ struct InstagramConnectionView: View {
                 Task { await viewModel.saveInstagramCookies(credentials) }
             }
         }
+        .task {
+            await viewModel.revalidateInstagram()
+        }
     }
 
     private func binding(for category: InstagramNotificationCategory) -> Binding<Bool> {

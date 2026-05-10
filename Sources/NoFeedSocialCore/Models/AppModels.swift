@@ -202,6 +202,32 @@ public struct NetworkProfile: Identifiable, Hashable, Codable, Sendable {
     }
 }
 
+public struct InstagramStoryReel: Identifiable, Hashable, Sendable {
+    public let id: String
+    public let user: NotificationActor
+    public let slides: [InstagramStorySlide]
+
+    public init(id: String, user: NotificationActor, slides: [InstagramStorySlide]) {
+        self.id = id
+        self.user = user
+        self.slides = slides
+    }
+}
+
+public struct InstagramStorySlide: Identifiable, Hashable, Sendable {
+    public let id: String
+    public let imageURL: URL
+    public let videoURL: URL?
+    public let isVideo: Bool
+
+    public init(id: String, imageURL: URL, videoURL: URL?, isVideo: Bool) {
+        self.id = id
+        self.imageURL = imageURL
+        self.videoURL = videoURL
+        self.isVideo = isVideo
+    }
+}
+
 public struct ReadWatermark: Codable, Equatable, Sendable {
     public let network: SocialNetwork
     public let accountId: String

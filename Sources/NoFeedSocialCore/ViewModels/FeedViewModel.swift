@@ -3,17 +3,20 @@ import Foundation
 @MainActor
 public final class FeedViewModel: ObservableObject {
     @Published public private(set) var items: [DisplayNotificationItem] = []
+    @Published public private(set) var instagramStoryReels: [InstagramStoryReel] = []
     @Published public private(set) var pendingNewCount = 0
     @Published public private(set) var isRefreshing = false
     @Published public private(set) var isForegroundRefreshing = false
     @Published public var errorMessage: String?
 
     private let feedService: FeedService
+    private let instagramSource: InstagramNotificationSource?
 
     public var service: FeedService { feedService }
 
-    public init(feedService: FeedService) {
+    public init(feedService: FeedService, instagramSource: InstagramNotificationSource?) {
         self.feedService = feedService
+        self.instagramSource = instagramSource
     }
 
     public func loadCachedFeed() {
@@ -39,6 +42,8 @@ public final class FeedViewModel: ObservableObject {
         } catch {
             errorMessage = "Refresh failed."
         }
+
+        await fetchInstagramStories()
     }
 
     public func markAllRead() {
@@ -57,6 +62,8 @@ public final class FeedViewModel: ObservableObject {
         } catch {
             errorMessage = "Foreground refresh failed."
         }
+
+        await fetchInstagramStories()
     }
 
     public func revealPendingNotifications() {
@@ -66,5 +73,18 @@ public final class FeedViewModel: ObservableObject {
         } catch {
             errorMessage = "Could not load new notifications."
         }
+    }
+
+    public func fetchInstagramStories() async {
+        guard let instagramSource else { return }
+        do {
+            instagramStoryReels = try await instagramSource.fetchStoryReels()
+        } catch {
+            // Non-critical: stories silently fail
+        }
+    }
+
+    public func performCredentialHealthCheck() async {
+        await feedService.healthCheckAllSources()
     }
 }

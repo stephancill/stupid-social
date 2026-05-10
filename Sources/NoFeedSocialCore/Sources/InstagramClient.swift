@@ -44,11 +44,40 @@ public struct InstagramClient {
     }
 
     public static let defaultSession: URLSession = {
-        let config = URLSessionConfiguration.default
+        let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 15
         config.timeoutIntervalForResource = 30
+        config.httpShouldSetCookies = false
+        config.httpCookieAcceptPolicy = .never
+        config.httpCookieStorage = nil
         return URLSession(configuration: config)
     }()
+
+    private func ensureCookies(credentials: InstagramCredentials) {
+        let storage = HTTPCookieStorage.shared
+        storage.cookieAcceptPolicy = .always
+
+        let properties: [HTTPCookiePropertyKey: Any] = [
+            .domain: ".instagram.com",
+            .path: "/",
+        ]
+
+        let setCookie: (String, String) -> Void = { name, value in
+            var props = properties
+            props[.name] = name
+            props[.value] = value
+            if let cookie = HTTPCookie(properties: props) {
+                storage.setCookie(cookie)
+            }
+        }
+
+        setCookie("ds_user_id", credentials.dsUserId)
+        setCookie("csrftoken", credentials.csrfToken)
+        setCookie("sessionid", credentials.sessionId)
+        if let mid = credentials.mid { setCookie("mid", mid) }
+        if let rur = credentials.rur { setCookie("rur", rur) }
+        if let igDid = credentials.igDid { setCookie("ig_did", igDid) }
+    }
 
     public func verifiedUser() async throws -> InstagramVerifiedUser {
         guard let credentials = try credentialStore.loadInstagramCredentials() else {
@@ -58,6 +87,7 @@ public struct InstagramClient {
         var request = URLRequest(url: URL(string: "\(Self.baseURL)/api/v1/accounts/current_user/")!)
         request.httpMethod = "GET"
         request.allHTTPHeaderFields = headers(credentials: credentials)
+        configureRequest(&request)
 
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else {
@@ -95,6 +125,7 @@ public struct InstagramClient {
         var request = URLRequest(url: URL(string: "\(Self.baseURL)/api/v1/news/inbox/")!)
         request.httpMethod = "GET"
         request.allHTTPHeaderFields = headers(credentials: credentials)
+        configureRequest(&request)
 
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else {
@@ -119,6 +150,60 @@ public struct InstagramClient {
         )
     }
 
+    func reelsTray() async throws -> [InstagramTrayItem] {
+        guard let credentials = try credentialStore.loadInstagramCredentials() else {
+            throw SourceError.notConfigured
+        }
+
+        let caps = "supported_capabilities_new=%5B%7B%22name%22%3A%22SUPPORTED_SDK_VERSIONS%22%2C%22value%22%3A%2266.0%2C67.0%2C68.0%2C69.0%2C70.0%22%7D%2C%7B%22name%22%3A%22FACE_TRACKER_VERSION%22%2C%22value%22%3A14%7D%2C%7B%22name%22%3A%22COMPRESSION%22%2C%22value%22%3A%22ETC2_COMPRESSION%22%7D%5D"
+        let body = "\(caps)&reason=cold_start&_csrftoken=\(credentials.csrfToken)&_uuid=\(credentials.dsUserId)"
+        var request = URLRequest(url: URL(string: "\(Self.baseURL)/api/v1/feed/reels_tray/")!)
+        request.httpMethod = "POST"
+        request.httpBody = body.data(using: .utf8)
+        var hdrs = headers(credentials: credentials)
+        hdrs["Content-Type"] = "application/x-www-form-urlencoded"
+        request.allHTTPHeaderFields = hdrs
+        configureRequest(&request)
+
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw SourceError.invalidResponse
+        }
+        if http.statusCode == 401 || http.statusCode == 403 {
+            throw SourceError.notConfigured
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            throw SourceError.invalidResponse
+        }
+
+        let decoded = try JSONDecoder().decode(InstagramReelsTrayResponse.self, from: data)
+        return decoded.tray
+    }
+
+    func userStory(userId: String) async throws -> InstagramUserStoryResponse {
+        guard let credentials = try credentialStore.loadInstagramCredentials() else {
+            throw SourceError.notConfigured
+        }
+
+        var request = URLRequest(url: URL(string: "\(Self.baseURL)/api/v1/feed/user/\(userId)/story/")!)
+        request.httpMethod = "GET"
+        request.allHTTPHeaderFields = headers(credentials: credentials)
+        configureRequest(&request)
+
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw SourceError.invalidResponse
+        }
+        if http.statusCode == 401 || http.statusCode == 403 {
+            throw SourceError.notConfigured
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            throw SourceError.invalidResponse
+        }
+
+        return try JSONDecoder().decode(InstagramUserStoryResponse.self, from: data)
+    }
+
     public func userInfo(uid: String) async throws -> InstagramUserInfoResponse {
         guard let credentials = try credentialStore.loadInstagramCredentials() else {
             throw SourceError.notConfigured
@@ -127,6 +212,7 @@ public struct InstagramClient {
         var request = URLRequest(url: URL(string: "\(Self.baseURL)/api/v1/users/\(uid)/info/")!)
         request.httpMethod = "GET"
         request.allHTTPHeaderFields = headers(credentials: credentials)
+        configureRequest(&request)
 
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else {
@@ -145,18 +231,34 @@ public struct InstagramClient {
     }
 
     private func headers(credentials: InstagramCredentials) -> [String: String] {
-        var cookie = "ds_user_id=\(credentials.dsUserId); csrftoken=\(credentials.csrfToken); sessionid=\(credentials.sessionId)"
-        if let mid = credentials.mid {
-            cookie += "; mid=\(mid)"
-        }
+        let deviceId = credentials.dsUserId
+
+        var cookieParts = [
+            "ds_user_id=\(credentials.dsUserId)",
+            "csrftoken=\(credentials.csrfToken)",
+            "sessionid=\(credentials.sessionId)",
+        ]
+        if let mid = credentials.mid { cookieParts.append("mid=\(mid)") }
+        if let rur = credentials.rur { cookieParts.append("rur=\(rur)") }
+        if let igDid = credentials.igDid { cookieParts.append("ig_did=\(igDid)") }
 
         return [
-            "Cookie": cookie,
+            "Cookie": cookieParts.joined(separator: "; "),
             "X-CSRFToken": credentials.csrfToken,
             "User-Agent": "Instagram 416.0.0.47.66 Android (35/35; 480dpi; 1080x2400; samsung; SM-S938U; qcom; en_US; 718621835)",
             "Accept": "*/*",
             "Accept-Language": "en-US,en;q=0.9",
+            "X-IG-Capabilities": "3brTv10=",
+            "X-IG-App-ID": "567067343352427",
+            "X-IG-Device-ID": deviceId,
+            "X-IG-Android-ID": "android-\(String(deviceId.suffix(16)))",
+            "X-IG-Connection-Type": "WIFI",
+            "X-FB-HTTP-Engine": "Liger",
         ]
+    }
+
+    private func configureRequest(_ request: inout URLRequest) {
+        request.httpShouldHandleCookies = false
     }
 }
 
@@ -283,6 +385,116 @@ public struct InstagramUserInfoResponse: Decodable {
 
     public let user: InfoUser
     public let status: String?
+}
+
+struct InstagramReelsTrayResponse: Decodable {
+    let tray: [InstagramTrayItem]
+    let status: String?
+}
+
+struct InstagramTrayItem: Decodable {
+    let id: String
+    let latestReelMedia: Double?
+    let expiringAt: Double?
+    let mediaCount: Int?
+    let user: InstagramTrayUser
+    let reelType: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case latestReelMedia = "latest_reel_media"
+        case expiringAt = "expiring_at"
+        case mediaCount = "media_count"
+        case user
+        case reelType = "reel_type"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let intId = try? container.decode(UInt64.self, forKey: .id) {
+            id = String(intId)
+        } else {
+            id = try container.decode(String.self, forKey: .id)
+        }
+        latestReelMedia = try container.decodeIfPresent(Double.self, forKey: .latestReelMedia)
+        expiringAt = try container.decodeIfPresent(Double.self, forKey: .expiringAt)
+        mediaCount = try container.decodeIfPresent(Int.self, forKey: .mediaCount)
+        user = try container.decode(InstagramTrayUser.self, forKey: .user)
+        reelType = try container.decodeIfPresent(String.self, forKey: .reelType)
+    }
+}
+
+struct InstagramTrayUser: Decodable {
+    let pk: UInt64
+    let username: String?
+    let fullName: String?
+    let profilePicUrl: String?
+    let isPrivate: Bool?
+    let isVerified: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case pk
+        case username
+        case fullName = "full_name"
+        case profilePicUrl = "profile_pic_url"
+        case isPrivate = "is_private"
+        case isVerified = "is_verified"
+    }
+}
+
+struct InstagramUserStoryResponse: Decodable {
+    let reel: InstagramReel?
+    let status: String?
+}
+
+struct InstagramReel: Decodable {
+    let id: UInt64
+    let latestReelMedia: Double?
+    let expiringAt: Double?
+    let mediaCount: Int?
+    let items: [InstagramStoryMedia]?
+    let user: InstagramTrayUser?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case latestReelMedia = "latest_reel_media"
+        case expiringAt = "expiring_at"
+        case mediaCount = "media_count"
+        case items
+        case user
+    }
+}
+
+struct InstagramStoryMedia: Decodable {
+    let id: String
+    let takenAt: Double?
+    let mediaType: Int?
+    let imageVersions2: InstagramImageVersions?
+    let videoVersions: [InstagramVideoVersion]?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case takenAt = "taken_at"
+        case mediaType = "media_type"
+        case imageVersions2 = "image_versions2"
+        case videoVersions = "video_versions"
+    }
+}
+
+struct InstagramImageVersions: Decodable {
+    let candidates: [InstagramMediaCandidate]?
+}
+
+struct InstagramMediaCandidate: Decodable {
+    let url: String
+    let width: Int?
+    let height: Int?
+}
+
+struct InstagramVideoVersion: Decodable {
+    let url: String
+    let width: Int?
+    let height: Int?
 }
 
 // MARK: - Parser

@@ -99,9 +99,15 @@ public final class FeedService {
     }
 
     public func revealPendingNotifications() throws -> [DisplayNotificationItem] {
-        revealedIds.formUnion(pendingIds)
+        revealedIds = pendingIds
         pendingIds.removeAll()
         return try loadCachedFeed()
+    }
+
+    public func healthCheckAllSources() async {
+        for source in sources {
+            _ = try? await source.validateAccount()
+        }
     }
 
     public func fetchProfile(for actorId: String, network: SocialNetwork, username: String? = nil) async throws -> NetworkProfile {

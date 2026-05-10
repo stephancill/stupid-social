@@ -38,6 +38,11 @@ public struct ContentView: View {
         let cacheStore = NotificationCacheStore(context: modelContext)
         let watermarkStore = ICloudReadWatermarkStore()
 
+        let instagramSource = InstagramNotificationSource(
+            client: InstagramClient(credentialStore: keychainStore),
+            metadataStore: metadataStore
+        )
+
         let sources: [any NotificationSource] = [
             XNotificationSource(
                 client: XClient(credentialStore: keychainStore),
@@ -47,10 +52,7 @@ public struct ContentView: View {
                 client: farcasterClient,
                 metadataStore: metadataStore
             ),
-            InstagramNotificationSource(
-                client: InstagramClient(credentialStore: keychainStore),
-                metadataStore: metadataStore
-            ),
+            instagramSource,
             SpotifyNotificationSource(
                 client: SpotifyClient(credentialStore: keychainStore),
                 metadataStore: metadataStore
@@ -67,7 +69,7 @@ public struct ContentView: View {
             watermarkStore: watermarkStore
         )
 
-        let feed = FeedViewModel(feedService: service)
+        let feed = FeedViewModel(feedService: service, instagramSource: instagramSource)
         feed.loadCachedFeed()
         feedViewModel = feed
         settingsViewModel = SettingsViewModel(
@@ -76,5 +78,9 @@ public struct ContentView: View {
             farcasterClient: farcasterClient,
             cacheStore: cacheStore
         )
+
+        Task {
+            await feed.fetchInstagramStories()
+        }
     }
 }

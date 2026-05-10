@@ -12,6 +12,9 @@ struct InstagramLoginWebView: View {
             InstagramLoginWKWebView(
                 url: URL(string: "https://www.instagram.com/accounts/login/")!,
                 onCookiesFound: { cookies in
+                    for cookie in cookies {
+                        HTTPCookieStorage.shared.setCookie(cookie)
+                    }
                     guard let creds = extractCredentials(from: cookies) else { return }
                     onLoginSuccess(creds)
                     dismiss()
@@ -39,7 +42,9 @@ struct InstagramLoginWebView: View {
             sessionId: sessionId,
             csrfToken: csrfToken,
             dsUserId: dsUserId,
-            mid: cookieDict["mid"]
+            mid: cookieDict["mid"],
+            rur: cookieDict["rur"],
+            igDid: cookieDict["ig_did"]
         )
     }
 }
@@ -54,7 +59,7 @@ private struct InstagramLoginWKWebView: UIViewRepresentable {
 
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
-        webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
+        webView.customUserAgent = "Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Mobile Safari/537.36"
         webView.load(URLRequest(url: url))
         return webView
     }

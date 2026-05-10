@@ -10,15 +10,25 @@ import AppKit
 struct FeedView: View {
     @ObservedObject var viewModel: FeedViewModel
     let settingsViewModel: SettingsViewModel
+    @State private var selectedInstagramReelIndex: Int?
+    @State private var showStoryViewer = false
 
     var body: some View {
         NavigationStack {
             List {
-                if !storyItems.isEmpty {
-                    StoriesBar(items: storyItems, feedService: viewModel.service)
+                if !storyItems.isEmpty || !viewModel.instagramStoryReels.isEmpty {
+                    StoriesBar(
+                        items: storyItems,
+                        instagramReels: viewModel.instagramStoryReels,
+                        feedService: viewModel.service,
+                        onInstagramReelTap: { index in
+                            selectedInstagramReelIndex = index
+                            showStoryViewer = true
+                        }
+                    )
                 }
 
-                if notificationItems.isEmpty && storyItems.isEmpty {
+                if notificationItems.isEmpty && storyItems.isEmpty && viewModel.instagramStoryReels.isEmpty {
                     VStack {
                         Spacer(minLength: 0)
                         ContentUnavailableView(
@@ -102,6 +112,12 @@ struct FeedView: View {
                 Text(viewModel.errorMessage ?? "Refresh failed.")
             }
         }
+        .fullScreenCover(isPresented: $showStoryViewer) {
+            InstagramStoryViewer(
+                reels: viewModel.instagramStoryReels,
+                startIndex: selectedInstagramReelIndex ?? 0
+            )
+        }
     }
 
     private var storyItems: [DisplayNotificationItem] {
@@ -130,11 +146,22 @@ struct FeedView: View {
 
 private struct StoriesBar: View {
     let items: [DisplayNotificationItem]
+    let instagramReels: [InstagramStoryReel]
     let feedService: FeedService
+    let onInstagramReelTap: (Int) -> Void
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(alignment: .top, spacing: 12) {
+                ForEach(Array(instagramReels.enumerated()), id: \.element.id) { index, reel in
+                    Button {
+                        onInstagramReelTap(index)
+                    } label: {
+                        InstagramStoryBubble(reel: reel)
+                    }
+                    .buttonStyle(.plain)
+                }
+
                 ForEach(items) { displayItem in
                     NavigationLink {
                         NotificationDetailView(displayItem: displayItem, feedService: feedService)
@@ -149,6 +176,62 @@ private struct StoriesBar: View {
         }
         .listRowInsets(EdgeInsets())
         .listRowSeparator(.hidden)
+    }
+}
+
+private struct InstagramStoryBubble: View {
+    let reel: InstagramStoryReel
+
+    var body: some View {
+        VStack(spacing: 6) {
+            ZStack {
+                AsyncImage(url: reel.user.avatarURL) { phase in
+                    switch phase {
+                    case let .success(image):
+                        image
+                            .resizable()
+                            .scaledToFill()
+                    case .failure, .empty:
+                        ZStack {
+                            Color.secondary.opacity(0.18)
+                            Text(initial)
+                                .font(.title3.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                    @unknown default:
+                        Color.clear
+                    }
+                }
+                .frame(width: 70, height: 70)
+                .clipShape(Circle())
+                .overlay {
+                    Circle()
+                        .stroke(
+                            LinearGradient(
+                                colors: [.purple, .pink, .orange],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            lineWidth: 3
+                        )
+                }
+            }
+
+            Text(label)
+                .font(.caption2)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .frame(width: 70)
+        }
+        .accessibilityLabel("Instagram stories from \(label)")
+    }
+
+    private var label: String {
+        reel.user.username ?? reel.user.displayName ?? reel.user.id
+    }
+
+    private var initial: String {
+        label.first.map { String($0).uppercased() } ?? "?"
     }
 }
 

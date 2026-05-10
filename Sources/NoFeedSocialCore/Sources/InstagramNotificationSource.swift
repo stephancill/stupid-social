@@ -21,10 +21,9 @@ public final class InstagramNotificationSource: NotificationSource {
                 status: .valid
             )
             return .valid
-        } catch SourceError.notConfigured {
-            return .notConfigured
         } catch {
-            return .serviceError(error.localizedDescription)
+            invalidateAccount()
+            return .notConfigured
         }
     }
 
@@ -43,6 +42,68 @@ public final class InstagramNotificationSource: NotificationSource {
         let categories = metadataStore.instagramAccount?.enabledCategories ?? Set(InstagramNotificationCategory.allCases)
         let username = metadataStore.instagramAccount?.username
         return try await client.notifications(enabledCategories: categories, accountUsername: username)
+    }
+
+    public func fetchStoryReels() async throws -> [InstagramStoryReel] {
+        let tray: [InstagramTrayItem]
+        do {
+            tray = try await client.reelsTray()
+        } catch {
+            invalidateAccount()
+            return []
+        }
+
+        // Successful tray fetch means credentials are valid
+        if var account = metadataStore.instagramAccount, account.status != .valid {
+            account.status = .valid
+            metadataStore.instagramAccount = account
+        }
+
+        var reels: [InstagramStoryReel] = []
+        for item in tray {
+            let actor = NotificationActor(
+                id: String(item.user.pk),
+                network: .instagram,
+                username: item.user.username,
+                displayName: item.user.fullName,
+                avatarURL: item.user.profilePicUrl.flatMap(URL.init)
+            )
+
+            var slides: [InstagramStorySlide] = []
+            let userId = String(item.user.pk)
+            if let reel = try? await client.userStory(userId: userId).reel {
+                for media in reel.items ?? [] {
+                    if let candidates = media.imageVersions2?.candidates,
+                       let best = candidates.sorted(by: { (a: InstagramMediaCandidate, b: InstagramMediaCandidate) in (a.width ?? 0) > (b.width ?? 0) }).first,
+                       let imageURL = URL(string: best.url) {
+                        let videoVersion = media.videoVersions?.first
+                        let videoURL: URL? = videoVersion.flatMap { URL(string: $0.url) }
+                        slides.append(InstagramStorySlide(
+                            id: media.id,
+                            imageURL: imageURL,
+                            videoURL: videoURL,
+                            isVideo: media.mediaType == 2
+                        ))
+                    }
+                }
+            }
+
+            if !slides.isEmpty {
+                reels.append(InstagramStoryReel(
+                    id: String(item.id),
+                    user: actor,
+                    slides: slides
+                ))
+            }
+        }
+
+        return reels
+    }
+
+    private func invalidateAccount() {
+        guard var account = metadataStore.instagramAccount else { return }
+        account.status = .invalidCredentials
+        metadataStore.instagramAccount = account
     }
 
     public func fetchProfile(id: String) async throws -> NetworkProfile {

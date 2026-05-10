@@ -84,6 +84,16 @@ struct SpotifyLoginWKWebView: UIViewRepresentable {
             tryExtractCredentials()
         }
 
+        func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+            guard let url = navigationAction.request.url, url.host == "open.spotify.com" else {
+                decisionHandler(.allow)
+                return
+            }
+            decisionHandler(.cancel)
+            self.webView = webView
+            tryExtractCredentials()
+        }
+
         private func tryExtractCredentials() {
             guard !captured, let bearer = pendingBearerToken, let view = webView else { return }
 
@@ -210,6 +220,16 @@ struct SpotifyLoginWKWebView: NSViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            self.webView = webView
+            tryExtractCredentials()
+        }
+
+        func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+            guard let url = navigationAction.request.url, url.host == "open.spotify.com" else {
+                decisionHandler(.allow)
+                return
+            }
+            decisionHandler(.cancel)
             self.webView = webView
             tryExtractCredentials()
         }
