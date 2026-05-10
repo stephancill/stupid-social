@@ -59,6 +59,7 @@ struct XConnectionView: View {
                 }
             }
         }
+        .onAppear { viewModel.message = nil }
         .navigationTitle("X")
         .sheet(isPresented: $showingLoginSheet) {
             XLoginWebView { credentials in

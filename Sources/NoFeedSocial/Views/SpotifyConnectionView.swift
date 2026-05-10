@@ -64,6 +64,7 @@ struct SpotifyConnectionView: View {
                 }
             }
         }
+        .onAppear { viewModel.message = nil }
         .navigationTitle("Spotify")
         .sheet(isPresented: $showingLoginSheet) {
             SpotifyLoginWebView { credentials in

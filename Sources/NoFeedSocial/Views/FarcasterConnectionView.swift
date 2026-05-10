@@ -34,6 +34,7 @@ struct FarcasterConnectionView: View {
                 }
             }
         }
+        .onAppear { viewModel.message = nil }
         .navigationTitle("Farcaster")
     }
 

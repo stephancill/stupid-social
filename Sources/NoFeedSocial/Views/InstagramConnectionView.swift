@@ -74,6 +74,7 @@ struct InstagramConnectionView: View {
                 }
             }
         }
+        .onAppear { viewModel.message = nil }
         .navigationTitle("Instagram")
         .sheet(isPresented: $showingLoginSheet) {
             InstagramLoginWebView { credentials in

@@ -33,6 +33,7 @@ struct DebugConnectionView: View {
                 }
             }
         }
+        .onAppear { viewModel.message = nil }
         .navigationTitle("Debug")
     }
 }
