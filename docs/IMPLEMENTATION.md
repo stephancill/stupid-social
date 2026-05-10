@@ -314,3 +314,9 @@
 - New `SpotifyStoryBubble` renders `SpotifyActivityItem` directly in the stories bar using the existing `SpotifyAnimatedStoryThumbnail`.
 - `SpotifyStoryViewer` now accepts `[SpotifyActivityItem]` with direct property access (e.g. `item.trackName`, `item.artistName`, `item.userAvatarURL`) instead of navigating `NotificationItem`'s actor/target graph.
 - Added `album` field to `NotificationTarget` (retained for future use; Spotify no longer uses it but the field persists for compatibility).
+
+### Audio session, ordering, and top bar fixes
+
+- Configured `AVAudioSession` for `.playback` category in `SpotifyStoryViewer.onAppear` — fixes no audio on physical devices where the default category is ambient/silent.
+- Sorted `spotifyActivityItems` by `timestamp` descending in `FeedViewModel.fetchSpotifyActivity()` so latest activity appears first.
+- Replaced static "Listening" subtitle in the top bar with `item.timestamp.compactRelativeTime` so it shows the relative time since the user listened.

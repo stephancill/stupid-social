@@ -103,6 +103,7 @@ public final class FeedViewModel: ObservableObject {
         }
         do {
             spotifyActivityItems = try await spotifyActivitySource.fetchActivity(reason: .manual)
+                .sorted { $0.timestamp > $1.timestamp }
         } catch {
             // Non-critical: activity silently fails
         }

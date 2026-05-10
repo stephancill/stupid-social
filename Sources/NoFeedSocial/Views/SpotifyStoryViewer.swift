@@ -47,6 +47,8 @@ struct SpotifyStoryViewer: View {
             }
         }
         .onAppear {
+            try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
+            try? AVAudioSession.sharedInstance().setActive(true)
             loadPreviewURL(for: startIndex)
         }
         .onChange(of: currentIndex) { _, newIndex in
@@ -264,7 +266,7 @@ struct SpotifyStoryViewer: View {
                     Text(item.userName)
                         .font(.headline)
                         .foregroundStyle(.white)
-                    Text("Listening")
+                    Text(item.timestamp.compactRelativeTime)
                         .font(.caption)
                         .foregroundStyle(.white.opacity(0.7))
                 }
