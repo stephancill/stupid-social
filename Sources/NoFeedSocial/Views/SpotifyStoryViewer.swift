@@ -48,8 +48,10 @@ struct SpotifyStoryViewer: View {
             }
         }
         .onAppear {
-            try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
-            try? AVAudioSession.sharedInstance().setActive(true)
+            #if os(iOS)
+                try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
+                try? AVAudioSession.sharedInstance().setActive(true)
+            #endif
             loadPreviewURL(for: startIndex)
         }
         .onChange(of: currentIndex) { _, newIndex in

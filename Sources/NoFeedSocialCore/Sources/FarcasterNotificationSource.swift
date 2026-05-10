@@ -75,6 +75,10 @@ public struct FarcasterNotificationSource: NotificationSource {
         let sourceId = stableSourceId(notification, type: notification.type)
         let text = notificationText(notification, type: type, actors: actors)
 
+        let imageURL = notification.cast?
+            .embeds?.first?.url
+            .flatMap(URL.init)
+
         return NotificationItem(
             id: "farcaster:\(accountId):\(sourceId)",
             network: .farcaster,
@@ -85,7 +89,7 @@ public struct FarcasterNotificationSource: NotificationSource {
             text: text,
             actors: actors,
             target: notification.cast.map {
-                NotificationTarget(id: $0.hash, text: $0.displayText ?? $0.text, url: nil)
+                NotificationTarget(id: $0.hash, text: $0.displayText ?? $0.text, url: nil, imageURL: imageURL)
             },
             parentTarget: nil
         )

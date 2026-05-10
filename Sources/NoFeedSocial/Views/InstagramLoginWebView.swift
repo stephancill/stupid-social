@@ -22,12 +22,14 @@ struct InstagramLoginWebView: View {
             )
             .ignoresSafeArea()
             .navigationTitle("Log in to Instagram")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+            #if os(iOS)
+                .navigationBarTitleDisplayMode(.inline)
+            #endif
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { dismiss() }
+                    }
                 }
-            }
         }
     }
 
@@ -50,49 +52,98 @@ struct InstagramLoginWebView: View {
     }
 }
 
-private struct InstagramLoginWKWebView: UIViewRepresentable {
-    let url: URL
-    let onCookiesFound: ([HTTPCookie]) -> Void
-
-    func makeUIView(context: Context) -> WKWebView {
-        let config = WKWebViewConfiguration()
-        config.websiteDataStore = .nonPersistent()
-
-        let webView = WKWebView(frame: .zero, configuration: config)
-        webView.navigationDelegate = context.coordinator
-        webView.customUserAgent = "Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Mobile Safari/537.36"
-        webView.load(URLRequest(url: url))
-        return webView
-    }
-
-    func updateUIView(_: WKWebView, context _: Context) {}
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(onCookiesFound: onCookiesFound)
-    }
-
-    class Coordinator: NSObject, WKNavigationDelegate {
+#if os(iOS)
+    private struct InstagramLoginWKWebView: UIViewRepresentable {
+        let url: URL
         let onCookiesFound: ([HTTPCookie]) -> Void
-        private var hasNotified = false
 
-        init(onCookiesFound: @escaping ([HTTPCookie]) -> Void) {
-            self.onCookiesFound = onCookiesFound
+        func makeUIView(context: Context) -> WKWebView {
+            let config = WKWebViewConfiguration()
+            config.websiteDataStore = .nonPersistent()
+
+            let webView = WKWebView(frame: .zero, configuration: config)
+            webView.navigationDelegate = context.coordinator
+            webView.customUserAgent = "Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Mobile Safari/537.36"
+            webView.load(URLRequest(url: url))
+            return webView
         }
 
-        func webView(_ webView: WKWebView, didFinish _: WKNavigation!) {
-            guard !hasNotified else { return }
-            checkForAuthCookies(webView: webView)
+        func updateUIView(_: WKWebView, context _: Context) {}
+
+        func makeCoordinator() -> Coordinator {
+            Coordinator(onCookiesFound: onCookiesFound)
         }
 
-        private func checkForAuthCookies(webView: WKWebView) {
-            webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
-                let hasAuth = cookies.contains { $0.name == "sessionid" }
-                guard hasAuth else { return }
-                self.hasNotified = true
-                DispatchQueue.main.async {
-                    self.onCookiesFound(cookies)
+        class Coordinator: NSObject, WKNavigationDelegate {
+            let onCookiesFound: ([HTTPCookie]) -> Void
+            private var hasNotified = false
+
+            init(onCookiesFound: @escaping ([HTTPCookie]) -> Void) {
+                self.onCookiesFound = onCookiesFound
+            }
+
+            func webView(_ webView: WKWebView, didFinish _: WKNavigation!) {
+                guard !hasNotified else { return }
+                checkForAuthCookies(webView: webView)
+            }
+
+            private func checkForAuthCookies(webView: WKWebView) {
+                webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
+                    let hasAuth = cookies.contains { $0.name == "sessionid" }
+                    guard hasAuth else { return }
+                    self.hasNotified = true
+                    DispatchQueue.main.async {
+                        self.onCookiesFound(cookies)
+                    }
                 }
             }
         }
     }
-}
+#else
+    private struct InstagramLoginWKWebView: NSViewRepresentable {
+        let url: URL
+        let onCookiesFound: ([HTTPCookie]) -> Void
+
+        func makeNSView(context: Context) -> WKWebView {
+            let config = WKWebViewConfiguration()
+            config.websiteDataStore = .nonPersistent()
+
+            let webView = WKWebView(frame: .zero, configuration: config)
+            webView.navigationDelegate = context.coordinator
+            webView.customUserAgent = "Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Mobile Safari/537.36"
+            webView.load(URLRequest(url: url))
+            return webView
+        }
+
+        func updateNSView(_: WKWebView, context _: Context) {}
+
+        func makeCoordinator() -> Coordinator {
+            Coordinator(onCookiesFound: onCookiesFound)
+        }
+
+        class Coordinator: NSObject, WKNavigationDelegate {
+            let onCookiesFound: ([HTTPCookie]) -> Void
+            private var hasNotified = false
+
+            init(onCookiesFound: @escaping ([HTTPCookie]) -> Void) {
+                self.onCookiesFound = onCookiesFound
+            }
+
+            func webView(_ webView: WKWebView, didFinish _: WKNavigation!) {
+                guard !hasNotified else { return }
+                checkForAuthCookies(webView: webView)
+            }
+
+            private func checkForAuthCookies(webView: WKWebView) {
+                webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
+                    let hasAuth = cookies.contains { $0.name == "sessionid" }
+                    guard hasAuth else { return }
+                    self.hasNotified = true
+                    DispatchQueue.main.async {
+                        self.onCookiesFound(cookies)
+                    }
+                }
+            }
+        }
+    }
+#endif

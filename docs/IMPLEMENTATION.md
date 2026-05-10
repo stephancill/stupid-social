@@ -330,3 +330,33 @@
 - Extracted `SpotifyPulseRing` into a shared `Views/SpotifyPulseRing.swift` used by both the full-screen viewer and (if needed) the feed thumbnail.
 - Removed pulse rings from feed `SpotifyAnimatedStoryThumbnail`; the thumbnail now only spins album art.
 - Removed orphaned animation helpers (`confidence`, `loudnessIntensity`, `pulseDuration`, `pulseScale`, `pulseOpacity`) from `SpotifyAnimatedStoryThumbnail`.
+
+### Instagram story reel ordering
+
+- Slides within each reel are now sorted by `takenAt` descending (newest first) in `InstagramNotificationSource.fetchStoryReels()`.
+- Reels are sorted by: (1) unseen first, then (2) latest slide timestamp descending. Shared `sortReels` helper used in both `instagramReels()` and `markInstagramReelAsSeen()`.
+- The `latestReelMedia` field from the Instagram tray model is available but not used for sorting since actual slide `takenAt` is more reliable.
+
+### StoriesBar loading gate
+
+- Added `@Published var storyBarLoading` to `FeedViewModel`. Set to `true` before `fetchStoryBarContent()` starts and `false` after both Instagram and Spotify fetches complete.
+- `FeedView` now requires `!viewModel.storyBarLoading` before showing the stories bar, preventing partial rendering when one provider loads before the other.
+
+### Inline images for X and Farcaster notifications
+
+- **X**: Added `XExtendedEntities` / `XMediaEntity` models to decode `extended_entities.media.media_url_https` from tweet objects. Both `parseTweetEntry` and `parseNotificationEntry` pass the first media URL as `imageURL` on `NotificationTarget`.
+- **Farcaster**: Added `FarcasterEmbed` model to decode `embeds` on `FarcasterCastResponse`. Hipersnap cast embeds contain `url` fields; the first embed URL is passed as `imageURL` on `NotificationTarget`.
+- **FeedView**: Removed the `cdninstagram.com` URL gate in `previewContent` — any notification with a non-nil `imageURL` now shows the 48×48 inline thumbnail regardless of network.
+- Hipersnap API confirmed embeds response shape with live `GET /v2/farcaster/notifications` probe.
+
+### Test fixes for macOS compilation
+
+- Tests failed because the test target compiles for macOS but used iOS-only APIs. Fixed with `#if os(iOS)` / `#else` conditionals:
+  - `SpotifyStoryViewer`: wrapped `AVAudioSession` calls in `#if os(iOS)`
+  - `XLoginWebView`, `InstagramLoginWebView`: added `#if os(iOS)`/`#else` blocks with `NSViewRepresentable` for macOS, and `#if os(iOS)` around `.navigationBarTitleDisplayMode(.inline)`
+  - `FeedView`: wrapped `.fullScreenCover` in `#if os(iOS)` with `.sheet` fallback for macOS
+- All 19 tests pass (1 skipped, 0 failures).
+
+### Instagram story viewer timestamp
+
+- Replaced Apple's `RelativeDateTimeFormatter` (yielding localized strings like `"3 min. ago"`) with the shared `Date.compactRelativeTime` extension (yielding compact strings like `"3m"`), matching the Spotify story viewer and feed rows.

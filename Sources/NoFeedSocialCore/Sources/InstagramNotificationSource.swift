@@ -119,6 +119,7 @@ public final class InstagramNotificationSource: NotificationSource {
             }
 
             if !slides.isEmpty {
+                slides.sort { $0.takenAt > $1.takenAt }
                 reels.append(InstagramStoryReel(
                     id: entry.reelId,
                     user: actor,

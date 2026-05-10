@@ -192,18 +192,11 @@ struct InstagramStoryViewer: View {
         }
     }
 
-    private static let relativeFormatter: RelativeDateTimeFormatter = {
-        let f = RelativeDateTimeFormatter()
-        f.unitsStyle = .abbreviated
-        return f
-    }()
-
     private var relativeTimeString: String {
         guard reels.indices.contains(currentReelIndex) else { return "" }
         let slides = reels[currentReelIndex].slides
         guard slides.indices.contains(currentSlideIndex) else { return "" }
-        let date = Date(timeIntervalSince1970: slides[currentSlideIndex].takenAt)
-        return Self.relativeFormatter.localizedString(for: date, relativeTo: .now)
+        return Date(timeIntervalSince1970: slides[currentSlideIndex].takenAt).compactRelativeTime
     }
 
     private let slideDuration: Double = 5

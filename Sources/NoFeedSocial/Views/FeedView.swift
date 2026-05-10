@@ -19,7 +19,7 @@ struct FeedView: View {
     var body: some View {
         NavigationStack {
             List {
-                if !viewModel.spotifyActivityItems.isEmpty || !viewModel.instagramStoryReels.isEmpty {
+                if !viewModel.storyBarLoading, !viewModel.spotifyActivityItems.isEmpty || !viewModel.instagramStoryReels.isEmpty {
                     StoriesBar(
                         spotifyItems: viewModel.spotifyActivityItems,
                         instagramReels: viewModel.instagramStoryReels,
@@ -119,6 +119,7 @@ struct FeedView: View {
                 Text(viewModel.errorMessage ?? "Refresh failed.")
             }
         }
+        #if os(iOS)
         .fullScreenCover(isPresented: $showStoryViewer) {
             InstagramStoryViewer(
                 reels: viewModel.instagramStoryReels,
@@ -135,6 +136,24 @@ struct FeedView: View {
                 spotifyClient: spotifyClient
             )
         }
+        #else
+        .sheet(isPresented: $showStoryViewer) {
+                    InstagramStoryViewer(
+                        reels: viewModel.instagramStoryReels,
+                        startIndex: selectedInstagramReelIndex ?? 0,
+                        onReelSeen: { index in
+                            viewModel.markInstagramReelAsSeen(reelIndex: index)
+                        }
+                    )
+                }
+                .sheet(isPresented: $showSpotifyViewer) {
+                    SpotifyStoryViewer(
+                        items: viewModel.spotifyActivityItems,
+                        startIndex: selectedSpotifyItemIndex ?? 0,
+                        spotifyClient: spotifyClient
+                    )
+                }
+        #endif
     }
 
     private var notificationItems: [DisplayNotificationItem] {
@@ -436,9 +455,7 @@ private struct NotificationRow: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
-        } else if let imageUrl = displayItem.item.target?.imageURL,
-                  imageUrl.absoluteString.contains("cdninstagram.com") || displayItem.item.type == .music
-        {
+        } else if let imageUrl = displayItem.item.target?.imageURL {
             AsyncImage(url: imageUrl) { phase in
                 switch phase {
                 case let .success(image):
@@ -534,7 +551,6 @@ private struct NotificationRow: View {
 }
 
 private extension Color {
-
     static var spotifyActivityBorder: Color {
         Color.secondary
     }

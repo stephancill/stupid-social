@@ -182,6 +182,7 @@ struct FarcasterCastResponse: Decodable {
     let author: FarcasterUserResponse?
     let mentionedProfiles: [FarcasterMentionedProfile]?
     let mentionedProfilesRanges: [FarcasterMentionRange]?
+    let embeds: [FarcasterEmbed]?
 
     var displayText: String? {
         guard let text, let profiles = mentionedProfiles, let ranges = mentionedProfilesRanges,
@@ -196,6 +197,10 @@ struct FarcasterCastResponse: Decodable {
         }
         return result
     }
+}
+
+struct FarcasterEmbed: Decodable {
+    let url: String?
 }
 
 struct FarcasterMentionedProfile: Decodable {

@@ -397,10 +397,23 @@ private struct XTweetObject: Decodable {
     let userIdStr: String
     let inReplyToStatusIdStr: String?
     let inReplyToUserIdStr: String?
+    let extendedEntities: XExtendedEntities?
 
     var stableId: String {
         idStr ?? id.map(String.init) ?? ""
     }
+
+    var firstMediaUrl: String? {
+        extendedEntities?.media?.first?.mediaUrlHttps
+    }
+}
+
+private struct XExtendedEntities: Decodable {
+    let media: [XMediaEntity]?
+}
+
+private struct XMediaEntity: Decodable {
+    let mediaUrlHttps: String?
 }
 
 // MARK: - Parser
@@ -469,6 +482,8 @@ private enum XNotificationParser {
 
         let text = notificationText(element: element, actorName: user.name, tweetText: tweet.fullText)
 
+        let imageURL = tweet.firstMediaUrl.flatMap(URL.init)
+
         return NotificationItem(
             id: "x:\(tweet.stableId):\(element)",
             network: .x,
@@ -478,7 +493,7 @@ private enum XNotificationParser {
             timestamp: timestamp,
             text: text,
             actors: [actor],
-            target: NotificationTarget(id: tweet.stableId, text: tweet.fullText, url: nil),
+            target: NotificationTarget(id: tweet.stableId, text: tweet.fullText, url: nil, imageURL: imageURL),
             parentTarget: nil
         )
     }
@@ -504,7 +519,8 @@ private enum XNotificationParser {
         if let targetTweetId = notificationRef.targetTweets?.first,
            let tweet = tweets[targetTweetId]
         {
-            target = NotificationTarget(id: tweet.stableId, text: tweet.fullText, url: nil)
+            let imageURL = tweet.firstMediaUrl.flatMap(URL.init)
+            target = NotificationTarget(id: tweet.stableId, text: tweet.fullText, url: nil, imageURL: imageURL)
             sourceId = tweet.stableId
         } else {
             target = nil

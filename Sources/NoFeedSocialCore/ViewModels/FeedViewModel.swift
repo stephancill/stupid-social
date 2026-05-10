@@ -5,6 +5,7 @@ public final class FeedViewModel: ObservableObject {
     @Published public private(set) var items: [DisplayNotificationItem] = []
     @Published public private(set) var instagramStoryReels: [InstagramStoryReel] = []
     @Published public private(set) var spotifyActivityItems: [SpotifyActivityItem] = []
+    @Published public private(set) var storyBarLoading = false
     @Published public private(set) var pendingNewCount = 0
     @Published public private(set) var isRefreshing = false
     @Published public private(set) var isForegroundRefreshing = false
@@ -89,20 +90,33 @@ public final class FeedViewModel: ObservableObject {
     }
 
     private func fetchStoryBarContent() async {
+        storyBarLoading = true
         async let reels = instagramReels()
         async let items = spotifyItems()
         instagramStoryReels = await reels
         spotifyActivityItems = await items
+        storyBarLoading = false
     }
 
     private func instagramReels() async -> [InstagramStoryReel] {
         guard let instagramSource, instagramSource.storiesEnabled else { return [] }
         do {
             var reels = try await instagramSource.fetchStoryReels()
-            reels.sort { $0.isSeen == false && $1.isSeen == true }
+            sortReels(&reels)
             return reels
         } catch {
             return []
+        }
+    }
+
+    private func sortReels(_ reels: inout [InstagramStoryReel]) {
+        reels.sort { a, b in
+            if a.isSeen != b.isSeen {
+                return !a.isSeen
+            }
+            let latestA = a.slides.first?.takenAt ?? 0
+            let latestB = b.slides.first?.takenAt ?? 0
+            return latestA > latestB
         }
     }
 
@@ -128,7 +142,7 @@ public final class FeedViewModel: ObservableObject {
 
         let updated = InstagramStoryReel(id: reel.id, user: reel.user, slides: reel.slides, isSeen: true)
         instagramStoryReels[reelIndex] = updated
-        instagramStoryReels.sort { $0.isSeen == false && $1.isSeen == true }
+        sortReels(&instagramStoryReels)
     }
 
     public func performCredentialHealthCheck() async {
