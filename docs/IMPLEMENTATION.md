@@ -371,3 +371,5 @@
 - Spotify story activity is now deduplicated by `userURI` after sorting newest-first, so each Spotify user contributes at most one story bubble/slide.
 - `SpotifyStoryViewer` now shows a single progress segment for the current user's slide instead of rendering every Spotify user as a stop in one combined progress bar. Taps/swipes still advance between users.
 - Spotify story progress now starts only after the preview audio begins playing. While the preview URL/player is loading, the full progress bar pulses gray as a loading indicator.
+- Removed tap/press-to-pause from `SpotifyStoryViewer`; taps are reserved for navigating between Spotify user slides.
+- Replaced `SpotifyStoryViewer` album-art `.repeatForever` rotation with timer-driven rotation phase updates so navigation and playback state changes do not restart or slow the rotation animation.

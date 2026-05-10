@@ -8,6 +8,7 @@ struct SpotifyStoryViewer: View {
     let startIndex: Int
     let spotifyClient: SpotifyClient
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var currentIndex: Int
     @State private var elapsedTime: Double = 0
     @State private var isPaused: Bool = false
@@ -16,6 +17,7 @@ struct SpotifyStoryViewer: View {
     @State private var previewURLs: [String: URL?] = [:]
     @State private var audioDuration: Double = 5
     @State private var pulsePhase: Double = 0
+    @State private var rotationPhase: Double = 0
     @State private var loadingProgressPulse = false
 
     enum PlayerStatus: Equatable {
@@ -83,24 +85,19 @@ struct SpotifyStoryViewer: View {
             if pulsePhase >= pd {
                 pulsePhase = 0
             }
+
+            if !reduceMotion {
+                let rd = rotationDuration(item.musicAnimation)
+                rotationPhase += 0.05
+                if rotationPhase >= rd {
+                    rotationPhase.formTruncatingRemainder(dividingBy: rd)
+                }
+            }
         }
         .onDisappear {
             stopPlayback()
         }
         .contentShape(Rectangle())
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { _ in
-                    isPaused = true
-                    player?.pause()
-                }
-                .onEnded { _ in
-                    isPaused = false
-                    if playerStatus == .playing {
-                        player?.play()
-                    }
-                }
-        )
         .gesture(
             DragGesture(minimumDistance: 30, coordinateSpace: .local)
                 .onEnded { value in
@@ -170,13 +167,7 @@ struct SpotifyStoryViewer: View {
                 Circle()
                     .stroke(.white.opacity(0.15), lineWidth: 1)
             }
-            .rotationEffect(.degrees(playerStatus == .playing && !isPaused ? 360 : 0))
-            .animation(
-                playerStatus == .playing && !isPaused
-                    ? .linear(duration: rotationDuration(animation)).repeatForever(autoreverses: false)
-                    : nil,
-                value: playerStatus
-            )
+            .rotationEffect(.degrees(reduceMotion ? 0 : rotationDegrees(animation)))
         }
     }
 
@@ -430,6 +421,12 @@ struct SpotifyStoryViewer: View {
 
     private func rotationDuration(_ animation: MusicAnimationMetadata?) -> TimeInterval {
         (60 / tempo(animation)) * 16
+    }
+
+    private func rotationDegrees(_ animation: MusicAnimationMetadata?) -> Double {
+        let duration = rotationDuration(animation)
+        guard duration > 0 else { return 0 }
+        return (rotationPhase / duration) * 360
     }
 
     private func pulseDuration(_ animation: MusicAnimationMetadata?) -> TimeInterval {
