@@ -119,6 +119,8 @@ struct SpotifyStoryViewer: View {
 
             trackInfoView
 
+            openInSpotifyButton
+
             Spacer()
         }
     }
@@ -186,13 +188,31 @@ struct SpotifyStoryViewer: View {
                 Text(album)
                     .font(.subheadline)
                     .foregroundStyle(.white.opacity(0.6))
+                    .lineLimit(1)
             }
-
-            Text(item.timestamp.compactRelativeTime)
-                .font(.caption)
-                .foregroundStyle(.white.opacity(0.4))
         }
+        .frame(height: 64)
         .padding(.horizontal, 32)
+    }
+
+    @ViewBuilder
+    private var openInSpotifyButton: some View {
+        let item = items[currentIndex]
+
+        if let trackURL = item.trackURL {
+            Link(destination: trackURL) {
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.up.forward.app")
+                        .font(.title3)
+                    Text("Open in Spotify")
+                        .font(.subheadline.weight(.medium))
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 10)
+                .background(.white.opacity(0.12), in: Capsule())
+            }
+        }
     }
 
     private var topBar: some View {

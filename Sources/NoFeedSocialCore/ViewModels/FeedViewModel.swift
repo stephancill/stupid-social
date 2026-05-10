@@ -48,8 +48,7 @@ public final class FeedViewModel: ObservableObject {
             errorMessage = "Refresh failed."
         }
 
-        await fetchInstagramStories()
-        await fetchSpotifyActivity()
+        await fetchStoryBarContent()
     }
 
     public func markAllRead() {
@@ -69,8 +68,7 @@ public final class FeedViewModel: ObservableObject {
             errorMessage = "Foreground refresh failed."
         }
 
-        await fetchInstagramStories()
-        await fetchSpotifyActivity()
+        await fetchStoryBarContent()
     }
 
     public func revealPendingNotifications() {
@@ -83,29 +81,38 @@ public final class FeedViewModel: ObservableObject {
     }
 
     public func fetchInstagramStories() async {
-        guard let instagramSource, instagramSource.storiesEnabled else {
-            instagramStoryReels = []
-            return
-        }
-        do {
-            var reels = try await instagramSource.fetchStoryReels()
-            reels.sort { $0.isSeen == false && $1.isSeen == true }
-            instagramStoryReels = reels
-        } catch {
-            // Non-critical: stories silently fail
-        }
+        instagramStoryReels = await instagramReels()
     }
 
     public func fetchSpotifyActivity() async {
-        guard let spotifyActivitySource else {
-            spotifyActivityItems = []
-            return
-        }
+        spotifyActivityItems = await spotifyItems()
+    }
+
+    private func fetchStoryBarContent() async {
+        async let reels = instagramReels()
+        async let items = spotifyItems()
+        instagramStoryReels = await reels
+        spotifyActivityItems = await items
+    }
+
+    private func instagramReels() async -> [InstagramStoryReel] {
+        guard let instagramSource, instagramSource.storiesEnabled else { return [] }
         do {
-            spotifyActivityItems = try await spotifyActivitySource.fetchActivity(reason: .manual)
+            var reels = try await instagramSource.fetchStoryReels()
+            reels.sort { $0.isSeen == false && $1.isSeen == true }
+            return reels
+        } catch {
+            return []
+        }
+    }
+
+    private func spotifyItems() async -> [SpotifyActivityItem] {
+        guard let spotifyActivitySource else { return [] }
+        do {
+            return try await spotifyActivitySource.fetchActivity(reason: .manual)
                 .sorted { $0.timestamp > $1.timestamp }
         } catch {
-            // Non-critical: activity silently fails
+            return []
         }
     }
 
