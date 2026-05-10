@@ -10,8 +10,11 @@ import SwiftUI
 struct FeedView: View {
     @ObservedObject var viewModel: FeedViewModel
     let settingsViewModel: SettingsViewModel
+    let spotifyClient: SpotifyClient
     @State private var selectedInstagramReelIndex: Int?
     @State private var showStoryViewer = false
+    @State private var selectedSpotifyItemIndex: Int?
+    @State private var showSpotifyViewer = false
 
     var body: some View {
         NavigationStack {
@@ -24,6 +27,10 @@ struct FeedView: View {
                         onInstagramReelTap: { index in
                             selectedInstagramReelIndex = index
                             showStoryViewer = true
+                        },
+                        onSpotifyItemTap: { index in
+                            selectedSpotifyItemIndex = index
+                            showSpotifyViewer = true
                         }
                     )
                 }
@@ -121,6 +128,13 @@ struct FeedView: View {
                 }
             )
         }
+        .fullScreenCover(isPresented: $showSpotifyViewer) {
+            SpotifyStoryViewer(
+                items: storyItems.map(\.item),
+                startIndex: selectedSpotifyItemIndex ?? 0,
+                spotifyClient: spotifyClient
+            )
+        }
     }
 
     private var storyItems: [DisplayNotificationItem] {
@@ -152,6 +166,7 @@ private struct StoriesBar: View {
     let instagramReels: [InstagramStoryReel]
     let feedService: FeedService
     let onInstagramReelTap: (Int) -> Void
+    let onSpotifyItemTap: (Int) -> Void
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -165,13 +180,22 @@ private struct StoriesBar: View {
                     .buttonStyle(.plain)
                 }
 
-                ForEach(items) { displayItem in
-                    NavigationLink {
-                        NotificationDetailView(displayItem: displayItem, feedService: feedService)
-                    } label: {
-                        StoryBubble(displayItem: displayItem)
+                ForEach(Array(items.enumerated()), id: \.element.id) { index, displayItem in
+                    if displayItem.item.network == .spotify {
+                        Button {
+                            onSpotifyItemTap(index)
+                        } label: {
+                            StoryBubble(displayItem: displayItem)
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        NavigationLink {
+                            NotificationDetailView(displayItem: displayItem, feedService: feedService)
+                        } label: {
+                            StoryBubble(displayItem: displayItem)
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 }
             }
             .padding(.horizontal, 16)

@@ -1,5 +1,55 @@
 # Project Conventions
 
+## Project Structure
+
+```
+Sources/
+  NoFeedSocial/                     # App UI layer (SwiftUI views)
+    NoFeedSocialApp.swift           # iOS @main entry point
+    Views/
+      ContentView.swift             # Root view, dependency wiring
+      FeedView.swift                # Main list + StoriesBar + story viewer triggers
+      NotificationDetailView.swift  # Standard form-based notification detail
+      ProfileDetailView.swift       # Actor profile detail
+      InstagramStoryViewer.swift    # Full-screen Instagram story viewer
+      SpotifyStoryViewer.swift      # Full-screen Spotify listening viewer
+      InstagramConnectionView.swift # Instagram credential setup
+      InstagramLoginWebView.swift   # Instagram WebView login
+      SpotifyConnectionView.swift   # Spotify credential setup
+      SpotifyLoginWebView.swift     # Spotify WebView login
+      XConnectionView.swift         # X credential setup
+      XLoginWebView.swift           # X WebView login
+      FarcasterConnectionView.swift # Farcaster credential setup
+      DebugConnectionView.swift     # Debug notifications toggle
+      SettingsView.swift            # Settings with connection links
+  NoFeedSocialCore/                 # Shared core (models, services, sources)
+    Models/
+      AppModels.swift               # All public model types
+      CachedNotification.swift      # SwiftData cache model
+    Services/
+      FeedService.swift             # Central feed orchestration
+    Sources/                        # Network clients + notification sources
+      NotificationSource.swift      # Protocol definition
+      InstagramClient.swift / InstagramNotificationSource.swift
+      SpotifyClient.swift / SpotifyNotificationSource.swift
+      XClient.swift / XNotificationSource.swift
+      FarcasterClient.swift / FarcasterNotificationSource.swift
+      DebugNotificationsClient.swift / DebugNotificationSource.swift
+    Storage/
+      AccountMetadataStore.swift
+      CookieHeaderParser.swift
+      KeychainCredentialStore.swift
+      NotificationCacheStore.swift
+      ReadWatermarkStore.swift
+    ViewModels/
+      FeedViewModel.swift
+      SettingsViewModel.swift
+  NoFeedSocialMac/                  # macOS app entry point
+    NoFeedSocialMacApp.swift
+```
+
+- Keep `## Project Structure` in sync when files are added, moved, or renamed.
+
 ## Required Context
 
 - Always read `docs/PLAN.md` before making product, architecture, or implementation decisions.

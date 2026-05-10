@@ -199,6 +199,32 @@ public struct SpotifyClient {
         let (data, _) = try await makeRequest("audio-attributes/v1/audio-analysis/\(trackId)")
         return try JSONDecoder().decode(SpotifyAudioAnalysis.self, from: data)
     }
+
+    public func trackPreviewURL(trackId: String) async -> URL? {
+        guard let url = URL(string: "https://open.spotify.com/embed/track/\(trackId)") else { return nil }
+        var request = URLRequest(url: url)
+        request.setValue("en", forHTTPHeaderField: "accept-language")
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200 ... 299).contains(httpResponse.statusCode),
+                  let html = String(data: data, encoding: .utf8)
+            else { return nil }
+            return extractPreviewURL(from: html)
+        } catch {
+            return nil
+        }
+    }
+
+    private func extractPreviewURL(from html: String) -> URL? {
+        guard let range = html.range(of: "\"audioPreview\":{\"url\":\"") else { return nil }
+        let after = html[range.upperBound...]
+        guard let urlEnd = after.range(of: "\"") else { return nil }
+        let urlString = String(after[..<urlEnd.lowerBound])
+            .replacingOccurrences(of: "\\u0026", with: "&")
+            .replacingOccurrences(of: "\\/", with: "/")
+        return URL(string: urlString)
+    }
 }
 
 enum SpotifyWebPlayerToken {

@@ -265,3 +265,41 @@
 - Added optional `timestamp: Date?` to `NotificationActor` so individual actors can carry their own action time.
 - Farcaster notification normalization now threads the per-notification timestamp into each actor during creation. When grouped reactions include multiple actors, each actor retains their individual like/reaction timestamp rather than all sharing the group's newest timestamp.
 - `PersonRow` in `NotificationDetailView` shows relative time only when the actor has a timestamp (currently Farcaster only). Other networks that don't provide per-actor timestamps show no time in the People section.
+
+## 2026-05-10 - Spotify Full-Screen Viewer
+
+- Added `SpotifyStoryViewer` modeled after `InstagramStoryViewer`. Receives an array of `NotificationItem` (spotify music items) and a start index. Features: full-screen black background, large album art with rotation/pulse animations driven by `MusicAnimationMetadata`, track/artist info, user avatar and name in the top bar, progress bar (one segment per item, 5s auto-advance), tap zones and swipe gestures matching Instagram stories.
+
+### Preview URL scraping
+
+- Added `SpotifyClient.trackPreviewURL(trackId:)` which fetches `https://open.spotify.com/embed/track/{id}` and extracts `audioPreview.url` from the inline JSON. Returns `nil` when no preview is available (many tracks don't have one). No authentication required — this is the public embed page.
+
+### Audio playback
+
+- Uses `AVPlayer` for streaming the 30-second MP3 previews. Play/pause/replay button shown below the album art. Automatically stops when navigating away or dismissing. Status is tracked via `PlayerStatus` enum (idle/loading/playing/paused/finished/unavailable).
+
+### Feed integration
+
+- `ContentView` stores a reference to `SpotifyClient` and passes it to `FeedView`.
+- `StoriesBar` now distinguishes Spotify items from other story bar items: Spotify items use a `Button` that triggers the `SpotifyStoryViewer` full-screen cover, while non-Spotify story bar items continue to use `NavigationLink` to `NotificationDetailView`.
+- `FeedView` has new `showSpotifyViewer` / `selectedSpotifyItemIndex` state and a `.fullScreenCover` for the Spotify viewer.
+- Refactored the spotlight `SpotifyPulseRing` from `FeedView` into the viewer (adapted for larger `RoundedRectangle` shape at full size vs. `Circle` at thumbnail size).
+
+### AGENTS.md
+
+- Added `## Project Structure` section documenting the source tree, with a note to keep it in sync when files change.
+
+### Auto-play and audio-duration progress bar
+
+- Preview audio now auto-plays when the viewer opens and when navigating to a new item. No manual tap needed.
+- Progress bar uses the actual audio duration (via `AVAsset.load(.duration)`) instead of a fixed 5 seconds. Falls back to 5s while the duration loads.
+- During touch-and-hold (the existing drag gesture that pauses the progress bar), the audio also pauses/resumes.
+
+### "Open in Spotify" link
+
+- Replaced the pause/play button with an `Open in Spotify` `Link` that opens the track in the Spotify app or website via `target.url`.
+- Removed `togglePlayback`, `playbackIcon`, and `playbackLabel` — no longer needed since playback is auto-managed.
+
+### Circular album art
+
+- Changed album art and pulse rings from `RoundedRectangle` to `Circle` to match the Spotify feed thumbnail shape.

@@ -7,13 +7,14 @@ public struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var feedViewModel: FeedViewModel?
     @State private var settingsViewModel: SettingsViewModel?
+    @State private var spotifyClient: SpotifyClient?
 
     public init() {}
 
     public var body: some View {
         Group {
-            if let feedViewModel, let settingsViewModel {
-                FeedView(viewModel: feedViewModel, settingsViewModel: settingsViewModel)
+            if let feedViewModel, let settingsViewModel, let spotifyClient {
+                FeedView(viewModel: feedViewModel, settingsViewModel: settingsViewModel, spotifyClient: spotifyClient)
             } else {
                 ProgressView()
             }
@@ -43,6 +44,8 @@ public struct ContentView: View {
             metadataStore: metadataStore
         )
 
+        let spotifyClientRef = SpotifyClient(credentialStore: keychainStore)
+
         let sources: [any NotificationSource] = [
             XNotificationSource(
                 client: XClient(credentialStore: keychainStore),
@@ -54,7 +57,7 @@ public struct ContentView: View {
             ),
             instagramSource,
             SpotifyNotificationSource(
-                client: SpotifyClient(credentialStore: keychainStore),
+                client: spotifyClientRef,
                 metadataStore: metadataStore
             ),
             DebugNotificationSource(
@@ -78,6 +81,7 @@ public struct ContentView: View {
             farcasterClient: farcasterClient,
             cacheStore: cacheStore
         )
+        spotifyClient = spotifyClientRef
 
         Task {
             await feed.fetchInstagramStories()
