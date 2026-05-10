@@ -98,13 +98,15 @@ public struct NotificationActor: Hashable, Codable, Sendable {
     public let username: String?
     public let displayName: String?
     public let avatarURL: URL?
+    public let timestamp: Date?
 
-    public init(id: String, network: SocialNetwork, username: String?, displayName: String?, avatarURL: URL?) {
+    public init(id: String, network: SocialNetwork, username: String?, displayName: String?, avatarURL: URL?, timestamp: Date? = nil) {
         self.id = id
         self.network = network
         self.username = username
         self.displayName = displayName
         self.avatarURL = avatarURL
+        self.timestamp = timestamp
     }
 }
 

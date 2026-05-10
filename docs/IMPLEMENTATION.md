@@ -257,3 +257,11 @@
 - Implemented the batch story media path in `InstagramNotificationSource.fetchStoryReels()`: it now deduplicates active tray entries by user PK, skips highlight/non-active reel IDs, calls `InstagramClient.reelsMedia(reelIds:)` once, and builds story slides from the returned reel map while preserving tray ordering, tray user metadata, and tray `seen`.
 - Fixed server-side story seen marking: `InstagramClient.markStorySeen` now posts to `POST /api/v2/media/seen/?reel=1&live_vod=0` with the correct compound key format (`<mediaId>_<ownerId>`), the correct HMAC-SHA256 key from `instagram-private-api` constants, and all required form fields (`reel_media_skipped`, `live_vods`, `nuxes`, etc.). Verified with live curl testing against the `sai.k1065` test account.
 - Added Instagram stories toggle: `InstagramAccountMetadata.storiesEnabled` (defaults to `true`), persisted in `UserDefaults`. `InstagramConnectionView` shows a "Show Stories" toggle. `FeedViewModel.fetchInstagramStories()` clears `instagramStoryReels` and skips the fetch when toggled off. The feed's `StoriesBar` is hidden when neither Spotify nor Instagram story content is present.
+
+### Notification detail relative timestamps and per-actor time
+
+- Added `Date.compactRelativeTime` extension in `NoFeedSocialCore/Date+RelativeTime.swift` as a shared utility (extracted from the duplicated private computed property in `FeedView` and `NotificationDetailView`).
+- Feed rows and notification detail People rows both use this shared extension.
+- Added optional `timestamp: Date?` to `NotificationActor` so individual actors can carry their own action time.
+- Farcaster notification normalization now threads the per-notification timestamp into each actor during creation. When grouped reactions include multiple actors, each actor retains their individual like/reaction timestamp rather than all sharing the group's newest timestamp.
+- `PersonRow` in `NotificationDetailView` shows relative time only when the actor has a timestamp (currently Farcaster only). Other networks that don't provide per-actor timestamps show no time in the People section.

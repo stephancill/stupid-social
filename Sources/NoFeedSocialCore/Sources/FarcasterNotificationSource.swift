@@ -71,7 +71,7 @@ public struct FarcasterNotificationSource: NotificationSource {
     ) -> NotificationItem {
         let timestamp = notification.notificationDate
         let type = normalizeType(notification.type, notification: notification, accountFid: accountId)
-        let actors = notificationActors(notification)
+        let actors = notificationActors(notification, timestamp: timestamp)
         let sourceId = stableSourceId(notification, type: notification.type)
         let text = notificationText(notification, type: type, actors: actors)
 
@@ -124,55 +124,58 @@ public struct FarcasterNotificationSource: NotificationSource {
         }
     }
 
-    private func notificationActors(_ notification: FarcasterNotificationResponse) -> [NotificationActor] {
+    private func notificationActors(_ notification: FarcasterNotificationResponse, timestamp: Date) -> [NotificationActor] {
         if let user = notification.user {
-            return [actor(from: user)]
+            return [actor(from: user, timestamp: timestamp)]
         }
 
         if let author = notification.cast?.author {
-            return [actor(from: author)]
+            return [actor(from: author, timestamp: timestamp)]
         }
 
         if let reactions = notification.reactions, !reactions.isEmpty {
-            return reactions.compactMap(actor(from:))
+            return reactions.compactMap { actor(from: $0, timestamp: timestamp) }
         }
 
         if let follows = notification.follows, !follows.isEmpty {
-            return follows.compactMap(actor(from:))
+            return follows.compactMap { actor(from: $0, timestamp: timestamp) }
         }
 
         return []
     }
 
-    private func actor(from user: FarcasterUserResponse) -> NotificationActor {
+    private func actor(from user: FarcasterUserResponse, timestamp: Date) -> NotificationActor {
         NotificationActor(
             id: String(user.fid),
             network: .farcaster,
             username: user.username,
             displayName: user.displayName,
-            avatarURL: user.pfpUrl
+            avatarURL: user.pfpUrl,
+            timestamp: timestamp
         )
     }
 
-    private func actor(from user: FarcasterReactionResponse) -> NotificationActor? {
+    private func actor(from user: FarcasterReactionResponse, timestamp: Date) -> NotificationActor? {
         guard let fid = user.fid else { return nil }
         return NotificationActor(
             id: String(fid),
             network: .farcaster,
             username: user.username,
             displayName: user.displayName,
-            avatarURL: user.pfpUrl
+            avatarURL: user.pfpUrl,
+            timestamp: timestamp
         )
     }
 
-    private func actor(from user: FarcasterFollowResponse) -> NotificationActor? {
+    private func actor(from user: FarcasterFollowResponse, timestamp: Date) -> NotificationActor? {
         guard let fid = user.fid else { return nil }
         return NotificationActor(
             id: String(fid),
             network: .farcaster,
             username: user.username,
             displayName: user.displayName,
-            avatarURL: user.pfpUrl
+            avatarURL: user.pfpUrl,
+            timestamp: timestamp
         )
     }
 

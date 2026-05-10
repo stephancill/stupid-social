@@ -144,6 +144,14 @@ private struct PersonRow: View {
                 Text(actor.username ?? actor.id)
                     .foregroundStyle(.primary)
             }
+
+            Spacer()
+
+            if let actorTimestamp = actor.timestamp {
+                Text(actorTimestamp.compactRelativeTime)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
         }
         .padding(.vertical, 1)
     }

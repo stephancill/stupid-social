@@ -547,7 +547,7 @@ private struct NotificationRow: View {
 
                     Spacer()
 
-                    Text(compactRelativeTime)
+                    Text(displayItem.item.timestamp.compactRelativeTime)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
@@ -664,28 +664,6 @@ private struct NotificationRow: View {
         let remainingCount = displayItem.item.actors.count - 1
         guard remainingCount > 0 else { return firstName }
         return "\(firstName) and \(remainingCount) other\(remainingCount == 1 ? "" : "s")"
-    }
-
-    private var compactRelativeTime: String {
-        let seconds = max(0, Int(Date().timeIntervalSince(displayItem.item.timestamp)))
-        if seconds < 60 { return "now" }
-
-        let minutes = seconds / 60
-        if minutes < 60 { return "\(minutes)m" }
-
-        let hours = minutes / 60
-        if hours < 24 { return "\(hours)h" }
-
-        let days = hours / 24
-        if days < 7 { return "\(days)d" }
-
-        let weeks = days / 7
-        if weeks < 5 { return "\(weeks)w" }
-
-        let months = days / 30
-        if months < 12 { return "\(months)mo" }
-
-        return "\(days / 365)y"
     }
 }
 
