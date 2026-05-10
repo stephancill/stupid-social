@@ -373,3 +373,8 @@
 - Spotify story progress now starts only after the preview audio begins playing. While the preview URL/player is loading, the full progress bar pulses gray as a loading indicator.
 - Removed tap/press-to-pause from `SpotifyStoryViewer`; taps are reserved for navigating between Spotify user slides.
 - Replaced `SpotifyStoryViewer` album-art `.repeatForever` rotation with timer-driven rotation phase updates so navigation and playback state changes do not restart or slow the rotation animation.
+
+### Instagram story seen state
+
+- Instagram story bubbles now treat the tray `seen` field as a timestamp rather than a boolean. A reel is seen only when `seen` is greater than or equal to the newest fetched slide's `takenAt`, so users correctly return to the unseen ring when they post a newer story after their previous stories were seen.
+- Instagram story viewer presentation now uses a snapshot of the story reels captured at tap time and marks reels seen by stable reel id. This prevents the live stories bar re-sort after marking the tapped reel seen from changing which reel appears at the viewer's current index.

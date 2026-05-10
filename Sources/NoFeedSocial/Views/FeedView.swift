@@ -12,6 +12,7 @@ struct FeedView: View {
     let settingsViewModel: SettingsViewModel
     let spotifyClient: SpotifyClient
     @State private var selectedInstagramReelIndex: Int?
+    @State private var selectedInstagramReels: [InstagramStoryReel] = []
     @State private var showStoryViewer = false
     @State private var selectedSpotifyItemIndex: Int?
     @State private var showSpotifyViewer = false
@@ -25,6 +26,7 @@ struct FeedView: View {
                         instagramReels: viewModel.instagramStoryReels,
                         feedService: viewModel.service,
                         onInstagramReelTap: { index in
+                            selectedInstagramReels = viewModel.instagramStoryReels
                             selectedInstagramReelIndex = index
                             showStoryViewer = true
                         },
@@ -122,10 +124,11 @@ struct FeedView: View {
         #if os(iOS)
         .fullScreenCover(isPresented: $showStoryViewer) {
             InstagramStoryViewer(
-                reels: viewModel.instagramStoryReels,
+                reels: selectedInstagramReels,
                 startIndex: selectedInstagramReelIndex ?? 0,
                 onReelSeen: { index in
-                    viewModel.markInstagramReelAsSeen(reelIndex: index)
+                    guard selectedInstagramReels.indices.contains(index) else { return }
+                    viewModel.markInstagramReelAsSeen(reelId: selectedInstagramReels[index].id)
                 }
             )
         }
@@ -139,10 +142,11 @@ struct FeedView: View {
         #else
         .sheet(isPresented: $showStoryViewer) {
                     InstagramStoryViewer(
-                        reels: viewModel.instagramStoryReels,
+                        reels: selectedInstagramReels,
                         startIndex: selectedInstagramReelIndex ?? 0,
                         onReelSeen: { index in
-                            viewModel.markInstagramReelAsSeen(reelIndex: index)
+                            guard selectedInstagramReels.indices.contains(index) else { return }
+                            viewModel.markInstagramReelAsSeen(reelId: selectedInstagramReels[index].id)
                         }
                     )
                 }

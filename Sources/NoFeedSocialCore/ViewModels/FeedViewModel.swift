@@ -151,6 +151,11 @@ public final class FeedViewModel: ObservableObject {
         sortReels(&instagramStoryReels)
     }
 
+    public func markInstagramReelAsSeen(reelId: String) {
+        guard let reelIndex = instagramStoryReels.firstIndex(where: { $0.id == reelId }) else { return }
+        markInstagramReelAsSeen(reelIndex: reelIndex)
+    }
+
     public func performCredentialHealthCheck() async {
         await feedService.healthCheckAllSources()
     }

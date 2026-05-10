@@ -95,8 +95,6 @@ public final class InstagramNotificationSource: NotificationSource {
                 avatarURL: item.user.profilePicUrl.flatMap(URL.init)
             )
 
-            let isSeen = item.seen != 0
-
             var slides: [InstagramStorySlide] = []
             if let reel = mediaByReelId[entry.reelId] {
                 for media in reel.items ?? [] {
@@ -120,6 +118,8 @@ public final class InstagramNotificationSource: NotificationSource {
 
             if !slides.isEmpty {
                 slides.sort { $0.takenAt > $1.takenAt }
+                let latestSlideTakenAt = slides.first?.takenAt ?? 0
+                let isSeen = item.seen > 0 && Double(item.seen) >= latestSlideTakenAt
                 reels.append(InstagramStoryReel(
                     id: entry.reelId,
                     user: actor,
