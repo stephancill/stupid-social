@@ -4,6 +4,7 @@ import Foundation
 public final class FeedViewModel: ObservableObject {
     @Published public private(set) var items: [DisplayNotificationItem] = []
     @Published public private(set) var instagramStoryReels: [InstagramStoryReel] = []
+    @Published public private(set) var spotifyActivityItems: [SpotifyActivityItem] = []
     @Published public private(set) var pendingNewCount = 0
     @Published public private(set) var isRefreshing = false
     @Published public private(set) var isForegroundRefreshing = false
@@ -11,14 +12,16 @@ public final class FeedViewModel: ObservableObject {
 
     private let feedService: FeedService
     private let instagramSource: InstagramNotificationSource?
+    private let spotifyActivitySource: SpotifyActivitySource?
 
     public var service: FeedService {
         feedService
     }
 
-    public init(feedService: FeedService, instagramSource: InstagramNotificationSource?) {
+    public init(feedService: FeedService, instagramSource: InstagramNotificationSource?, spotifyActivitySource: SpotifyActivitySource? = nil) {
         self.feedService = feedService
         self.instagramSource = instagramSource
+        self.spotifyActivitySource = spotifyActivitySource
     }
 
     public func loadCachedFeed() {
@@ -46,6 +49,7 @@ public final class FeedViewModel: ObservableObject {
         }
 
         await fetchInstagramStories()
+        await fetchSpotifyActivity()
     }
 
     public func markAllRead() {
@@ -66,6 +70,7 @@ public final class FeedViewModel: ObservableObject {
         }
 
         await fetchInstagramStories()
+        await fetchSpotifyActivity()
     }
 
     public func revealPendingNotifications() {
@@ -88,6 +93,18 @@ public final class FeedViewModel: ObservableObject {
             instagramStoryReels = reels
         } catch {
             // Non-critical: stories silently fail
+        }
+    }
+
+    public func fetchSpotifyActivity() async {
+        guard let spotifyActivitySource else {
+            spotifyActivityItems = []
+            return
+        }
+        do {
+            spotifyActivityItems = try await spotifyActivitySource.fetchActivity(reason: .manual)
+        } catch {
+            // Non-critical: activity silently fails
         }
     }
 

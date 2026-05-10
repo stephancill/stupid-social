@@ -1,7 +1,7 @@
 import Foundation
 
 @MainActor
-public final class SpotifyNotificationSource: NotificationSource {
+public final class SpotifyActivitySource: NotificationSource {
     public let network: SocialNetwork = .spotify
 
     private let client: SpotifyClient
@@ -42,11 +42,10 @@ public final class SpotifyNotificationSource: NotificationSource {
     }
 
     public func fetchNotifications(reason _: RefreshReason) async throws -> [NotificationItem] {
-        let accountId = metadataStore.spotifyAccount?.accountId ?? "spotify"
-        return try await normalizeFriendActivity(accountId: accountId)
+        return []
     }
 
-    private func normalizeFriendActivity(accountId: String) async throws -> [NotificationItem] {
+    public func fetchActivity(reason _: RefreshReason) async throws -> [SpotifyActivityItem] {
         let friends: [SpotifyFriend]
         do {
             friends = try await client.friendActivity()
@@ -54,45 +53,26 @@ public final class SpotifyNotificationSource: NotificationSource {
             return []
         }
 
-        var items: [NotificationItem] = []
+        var items: [SpotifyActivityItem] = []
 
         for friend in friends {
             let timestamp = Date(timeIntervalSince1970: Double(friend.timestamp) / 1000.0)
-
-            let actor = NotificationActor(
-                id: friend.user.uri,
-                network: .spotify,
-                username: friend.user.name,
-                displayName: friend.user.name,
-                avatarURL: friend.user.imageUrl.flatMap { URL(string: $0) }
-            )
-
-            let trackURL = URL(string: "https://open.spotify.com/track/\(trackId(from: friend.track.uri))")
-            let imageURL = friend.track.imageUrl.flatMap { URL(string: $0) }
             let trackId = trackId(from: friend.track.uri)
             let animation = await musicAnimation(for: trackId)
 
-            let target = NotificationTarget(
-                id: friend.track.uri,
-                text: "\(friend.track.name) — \(friend.track.artist?.name ?? "Unknown")",
-                url: trackURL,
-                imageURL: imageURL,
-                album: friend.track.album?.name,
-                musicAnimation: animation
-            )
-
-            let text = "\(friend.user.name) listened to a song"
-
-            items.append(NotificationItem(
+            items.append(SpotifyActivityItem(
                 id: "spotify-friend-\(friend.user.uri)-\(friend.timestamp)",
-                network: .spotify,
-                accountId: accountId,
-                sourceId: "\(friend.timestamp)",
-                type: .music,
                 timestamp: timestamp,
-                text: text,
-                actors: [actor],
-                target: target
+                userName: friend.user.name,
+                userURI: friend.user.uri,
+                userAvatarURL: friend.user.imageUrl.flatMap { URL(string: $0) },
+                trackName: friend.track.name,
+                artistName: friend.track.artist?.name,
+                albumName: friend.track.album?.name,
+                trackURI: friend.track.uri,
+                trackURL: URL(string: "https://open.spotify.com/track/\(trackId)"),
+                imageURL: friend.track.imageUrl.flatMap { URL(string: $0) },
+                musicAnimation: animation
             ))
         }
 

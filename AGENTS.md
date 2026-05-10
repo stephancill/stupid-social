@@ -31,7 +31,7 @@ Sources/
     Sources/                        # Network clients + notification sources
       NotificationSource.swift      # Protocol definition
       InstagramClient.swift / InstagramNotificationSource.swift
-      SpotifyClient.swift / SpotifyNotificationSource.swift
+      SpotifyClient.swift / SpotifyActivitySource.swift
       XClient.swift / XNotificationSource.swift
       FarcasterClient.swift / FarcasterNotificationSource.swift
       DebugNotificationsClient.swift / DebugNotificationSource.swift

@@ -4,7 +4,7 @@ import NoFeedSocialCore
 import SwiftUI
 
 struct SpotifyStoryViewer: View {
-    let items: [NotificationItem]
+    let items: [SpotifyActivityItem]
     let startIndex: Int
     let spotifyClient: SpotifyClient
     @Environment(\.dismiss) private var dismiss
@@ -25,7 +25,7 @@ struct SpotifyStoryViewer: View {
         case unavailable
     }
 
-    init(items: [NotificationItem], startIndex: Int = 0, spotifyClient: SpotifyClient) {
+    init(items: [SpotifyActivityItem], startIndex: Int = 0, spotifyClient: SpotifyClient) {
         self.items = items
         self.startIndex = startIndex
         self.spotifyClient = spotifyClient
@@ -98,25 +98,27 @@ struct SpotifyStoryViewer: View {
         )
     }
 
-    private func content(for item: NotificationItem) -> some View {
+    private func content(for _: SpotifyActivityItem) -> some View {
         VStack(spacing: 32) {
             Spacer()
 
-            albumArtView(for: item)
+            albumArtView
 
-            trackInfoView(for: item)
+            trackInfoView
 
-            playbackControl(for: item)
+            playbackControl
 
             Spacer()
         }
     }
 
-    private func albumArtView(for item: NotificationItem) -> some View {
-        let animation = item.target?.musicAnimation
-        let url = item.target?.imageURL
+    @ViewBuilder
+    private var albumArtView: some View {
+        let item = items[currentIndex]
+        let animation = item.musicAnimation
+        let url = item.imageURL
 
-        return ZStack {
+        ZStack {
             AsyncImage(url: url) { phase in
                 switch phase {
                 case let .success(image):
@@ -167,15 +169,18 @@ struct SpotifyStoryViewer: View {
         }
     }
 
-    private func trackInfoView(for item: NotificationItem) -> some View {
-        VStack(spacing: 4) {
-            Text(item.target?.text ?? "Unknown Track")
+    private var trackInfoView: some View {
+        let item = items[currentIndex]
+        let trackText = item.artistName.map { "\(item.trackName) — \($0)" } ?? item.trackName
+
+        return VStack(spacing: 4) {
+            Text(trackText)
                 .font(.title3.weight(.semibold))
                 .foregroundStyle(.white)
                 .lineLimit(2)
                 .multilineTextAlignment(.center)
 
-            if let album = item.target?.album {
+            if let album = item.albumName {
                 Text(album)
                     .font(.subheadline)
                     .foregroundStyle(.white.opacity(0.6))
@@ -189,8 +194,10 @@ struct SpotifyStoryViewer: View {
     }
 
     @ViewBuilder
-    private func playbackControl(for item: NotificationItem) -> some View {
-        if let trackURL = item.target?.url {
+    private var playbackControl: some View {
+        let item = items[currentIndex]
+
+        if let trackURL = item.trackURL {
             Link(destination: trackURL) {
                 HStack(spacing: 8) {
                     Image(systemName: "arrow.up.forward.app")
@@ -236,30 +243,30 @@ struct SpotifyStoryViewer: View {
             .padding(.horizontal, 8)
 
             HStack(spacing: 10) {
-                if let actor = items[currentIndex].actors.first {
-                    AsyncImage(url: actor.avatarURL) { phase in
-                        switch phase {
-                        case let .success(image):
-                            image
-                                .resizable()
-                                .scaledToFill()
-                        case .failure, .empty:
-                            Circle().fill(Color.white.opacity(0.2))
-                        @unknown default:
-                            Color.clear
-                        }
-                    }
-                    .frame(width: 36, height: 36)
-                    .clipShape(Circle())
+                let item = items[currentIndex]
 
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(actor.displayName ?? actor.username ?? "")
-                            .font(.headline)
-                            .foregroundStyle(.white)
-                        Text("Listening")
-                            .font(.caption)
-                            .foregroundStyle(.white.opacity(0.7))
+                AsyncImage(url: item.userAvatarURL) { phase in
+                    switch phase {
+                    case let .success(image):
+                        image
+                            .resizable()
+                            .scaledToFill()
+                    case .failure, .empty:
+                        Circle().fill(Color.white.opacity(0.2))
+                    @unknown default:
+                        Color.clear
                     }
+                }
+                .frame(width: 36, height: 36)
+                .clipShape(Circle())
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(item.userName)
+                        .font(.headline)
+                        .foregroundStyle(.white)
+                    Text("Listening")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.7))
                 }
 
                 Spacer()
@@ -324,7 +331,7 @@ struct SpotifyStoryViewer: View {
     private func loadPreviewURL(for index: Int) {
         guard items.indices.contains(index) else { return }
         let item = items[index]
-        let trackId = trackId(from: item.target?.id ?? "")
+        let trackId = extractTrackId(from: item.trackURI)
         guard !trackId.isEmpty else {
             previewURLs[trackId] = .some(nil)
             playerStatus = .unavailable
@@ -380,7 +387,7 @@ struct SpotifyStoryViewer: View {
         NotificationCenter.default.removeObserver(self, name: .AVPlayerItemDidPlayToEndTime, object: nil)
     }
 
-    private func trackId(from uri: String) -> String {
+    private func extractTrackId(from uri: String) -> String {
         uri.replacingOccurrences(of: "spotify:track:", with: "")
             .replacingOccurrences(of: "spotify:album:", with: "")
             .replacingOccurrences(of: "spotify:playlist:", with: "")
@@ -389,7 +396,7 @@ struct SpotifyStoryViewer: View {
             .replacingOccurrences(of: "spotify:socialsession:", with: "")
     }
 
-    // MARK: - Animation parameters (mirror SpotifyAnimatedStoryThumbnail)
+    // MARK: - Animation parameters
 
     private func tempo(_ animation: MusicAnimationMetadata?) -> Double {
         guard let tempo = animation?.tempo, tempo > 0 else { return 108 }

@@ -19,9 +19,9 @@ struct FeedView: View {
     var body: some View {
         NavigationStack {
             List {
-                if !storyItems.isEmpty || !viewModel.instagramStoryReels.isEmpty {
+                if !viewModel.spotifyActivityItems.isEmpty || !viewModel.instagramStoryReels.isEmpty {
                     StoriesBar(
-                        items: storyItems,
+                        spotifyItems: viewModel.spotifyActivityItems,
                         instagramReels: viewModel.instagramStoryReels,
                         feedService: viewModel.service,
                         onInstagramReelTap: { index in
@@ -35,7 +35,7 @@ struct FeedView: View {
                     )
                 }
 
-                if notificationItems.isEmpty && storyItems.isEmpty && viewModel.instagramStoryReels.isEmpty {
+                if notificationItems.isEmpty && viewModel.spotifyActivityItems.isEmpty && viewModel.instagramStoryReels.isEmpty {
                     VStack {
                         Spacer(minLength: 0)
                         ContentUnavailableView(
@@ -130,19 +130,15 @@ struct FeedView: View {
         }
         .fullScreenCover(isPresented: $showSpotifyViewer) {
             SpotifyStoryViewer(
-                items: storyItems.map(\.item),
+                items: viewModel.spotifyActivityItems,
                 startIndex: selectedSpotifyItemIndex ?? 0,
                 spotifyClient: spotifyClient
             )
         }
     }
 
-    private var storyItems: [DisplayNotificationItem] {
-        viewModel.items.filter(\.isStoryBarItem)
-    }
-
     private var notificationItems: [DisplayNotificationItem] {
-        viewModel.items.filter { !$0.isStoryBarItem }
+        viewModel.items
     }
 
     private var unreadItems: [DisplayNotificationItem] {
@@ -162,7 +158,7 @@ struct FeedView: View {
 }
 
 private struct StoriesBar: View {
-    let items: [DisplayNotificationItem]
+    let spotifyItems: [SpotifyActivityItem]
     let instagramReels: [InstagramStoryReel]
     let feedService: FeedService
     let onInstagramReelTap: (Int) -> Void
@@ -180,22 +176,13 @@ private struct StoriesBar: View {
                     .buttonStyle(.plain)
                 }
 
-                ForEach(Array(items.enumerated()), id: \.element.id) { index, displayItem in
-                    if displayItem.item.network == .spotify {
-                        Button {
-                            onSpotifyItemTap(index)
-                        } label: {
-                            StoryBubble(displayItem: displayItem)
-                        }
-                        .buttonStyle(.plain)
-                    } else {
-                        NavigationLink {
-                            NotificationDetailView(displayItem: displayItem, feedService: feedService)
-                        } label: {
-                            StoryBubble(displayItem: displayItem)
-                        }
-                        .buttonStyle(.plain)
+                ForEach(Array(spotifyItems.enumerated()), id: \.element.id) { index, item in
+                    Button {
+                        onSpotifyItemTap(index)
+                    } label: {
+                        SpotifyStoryBubble(item: item)
                     }
+                    .buttonStyle(.plain)
                 }
             }
             .padding(.horizontal, 16)
@@ -273,101 +260,29 @@ private struct InstagramStoryBubble: View {
     }
 }
 
-private struct StoryBubble: View {
-    let displayItem: DisplayNotificationItem
+private struct SpotifyStoryBubble: View {
+    let item: SpotifyActivityItem
 
     var body: some View {
         VStack(spacing: 6) {
             ZStack(alignment: .bottomTrailing) {
-                StoryThumbnail(
-                    url: displayItem.item.target?.imageURL,
-                    network: displayItem.item.network,
-                    musicAnimation: displayItem.item.target?.musicAnimation
+                SpotifyAnimatedStoryThumbnail(
+                    url: item.imageURL,
+                    musicAnimation: item.musicAnimation
                 )
                 .overlay {
-                    storyThumbnailShape
-                        .stroke(displayItem.item.network.storyAccentColor, lineWidth: 2)
-                }
-
-                if let actor = displayItem.item.actors.first {
-                    StoryActorAvatar(actor: actor)
-                        .offset(x: 3, y: 3)
+                    Circle()
+                        .stroke(Color(red: 0.12, green: 0.73, blue: 0.26), lineWidth: 2)
                 }
             }
 
-            Text(label)
+            Text(item.userName)
                 .font(.caption2)
                 .foregroundStyle(.primary)
                 .lineLimit(1)
                 .frame(width: 70)
         }
-        .accessibilityLabel(accessibilityLabel)
-    }
-
-    private var label: String {
-        guard let actor = displayItem.item.actors.first else { return displayItem.item.network.displayName }
-        return actor.username ?? actor.displayName ?? actor.id
-    }
-
-    private var accessibilityLabel: String {
-        switch displayItem.item.network {
-        case .spotify:
-            "Listening activity from \(label)"
-        case .instagram:
-            "Instagram story activity from \(label)"
-        case .x, .farcaster, .debug:
-            displayItem.item.text
-        }
-    }
-
-    private var storyThumbnailShape: AnyShape {
-        if displayItem.item.network == .spotify {
-            return AnyShape(Circle())
-        }
-        return AnyShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-    }
-}
-
-private struct StoryThumbnail: View {
-    let url: URL?
-    let network: SocialNetwork
-    let musicAnimation: MusicAnimationMetadata?
-
-    var body: some View {
-        if network == .spotify {
-            SpotifyAnimatedStoryThumbnail(url: url, musicAnimation: musicAnimation)
-        } else {
-            staticThumbnail
-        }
-    }
-
-    private var staticThumbnail: some View {
-        AsyncImage(url: url) { phase in
-            switch phase {
-            case let .success(image):
-                image
-                    .resizable()
-                    .scaledToFill()
-            case .failure, .empty:
-                ZStack {
-                    network.storyAccentColor.opacity(0.18)
-                    Image(systemName: network == .spotify ? "music.note" : "camera")
-                        .font(.title2)
-                        .foregroundStyle(network.storyAccentColor)
-                }
-            @unknown default:
-                Color.clear
-            }
-        }
-        .frame(width: 70, height: 70)
-        .clipShape(thumbnailShape)
-    }
-
-    private var thumbnailShape: AnyShape {
-        if network == .spotify {
-            return AnyShape(Circle())
-        }
-        return AnyShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .accessibilityLabel("Listening activity from \(item.userName)")
     }
 }
 
@@ -484,40 +399,6 @@ private struct SpotifyPulseRing: View {
                     .repeatForever(autoreverses: false),
                 value: isAnimating
             )
-    }
-}
-
-private struct StoryActorAvatar: View {
-    let actor: NotificationActor
-
-    var body: some View {
-        AsyncImage(url: actor.avatarURL) { phase in
-            switch phase {
-            case let .success(image):
-                image
-                    .resizable()
-                    .scaledToFill()
-            case .failure, .empty:
-                ZStack {
-                    Color.secondary.opacity(0.18)
-                    Text(initial)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                }
-            @unknown default:
-                Color.clear
-            }
-        }
-        .frame(width: 28, height: 28)
-        .clipShape(Circle())
-        .overlay {
-            Circle().stroke(Color.storyAvatarBorder, lineWidth: 2)
-        }
-    }
-
-    private var initial: String {
-        let name = actor.username ?? actor.displayName ?? actor.id
-        return name.first.map { String($0).uppercased() } ?? "?"
     }
 }
 
@@ -693,29 +574,10 @@ private struct NotificationRow: View {
     }
 }
 
-private extension DisplayNotificationItem {
-    var isStoryBarItem: Bool {
-        item.network == .spotify && item.type == .music
-    }
-}
-
 private extension Color {
-    static var spotifyGreen: Color {
-        Color(red: 0.12, green: 0.73, blue: 0.26)
-    }
 
     static var spotifyActivityBorder: Color {
         Color.secondary
-    }
-
-    static var storyAvatarBorder: Color {
-        #if os(iOS)
-            Color(uiColor: .systemBackground)
-        #elseif os(macOS)
-            Color(nsColor: .windowBackgroundColor)
-        #else
-            Color.white
-        #endif
     }
 }
 
@@ -800,17 +662,6 @@ private extension SocialNetwork {
             Color(red: 0.12, green: 0.73, blue: 0.26)
         case .debug:
             .orange
-        }
-    }
-
-    var storyAccentColor: Color {
-        switch self {
-        case .instagram:
-            Color(red: 0.88, green: 0.21, blue: 0.44)
-        case .spotify:
-            Color(red: 0.12, green: 0.73, blue: 0.26)
-        case .x, .farcaster, .debug:
-            badgeBackgroundColor
         }
     }
 }

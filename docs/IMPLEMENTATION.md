@@ -304,3 +304,13 @@
 
 - Changed album art and pulse rings from `RoundedRectangle` to `Circle` to match the Spotify feed thumbnail shape.
 - Moved pulse rings in front of album art (higher ZStack layer) so they visually originate from the album art border rather than from behind.
+
+### Decoupling Spotify activity from notifications
+
+- Added `SpotifyActivityItem` as a dedicated model with user, track, album, and animation metadata fields — no longer uses `NotificationItem` with `.music` type.
+- Renamed `SpotifyNotificationSource` → `SpotifyActivitySource`. Still conforms to `NotificationSource` for `validateAccount`/`fetchProfile`/`healthCheckAllSources`, but `fetchNotifications` now returns `[]` (Spotify items no longer enter the notification cache). New `fetchActivity(reason:)` returns `[SpotifyActivityItem]`.
+- `FeedViewModel` manages `spotifyActivityItems` separately from notification `items`, fetching them via `spotifyActivitySource.fetchActivity()` alongside Instagram story fetches.
+- `FeedView` passes `viewModel.spotifyActivityItems` directly to the stories bar and viewer. Removed `isStoryBarItem` filtering, `StoryBubble`, `StoryThumbnail`, `StoryActorAvatar`, `storyAccentColor`, and the non-Spotify path in `StoriesBar` (only Spotify items were ever story bar items).
+- New `SpotifyStoryBubble` renders `SpotifyActivityItem` directly in the stories bar using the existing `SpotifyAnimatedStoryThumbnail`.
+- `SpotifyStoryViewer` now accepts `[SpotifyActivityItem]` with direct property access (e.g. `item.trackName`, `item.artistName`, `item.userAvatarURL`) instead of navigating `NotificationItem`'s actor/target graph.
+- Added `album` field to `NotificationTarget` (retained for future use; Spotify no longer uses it but the field persists for compatibility).

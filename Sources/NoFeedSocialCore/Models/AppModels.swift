@@ -256,3 +256,46 @@ public struct ReadWatermark: Codable, Equatable, Sendable {
         self.updatedAt = updatedAt
     }
 }
+
+public struct SpotifyActivityItem: Identifiable, Hashable, Sendable {
+    public let id: String
+    public let timestamp: Date
+    public let userName: String
+    public let userURI: String
+    public let userAvatarURL: URL?
+    public let trackName: String
+    public let artistName: String?
+    public let albumName: String?
+    public let trackURI: String
+    public let trackURL: URL?
+    public let imageURL: URL?
+    public let musicAnimation: MusicAnimationMetadata?
+
+    public init(
+        id: String,
+        timestamp: Date,
+        userName: String,
+        userURI: String,
+        userAvatarURL: URL?,
+        trackName: String,
+        artistName: String?,
+        albumName: String?,
+        trackURI: String,
+        trackURL: URL?,
+        imageURL: URL?,
+        musicAnimation: MusicAnimationMetadata?
+    ) {
+        self.id = id
+        self.timestamp = timestamp
+        self.userName = userName
+        self.userURI = userURI
+        self.userAvatarURL = userAvatarURL
+        self.trackName = trackName
+        self.artistName = artistName
+        self.albumName = albumName
+        self.trackURI = trackURI
+        self.trackURL = trackURL
+        self.imageURL = imageURL
+        self.musicAnimation = musicAnimation
+    }
+}
