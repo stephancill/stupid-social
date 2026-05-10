@@ -15,6 +15,7 @@ struct SpotifyStoryViewer: View {
     @State private var playerStatus: PlayerStatus = .idle
     @State private var previewURLs: [String: URL?] = [:]
     @State private var audioDuration: Double = 5
+    @State private var pulsePhase: Double = 0
 
     enum PlayerStatus: Equatable {
         case idle
@@ -54,16 +55,26 @@ struct SpotifyStoryViewer: View {
         .onChange(of: currentIndex) { _, newIndex in
             elapsedTime = 0
             audioDuration = 5
+            pulsePhase = 0
             stopPlayback()
             loadPreviewURL(for: newIndex)
         }
         .onReceive(Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()) { _ in
             guard !isPaused else { return }
             guard items.indices.contains(currentIndex) else { return }
+
             elapsedTime += 0.05
             if elapsedTime >= slideDuration {
                 elapsedTime = 0
                 goForward()
+            }
+
+            guard playerStatus == .playing else { return }
+            let item = items[currentIndex]
+            let pd = pulseDuration(item.musicAnimation)
+            pulsePhase += 0.05
+            if pulsePhase >= pd {
+                pulsePhase = 0
             }
         }
         .onDisappear {
@@ -108,8 +119,6 @@ struct SpotifyStoryViewer: View {
 
             trackInfoView
 
-            playbackControl
-
             Spacer()
         }
     }
@@ -121,6 +130,14 @@ struct SpotifyStoryViewer: View {
         let url = item.imageURL
 
         ZStack {
+            SpotifyPulseRing(
+                phase: pulsePhase,
+                maxPhase: pulseDuration(animation),
+                scale: pulseScale(animation),
+                opacity: pulseOpacity(animation),
+                size: 280
+            )
+
             AsyncImage(url: url) { phase in
                 switch phase {
                 case let .success(image):
@@ -151,23 +168,6 @@ struct SpotifyStoryViewer: View {
                     : nil,
                 value: playerStatus
             )
-
-            SpotifyPulseRing(
-                delay: 0,
-                isAnimating: playerStatus == .playing && !isPaused,
-                duration: pulseDuration(animation),
-                scale: pulseScale(animation),
-                opacity: pulseOpacity(animation),
-                size: 280
-            )
-            SpotifyPulseRing(
-                delay: pulseDuration(animation) * 0.48,
-                isAnimating: playerStatus == .playing && !isPaused,
-                duration: pulseDuration(animation),
-                scale: pulseScale(animation) * 1.08,
-                opacity: pulseOpacity(animation) * 0.72,
-                size: 280
-            )
         }
     }
 
@@ -193,26 +193,6 @@ struct SpotifyStoryViewer: View {
                 .foregroundStyle(.white.opacity(0.4))
         }
         .padding(.horizontal, 32)
-    }
-
-    @ViewBuilder
-    private var playbackControl: some View {
-        let item = items[currentIndex]
-
-        if let trackURL = item.trackURL {
-            Link(destination: trackURL) {
-                HStack(spacing: 8) {
-                    Image(systemName: "arrow.up.forward.app")
-                        .font(.title3)
-                    Text("Open in Spotify")
-                        .font(.subheadline.weight(.medium))
-                }
-                .foregroundStyle(.white)
-                .padding(.horizontal, 20)
-                .padding(.vertical, 10)
-                .background(.white.opacity(0.12), in: Capsule())
-            }
-        }
     }
 
     private var topBar: some View {
@@ -386,6 +366,7 @@ struct SpotifyStoryViewer: View {
         player?.replaceCurrentItem(with: nil)
         player = nil
         playerStatus = .idle
+        pulsePhase = 0
         NotificationCenter.default.removeObserver(self, name: .AVPlayerItemDidPlayToEndTime, object: nil)
     }
 
@@ -428,28 +409,5 @@ struct SpotifyStoryViewer: View {
 
     private func pulseOpacity(_ animation: MusicAnimationMetadata?) -> Double {
         min((0.72 + loudnessIntensity(animation) * 0.28) * confidence(animation), 1)
-    }
-}
-
-private struct SpotifyPulseRing: View {
-    let delay: TimeInterval
-    let isAnimating: Bool
-    let duration: TimeInterval
-    let scale: Double
-    let opacity: Double
-    let size: CGFloat
-
-    var body: some View {
-        Circle()
-            .stroke(.white.opacity(opacity), lineWidth: 7)
-            .frame(width: size, height: size)
-            .scaleEffect(isAnimating ? scale : 1)
-            .opacity(isAnimating ? 0 : opacity)
-            .animation(
-                .easeOut(duration: duration)
-                    .delay(delay)
-                    .repeatForever(autoreverses: false),
-                value: isAnimating
-            )
     }
 }

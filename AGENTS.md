@@ -13,6 +13,7 @@ Sources/
       ProfileDetailView.swift       # Actor profile detail
       InstagramStoryViewer.swift    # Full-screen Instagram story viewer
       SpotifyStoryViewer.swift      # Full-screen Spotify listening viewer
+      SpotifyPulseRing.swift        # Shared phase-driven pulse ring
       InstagramConnectionView.swift # Instagram credential setup
       InstagramLoginWebView.swift   # Instagram WebView login
       SpotifyConnectionView.swift   # Spotify credential setup

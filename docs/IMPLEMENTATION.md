@@ -320,3 +320,13 @@
 - Configured `AVAudioSession` for `.playback` category in `SpotifyStoryViewer.onAppear` — fixes no audio on physical devices where the default category is ambient/silent.
 - Sorted `spotifyActivityItems` by `timestamp` descending in `FeedViewModel.fetchSpotifyActivity()` so latest activity appears first.
 - Replaced static "Listening" subtitle in the top bar with `item.timestamp.compactRelativeTime` so it shows the relative time since the user listened.
+
+### Pulse rendering refactor
+
+- Switched from `.repeatForever` animation to manual timer-driven phase interpolation. A `pulsePhase` counter advances each timer tick (0.05s) and resets when it reaches `pulseDuration`. The ring's scale and opacity are computed directly from `phase / maxPhase`, so each cycle fades to zero before restarting — no visible snap between cycles.
+- Ring size reduced to 260px (from 280px album art size) so it starts slightly inside and emerges from behind the album art.
+- Single pulse ring (was two staggered rings).
+- Pulse ring moved behind album art in ZStack so the stroke never overlaps the art.
+- Extracted `SpotifyPulseRing` into a shared `Views/SpotifyPulseRing.swift` used by both the full-screen viewer and (if needed) the feed thumbnail.
+- Removed pulse rings from feed `SpotifyAnimatedStoryThumbnail`; the thumbnail now only spins album art.
+- Removed orphaned animation helpers (`confidence`, `loudnessIntensity`, `pulseDuration`, `pulseScale`, `pulseOpacity`) from `SpotifyAnimatedStoryThumbnail`.

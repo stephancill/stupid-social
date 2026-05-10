@@ -274,6 +274,26 @@ private struct SpotifyStoryBubble: View {
                     Circle()
                         .stroke(Color(red: 0.12, green: 0.73, blue: 0.26), lineWidth: 2)
                 }
+
+                AsyncImage(url: item.userAvatarURL) { phase in
+                    switch phase {
+                    case let .success(image):
+                        image
+                            .resizable()
+                            .scaledToFill()
+                    case .failure, .empty:
+                        Circle().fill(Color.secondary.opacity(0.18))
+                    @unknown default:
+                        Color.clear
+                    }
+                }
+                .frame(width: 28, height: 28)
+                .clipShape(Circle())
+                .overlay {
+                    Circle()
+                        .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+                }
+                .offset(x: 3, y: 3)
             }
 
             Text(item.userName)
@@ -294,23 +314,6 @@ private struct SpotifyAnimatedStoryThumbnail: View {
 
     var body: some View {
         ZStack {
-            if !reduceMotion {
-                SpotifyPulseRing(
-                    delay: 0,
-                    isAnimating: isAnimating,
-                    duration: pulseDuration,
-                    scale: pulseScale,
-                    opacity: pulseOpacity
-                )
-                SpotifyPulseRing(
-                    delay: pulseDuration * 0.48,
-                    isAnimating: isAnimating,
-                    duration: pulseDuration,
-                    scale: pulseScale * 1.08,
-                    opacity: pulseOpacity * 0.72
-                )
-            }
-
             albumArt
                 .frame(width: 70, height: 70)
                 .clipShape(Circle())
@@ -353,52 +356,8 @@ private struct SpotifyAnimatedStoryThumbnail: View {
         return min(max(tempo, 60), 190)
     }
 
-    private var confidence: Double {
-        min(max(musicAnimation?.tempoConfidence ?? 0.55, 0.3), 1)
-    }
-
-    private var loudnessIntensity: Double {
-        guard let loudness = musicAnimation?.loudness else { return 0.58 }
-        return min(max((loudness + 24) / 18, 0.22), 1)
-    }
-
     private var rotationDuration: TimeInterval {
-        // One revolution spans roughly sixteen beats, making faster tracks spin faster without becoming frantic.
         (60 / tempo) * 16
-    }
-
-    private var pulseDuration: TimeInterval {
-        min(max((60 / tempo) * 2, 0.65), 1.55)
-    }
-
-    private var pulseScale: Double {
-        0.98 + loudnessIntensity * 0.36
-    }
-
-    private var pulseOpacity: Double {
-        min((0.72 + loudnessIntensity * 0.28) * confidence, 1)
-    }
-}
-
-private struct SpotifyPulseRing: View {
-    let delay: TimeInterval
-    let isAnimating: Bool
-    let duration: TimeInterval
-    let scale: Double
-    let opacity: Double
-
-    var body: some View {
-        Circle()
-            .stroke(Color.spotifyActivityBorder.opacity(opacity), lineWidth: 7)
-            .frame(width: 70, height: 70)
-            .scaleEffect(isAnimating ? scale : 1)
-            .opacity(isAnimating ? 0 : opacity)
-            .animation(
-                .easeOut(duration: duration)
-                    .delay(delay)
-                    .repeatForever(autoreverses: false),
-                value: isAnimating
-            )
     }
 }
 
