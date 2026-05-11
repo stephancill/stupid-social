@@ -9,28 +9,30 @@ struct SpotifyConnectionView: View {
 
     var body: some View {
         Form {
-            Section {
-                Button {
-                    showingLoginSheet = true
-                } label: {
-                    HStack {
-                        Spacer()
-                        Label("Log in to Spotify", systemImage: "safari")
-                        Spacer()
+            if viewModel.spotifyStatus == .notConfigured {
+                Section {
+                    Button {
+                        showingLoginSheet = true
+                    } label: {
+                        HStack {
+                            Spacer()
+                            Label("Log in to Spotify", systemImage: "safari")
+                            Spacer()
+                        }
                     }
                 }
             }
 
             Section {
                 HStack {
-                    Text("Status")
+                    Text("Connection")
                     Spacer()
-                    Text(viewModel.spotifyStatus.label)
+                    Text(viewModel.spotifyConnectionLabel)
                         .foregroundStyle(.secondary)
                 }
             }
 
-            if devModeEnabled {
+            if devModeEnabled, viewModel.spotifyStatus == .notConfigured {
                 Section("Manual (Dev)") {
                     TextField("Bearer token", text: $viewModel.spotifyBearerToken, axis: .vertical)
                         .lineLimit(2 ... 4)

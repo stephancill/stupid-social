@@ -11,6 +11,7 @@ struct ProfileDetailView: View {
     let actor: NotificationActor
     let feedService: FeedService
     @Environment(\.openURL) private var openURL
+    @AppStorage("devModeEnabled") private var devModeEnabled = false
 
     @State private var profile: NetworkProfile?
     @State private var isLoading = true
@@ -47,7 +48,7 @@ struct ProfileDetailView: View {
                     VStack(spacing: 4) {
                         HStack(spacing: 4) {
                             if let displayName = profile.displayName, !displayName.isEmpty {
-                                Text(displayName)
+                                Text(DebugRedaction.username(displayName, enabled: devModeEnabled))
                                     .font(.title2.weight(.bold))
                             }
                             if profile.isVerified == true {
@@ -57,7 +58,7 @@ struct ProfileDetailView: View {
                             }
                         }
                         if let username = profile.username {
-                            Text("@\(username)")
+                            Text(devModeEnabled ? "Redacted" : "@\(username)")
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
                         }
@@ -140,17 +141,10 @@ struct ProfileDetailView: View {
     @ViewBuilder
     private func avatarView(url: URL?) -> some View {
         if let url {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case let .success(image):
-                    image
-                        .resizable()
-                        .scaledToFill()
-                case .empty, .failure:
-                    avatarFallback
-                @unknown default:
-                    avatarFallback
-                }
+            CachedAsyncImage(url: url) {
+                avatarFallback
+            } failure: {
+                avatarFallback
             }
             .clipShape(Circle())
         } else {

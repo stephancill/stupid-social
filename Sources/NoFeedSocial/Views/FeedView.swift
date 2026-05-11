@@ -11,26 +11,17 @@ struct FeedView: View {
     @ObservedObject var viewModel: FeedViewModel
     let settingsViewModel: SettingsViewModel
     let spotifyClient: SpotifyClient
-    @State private var instagramStorySelection: InstagramStorySelection?
-    @State private var spotifyActivitySelection: SpotifyActivitySelection?
+    @State private var storyViewerSelection: StoryViewerSelection?
 
     var body: some View {
         NavigationStack {
             List {
                 if hasStoryBarContent {
                     StoriesBar(
-                        spotifyItems: viewModel.spotifyActivityItems,
-                        instagramReels: viewModel.instagramStoryReels,
-                        feedService: viewModel.service,
-                        onInstagramReelTap: { index in
-                            instagramStorySelection = InstagramStorySelection(
-                                reels: viewModel.instagramStoryReels,
-                                startIndex: index
-                            )
-                        },
-                        onSpotifyItemTap: { index in
-                            spotifyActivitySelection = SpotifyActivitySelection(
-                                items: viewModel.spotifyActivityItems,
+                        items: viewModel.storyBarItems,
+                        onItemTap: { index in
+                            storyViewerSelection = StoryViewerSelection(
+                                items: viewModel.storyBarItems,
                                 startIndex: index
                             )
                         }
@@ -108,6 +99,11 @@ struct FeedView: View {
                 ToolbarItem(placement: .primaryAction) {
                     NavigationLink {
                         SettingsView(viewModel: settingsViewModel)
+                            .onDisappear {
+                                Task {
+                                    await viewModel.refreshOnForegroundActivation()
+                                }
+                            }
                     } label: {
                         Image(systemName: "gear")
                     }
@@ -122,46 +118,30 @@ struct FeedView: View {
             }
         }
         #if os(iOS)
-        .fullScreenCover(item: $instagramStorySelection) { selection in
-            InstagramStoryViewer(
-                reels: selection.reels,
-                startIndex: selection.startIndex,
-                onReelSeen: { index in
-                    guard selection.reels.indices.contains(index) else { return }
-                    viewModel.markInstagramReelAsSeen(reelId: selection.reels[index].id)
-                }
-            )
-        }
-        .fullScreenCover(item: $spotifyActivitySelection) { selection in
-            SpotifyStoryViewer(
+        .fullScreenCover(item: $storyViewerSelection) { selection in
+            UnifiedStoryViewer(
                 items: selection.items,
                 startIndex: selection.startIndex,
                 spotifyClient: spotifyClient,
-                onItemSeen: { index in
-                    guard selection.items.indices.contains(index) else { return }
-                    viewModel.markSpotifyActivityAsSeen(userURI: selection.items[index].userURI)
+                onInstagramReelSeen: { reelId in
+                    viewModel.markInstagramReelAsSeen(reelId: reelId)
+                },
+                onSpotifyItemSeen: { userURI in
+                    viewModel.markSpotifyActivityAsSeen(userURI: userURI)
                 }
             )
         }
         #else
-        .sheet(item: $instagramStorySelection) { selection in
-                    InstagramStoryViewer(
-                        reels: selection.reels,
-                        startIndex: selection.startIndex,
-                        onReelSeen: { index in
-                            guard selection.reels.indices.contains(index) else { return }
-                            viewModel.markInstagramReelAsSeen(reelId: selection.reels[index].id)
-                        }
-                    )
-                }
-                .sheet(item: $spotifyActivitySelection) { selection in
-                    SpotifyStoryViewer(
+        .sheet(item: $storyViewerSelection) { selection in
+                    UnifiedStoryViewer(
                         items: selection.items,
                         startIndex: selection.startIndex,
                         spotifyClient: spotifyClient,
-                        onItemSeen: { index in
-                            guard selection.items.indices.contains(index) else { return }
-                            viewModel.markSpotifyActivityAsSeen(userURI: selection.items[index].userURI)
+                        onInstagramReelSeen: { reelId in
+                            viewModel.markInstagramReelAsSeen(reelId: reelId)
+                        },
+                        onSpotifyItemSeen: { userURI in
+                            viewModel.markSpotifyActivityAsSeen(userURI: userURI)
                         }
                     )
                 }
@@ -181,7 +161,7 @@ struct FeedView: View {
     }
 
     private var hasStoryBarContent: Bool {
-        !viewModel.spotifyActivityItems.isEmpty || !viewModel.instagramStoryReels.isEmpty
+        !viewModel.storyBarItems.isEmpty
     }
 
     private var errorBinding: Binding<Bool> {
@@ -192,42 +172,24 @@ struct FeedView: View {
     }
 }
 
-private struct InstagramStorySelection: Identifiable {
+private struct StoryViewerSelection: Identifiable {
     let id = UUID()
-    let reels: [InstagramStoryReel]
-    let startIndex: Int
-}
-
-private struct SpotifyActivitySelection: Identifiable {
-    let id = UUID()
-    let items: [SpotifyActivityItem]
+    let items: [StoryBarItem]
     let startIndex: Int
 }
 
 private struct StoriesBar: View {
-    let spotifyItems: [SpotifyActivityItem]
-    let instagramReels: [InstagramStoryReel]
-    let feedService: FeedService
-    let onInstagramReelTap: (Int) -> Void
-    let onSpotifyItemTap: (Int) -> Void
+    let items: [StoryBarItem]
+    let onItemTap: (Int) -> Void
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(alignment: .top, spacing: 12) {
-                ForEach(Array(instagramReels.enumerated()), id: \.element.id) { index, reel in
+                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                     Button {
-                        onInstagramReelTap(index)
+                        onItemTap(index)
                     } label: {
-                        InstagramStoryBubble(reel: reel)
-                    }
-                    .buttonStyle(.plain)
-                }
-
-                ForEach(Array(spotifyItems.enumerated()), id: \.element.id) { index, item in
-                    Button {
-                        onSpotifyItemTap(index)
-                    } label: {
-                        SpotifyStoryBubble(item: item)
+                        storyBubble(for: item)
                     }
                     .buttonStyle(.plain)
                 }
@@ -238,29 +200,38 @@ private struct StoriesBar: View {
         .listRowInsets(EdgeInsets())
         .listRowSeparator(.hidden)
     }
+
+    @ViewBuilder
+    private func storyBubble(for item: StoryBarItem) -> some View {
+        switch item {
+        case let .instagram(reel):
+            InstagramStoryBubble(reel: reel)
+        case let .spotify(spotifyItem):
+            SpotifyStoryBubble(item: spotifyItem)
+        }
+    }
 }
 
 private struct InstagramStoryBubble: View {
     let reel: InstagramStoryReel
+    @AppStorage("devModeEnabled") private var devModeEnabled = false
 
     var body: some View {
         VStack(spacing: 6) {
             ZStack {
-                AsyncImage(url: reel.user.avatarURL) { phase in
-                    switch phase {
-                    case let .success(image):
-                        image
-                            .resizable()
-                            .scaledToFill()
-                    case .failure, .empty:
-                        ZStack {
-                            Color.secondary.opacity(0.18)
-                            Text(initial)
-                                .font(.title3.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                        }
-                    @unknown default:
-                        Color.clear
+                CachedAsyncImage(url: reel.user.avatarURL, cacheKey: "instagram-avatar-\(reel.user.id)") {
+                    ZStack {
+                        Color.secondary.opacity(0.18)
+                        Text(initial)
+                            .font(.title3.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                } failure: {
+                    ZStack {
+                        Color.secondary.opacity(0.18)
+                        Text(initial)
+                            .font(.title3.weight(.semibold))
+                            .foregroundStyle(.secondary)
                     }
                 }
                 .frame(width: 70, height: 70)
@@ -299,7 +270,7 @@ private struct InstagramStoryBubble: View {
     }
 
     private var label: String {
-        reel.user.username ?? reel.user.displayName ?? reel.user.id
+        DebugRedaction.actorName(reel.user, enabled: devModeEnabled)
     }
 
     private var initial: String {
@@ -309,6 +280,7 @@ private struct InstagramStoryBubble: View {
 
 private struct SpotifyStoryBubble: View {
     let item: SpotifyActivityItem
+    @AppStorage("devModeEnabled") private var devModeEnabled = false
 
     var body: some View {
         VStack(spacing: 6) {
@@ -322,17 +294,10 @@ private struct SpotifyStoryBubble: View {
                         .stroke(item.isSeen ? Color.gray.opacity(0.4) : Color.spotifyActivityBorder, lineWidth: 3)
                 }
 
-                AsyncImage(url: item.userAvatarURL) { phase in
-                    switch phase {
-                    case let .success(image):
-                        image
-                            .resizable()
-                            .scaledToFill()
-                    case .failure, .empty:
-                        Circle().fill(Color.secondary.opacity(0.18))
-                    @unknown default:
-                        Color.clear
-                    }
+                CachedAsyncImage(url: item.userAvatarURL, cacheKey: "spotify-avatar-\(item.userURI)") {
+                    Circle().fill(Color.secondary.opacity(0.18))
+                } failure: {
+                    Circle().fill(Color.secondary.opacity(0.18))
                 }
                 .frame(width: 28, height: 28)
                 .clipShape(Circle())
@@ -343,13 +308,17 @@ private struct SpotifyStoryBubble: View {
                 .offset(x: 3, y: 3)
             }
 
-            Text(item.userName)
+            Text(displayUserName)
                 .font(.caption2)
                 .foregroundStyle(.primary)
                 .lineLimit(1)
                 .frame(width: 70)
         }
-        .accessibilityLabel("Listening activity from \(item.userName)")
+        .accessibilityLabel("Listening activity from \(displayUserName)")
+    }
+
+    private var displayUserName: String {
+        DebugRedaction.username(item.userName, enabled: devModeEnabled)
     }
 }
 
@@ -439,6 +408,7 @@ private struct NewSeparatorRow: View {
 
 private struct NotificationRow: View {
     let displayItem: DisplayNotificationItem
+    @AppStorage("devModeEnabled") private var devModeEnabled = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -475,7 +445,7 @@ private struct NotificationRow: View {
         } else if let targetText = displayItem.item.target?.text, !targetText.isEmpty,
                   displayItem.item.type == .reaction || displayItem.item.type == .reply || displayItem.item.type == .mention || displayItem.item.type == .music
         {
-            Text(targetText)
+            Text(DebugRedaction.text(targetText, actors: displayItem.item.actors, enabled: devModeEnabled))
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
@@ -496,7 +466,7 @@ private struct NotificationRow: View {
                 }
             }
         } else if let actor = displayItem.item.actors.first {
-            Text(actor.username ?? actor.id)
+            Text(DebugRedaction.actorName(actor, enabled: devModeEnabled))
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
@@ -559,15 +529,16 @@ private struct NotificationRow: View {
     }
 
     private var sanitizedItemText: String {
-        displayItem.item.actors.reduce(displayItem.item.text) { text, actor in
+        let sanitized = displayItem.item.actors.reduce(displayItem.item.text) { text, actor in
             guard let username = actor.username else { return text }
             return text.replacingOccurrences(of: "@\(username)", with: username)
         }
+        return DebugRedaction.text(sanitized, actors: displayItem.item.actors, enabled: devModeEnabled)
     }
 
     private var actorSummary: String {
         guard let first = displayItem.item.actors.first else { return "Someone" }
-        let firstName = first.username ?? first.id
+        let firstName = DebugRedaction.actorName(first, enabled: devModeEnabled)
         let remainingCount = displayItem.item.actors.count - 1
         guard remainingCount > 0 else { return firstName }
         return "\(firstName) and \(remainingCount) other\(remainingCount == 1 ? "" : "s")"
@@ -744,6 +715,7 @@ private struct NotificationTypeIcon: View {
 
 private struct AvatarStrip: View {
     let actors: [NotificationActor]
+    @AppStorage("devModeEnabled") private var devModeEnabled = false
 
     var body: some View {
         HStack(spacing: -6) {
@@ -771,7 +743,7 @@ private struct AvatarStrip: View {
 
     private var avatarAccessibilityLabel: String {
         let visibleNames = actors.prefix(5).map { actor in
-            actor.username ?? actor.displayName ?? actor.id
+            DebugRedaction.actorName(actor, enabled: devModeEnabled)
         }
         let suffix = actors.count > 5 ? ", and \(actors.count - 5) more" : ""
         return "Actors: \(visibleNames.joined(separator: ", "))\(suffix)"
@@ -784,17 +756,10 @@ private struct ActorAvatar: View {
     var body: some View {
         Group {
             if let avatarURL = actor.avatarURL {
-                AsyncImage(url: avatarURL) { phase in
-                    switch phase {
-                    case let .success(image):
-                        image
-                            .resizable()
-                            .scaledToFill()
-                    case .empty, .failure:
-                        AvatarFallback(actor: actor)
-                    @unknown default:
-                        AvatarFallback(actor: actor)
-                    }
+                CachedAsyncImage(url: avatarURL) {
+                    AvatarFallback(actor: actor)
+                } failure: {
+                    AvatarFallback(actor: actor)
                 }
             } else {
                 AvatarFallback(actor: actor)
@@ -812,6 +777,7 @@ private struct ActorAvatar: View {
 
 private struct AvatarFallback: View {
     let actor: NotificationActor
+    @AppStorage("devModeEnabled") private var devModeEnabled = false
 
     var body: some View {
         ZStack {
@@ -825,7 +791,7 @@ private struct AvatarFallback: View {
     }
 
     private var initial: String {
-        let value = actor.username ?? actor.displayName ?? actor.id
+        let value = DebugRedaction.actorName(actor, enabled: devModeEnabled)
         return value.first.map { String($0).uppercased() } ?? "?"
     }
 }

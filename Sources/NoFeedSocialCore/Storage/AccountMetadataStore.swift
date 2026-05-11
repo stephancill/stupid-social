@@ -16,11 +16,36 @@ public struct FarcasterAccountMetadata: Codable, Equatable {
     public var username: String
     public var fid: UInt64
     public var status: AccountStatusSnapshot
+    public var enabledCategories: Set<FarcasterNotificationCategory>
 
-    public init(username: String, fid: UInt64, status: AccountStatusSnapshot) {
+    public init(username: String, fid: UInt64, status: AccountStatusSnapshot, enabledCategories: Set<FarcasterNotificationCategory>? = nil) {
         self.username = username
         self.fid = fid
         self.status = status
+        self.enabledCategories = enabledCategories ?? Set(FarcasterNotificationCategory.allCases)
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        username = try container.decode(String.self, forKey: .username)
+        fid = try container.decode(UInt64.self, forKey: .fid)
+        status = try container.decode(AccountStatusSnapshot.self, forKey: .status)
+        enabledCategories = try container.decodeIfPresent(Set<FarcasterNotificationCategory>.self, forKey: .enabledCategories) ?? Set(FarcasterNotificationCategory.allCases)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(username, forKey: .username)
+        try container.encode(fid, forKey: .fid)
+        try container.encode(status, forKey: .status)
+        try container.encode(enabledCategories, forKey: .enabledCategories)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case username
+        case fid
+        case status
+        case enabledCategories
     }
 }
 

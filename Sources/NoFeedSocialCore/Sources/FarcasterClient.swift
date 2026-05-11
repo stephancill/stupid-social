@@ -1,5 +1,31 @@
 import Foundation
 
+public enum FarcasterNotificationCategory: String, CaseIterable, Codable, Sendable {
+    case mentions
+    case replies
+    case reactions
+    case follows
+
+    public var displayLabel: String {
+        switch self {
+        case .mentions: "Mentions"
+        case .replies: "Replies"
+        case .reactions: "Reactions"
+        case .follows: "Follows"
+        }
+    }
+
+    static func category(for type: NotificationType) -> Self? {
+        switch type {
+        case .mention: .mentions
+        case .reply: .replies
+        case .reaction: .reactions
+        case .follow: .follows
+        case .music, .unknown: nil
+        }
+    }
+}
+
 @MainActor
 public struct FarcasterClient {
     private let baseURL: URL

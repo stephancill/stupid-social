@@ -8,18 +8,30 @@ struct FarcasterConnectionView: View {
     var body: some View {
         Form {
             Section {
-                farcasterUsernameField
-                LabeledContent("Status", value: viewModel.farcasterStatus.label)
+                if viewModel.farcasterStatus == .notConfigured {
+                    farcasterUsernameField
+                }
+                LabeledContent("Connection", value: viewModel.farcasterConnectionLabel)
             }
 
-            Section {
-                Button("Save Farcaster Account") {
-                    isFocused = false
-                    Task { await viewModel.saveFarcasterUsername() }
+            if viewModel.farcasterStatus == .notConfigured {
+                Section {
+                    Button("Save Farcaster Account") {
+                        isFocused = false
+                        Task { await viewModel.saveFarcasterUsername() }
+                    }
                 }
             }
 
             if viewModel.farcasterStatus != .notConfigured {
+                Section("Notification Types") {
+                    ForEach(FarcasterNotificationCategory.allCases, id: \.self) { category in
+                        Toggle(isOn: binding(for: category)) {
+                            Text(category.displayLabel)
+                        }
+                    }
+                }
+
                 Section {
                     Button("Disconnect", role: .destructive) {
                         viewModel.disconnectFarcaster()
@@ -49,5 +61,12 @@ struct FarcasterConnectionView: View {
             TextField("Username", text: $viewModel.farcasterUsername)
                 .focused($isFocused)
         #endif
+    }
+
+    private func binding(for category: FarcasterNotificationCategory) -> Binding<Bool> {
+        Binding(
+            get: { viewModel.farcasterEnabledCategories.contains(category) },
+            set: { viewModel.toggleFarcasterCategory(category, enabled: $0) }
+        )
     }
 }

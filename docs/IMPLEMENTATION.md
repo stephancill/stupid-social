@@ -319,6 +319,24 @@
 
 - Configured `AVAudioSession` for `.playback` category in `SpotifyStoryViewer.onAppear` — fixes no audio on physical devices where the default category is ambient/silent.
 - Sorted `spotifyActivityItems` by `timestamp` descending in `FeedViewModel.fetchSpotifyActivity()` so latest activity appears first.
+
+## 2026-05-11
+
+### Connection screen status cleanup
+
+- Connection detail screens now hide webview login buttons and manual/dev setup inputs once an account is configured. Farcaster likewise hides the username input and save button after setup.
+- Connection detail Status rows now use the same per-network connection labels as Settings, showing the stored username/handle when available instead of the generic `Valid` status.
+- Connection detail rows are labeled `Connection` instead of `Status` to better describe the displayed account identity/state.
+- Credential save success messages no longer duplicate the connected account identity with `Connected as @...`; the account identity is shown only in the Status field.
+
+### Farcaster Notification Type Filters
+
+- Added Farcaster notification category filtering for mentions, replies, reactions, and follows, matching Instagram's per-type settings pattern.
+- `FarcasterAccountMetadata.enabledCategories` persists the selected category set and defaults older saved accounts to all categories enabled.
+- `FarcasterNotificationSource` filters normalized Farcaster items before reaction/follow grouping and unread counts so disabled categories are hidden consistently.
+
+### Spotify story top bar
+
 - Replaced static "Listening" subtitle in the top bar with `item.timestamp.compactRelativeTime` so it shows the relative time since the user listened.
 
 ### Pulse rendering refactor
@@ -390,4 +408,48 @@
 - Spotify full-screen album art is keyed by image URL and shows a loading placeholder during `AsyncImage.empty`, preventing the previous user's album art from lingering after navigation.
 - Fixed Spotify unseen story rings using gray by restoring `Color.spotifyActivityBorder` to Spotify green; seen rings remain the same gray as Instagram seen stories.
 - Removed the spinner from Spotify full-screen album-art loading; the image area now pulses gray while `AsyncImage` is loading.
-- Replaced Spotify full-screen album art `AsyncImage` with a small in-memory cache-backed loader. Previously loaded album images render immediately when revisiting a Spotify story; uncached images still show the pulsing gray loading placeholder.
+- Replaced `AsyncImage` with a generic `CachedAsyncImage` backed by a shared `StoryImageCache` for all avatars across the app: Instagram/Spotify story bubbles, viewer top-bar avatars, feed notification row avatars, notification detail actor avatars, and profile detail avatars. Previously loaded images render instantly across all screens.
+
+### Debug redaction
+
+- Added UI-only username redaction when `devModeEnabled` is active. Feed rows, story bubbles/viewers, notification detail people rows/content, profile headers, and settings connection labels replace usernames/display names with `Redacted` while leaving stored source data unchanged.
+
+### Unified story feed
+
+- Combined Instagram stories and Spotify listening activity into a single reverse-chronological unified stories bar and viewer (`UnifiedStoryViewer`).
+- Introduced `StoryBarItem` enum in `AppModels` wrapping `.instagram(InstagramStoryReel)` and `.spotify(SpotifyActivityItem)`, with unified `id`, `timestamp`, `isSeen`, `userAvatarURL`, `userName`, and `network` accessors.
+- `FeedViewModel` now publishes a single `storyBarItems: [StoryBarItem]` array sorted unseen-first then newest-first. `fetchStoryBarContent()` merges both provider fetches atomically.
+- `StoriesBar` in `FeedView` renders all items from one sorted list. Each bubble type (`InstagramStoryBubble` / `SpotifyStoryBubble`) renders from `StoryBarItem` cases in the bar; provider-specific rendering is localized to the bubble views, not centralized in the bar.
+- `UnifiedStoryViewer` is a pure navigation container: progress bar (N segments for Instagram multi-slide, N=1 for Spotify), top bar (avatar + name + time + close), swipe/pause gestures, auto-advance timer, and Spotify audio playback. Provider-specific slide content (Instagram image, Spotify album art with pulse ring and track info) lives in `StoryBarItem` extensions, not in the viewer body.
+- The progress bar is unified: Instagram reels with multiple slides show segmented progress; Spotify's single-slide-per-item is just the N=1 case of the same segmented bar.
+- Navigation swipes between items regardless of provider; swipe down dismisses; touch-and-hold pauses Instagram auto-advance only (Spotify removed tap-to-pause per prior design).
+- Replaced the two separate `fullScreenCover`/`sheet` modifiers with a single `StoryViewerSelection` payload.
+- Removed `InstagramStoryViewer.swift` and `SpotifyStoryViewer.swift`.
+
+### Instagram reels media batch limit
+
+- Investigated missing Instagram stories for simulator account `helaineduv`. `POST /api/v1/feed/reels_tray/` returned 179 tray entries, with 116 active user reels after app filtering, but the single `POST /api/v1/feed/reels_media/` request for all 116 reel IDs returned HTTP 400 `Too many reels requested`.
+- Live probes showed `/feed/reels_media/` succeeds with 30 reel IDs and fails at 40. `InstagramClient.reelsMedia(reelIds:)` now chunks requests into batches of 30 and merges the returned reel map so large accounts still render stories.
+- The batch requests now run concurrently to reduce story bar load time for accounts with large trays while preserving the 30-ID request cap.
+
+### Feed refresh after settings
+
+- Returning from `SettingsView` to the feed now triggers `FeedViewModel.refreshOnForegroundActivation()`, reusing the existing safe refresh policy: X count-only, fetch-capable sources refresh cache/story content, and pending new items remain gated behind the new-items affordance.
+
+### Story avatar refresh stability
+
+- Investigated Instagram story avatar flashes after refresh. Live tray probes showed Instagram returns different signed `profile_pic_url` values for the same users between `reels_tray` calls, usually with the same CDN path but different query parameters. The image cache previously keyed only by full URL, so refreshed story items missed cache and briefly rendered placeholders.
+- `CachedAsyncImage` now accepts an optional stable `cacheKey`; when a refreshed URL misses the URL cache but the logical key has an image, it keeps showing the previous image while fetching and updating the new signed URL. Instagram story avatars use `instagram-avatar-<userId>` and Spotify avatars use `spotify-avatar-<userURI>`.
+
+### Instagram story refresh failure handling
+
+- Returning from Settings can trigger story refresh while existing story content is visible. If Instagram's story fetch fails transiently while Spotify succeeds, the unified story list previously replaced existing Instagram stories with a Spotify-only list. `InstagramNotificationSource.fetchStoryReels()` now throws on tray failures instead of collapsing them to an empty result, and `FeedViewModel.fetchStoryBarContent()` preserves existing Instagram stories for transient Instagram failures while still clearing them when Instagram is not configured.
+
+### Story viewer swipe navigation
+
+- Horizontal swipe gestures in `UnifiedStoryViewer` now jump directly between story users/items. Tap zones still navigate within the current Instagram user's slides, preserving familiar story behavior: tap advances slide, swipe advances user.
+- Replaced the competing invisible button tap zones, pause gesture, and navigation gesture with one unified drag gesture. This allows horizontal swipes to be recognized anywhere in the viewer, preserves short tap left/right for slide navigation, and prevents a long-press pause from advancing/skipping when released.
+
+### Instagram muted stories
+
+- Live `reels_tray` payload inspection confirmed Instagram includes mute metadata in tray entries: top-level `muted`, plus `user.friendship_status.is_muting_reel` and `user.friendship_status.muting`. `InstagramTrayItem` now decodes these fields and `InstagramNotificationSource.fetchStoryReels()` filters muted tray entries before deduping users or fetching story media.

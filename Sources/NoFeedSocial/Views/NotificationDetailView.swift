@@ -11,6 +11,7 @@ struct NotificationDetailView: View {
     let displayItem: DisplayNotificationItem
     let feedService: FeedService
     @Environment(\.openURL) private var openURL
+    @AppStorage("devModeEnabled") private var devModeEnabled = false
 
     var body: some View {
         Form {
@@ -18,7 +19,8 @@ struct NotificationDetailView: View {
                 LabeledContent("Network", value: displayItem.item.network.displayName)
 
                 VStack(alignment: .leading, spacing: 8) {
-                    let displayText = displayItem.item.target?.text ?? (displayItem.item.target?.imageURL != nil ? "" : displayItem.item.text)
+                    let rawDisplayText = displayItem.item.target?.text ?? (displayItem.item.target?.imageURL != nil ? "" : displayItem.item.text)
+                    let displayText = DebugRedaction.text(rawDisplayText, actors: displayItem.item.actors, enabled: devModeEnabled)
                     if let targetURL {
                         LabeledContent("Content") {
                             HStack(spacing: 4) {
@@ -133,6 +135,7 @@ struct NotificationDetailView: View {
 
 private struct PersonRow: View {
     let actor: NotificationActor
+    @AppStorage("devModeEnabled") private var devModeEnabled = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -141,7 +144,7 @@ private struct PersonRow: View {
             HStack(spacing: 6) {
                 DetailNetworkUsernameBadge(network: actor.network)
 
-                Text(actor.username ?? actor.id)
+                Text(DebugRedaction.actorName(actor, enabled: devModeEnabled))
                     .foregroundStyle(.primary)
             }
 
@@ -262,17 +265,10 @@ private struct DetailActorAvatar: View {
     var body: some View {
         Group {
             if let avatarURL = actor.avatarURL {
-                AsyncImage(url: avatarURL) { phase in
-                    switch phase {
-                    case let .success(image):
-                        image
-                            .resizable()
-                            .scaledToFill()
-                    case .empty, .failure:
-                        DetailAvatarFallback(actor: actor)
-                    @unknown default:
-                        DetailAvatarFallback(actor: actor)
-                    }
+                CachedAsyncImage(url: avatarURL) {
+                    DetailAvatarFallback(actor: actor)
+                } failure: {
+                    DetailAvatarFallback(actor: actor)
                 }
             } else {
                 DetailAvatarFallback(actor: actor)
@@ -289,6 +285,7 @@ private struct DetailActorAvatar: View {
 
 private struct DetailAvatarFallback: View {
     let actor: NotificationActor
+    @AppStorage("devModeEnabled") private var devModeEnabled = false
 
     var body: some View {
         ZStack {
@@ -302,7 +299,7 @@ private struct DetailAvatarFallback: View {
     }
 
     private var initial: String {
-        let value = actor.username ?? actor.displayName ?? actor.id
+        let value = DebugRedaction.actorName(actor, enabled: devModeEnabled)
         return value.first.map { String($0).uppercased() } ?? "?"
     }
 }

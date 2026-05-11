@@ -33,7 +33,7 @@ public struct FarcasterNotificationSource: NotificationSource {
         }
 
         let response = try await client.notifications(fid: account.fid)
-        let items = response.notifications.map { normalize($0, accountId: String(account.fid)) }
+        let items = filteredItems(from: response.notifications, account: account)
         return groupItems(items, accountId: String(account.fid)).count
     }
 
@@ -43,7 +43,7 @@ public struct FarcasterNotificationSource: NotificationSource {
         }
 
         let response = try await client.notifications(fid: account.fid)
-        let items = response.notifications.map { normalize($0, accountId: String(account.fid)) }
+        let items = filteredItems(from: response.notifications, account: account)
         return groupItems(items, accountId: String(account.fid))
     }
 
@@ -93,6 +93,18 @@ public struct FarcasterNotificationSource: NotificationSource {
             },
             parentTarget: nil
         )
+    }
+
+    private func filteredItems(
+        from notifications: [FarcasterNotificationResponse],
+        account: FarcasterAccountMetadata
+    ) -> [NotificationItem] {
+        notifications
+            .map { normalize($0, accountId: String(account.fid)) }
+            .filter { item in
+                guard let category = FarcasterNotificationCategory.category(for: item.type) else { return false }
+                return account.enabledCategories.contains(category)
+            }
     }
 
     private func stableSourceId(_ notification: FarcasterNotificationResponse, type: String) -> String {

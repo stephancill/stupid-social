@@ -206,10 +206,33 @@ public struct InstagramClient {
     }
 
     func reelsMedia(reelIds: [String]) async throws -> [String: InstagramReel] {
+        guard !reelIds.isEmpty else { return [:] }
+
+        var reels: [String: InstagramReel] = [:]
+        let batches = stride(from: 0, to: reelIds.count, by: Self.reelsMediaBatchSize).map { start in
+            let end = min(start + Self.reelsMediaBatchSize, reelIds.count)
+            return Array(reelIds[start ..< end])
+        }
+
+        try await withThrowingTaskGroup(of: [String: InstagramReel].self) { group in
+            for batch in batches {
+                group.addTask {
+                    try await reelsMediaBatch(reelIds: batch)
+                }
+            }
+
+            for try await batchReels in group {
+                reels.merge(batchReels) { current, _ in current }
+            }
+        }
+
+        return reels
+    }
+
+    private func reelsMediaBatch(reelIds: [String]) async throws -> [String: InstagramReel] {
         guard let credentials = try credentialStore.loadInstagramCredentials() else {
             throw SourceError.notConfigured
         }
-        guard !reelIds.isEmpty else { return [:] }
 
         let body = formURLEncoded([
             "reel_ids": jsonString(reelIds),
@@ -239,6 +262,8 @@ public struct InstagramClient {
 
         return try JSONDecoder().decode(InstagramReelsMediaResponse.self, from: data).reels
     }
+
+    private static let reelsMediaBatchSize = 30
 
     public func userInfo(uid: String) async throws -> InstagramUserInfoResponse {
         guard let credentials = try credentialStore.loadInstagramCredentials() else {
@@ -525,8 +550,13 @@ struct InstagramTrayItem: Decodable {
     let expiringAt: Double?
     let mediaCount: Int?
     let seen: Int
+    let muted: Bool?
     let user: InstagramTrayUser
     let reelType: String?
+
+    var isMuted: Bool {
+        muted == true || user.friendshipStatus?.isMutingReel == true || user.friendshipStatus?.muting == true
+    }
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -534,6 +564,7 @@ struct InstagramTrayItem: Decodable {
         case expiringAt = "expiring_at"
         case mediaCount = "media_count"
         case seen
+        case muted
         case user
         case reelType = "reel_type"
     }
@@ -549,6 +580,7 @@ struct InstagramTrayItem: Decodable {
         expiringAt = try container.decodeIfPresent(Double.self, forKey: .expiringAt)
         mediaCount = try container.decodeIfPresent(Int.self, forKey: .mediaCount)
         seen = try container.decodeIfPresent(Int.self, forKey: .seen) ?? 0
+        muted = try container.decodeIfPresent(Bool.self, forKey: .muted)
         user = try container.decode(InstagramTrayUser.self, forKey: .user)
         reelType = try container.decodeIfPresent(String.self, forKey: .reelType)
     }
@@ -561,6 +593,7 @@ struct InstagramTrayUser: Decodable {
     let profilePicUrl: String?
     let isPrivate: Bool?
     let isVerified: Bool?
+    let friendshipStatus: InstagramTrayFriendshipStatus?
 
     enum CodingKeys: String, CodingKey {
         case pk
@@ -569,6 +602,17 @@ struct InstagramTrayUser: Decodable {
         case profilePicUrl = "profile_pic_url"
         case isPrivate = "is_private"
         case isVerified = "is_verified"
+        case friendshipStatus = "friendship_status"
+    }
+}
+
+struct InstagramTrayFriendshipStatus: Decodable {
+    let muting: Bool?
+    let isMutingReel: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case muting
+        case isMutingReel = "is_muting_reel"
     }
 }
 

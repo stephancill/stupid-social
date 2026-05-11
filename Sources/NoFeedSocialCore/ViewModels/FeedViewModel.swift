@@ -3,8 +3,7 @@ import Foundation
 @MainActor
 public final class FeedViewModel: ObservableObject {
     @Published public private(set) var items: [DisplayNotificationItem] = []
-    @Published public private(set) var instagramStoryReels: [InstagramStoryReel] = []
-    @Published public private(set) var spotifyActivityItems: [SpotifyActivityItem] = []
+    @Published public private(set) var storyBarItems: [StoryBarItem] = []
     @Published public private(set) var storyBarLoading = false
     @Published public private(set) var pendingNewCount = 0
     @Published public private(set) var isRefreshing = false
@@ -93,22 +92,32 @@ public final class FeedViewModel: ObservableObject {
     public func fetchStoryBarContent() async {
         storyBarLoading = true
         async let reels = instagramReels()
-        async let items = spotifyItems()
-        let fetchedReels = await reels
-        let fetchedItems = await items
-        instagramStoryReels = fetchedReels
-        spotifyActivityItems = fetchedItems
+        async let spots = spotifyItems()
+        let fetchedReels = await reels ?? instagramStoryReels
+        let fetchedSpots = await spots
+
+        var merged: [StoryBarItem] = []
+        for reel in fetchedReels {
+            merged.append(.instagram(reel))
+        }
+        for item in fetchedSpots {
+            merged.append(.spotify(item))
+        }
+        sortStoryBarItems(&merged)
+        storyBarItems = merged
         storyBarLoading = false
     }
 
-    private func instagramReels() async -> [InstagramStoryReel] {
+    private func instagramReels() async -> [InstagramStoryReel]? {
         guard let instagramSource, instagramSource.storiesEnabled else { return [] }
         do {
             var reels = try await instagramSource.fetchStoryReels()
             sortReels(&reels)
             return reels
-        } catch {
+        } catch SourceError.notConfigured {
             return []
+        } catch {
+            return nil
         }
     }
 
@@ -165,42 +174,72 @@ public final class FeedViewModel: ObservableObject {
     }
 
     public func markSpotifyActivityAsSeen(userURI: String) {
-        guard let itemIndex = spotifyActivityItems.firstIndex(where: { $0.userURI == userURI }) else { return }
-        let item = spotifyActivityItems[itemIndex]
+        guard let itemIndex = storyBarItems.firstIndex(where: {
+            if case let .spotify(item) = $0, item.userURI == userURI { return true }
+            return false
+        }) else { return }
+
+        let storyItem = storyBarItems[itemIndex]
+        guard case let .spotify(item) = storyItem else { return }
+
         var seenTimestamps = UserDefaults.standard.dictionary(forKey: spotifySeenDefaultsKey) as? [String: Double] ?? [:]
         seenTimestamps[userURI] = max(seenTimestamps[userURI] ?? 0, item.timestamp.timeIntervalSince1970)
         UserDefaults.standard.set(seenTimestamps, forKey: spotifySeenDefaultsKey)
 
-        spotifyActivityItems[itemIndex] = spotifyItemWithSeenState(item)
-        spotifyActivityItems.sort { a, b in
+        let updated = spotifyItemWithSeenState(item)
+        storyBarItems[itemIndex] = .spotify(updated)
+        sortStoryBarItems(&storyBarItems)
+    }
+
+    public func markInstagramReelAsSeen(reelIndex: Int) {
+        guard instagramStoryReels.indices.contains(reelIndex) else { return }
+        let reel = instagramStoryReels[reelIndex]
+        guard !reel.isSeen else { return }
+        markInstagramReelAsSeen(reelId: reel.id)
+    }
+
+    public func markInstagramReelAsSeen(reelId: String) {
+        guard let itemIndex = storyBarItems.firstIndex(where: {
+            if case let .instagram(reel) = $0, reel.id == reelId { return true }
+            return false
+        }) else { return }
+
+        let storyItem = storyBarItems[itemIndex]
+        guard case let .instagram(reel) = storyItem, !reel.isSeen else { return }
+
+        Task {
+            await instagramSource?.markReelAsSeen(slides: reel.slides)
+        }
+
+        let updated = InstagramStoryReel(id: reel.id, user: reel.user, slides: reel.slides, isSeen: true)
+        storyBarItems[itemIndex] = .instagram(updated)
+        sortStoryBarItems(&storyBarItems)
+    }
+
+    public func performCredentialHealthCheck() async {
+        await feedService.healthCheckAllSources()
+    }
+
+    var instagramStoryReels: [InstagramStoryReel] {
+        storyBarItems.compactMap {
+            if case let .instagram(reel) = $0 { return reel }
+            return nil
+        }
+    }
+
+    var spotifyActivityItems: [SpotifyActivityItem] {
+        storyBarItems.compactMap {
+            if case let .spotify(item) = $0 { return item }
+            return nil
+        }
+    }
+
+    private func sortStoryBarItems(_ items: inout [StoryBarItem]) {
+        items.sort { a, b in
             if a.isSeen != b.isSeen {
                 return !a.isSeen
             }
             return a.timestamp > b.timestamp
         }
-    }
-
-    public func markInstagramReelAsSeen(reelIndex: Int) {
-        guard let instagramSource,
-              instagramStoryReels.indices.contains(reelIndex) else { return }
-        let reel = instagramStoryReels[reelIndex]
-        guard !reel.isSeen else { return }
-
-        Task {
-            await instagramSource.markReelAsSeen(slides: reel.slides)
-        }
-
-        let updated = InstagramStoryReel(id: reel.id, user: reel.user, slides: reel.slides, isSeen: true)
-        instagramStoryReels[reelIndex] = updated
-        sortReels(&instagramStoryReels)
-    }
-
-    public func markInstagramReelAsSeen(reelId: String) {
-        guard let reelIndex = instagramStoryReels.firstIndex(where: { $0.id == reelId }) else { return }
-        markInstagramReelAsSeen(reelIndex: reelIndex)
-    }
-
-    public func performCredentialHealthCheck() async {
-        await feedService.healthCheckAllSources()
     }
 }

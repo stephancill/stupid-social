@@ -139,6 +139,10 @@ final class LiveServiceTests: XCTestCase {
         if let creds = (try? KeychainCredentialStore().loadInstagramCredentials()).flatMap({ $0 }) {
             return creds
         }
+        return instagramEnvironmentCredentials()
+    }
+
+    private func instagramEnvironmentCredentials() -> InstagramCredentials? {
         if let session = env("INSTAGRAM_SESSION_ID"),
            let csrf = env("INSTAGRAM_CSRF_TOKEN"),
            let uid = env("INSTAGRAM_DS_USER_ID")
@@ -147,7 +151,9 @@ final class LiveServiceTests: XCTestCase {
                 sessionId: session,
                 csrfToken: csrf,
                 dsUserId: uid,
-                mid: env("INSTAGRAM_MID")
+                mid: env("INSTAGRAM_MID"),
+                rur: env("INSTAGRAM_RUR"),
+                igDid: env("INSTAGRAM_IG_DID")
             )
         }
         return nil

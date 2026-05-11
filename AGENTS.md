@@ -11,8 +11,7 @@ Sources/
       FeedView.swift                # Main list + StoriesBar + story viewer triggers
       NotificationDetailView.swift  # Standard form-based notification detail
       ProfileDetailView.swift       # Actor profile detail
-      InstagramStoryViewer.swift    # Full-screen Instagram story viewer
-      SpotifyStoryViewer.swift      # Full-screen Spotify listening viewer
+      UnifiedStoryViewer.swift      # Full-screen unified story viewer (Instagram + Spotify)
       SpotifyPulseRing.swift        # Shared phase-driven pulse ring
       InstagramConnectionView.swift # Instagram credential setup
       InstagramLoginWebView.swift   # Instagram WebView login
@@ -108,6 +107,7 @@ Sources/
 - When the user says "install" without specifying a target, default to `xtool dev run --simulator --no-attach --no-logs --launch-timeout 420`.
 - Only target a physical device over USB when the user explicitly says "install to iphone" or similar.
 - After making source or resource changes, run `xtool dev build` for them to take effect in the Xcode workspace. `xtool dev run` also performs a build, but a standalone build is faster for verification.
+- After making changes, install to the simulator with `xtool dev run --simulator --no-attach --no-logs --launch-timeout 420` unless the user explicitly asks not to install or asks for a different target.
 - When asked to bump the build number, increment `CFBundleVersion` in `Info.plist` by 1, then run `xtool dev build` to regenerate the Xcode workspace.
 
 ## Engineering Style

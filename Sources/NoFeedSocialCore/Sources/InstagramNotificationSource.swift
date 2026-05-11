@@ -52,9 +52,12 @@ public final class InstagramNotificationSource: NotificationSource {
         let tray: [InstagramTrayItem]
         do {
             tray = try await client.reelsTray()
+        } catch SourceError.notConfigured {
+            invalidateAccount()
+            throw SourceError.notConfigured
         } catch {
             invalidateAccount()
-            return []
+            throw error
         }
 
         // Successful tray fetch means credentials are valid
@@ -73,6 +76,7 @@ public final class InstagramNotificationSource: NotificationSource {
         for item in tray {
             let userId = item.user.pk
             let reelId = item.id
+            guard !item.isMuted else { continue }
             guard reelId == String(userId) else { continue }
             if seenUserIds.contains(userId) { continue }
             seenUserIds.insert(userId)

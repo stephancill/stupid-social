@@ -12,6 +12,7 @@ public final class SettingsViewModel: ObservableObject {
     @Published public var debugServerURL = ""
     @Published public private(set) var xStatus: AccountStatus = .notConfigured
     @Published public private(set) var farcasterStatus: AccountStatus = .notConfigured
+    @Published public var farcasterEnabledCategories: Set<FarcasterNotificationCategory> = []
     @Published public private(set) var instagramStatus: AccountStatus = .notConfigured
     @Published public var instagramEnabledCategories: Set<InstagramNotificationCategory> = []
     @Published public var instagramStoriesEnabled = true
@@ -100,7 +101,7 @@ public final class SettingsViewModel: ObservableObject {
             let user = try await XClient(credentialStore: keychainStore).verifiedUser()
             metadataStore.xAccount = XAccountMetadata(accountId: "x", handle: user.screenName, status: .valid)
             xStatus = .valid
-            message = "Connected as @\(user.screenName)."
+            message = "X credentials saved."
         } catch {
             metadataStore.xAccount = XAccountMetadata(accountId: "x", handle: nil, status: .valid)
             message = "X credentials saved, but could not resolve username."
@@ -129,7 +130,7 @@ public final class SettingsViewModel: ObservableObject {
             let user = try await XClient(credentialStore: keychainStore).verifiedUser()
             metadataStore.xAccount = XAccountMetadata(accountId: "x", handle: user.screenName, status: .valid)
             xStatus = .valid
-            message = "Connected as @\(user.screenName)."
+            message = "X credentials saved."
         } catch {
             metadataStore.xAccount = XAccountMetadata(accountId: "x", handle: nil, status: .valid)
             message = "X credentials saved, but could not resolve username."
@@ -149,8 +150,10 @@ public final class SettingsViewModel: ObservableObject {
             metadataStore.farcasterAccount = FarcasterAccountMetadata(
                 username: user.username ?? username,
                 fid: user.fid,
-                status: .valid
+                status: .valid,
+                enabledCategories: Set(FarcasterNotificationCategory.allCases)
             )
+            farcasterEnabledCategories = Set(FarcasterNotificationCategory.allCases)
             farcasterStatus = .valid
             message = "Farcaster account saved."
         } catch {
@@ -181,7 +184,7 @@ public final class SettingsViewModel: ObservableObject {
             )
             instagramEnabledCategories = categories
             instagramStatus = .valid
-            message = "Connected as @\(user.username)."
+            message = "Instagram credentials saved."
         } catch {
             let categories = Set(InstagramNotificationCategory.allCases)
             metadataStore.instagramAccount = InstagramAccountMetadata(
@@ -224,7 +227,7 @@ public final class SettingsViewModel: ObservableObject {
             )
             instagramEnabledCategories = categories
             instagramStatus = .valid
-            message = "Connected as @\(user.username)."
+            message = "Instagram credentials saved."
         } catch {
             let categories = Set(InstagramNotificationCategory.allCases)
             metadataStore.instagramAccount = InstagramAccountMetadata(
@@ -261,9 +264,23 @@ public final class SettingsViewModel: ObservableObject {
 
     public func disconnectFarcaster() {
         metadataStore.farcasterAccount = nil
+        farcasterEnabledCategories = []
         try? cacheStore.deleteNetwork(.farcaster)
         farcasterStatus = .notConfigured
         message = "Farcaster account disconnected."
+    }
+
+    public func toggleFarcasterCategory(_ category: FarcasterNotificationCategory, enabled: Bool) {
+        if enabled {
+            farcasterEnabledCategories.insert(category)
+        } else {
+            farcasterEnabledCategories.remove(category)
+        }
+        var account = metadataStore.farcasterAccount
+        account?.enabledCategories = farcasterEnabledCategories
+        if let account {
+            metadataStore.farcasterAccount = account
+        }
     }
 
     public func disconnectInstagram() {
@@ -317,7 +334,7 @@ public final class SettingsViewModel: ObservableObject {
                 status: .valid
             )
             spotifyStatus = .valid
-            message = "Connected as @\(username)."
+            message = "Spotify credentials saved."
         } catch {
             metadataStore.spotifyAccount = SpotifyAccountMetadata(
                 accountId: "spotify",
@@ -367,7 +384,7 @@ public final class SettingsViewModel: ObservableObject {
                 status: .valid
             )
             spotifyStatus = .valid
-            message = "Connected as @\(username)."
+            message = "Spotify credentials saved."
         } catch {
             metadataStore.spotifyAccount = SpotifyAccountMetadata(
                 accountId: "spotify",
@@ -397,8 +414,10 @@ public final class SettingsViewModel: ObservableObject {
         xStatus = accountStatus(from: metadataStore.xAccount?.status ?? .notConfigured)
         if let farcaster = metadataStore.farcasterAccount {
             farcasterUsername = farcaster.username
+            farcasterEnabledCategories = farcaster.enabledCategories
             farcasterStatus = accountStatus(from: farcaster.status)
         } else {
+            farcasterEnabledCategories = []
             farcasterStatus = .notConfigured
         }
 

@@ -99,9 +99,14 @@ struct SettingsView: View {
             Text(name)
                 .font(.body)
             Spacer()
-            Text(subtitle)
+            Text(redactedSubtitle(subtitle))
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
+    }
+
+    private func redactedSubtitle(_ subtitle: String) -> String {
+        guard devModeEnabled, subtitle.hasPrefix("@") else { return subtitle }
+        return "Redacted"
     }
 }

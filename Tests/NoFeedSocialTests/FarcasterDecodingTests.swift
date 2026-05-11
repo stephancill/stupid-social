@@ -2,6 +2,22 @@
 import XCTest
 
 final class FarcasterDecodingTests: XCTestCase {
+    func testFarcasterNotificationCategoryDefaultsToAllForExistingMetadata() throws {
+        let json = #"{"username":"alice","fid":123,"status":"valid"}"#.data(using: .utf8)!
+
+        let account = try JSONDecoder().decode(FarcasterAccountMetadata.self, from: json)
+
+        XCTAssertEqual(account.enabledCategories, Set(FarcasterNotificationCategory.allCases))
+    }
+
+    func testFarcasterNotificationCategoryMapsNormalizedTypes() {
+        XCTAssertEqual(FarcasterNotificationCategory.category(for: .mention), .mentions)
+        XCTAssertEqual(FarcasterNotificationCategory.category(for: .reply), .replies)
+        XCTAssertEqual(FarcasterNotificationCategory.category(for: .reaction), .reactions)
+        XCTAssertEqual(FarcasterNotificationCategory.category(for: .follow), .follows)
+        XCTAssertNil(FarcasterNotificationCategory.category(for: .unknown))
+    }
+
     func testDecodesCurrentHypersnapNotificationShape() throws {
         let json = #"""
         {

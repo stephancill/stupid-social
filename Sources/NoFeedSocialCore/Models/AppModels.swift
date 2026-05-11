@@ -243,6 +243,54 @@ public struct InstagramStorySlide: Identifiable, Hashable, Sendable {
     }
 }
 
+public enum StoryBarItem: Identifiable, Hashable, Sendable {
+    case instagram(InstagramStoryReel)
+    case spotify(SpotifyActivityItem)
+
+    public var id: String {
+        switch self {
+        case let .instagram(reel): "ig-\(reel.id)"
+        case let .spotify(item): "sp-\(item.userURI)"
+        }
+    }
+
+    public var timestamp: Date {
+        switch self {
+        case let .instagram(reel):
+            Date(timeIntervalSince1970: reel.slides.first?.takenAt ?? 0)
+        case let .spotify(item): item.timestamp
+        }
+    }
+
+    public var isSeen: Bool {
+        switch self {
+        case let .instagram(reel): reel.isSeen
+        case let .spotify(item): item.isSeen
+        }
+    }
+
+    public var userAvatarURL: URL? {
+        switch self {
+        case let .instagram(reel): reel.user.avatarURL
+        case let .spotify(item): item.userAvatarURL
+        }
+    }
+
+    public var userName: String {
+        switch self {
+        case let .instagram(reel): reel.user.username ?? reel.user.displayName ?? ""
+        case let .spotify(item): item.userName
+        }
+    }
+
+    public var network: SocialNetwork {
+        switch self {
+        case .instagram: .instagram
+        case .spotify: .spotify
+        }
+    }
+}
+
 public struct ReadWatermark: Codable, Equatable, Sendable {
     public let network: SocialNetwork
     public let accountId: String

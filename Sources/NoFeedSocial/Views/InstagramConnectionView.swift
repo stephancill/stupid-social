@@ -9,28 +9,30 @@ struct InstagramConnectionView: View {
 
     var body: some View {
         Form {
-            Section {
-                Button {
-                    showingLoginSheet = true
-                } label: {
-                    HStack {
-                        Spacer()
-                        Label("Log in to Instagram", systemImage: "safari")
-                        Spacer()
+            if viewModel.instagramStatus == .notConfigured {
+                Section {
+                    Button {
+                        showingLoginSheet = true
+                    } label: {
+                        HStack {
+                            Spacer()
+                            Label("Log in to Instagram", systemImage: "safari")
+                            Spacer()
+                        }
                     }
                 }
             }
 
             Section {
                 HStack {
-                    Text("Status")
+                    Text("Connection")
                     Spacer()
-                    Text(viewModel.instagramStatus.label)
+                    Text(viewModel.instagramConnectionLabel)
                         .foregroundStyle(.secondary)
                 }
             }
 
-            if devModeEnabled {
+            if devModeEnabled, viewModel.instagramStatus == .notConfigured {
                 Section("Manual (Dev)") {
                     TextField("Cookie header", text: $viewModel.instagramCookieHeader, axis: .vertical)
                         .lineLimit(2 ... 4)

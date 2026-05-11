@@ -9,28 +9,30 @@ struct XConnectionView: View {
 
     var body: some View {
         Form {
-            Section {
-                Button {
-                    showingLoginSheet = true
-                } label: {
-                    HStack {
-                        Spacer()
-                        Label("Log in to X", systemImage: "safari")
-                        Spacer()
+            if viewModel.xStatus == .notConfigured {
+                Section {
+                    Button {
+                        showingLoginSheet = true
+                    } label: {
+                        HStack {
+                            Spacer()
+                            Label("Log in to X", systemImage: "safari")
+                            Spacer()
+                        }
                     }
                 }
             }
 
             Section {
                 HStack {
-                    Text("Status")
+                    Text("Connection")
                     Spacer()
-                    Text(viewModel.xStatus.label)
+                    Text(viewModel.xConnectionLabel)
                         .foregroundStyle(.secondary)
                 }
             }
 
-            if devModeEnabled {
+            if devModeEnabled, viewModel.xStatus == .notConfigured {
                 Section("Manual (Dev)") {
                     TextField("Cookie header", text: $viewModel.xCookieHeader, axis: .vertical)
                         .lineLimit(2 ... 4)
