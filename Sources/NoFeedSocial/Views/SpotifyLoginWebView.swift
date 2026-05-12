@@ -9,7 +9,7 @@ struct SpotifyLoginWebView: View {
     var body: some View {
         NavigationStack {
             SpotifyLoginWKWebView(
-                url: URL(string: "https://accounts.spotify.com/login?continue=https://open.spotify.com/")!,
+                url: URL(string: "https://accounts.spotify.com/login?continue=https%3A%2F%2Fopen.spotify.com%2F%3Fnd%3D1")!,
                 onCredentialsFound: { creds in
                     onLoginSuccess(creds)
                     dismiss()
@@ -82,14 +82,9 @@ struct SpotifyLoginWebView: View {
                 tryExtractCredentials()
             }
 
-            func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void) {
-                guard let url = navigationAction.request.url, url.host == "open.spotify.com" else {
-                    decisionHandler(.allow)
-                    return
-                }
-                decisionHandler(.cancel)
+            func webView(_ webView: WKWebView, decidePolicyFor _: WKNavigationAction, decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void) {
                 self.webView = webView
-                tryExtractCredentials()
+                decisionHandler(.allow)
             }
 
             private func tryExtractCredentials() {
@@ -220,14 +215,9 @@ struct SpotifyLoginWebView: View {
                 tryExtractCredentials()
             }
 
-            func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void) {
-                guard let url = navigationAction.request.url, url.host == "open.spotify.com" else {
-                    decisionHandler(.allow)
-                    return
-                }
-                decisionHandler(.cancel)
+            func webView(_ webView: WKWebView, decidePolicyFor _: WKNavigationAction, decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void) {
                 self.webView = webView
-                tryExtractCredentials()
+                decisionHandler(.allow)
             }
 
             private func tryExtractCredentials() {

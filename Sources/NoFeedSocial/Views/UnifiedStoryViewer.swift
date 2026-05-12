@@ -24,6 +24,8 @@ struct UnifiedStoryViewer: View {
     @State private var player: AVPlayer?
     @State private var playerStatus: PlayerStatus = .idle
     @State private var previewURLs: [String: URL?] = [:]
+    @State private var preloadedPreviews: [String: PreloadedPreview] = [:]
+    @State private var preloadingTrackIds: Set<String> = []
     @State private var audioDuration: Double = 5
     @State private var pulsePhase: Double = 0
     @State private var rotationPhase: Double = 0
@@ -37,6 +39,11 @@ struct UnifiedStoryViewer: View {
         case paused
         case finished
         case unavailable
+    }
+
+    private struct PreloadedPreview {
+        let asset: AVURLAsset
+        let duration: Double?
     }
 
     init(
@@ -171,6 +178,8 @@ struct UnifiedStoryViewer: View {
     }
 
     private func prepareForCurrentItem() {
+        defer { preloadAdjacentSpotifyPreviews() }
+
         guard case let .spotify(spotifyItem) = currentItem else {
             playerStatus = .idle
             return
@@ -404,10 +413,18 @@ struct UnifiedStoryViewer: View {
         }
     }
 
-    private func startPlayback(url: URL, trackId _: String) {
+    private func startPlayback(url: URL, trackId: String) {
         playerStatus = .loading
 
-        let playerItem = AVPlayerItem(url: url)
+        let playerItem: AVPlayerItem
+        if let preloaded = preloadedPreviews[trackId] {
+            playerItem = AVPlayerItem(asset: preloaded.asset)
+            if let duration = preloaded.duration {
+                audioDuration = duration
+            }
+        } else {
+            playerItem = AVPlayerItem(url: url)
+        }
         let newPlayer = AVPlayer(playerItem: playerItem)
         player = newPlayer
 
@@ -429,6 +446,49 @@ struct UnifiedStoryViewer: View {
         }
 
         newPlayer.play()
+    }
+
+    private func preloadAdjacentSpotifyPreviews() {
+        if let previousSpotifyItem = items[..<currentItemIndex].reversed().compactMap({ spotifyItem(from: $0) }).first {
+            preloadPreview(for: previousSpotifyItem)
+        }
+
+        if let nextSpotifyItem = items.dropFirst(currentItemIndex + 1).compactMap({ spotifyItem(from: $0) }).first {
+            preloadPreview(for: nextSpotifyItem)
+        }
+    }
+
+    private func spotifyItem(from item: StoryBarItem) -> SpotifyActivityItem? {
+        guard case let .spotify(spotifyItem) = item else { return nil }
+        return spotifyItem
+    }
+
+    private func preloadPreview(for item: SpotifyActivityItem) {
+        let trackId = extractTrackId(from: item.trackURI)
+        guard !trackId.isEmpty, preloadedPreviews[trackId] == nil, !preloadingTrackIds.contains(trackId) else { return }
+
+        preloadingTrackIds.insert(trackId)
+        Task {
+            let url: URL?
+            if let cachedURL = previewURLs[trackId] {
+                url = cachedURL
+            } else {
+                url = await spotifyClient.trackPreviewURL(trackId: trackId)
+                previewURLs[trackId] = url
+            }
+
+            defer { preloadingTrackIds.remove(trackId) }
+            guard let url else { return }
+            let asset = AVURLAsset(url: url)
+            let duration = try? await asset.load(.duration)
+            preloadedPreviews[trackId] = PreloadedPreview(
+                asset: asset,
+                duration: duration.flatMap { duration in
+                    guard duration.seconds > 0, duration.seconds.isFinite else { return nil }
+                    return duration.seconds
+                }
+            )
+        }
     }
 
     private func stopPlayback() {
