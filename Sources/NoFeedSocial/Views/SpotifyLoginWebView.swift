@@ -9,7 +9,7 @@ struct SpotifyLoginWebView: View {
     var body: some View {
         NavigationStack {
             SpotifyLoginWKWebView(
-                url: URL(string: "https://accounts.spotify.com/en/login?continue=https://open.spotify.com/")!,
+                url: URL(string: "https://accounts.spotify.com/login?continue=https://open.spotify.com/")!,
                 onCredentialsFound: { creds in
                     onLoginSuccess(creds)
                     dismiss()
@@ -52,8 +52,6 @@ struct SpotifyLoginWebView: View {
 
             let webView = WKWebView(frame: .zero, configuration: config)
             webView.navigationDelegate = context.coordinator
-            webView.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1"
-
             webView.load(URLRequest(url: url))
             return webView
         }
@@ -84,7 +82,7 @@ struct SpotifyLoginWebView: View {
                 tryExtractCredentials()
             }
 
-            func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+            func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void) {
                 guard let url = navigationAction.request.url, url.host == "open.spotify.com" else {
                     decisionHandler(.allow)
                     return
@@ -192,8 +190,6 @@ struct SpotifyLoginWebView: View {
 
             let webView = WKWebView(frame: .zero, configuration: config)
             webView.navigationDelegate = context.coordinator
-            webView.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1"
-
             webView.load(URLRequest(url: url))
             return webView
         }
@@ -224,7 +220,7 @@ struct SpotifyLoginWebView: View {
                 tryExtractCredentials()
             }
 
-            func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+            func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void) {
                 guard let url = navigationAction.request.url, url.host == "open.spotify.com" else {
                     decisionHandler(.allow)
                     return

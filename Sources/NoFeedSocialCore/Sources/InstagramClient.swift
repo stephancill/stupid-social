@@ -38,6 +38,7 @@ public struct InstagramClient {
     private let session: URLSession
 
     private static let baseURL = "https://i.instagram.com"
+    private static let androidUserAgent = "Instagram 416.0.0.47.66 Android (35/35; 480dpi; 1080x2400; samsung; SM-S938U; qcom; en_US; 718621835)"
 
     public init(credentialStore: KeychainCredentialStore, session: URLSession = defaultSession) {
         self.credentialStore = credentialStore
@@ -366,9 +367,9 @@ public struct InstagramClient {
         return [
             "Cookie": cookieParts.joined(separator: "; "),
             "X-CSRFToken": credentials.csrfToken,
-            "User-Agent": "Instagram 416.0.0.47.66 Android (35/35; 480dpi; 1080x2400; samsung; SM-S938U; qcom; en_US; 718621835)",
+            "User-Agent": Self.androidUserAgent,
             "Accept": "*/*",
-            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Language": Self.acceptLanguageHeader,
             "X-IG-Capabilities": "3brTv10=",
             "X-IG-App-ID": "567067343352427",
             "X-IG-Device-ID": deviceId,
@@ -376,6 +377,14 @@ public struct InstagramClient {
             "X-IG-Connection-Type": "WIFI",
             "X-FB-HTTP-Engine": "Liger",
         ]
+    }
+
+    private static var acceptLanguageHeader: String {
+        let preferred = Locale.preferredLanguages.prefix(2)
+        guard !preferred.isEmpty else { return "en-US,en;q=0.9" }
+        return preferred.enumerated().map { index, language in
+            index == 0 ? language : "\(language);q=0.9"
+        }.joined(separator: ",")
     }
 
     private func configureRequest(_ request: inout URLRequest) {

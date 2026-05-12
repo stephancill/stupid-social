@@ -2,6 +2,13 @@ import NoFeedSocialCore
 import SwiftUI
 import WebKit
 
+private let instagramLoginUserAgent = "Mozilla/5.0 (Linux; Android 15; Pixel 8 Build/AP3A.241105.008; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/124.0.6367.179 Mobile Safari/537.36"
+
+private func hasRequiredInstagramCookies(_ cookies: [HTTPCookie]) -> Bool {
+    let names = Set(cookies.map(\.name))
+    return names.isSuperset(of: ["sessionid", "csrftoken", "ds_user_id", "mid", "rur", "ig_did"])
+}
+
 struct InstagramLoginWebView: View {
     @Environment(\.dismiss) private var dismiss
 
@@ -63,7 +70,7 @@ struct InstagramLoginWebView: View {
 
             let webView = WKWebView(frame: .zero, configuration: config)
             webView.navigationDelegate = context.coordinator
-            webView.customUserAgent = "Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Mobile Safari/537.36"
+            webView.customUserAgent = instagramLoginUserAgent
             webView.load(URLRequest(url: url))
             return webView
         }
@@ -89,8 +96,7 @@ struct InstagramLoginWebView: View {
 
             private func checkForAuthCookies(webView: WKWebView) {
                 webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
-                    let hasAuth = cookies.contains { $0.name == "sessionid" }
-                    guard hasAuth else { return }
+                    guard hasRequiredInstagramCookies(cookies) else { return }
                     self.hasNotified = true
                     DispatchQueue.main.async {
                         self.onCookiesFound(cookies)
@@ -110,7 +116,7 @@ struct InstagramLoginWebView: View {
 
             let webView = WKWebView(frame: .zero, configuration: config)
             webView.navigationDelegate = context.coordinator
-            webView.customUserAgent = "Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Mobile Safari/537.36"
+            webView.customUserAgent = instagramLoginUserAgent
             webView.load(URLRequest(url: url))
             return webView
         }
@@ -136,8 +142,7 @@ struct InstagramLoginWebView: View {
 
             private func checkForAuthCookies(webView: WKWebView) {
                 webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
-                    let hasAuth = cookies.contains { $0.name == "sessionid" }
-                    guard hasAuth else { return }
+                    guard hasRequiredInstagramCookies(cookies) else { return }
                     self.hasNotified = true
                     DispatchQueue.main.async {
                         self.onCookiesFound(cookies)

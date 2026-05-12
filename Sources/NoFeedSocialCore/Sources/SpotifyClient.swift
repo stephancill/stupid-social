@@ -56,7 +56,7 @@ public struct SpotifyClient {
         request.setValue(Self.appVersion, forHTTPHeaderField: "spotify-app-version")
         request.setValue("WebPlayer", forHTTPHeaderField: "app-platform")
         request.setValue("application/json", forHTTPHeaderField: "accept")
-        request.setValue("en", forHTTPHeaderField: "accept-language")
+        request.setValue(Self.acceptLanguageHeader, forHTTPHeaderField: "accept-language")
 
         let (data, response) = try await session.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
@@ -203,7 +203,7 @@ public struct SpotifyClient {
     public func trackPreviewURL(trackId: String) async -> URL? {
         guard let url = URL(string: "https://open.spotify.com/embed/track/\(trackId)") else { return nil }
         var request = URLRequest(url: url)
-        request.setValue("en", forHTTPHeaderField: "accept-language")
+        request.setValue(Self.acceptLanguageHeader, forHTTPHeaderField: "accept-language")
         do {
             let (data, response) = try await session.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse,
@@ -224,6 +224,14 @@ public struct SpotifyClient {
             .replacingOccurrences(of: "\\u0026", with: "&")
             .replacingOccurrences(of: "\\/", with: "/")
         return URL(string: urlString)
+    }
+
+    private static var acceptLanguageHeader: String {
+        let preferred = Locale.preferredLanguages.prefix(2)
+        guard !preferred.isEmpty else { return "en-US,en;q=0.9" }
+        return preferred.enumerated().map { index, language in
+            index == 0 ? language : "\(language);q=0.9"
+        }.joined(separator: ",")
     }
 }
 

@@ -453,3 +453,12 @@
 ### Instagram muted stories
 
 - Live `reels_tray` payload inspection confirmed Instagram includes mute metadata in tray entries: top-level `muted`, plus `user.friendship_status.is_muting_reel` and `user.friendship_status.muting`. `InstagramTrayItem` now decodes these fields and `InstagramNotificationSource.fetchStoryReels()` filters muted tray entries before deduping users or fetching story media.
+
+## 2026-05-12
+
+### Login region and verification hardening
+
+- Investigated user feedback that Instagram requested many verification steps and Spotify could not find the account. No South Africa-specific region lock was present, but the login flows had hard-coded locale/browser identity hints: Spotify used `/en/login` with a fixed iPhone Safari user agent, and Instagram used an old Android Chrome login user agent while API calls used a different Instagram Android app user agent with `en_US` locale.
+- Spotify login now uses `https://accounts.spotify.com/login?continue=https://open.spotify.com/` without a fixed `/en/` locale or custom webview user agent. Spotify API requests now send `Accept-Language` from `Locale.preferredLanguages` instead of hard-coded `en`.
+- Instagram login now uses a more current Android WebView user agent. Instagram API calls keep using the Instagram Android app user agent, because live simulator probes showed saved sessions return HTTP 400 `useragent mismatch` with the WebView user agent while the app user agent succeeds for both `current_user` and `reels_tray`. API calls still use a device-local `Accept-Language` header instead of hard-coded English locale hints.
+- Instagram login no longer dismisses as soon as only a `sessionid` cookie appears. The WebView waits until all cookies required by the mobile API session are present (`sessionid`, `csrftoken`, `ds_user_id`, `mid`, `rur`, and `ig_did`) before saving and closing. This lets verification continue until the cookie set is complete without requiring navigation to the home screen.
