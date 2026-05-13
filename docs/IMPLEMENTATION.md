@@ -483,6 +483,12 @@
 
 ## 2026-05-12
 
+### Story composer scaffold
+
+- Added a presentation-only story composer opened from the first bubble in the stories bar. The composer starts with Instagram as the displayed target, has a top-right vertical editing toolbar with image selection as the first tool, and fits a selected local image centered on the fullscreen canvas.
+- Added a text tool as the second composer toolbar action. Each tap creates a new centered editable text caption; captions move live while dragged around the story canvas after editing, and tapping the canvas outside captions clears focus. On iOS, dragging is backed by small UIKit overlays so pan updates move native text views directly instead of triggering SwiftUI layout on every frame. State is kept local to the composer.
+- No upload, submit, account-selection, or cross-posting network logic was added; the composer state is local UI scaffolding only.
+
 ### Login region and verification hardening
 
 - Investigated user feedback that Instagram requested many verification steps and Spotify could not find the account. No South Africa-specific region lock was present, but the login flows had hard-coded locale/browser identity hints: Spotify used `/en/login` with a fixed iPhone Safari user agent, and Instagram used an old Android Chrome login user agent while API calls used a different Instagram Android app user agent with `en_US` locale.

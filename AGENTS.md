@@ -9,6 +9,7 @@ Sources/
     Views/
       ContentView.swift             # Root view, dependency wiring
       FeedView.swift                # Main list + StoriesBar + story viewer triggers
+      StoryComposerView.swift       # Full-screen story composer scaffold
       NotificationDetailView.swift  # Standard form-based notification detail
       ProfileDetailView.swift       # Actor profile detail
       UnifiedStoryViewer.swift      # Full-screen unified story viewer (Instagram + Spotify)

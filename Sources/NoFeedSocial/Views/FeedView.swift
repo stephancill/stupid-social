@@ -12,25 +12,27 @@ struct FeedView: View {
     let settingsViewModel: SettingsViewModel
     let spotifyClient: SpotifyClient
     @State private var storyViewerSelection: StoryViewerSelection?
+    @State private var showingStoryComposer = false
 
     var body: some View {
         NavigationStack {
             List {
-                if hasStoryBarContent {
-                    StoriesBar(
-                        items: viewModel.storyBarItems,
-                        onItemTap: { index in
-                            let selectedItem = viewModel.storyBarItems[index]
-                            let items = viewModel.storyViewerItems(for: index)
-                            storyViewerSelection = StoryViewerSelection(
-                                items: items,
-                                startIndex: viewModel.storyViewerStartIndex(for: selectedItem, in: items)
-                            )
-                        }
-                    )
-                }
+                StoriesBar(
+                    items: viewModel.storyBarItems,
+                    onComposeTap: {
+                        showingStoryComposer = true
+                    },
+                    onItemTap: { index in
+                        let selectedItem = viewModel.storyBarItems[index]
+                        let items = viewModel.storyViewerItems(for: index)
+                        storyViewerSelection = StoryViewerSelection(
+                            items: items,
+                            startIndex: viewModel.storyViewerStartIndex(for: selectedItem, in: items)
+                        )
+                    }
+                )
 
-                if notificationItems.isEmpty && !hasStoryBarContent && !viewModel.storyBarLoading {
+                if notificationItems.isEmpty && viewModel.storyBarItems.isEmpty && !viewModel.storyBarLoading {
                     VStack {
                         Spacer(minLength: 0)
                         ContentUnavailableView(
@@ -134,6 +136,9 @@ struct FeedView: View {
                 }
             )
         }
+        .fullScreenCover(isPresented: $showingStoryComposer) {
+            StoryComposerView()
+        }
         #else
         .sheet(item: $storyViewerSelection) { selection in
                     UnifiedStoryViewer(
@@ -149,6 +154,9 @@ struct FeedView: View {
                         }
                     )
                 }
+                .sheet(isPresented: $showingStoryComposer) {
+                    StoryComposerView()
+                }
         #endif
     }
 
@@ -162,10 +170,6 @@ struct FeedView: View {
 
     private var readItems: [DisplayNotificationItem] {
         notificationItems.filter { !$0.isUnread }
-    }
-
-    private var hasStoryBarContent: Bool {
-        !viewModel.storyBarItems.isEmpty
     }
 
     private var errorBinding: Binding<Bool> {
@@ -184,11 +188,19 @@ private struct StoryViewerSelection: Identifiable {
 
 private struct StoriesBar: View {
     let items: [StoryBarItem]
+    let onComposeTap: () -> Void
     let onItemTap: (Int) -> Void
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(alignment: .top, spacing: 12) {
+                Button {
+                    onComposeTap()
+                } label: {
+                    StoryComposerBubble()
+                }
+                .buttonStyle(.plain)
+
                 ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                     Button {
                         onItemTap(index)
@@ -213,6 +225,39 @@ private struct StoriesBar: View {
         case let .spotify(spotifyItem):
             SpotifyStoryBubble(item: spotifyItem)
         }
+    }
+}
+
+private struct StoryComposerBubble: View {
+    var body: some View {
+        VStack(spacing: 6) {
+            ZStack(alignment: .bottomTrailing) {
+                Circle()
+                    .fill(Color.secondary.opacity(0.14))
+                    .frame(width: 70, height: 70)
+                    .overlay {
+                        Circle()
+                            .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
+                    }
+
+                Image(systemName: "plus")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 30, height: 30)
+                    .background(.background, in: Circle())
+                    .overlay {
+                        Circle()
+                            .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
+                    }
+            }
+
+            Text("Create")
+                .font(.caption2)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .frame(width: 70)
+        }
+        .accessibilityLabel("Create story")
     }
 }
 
