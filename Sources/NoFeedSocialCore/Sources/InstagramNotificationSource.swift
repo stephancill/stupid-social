@@ -108,11 +108,17 @@ public final class InstagramNotificationSource: NotificationSource {
                     {
                         let videoVersion = media.videoVersions?.first
                         let videoURL: URL? = videoVersion.flatMap { URL(string: $0.url) }
+                        let embed = media.storyFeedMedia?.first { $0.url != nil }
+                        let music = media.storyMusicStickers?.compactMap(\.music).first
                         slides.append(InstagramStorySlide(
                             id: media.id,
                             imageURL: imageURL,
                             videoURL: videoURL,
                             isVideo: media.mediaType == 2,
+                            videoDuration: media.videoDuration,
+                            embedURL: embed?.url,
+                            embedLabel: embed?.label,
+                            music: music,
                             ownerId: String(reel.user?.pk ?? userId),
                             takenAt: media.takenAt ?? 0
                         ))

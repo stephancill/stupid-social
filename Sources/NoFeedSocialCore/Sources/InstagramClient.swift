@@ -659,6 +659,9 @@ struct InstagramStoryMedia: Decodable {
     let mediaType: Int?
     let imageVersions2: InstagramImageVersions?
     let videoVersions: [InstagramVideoVersion]?
+    let videoDuration: Double?
+    let storyFeedMedia: [InstagramStoryFeedMedia]?
+    let storyMusicStickers: [InstagramStoryMusicSticker]?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -666,6 +669,9 @@ struct InstagramStoryMedia: Decodable {
         case mediaType = "media_type"
         case imageVersions2 = "image_versions2"
         case videoVersions = "video_versions"
+        case videoDuration = "video_duration"
+        case storyFeedMedia = "story_feed_media"
+        case storyMusicStickers = "story_music_stickers"
     }
 }
 
@@ -683,6 +689,71 @@ struct InstagramVideoVersion: Decodable {
     let url: String
     let width: Int?
     let height: Int?
+}
+
+struct InstagramStoryFeedMedia: Decodable {
+    let mediaCode: String?
+    let mediaType: String?
+    let productType: String?
+
+    enum CodingKeys: String, CodingKey {
+        case mediaCode = "media_code"
+        case mediaType = "media_type"
+        case productType = "product_type"
+    }
+
+    var url: URL? {
+        guard let mediaCode, !mediaCode.isEmpty else { return nil }
+        if productType == "clips" || mediaType == "clips" {
+            return URL(string: "https://www.instagram.com/reel/\(mediaCode)/")
+        }
+        return URL(string: "https://www.instagram.com/p/\(mediaCode)/")
+    }
+
+    var label: String {
+        if productType == "clips" || mediaType == "clips" {
+            return "Open reel"
+        }
+        return "Open post"
+    }
+}
+
+struct InstagramStoryMusicSticker: Decodable {
+    let attribution: String?
+    let musicAssetInfo: InstagramStoryMusicAssetInfo?
+
+    enum CodingKeys: String, CodingKey {
+        case attribution
+        case musicAssetInfo = "music_asset_info"
+    }
+
+    var music: InstagramStoryMusic? {
+        guard let musicAssetInfo else { return nil }
+        let title = musicAssetInfo.title?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let title, !title.isEmpty else { return nil }
+
+        let artist = musicAssetInfo.displayArtist?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let artwork = musicAssetInfo.coverArtworkThumbnailURI ?? musicAssetInfo.coverArtworkURI
+        return InstagramStoryMusic(
+            title: title,
+            artist: artist?.isEmpty == true ? nil : artist,
+            artworkURL: artwork.flatMap(URL.init)
+        )
+    }
+}
+
+struct InstagramStoryMusicAssetInfo: Decodable {
+    let title: String?
+    let displayArtist: String?
+    let coverArtworkThumbnailURI: String?
+    let coverArtworkURI: String?
+
+    enum CodingKeys: String, CodingKey {
+        case title
+        case displayArtist = "display_artist"
+        case coverArtworkThumbnailURI = "cover_artwork_thumbnail_uri"
+        case coverArtworkURI = "cover_artwork_uri"
+    }
 }
 
 // MARK: - Parser

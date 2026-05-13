@@ -322,6 +322,19 @@
 
 ## 2026-05-11
 
+### Instagram story rendering endpoint probe
+
+- Live-probed `POST /api/v1/feed/reels_media/` with simulator Instagram credentials, using the existing `reels_tray` IDs and redacting CDN URLs from command output. A 12-reel sample returned 50 story items: 14 video items (`media_type = 2`) and 7 post-embed items with `story_feed_media`.
+- Video story items include `video_versions` arrays with directly playable MP4 URLs, dimensions, and type values, plus `video_duration`; the app already decodes `video_versions` into `InstagramStorySlide.videoURL` but `UnifiedStoryViewer` currently renders only `imageURL`.
+- Post/reel reshares are represented by `story_feed_media` entries. Observed fields include `media_code`, `media_id`, `media_compound_str`, `media_type` (for example `sidecar`), `product_type` (for example `feed`), and normalized placement fields (`x`, `y`, `width`, `height`, `rotation`, `start_time_ms`, `end_time_ms`). The detail payload does not hydrate a separate caption/thumbnail for the embedded post; the story image itself remains the flattened visual preview. `media_code` is sufficient to build an external Instagram post link such as `https://www.instagram.com/p/{code}/`.
+- Other available overlay arrays in the sample include `story_music_stickers`, `story_locations`, and `story_captions`; these can be layered later if needed, but video playback and a simple post/reel embed link are the most direct rendering improvements from the current endpoint response.
+- Implemented richer story rendering from those fields: `InstagramStorySlide` now carries optional `videoDuration`, `embedURL`, and `embedLabel`; `InstagramStoryMedia` decodes `video_duration` and `story_feed_media`; and `InstagramNotificationSource` builds Instagram post/reel links from `story_feed_media.media_code`.
+- `UnifiedStoryViewer` now plays Instagram video stories with `AVPlayer`/`VideoPlayer`, uses video duration for progress when available, pauses playback during touch-and-hold, and shows an `Open post`/`Open reel` link overlay when the story contains a feed-media embed.
+- Replaced SwiftUI `VideoPlayer` for Instagram stories with a small `AVPlayerLayer` wrapper (`UIViewRepresentable`/`NSViewRepresentable`) so video playback has no native transport controls overlapping the app's story progress/header controls.
+- Live `story_music_stickers` entries expose `music_asset_info.title`, `display_artist`, `cover_artwork_thumbnail_uri`, and optional audio URLs. The app now decodes title/artist/artwork into `InstagramStoryMusic`, carries it on `InstagramStorySlide`, and renders a compact music metadata pill at the bottom of Instagram story slides. Sticker audio URLs are not separately played; story video/audio remains the single active `AVPlayer` stream.
+- Added a mute toggle to the unified story viewer top bar. It applies immediately to the active `AVPlayer` and is reused for Instagram video audio and Spotify preview playback.
+- Disabled animations on the mute toggle state change so the icon swaps immediately without SwiftUI's default button/content transition.
+
 ### Connection screen status cleanup
 
 - Connection detail screens now hide webview login buttons and manual/dev setup inputs once an account is configured. Farcaster likewise hides the username input and save button after setup.

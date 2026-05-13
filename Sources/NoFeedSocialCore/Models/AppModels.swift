@@ -230,16 +230,47 @@ public struct InstagramStorySlide: Identifiable, Hashable, Sendable {
     public let imageURL: URL
     public let videoURL: URL?
     public let isVideo: Bool
+    public let videoDuration: Double?
+    public let embedURL: URL?
+    public let embedLabel: String?
+    public let music: InstagramStoryMusic?
     public let ownerId: String
     public let takenAt: Double
 
-    public init(id: String, imageURL: URL, videoURL: URL?, isVideo: Bool, ownerId: String = "", takenAt: Double = 0) {
+    public init(
+        id: String,
+        imageURL: URL,
+        videoURL: URL?,
+        isVideo: Bool,
+        videoDuration: Double? = nil,
+        embedURL: URL? = nil,
+        embedLabel: String? = nil,
+        music: InstagramStoryMusic? = nil,
+        ownerId: String = "",
+        takenAt: Double = 0
+    ) {
         self.id = id
         self.imageURL = imageURL
         self.videoURL = videoURL
         self.isVideo = isVideo
+        self.videoDuration = videoDuration
+        self.embedURL = embedURL
+        self.embedLabel = embedLabel
+        self.music = music
         self.ownerId = ownerId
         self.takenAt = takenAt
+    }
+}
+
+public struct InstagramStoryMusic: Hashable, Sendable {
+    public let title: String
+    public let artist: String?
+    public let artworkURL: URL?
+
+    public init(title: String, artist: String?, artworkURL: URL?) {
+        self.title = title
+        self.artist = artist
+        self.artworkURL = artworkURL
     }
 }
 

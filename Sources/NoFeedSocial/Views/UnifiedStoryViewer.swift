@@ -18,6 +18,7 @@ struct UnifiedStoryViewer: View {
     @State private var currentSlideIndex: Int = 0
     @State private var elapsedTime: Double = 0
     @State private var isPaused: Bool = false
+    @State private var isMuted: Bool = false
     @State private var seenItems: Set<Int>
     @State private var touchStartedAt: Date?
 
@@ -83,6 +84,7 @@ struct UnifiedStoryViewer: View {
                         rotationPhase: rotationPhase,
                         rotationDegrees: rotationDegrees,
                         loadingArtworkPulse: $loadingArtworkPulse,
+                        player: player,
                         playerStatus: playerStatus,
                         reduceMotion: reduceMotion
                     )
@@ -116,6 +118,9 @@ struct UnifiedStoryViewer: View {
         }
         .onChange(of: currentSlideIndex) { _, _ in
             elapsedTime = 0
+            audioDuration = 5
+            stopPlayback()
+            prepareForCurrentItem()
         }
         .onReceive(Timer.publish(every: frameInterval, on: .main, in: .common).autoconnect()) { _ in
             guard !isPaused else { return }
@@ -159,11 +164,20 @@ struct UnifiedStoryViewer: View {
     }
 
     private var slideDuration: Double {
-        guard case .spotify = currentItem else { return 5 }
-        if playerStatus == .unavailable || playerStatus == .finished {
+        switch currentItem {
+        case let .instagram(reel):
+            guard reel.slides.indices.contains(currentSlideIndex) else { return 5 }
+            let slide = reel.slides[currentSlideIndex]
+            guard slide.isVideo else { return 5 }
+            return slide.videoDuration ?? audioDuration
+        case .spotify:
+            if playerStatus == .unavailable || playerStatus == .finished {
+                return 5
+            }
+            return audioDuration
+        case nil:
             return 5
         }
-        return audioDuration
     }
 
     private func markCurrentItemSeen() {
@@ -179,6 +193,15 @@ struct UnifiedStoryViewer: View {
 
     private func prepareForCurrentItem() {
         defer { preloadAdjacentSpotifyPreviews() }
+
+        if case let .instagram(reel) = currentItem {
+            playerStatus = .idle
+            guard reel.slides.indices.contains(currentSlideIndex) else { return }
+            let slide = reel.slides[currentSlideIndex]
+            guard slide.isVideo, let videoURL = slide.videoURL else { return }
+            startVideoPlayback(url: videoURL, duration: slide.videoDuration)
+            return
+        }
 
         guard case let .spotify(spotifyItem) = currentItem else {
             playerStatus = .idle
@@ -265,6 +288,23 @@ struct UnifiedStoryViewer: View {
             Spacer()
 
             Button {
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    isMuted.toggle()
+                    player?.isMuted = isMuted
+                }
+            } label: {
+                Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(8)
+            }
+            .transaction { transaction in
+                transaction.disablesAnimations = true
+            }
+
+            Button {
                 stopPlayback()
                 dismiss()
             } label: {
@@ -314,12 +354,16 @@ struct UnifiedStoryViewer: View {
                 }
                 if currentItem?.isInstagram == true {
                     isPaused = true
+                    player?.pause()
                 }
             }
             .onEnded { value in
                 let touchDuration = touchStartedAt.map { Date().timeIntervalSince($0) } ?? 0
                 touchStartedAt = nil
                 isPaused = false
+                if currentItem?.isInstagram == true {
+                    player?.play()
+                }
 
                 let hTranslation = value.translation.width
                 let vTranslation = value.translation.height
@@ -426,6 +470,7 @@ struct UnifiedStoryViewer: View {
             playerItem = AVPlayerItem(url: url)
         }
         let newPlayer = AVPlayer(playerItem: playerItem)
+        newPlayer.isMuted = isMuted
         player = newPlayer
 
         Task {
@@ -446,6 +491,39 @@ struct UnifiedStoryViewer: View {
         }
 
         newPlayer.play()
+    }
+
+    private func startVideoPlayback(url: URL, duration: Double?) {
+        playerStatus = .loading
+
+        let playerItem = AVPlayerItem(url: url)
+        let newPlayer = AVPlayer(playerItem: playerItem)
+        newPlayer.isMuted = isMuted
+        player = newPlayer
+
+        if let duration, duration > 0, duration.isFinite {
+            audioDuration = duration
+        } else {
+            Task {
+                let duration = try? await playerItem.asset.load(.duration)
+                if let duration, duration.seconds > 0, duration.seconds.isFinite {
+                    audioDuration = duration.seconds
+                }
+            }
+        }
+
+        NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: playerItem,
+            queue: .main
+        ) { _ in
+            Task { @MainActor in
+                playerStatus = .finished
+            }
+        }
+
+        newPlayer.play()
+        playerStatus = .playing
     }
 
     private func preloadAdjacentSpotifyPreviews() {
@@ -534,9 +612,78 @@ struct UnifiedStoryViewer: View {
     }
 }
 
+#if os(iOS)
+    private struct StoryVideoPlayer: UIViewRepresentable {
+        let player: AVPlayer
+
+        func makeUIView(context _: Context) -> PlayerLayerView {
+            let view = PlayerLayerView()
+            view.playerLayer.player = player
+            return view
+        }
+
+        func updateUIView(_ uiView: PlayerLayerView, context _: Context) {
+            uiView.playerLayer.player = player
+        }
+
+        final class PlayerLayerView: UIView {
+            override static var layerClass: AnyClass {
+                AVPlayerLayer.self
+            }
+
+            var playerLayer: AVPlayerLayer {
+                layer as! AVPlayerLayer
+            }
+
+            override init(frame: CGRect) {
+                super.init(frame: frame)
+                playerLayer.videoGravity = .resizeAspect
+                backgroundColor = .black
+            }
+
+            @available(*, unavailable)
+            required init?(coder _: NSCoder) {
+                nil
+            }
+        }
+    }
+
+#elseif os(macOS)
+    private struct StoryVideoPlayer: NSViewRepresentable {
+        let player: AVPlayer
+
+        func makeNSView(context _: Context) -> PlayerLayerView {
+            let view = PlayerLayerView()
+            view.playerLayer.player = player
+            return view
+        }
+
+        func updateNSView(_ nsView: PlayerLayerView, context _: Context) {
+            nsView.playerLayer.player = player
+        }
+
+        final class PlayerLayerView: NSView {
+            let playerLayer = AVPlayerLayer()
+
+            override init(frame frameRect: NSRect) {
+                super.init(frame: frameRect)
+                wantsLayer = true
+                layer = playerLayer
+                playerLayer.videoGravity = .resizeAspect
+                playerLayer.backgroundColor = NSColor.black.cgColor
+            }
+
+            @available(*, unavailable)
+            required init?(coder _: NSCoder) {
+                nil
+            }
+        }
+    }
+#endif
+
 // MARK: - StoryBarItem Provider Extensions
 
-private extension StoryBarItem {
+@MainActor private extension StoryBarItem {
     var slideCount: Int {
         switch self {
         case let .instagram(reel): reel.slides.count
@@ -563,12 +710,13 @@ private extension StoryBarItem {
         rotationPhase _: Double,
         rotationDegrees: Double,
         loadingArtworkPulse: Binding<Bool>,
+        player: AVPlayer?,
         playerStatus: UnifiedStoryViewer.PlayerStatus,
         reduceMotion: Bool
     ) -> some View {
         switch self {
         case let .instagram(reel):
-            instagramSlideContent(reel: reel, slideIndex: slideIndex)
+            instagramSlideContent(reel: reel, slideIndex: slideIndex, player: player)
         case let .spotify(item):
             spotifySlideContent(
                 item: item,
@@ -582,22 +730,102 @@ private extension StoryBarItem {
     }
 
     @ViewBuilder
-    private func instagramSlideContent(reel: InstagramStoryReel, slideIndex: Int) -> some View {
+    private func instagramSlideContent(reel: InstagramStoryReel, slideIndex: Int, player: AVPlayer?) -> some View {
         if !reel.slides.isEmpty, reel.slides.indices.contains(slideIndex) {
-            AsyncImage(url: reel.slides[slideIndex].imageURL) { phase in
-                switch phase {
-                case let .success(image):
-                    image
-                        .resizable()
-                        .scaledToFit()
-                case .failure, .empty:
-                    Color.gray.opacity(0.3)
-                @unknown default:
-                    Color.clear
+            let slide = reel.slides[slideIndex]
+            ZStack(alignment: .bottom) {
+                if slide.isVideo, let player {
+                    StoryVideoPlayer(player: player)
+                        .ignoresSafeArea()
+                } else {
+                    AsyncImage(url: slide.imageURL) { phase in
+                        switch phase {
+                        case let .success(image):
+                            image
+                                .resizable()
+                                .scaledToFit()
+                        case .failure, .empty:
+                            Color.gray.opacity(0.3)
+                        @unknown default:
+                            Color.clear
+                        }
+                    }
                 }
+
+                VStack(spacing: 10) {
+                    if let music = slide.music {
+                        musicMetadataView(music)
+                    }
+
+                    if let embedURL = slide.embedURL {
+                        Link(destination: embedURL) {
+                            HStack(spacing: 8) {
+                                Image(systemName: "arrow.up.forward.app")
+                                    .font(.title3)
+                                Text(slide.embedLabel ?? "Open post")
+                                    .font(.subheadline.weight(.medium))
+                            }
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 10)
+                            .background(.black.opacity(0.45), in: Capsule())
+                            .overlay {
+                                Capsule()
+                                    .stroke(.white.opacity(0.18), lineWidth: 1)
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, 24)
+                .padding(.bottom, 42)
             }
         } else {
             Color.gray.opacity(0.3)
+        }
+    }
+
+    private func musicMetadataView(_ music: InstagramStoryMusic) -> some View {
+        HStack(spacing: 10) {
+            CachedAsyncImage(url: music.artworkURL) {
+                ZStack {
+                    Color.white.opacity(0.12)
+                    Image(systemName: "music.note")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.7))
+                }
+            } failure: {
+                ZStack {
+                    Color.white.opacity(0.12)
+                    Image(systemName: "music.note")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.7))
+                }
+            }
+            .frame(width: 36, height: 36)
+            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(music.title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                if let artist = music.artist {
+                    Text(artist)
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.72))
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .frame(maxWidth: 360)
+        .background(.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(.white.opacity(0.14), lineWidth: 1)
         }
     }
 
