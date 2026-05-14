@@ -20,9 +20,11 @@ struct FeedView: View {
                     StoriesBar(
                         items: viewModel.storyBarItems,
                         onItemTap: { index in
+                            let selectedItem = viewModel.storyBarItems[index]
+                            let items = viewModel.storyViewerItems(for: index)
                             storyViewerSelection = StoryViewerSelection(
-                                items: viewModel.storyBarItems,
-                                startIndex: index
+                                items: items,
+                                startIndex: viewModel.storyViewerStartIndex(for: selectedItem, in: items)
                             )
                         }
                     )
@@ -123,6 +125,7 @@ struct FeedView: View {
                 items: selection.items,
                 startIndex: selection.startIndex,
                 spotifyClient: spotifyClient,
+                feedService: viewModel.service,
                 onInstagramReelSeen: { reelId in
                     viewModel.markInstagramReelAsSeen(reelId: reelId)
                 },
@@ -137,6 +140,7 @@ struct FeedView: View {
                         items: selection.items,
                         startIndex: selection.startIndex,
                         spotifyClient: spotifyClient,
+                        feedService: viewModel.service,
                         onInstagramReelSeen: { reelId in
                             viewModel.markInstagramReelAsSeen(reelId: reelId)
                         },
@@ -483,6 +487,8 @@ private struct NotificationRow: View {
             sanitizedItemText
         case .follow:
             "\(actorSummary) followed you"
+        case .post:
+            sanitizedItemText
         case .music:
             sanitizedItemText
         case .unknown:
@@ -515,6 +521,7 @@ private struct NotificationRow: View {
         if displayItem.item.type == .reaction
             || displayItem.item.type == .reply
             || displayItem.item.type == .mention
+            || displayItem.item.type == .post
             || displayItem.item.type == .music,
             let targetText = displayItem.item.target?.text, !targetText.isEmpty
         {
@@ -671,6 +678,8 @@ private struct NotificationTypeIcon: View {
             "at"
         case .follow:
             "person.fill.badge.plus"
+        case .post:
+            "bubble.left.and.bubble.right.fill"
         case .music:
             "music.note"
         case .unknown:
@@ -688,6 +697,8 @@ private struct NotificationTypeIcon: View {
             .purple
         case .follow:
             .green
+        case .post:
+            .primary
         case .music:
             Color(red: 0.12, green: 0.73, blue: 0.26)
         case .unknown:
@@ -705,6 +716,8 @@ private struct NotificationTypeIcon: View {
             "Mention"
         case .follow:
             "Follow"
+        case .post:
+            "Tweet"
         case .music:
             "Music"
         case .unknown:

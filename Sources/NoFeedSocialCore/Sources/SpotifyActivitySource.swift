@@ -69,6 +69,7 @@ public final class SpotifyActivitySource: NotificationSource {
                 trackName: friend.track.name,
                 artistName: friend.track.artist?.name,
                 albumName: friend.track.album?.name,
+                contextName: friend.track.context?.name,
                 trackURI: friend.track.uri,
                 trackURL: URL(string: "https://open.spotify.com/track/\(trackId)"),
                 imageURL: friend.track.imageUrl.flatMap { URL(string: $0) },

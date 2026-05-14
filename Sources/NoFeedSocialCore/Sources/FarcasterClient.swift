@@ -21,7 +21,7 @@ public enum FarcasterNotificationCategory: String, CaseIterable, Codable, Sendab
         case .reply: .replies
         case .reaction: .reactions
         case .follow: .follows
-        case .music, .unknown: nil
+        case .post, .music, .unknown: nil
         }
     }
 }
@@ -104,6 +104,43 @@ public struct FarcasterClient {
         return try await get(components.url!)
     }
 
+    func reactionCount(castHash: String, authorFid: String?, type: String = "likes") async throws -> Int {
+        var components = URLComponents(
+            url: baseURL.appending(path: "/v2/farcaster/reaction/cast"),
+            resolvingAgainstBaseURL: false
+        )!
+        components.queryItems = [
+            URLQueryItem(name: "hash", value: castHash),
+            URLQueryItem(name: "types", value: type),
+            URLQueryItem(name: "limit", value: "10000"),
+        ]
+
+        if let authorFid, !authorFid.isEmpty {
+            components.queryItems?.append(URLQueryItem(name: "fid", value: authorFid))
+        }
+
+        let response: FarcasterReactionsResponse = try await get(components.url!)
+        return response.reactions.count
+    }
+
+    func cast(hash: String, fid: String?) async throws -> FarcasterCastResponse {
+        var components = URLComponents(
+            url: baseURL.appending(path: "/v2/farcaster/cast"),
+            resolvingAgainstBaseURL: false
+        )!
+        components.queryItems = [
+            URLQueryItem(name: "identifier", value: hash),
+            URLQueryItem(name: "type", value: "hash"),
+        ]
+
+        if let fid, !fid.isEmpty {
+            components.queryItems?.append(URLQueryItem(name: "fid", value: fid))
+        }
+
+        let response: FarcasterCastWrapperResponse = try await get(components.url!)
+        return response.cast
+    }
+
     private func get<T: Decodable>(_ url: URL) async throws -> T {
         let (data, response) = try await session.data(from: url)
         guard let http = response as? HTTPURLResponse, (200 ..< 300).contains(http.statusCode) else {
@@ -175,6 +212,16 @@ struct FarcasterNotificationsResponse: Decodable {
     let next: FarcasterNextCursor?
 }
 
+struct FarcasterReactionsResponse: Decodable {
+    let reactions: [FarcasterReactionItemResponse]
+}
+
+struct FarcasterReactionItemResponse: Decodable {}
+
+struct FarcasterCastWrapperResponse: Decodable {
+    let cast: FarcasterCastResponse
+}
+
 struct FarcasterNextCursor: Decodable {
     let cursor: String?
 }
@@ -209,6 +256,7 @@ struct FarcasterCastResponse: Decodable {
     let mentionedProfiles: [FarcasterMentionedProfile]?
     let mentionedProfilesRanges: [FarcasterMentionRange]?
     let embeds: [FarcasterEmbed]?
+    let reactions: FarcasterCastReactions?
 
     var displayText: String? {
         guard let text, let profiles = mentionedProfiles, let ranges = mentionedProfilesRanges,
@@ -223,6 +271,10 @@ struct FarcasterCastResponse: Decodable {
         }
         return result
     }
+}
+
+struct FarcasterCastReactions: Decodable {
+    let likesCount: Int?
 }
 
 struct FarcasterEmbed: Decodable {

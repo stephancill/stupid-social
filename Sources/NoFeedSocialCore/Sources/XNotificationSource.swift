@@ -32,7 +32,11 @@ public struct XNotificationSource: NotificationSource {
     }
 
     public func fetchNotifications(reason _: RefreshReason) async throws -> [NotificationItem] {
-        return try await client.notifications()
+        let categories = metadataStore.xAccount?.enabledCategories ?? Set(XNotificationCategory.allCases)
+        return try await client.notifications().filter { item in
+            guard let category = XNotificationCategory.category(for: item.type) else { return false }
+            return categories.contains(category)
+        }
     }
 
     public func fetchProfile(id: String) async throws -> NetworkProfile {
@@ -57,5 +61,20 @@ public struct XNotificationSource: NotificationSource {
             )
         }
         throw SourceError.serviceError("X profile lookup failed for @\(id).")
+    }
+
+    public func fetchTargetMetrics(for item: NotificationItem) async throws -> NotificationTargetMetrics {
+        if item.type == .post {
+            let relatedTargets = try await client.deviceFollowTargets(for: item)
+            return NotificationTargetMetrics(relatedTargets: relatedTargets)
+        }
+
+        guard let tweetId = item.target?.id ?? item.sourceId,
+              tweetId.allSatisfy(\.isNumber), !tweetId.isEmpty
+        else {
+            throw SourceError.unsupported
+        }
+
+        return try await client.tweetMetrics(tweetId: tweetId)
     }
 }

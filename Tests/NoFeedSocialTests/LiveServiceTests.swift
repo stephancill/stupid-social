@@ -92,6 +92,7 @@ final class LiveServiceTests: XCTestCase {
         XCTAssertFalse(first.isEmpty, "First refresh returned no items")
 
         let firstIds = Set(first.map(\.item.id))
+        let firstById = Dictionary(uniqueKeysWithValues: first.map { ($0.item.id, $0.item) })
         XCTAssertEqual(firstIds.count, first.count, "First refresh contains duplicate IDs")
 
         let firstUnreadCount = first.filter(\.isUnread).count
@@ -108,7 +109,12 @@ final class LiveServiceTests: XCTestCase {
         let secondReadIds = Set(second.filter { !$0.isUnread }.map(\.item.id))
 
         let freshIds = secondUnreadIds.subtracting(firstIds)
-        let staleUnreadIds = secondUnreadIds.intersection(firstIds)
+        let staleUnreadIds = Set(second.filter { displayItem in
+            guard displayItem.isUnread, let oldItem = firstById[displayItem.item.id] else { return false }
+            let oldActorIds = Set(oldItem.actors.map(\.id))
+            let currentActorIds = Set(displayItem.item.actors.map(\.id))
+            return currentActorIds.subtracting(oldActorIds).isEmpty
+        }.map(\.item.id))
         XCTAssertTrue(staleUnreadIds.isEmpty, "Items from first refresh should not be unread in second: \(staleUnreadIds)")
 
         let missingIds = firstIds.subtracting(secondIds)

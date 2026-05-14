@@ -119,4 +119,16 @@ final class StoryImageCache {
     func setImage(_ image: PlatformImage, forKey key: String) {
         keyedCache.setObject(image, forKey: key as NSString)
     }
+
+    func preload(url: URL) {
+        guard image(for: url) == nil else { return }
+        Task {
+            guard let (data, _) = try? await URLSession.shared.data(from: url),
+                  let image = PlatformImage(data: data)
+            else { return }
+            await MainActor.run {
+                StoryImageCache.shared.setImage(image, for: url)
+            }
+        }
+    }
 }

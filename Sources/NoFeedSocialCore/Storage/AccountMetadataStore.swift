@@ -4,11 +4,36 @@ public struct XAccountMetadata: Codable, Equatable {
     public var accountId: String
     public var handle: String?
     public var status: AccountStatusSnapshot
+    public var enabledCategories: Set<XNotificationCategory>
 
-    public init(accountId: String, handle: String?, status: AccountStatusSnapshot) {
+    public init(accountId: String, handle: String?, status: AccountStatusSnapshot, enabledCategories: Set<XNotificationCategory>? = nil) {
         self.accountId = accountId
         self.handle = handle
         self.status = status
+        self.enabledCategories = enabledCategories ?? Set(XNotificationCategory.allCases)
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        accountId = try container.decode(String.self, forKey: .accountId)
+        handle = try container.decodeIfPresent(String.self, forKey: .handle)
+        status = try container.decode(AccountStatusSnapshot.self, forKey: .status)
+        enabledCategories = try container.decodeIfPresent(Set<XNotificationCategory>.self, forKey: .enabledCategories) ?? Set(XNotificationCategory.allCases)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(accountId, forKey: .accountId)
+        try container.encodeIfPresent(handle, forKey: .handle)
+        try container.encode(status, forKey: .status)
+        try container.encode(enabledCategories, forKey: .enabledCategories)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case accountId
+        case handle
+        case status
+        case enabledCategories
     }
 }
 

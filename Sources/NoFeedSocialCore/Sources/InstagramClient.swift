@@ -292,6 +292,42 @@ public struct InstagramClient {
         return try JSONDecoder().decode(InstagramUserInfoResponse.self, from: data)
     }
 
+    func mediaInfo(mediaId: String) async throws -> InstagramMediaInfoResponse {
+        do {
+            return try await mediaInfoRequest(mediaId: mediaId)
+        } catch {
+            let stripped = mediaId.split(separator: "_").first.map(String.init)
+            guard let stripped, stripped != mediaId else { throw error }
+            return try await mediaInfoRequest(mediaId: stripped)
+        }
+    }
+
+    private func mediaInfoRequest(mediaId: String) async throws -> InstagramMediaInfoResponse {
+        guard let credentials = try credentialStore.loadInstagramCredentials() else {
+            throw SourceError.notConfigured
+        }
+
+        var request = URLRequest(url: URL(string: "\(Self.baseURL)/api/v1/media/\(mediaId)/info/")!)
+        request.httpMethod = "GET"
+        request.allHTTPHeaderFields = headers(credentials: credentials)
+        configureRequest(&request)
+
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw SourceError.invalidResponse
+        }
+
+        if http.statusCode == 401 || http.statusCode == 403 {
+            throw SourceError.notConfigured
+        }
+
+        guard (200 ..< 300).contains(http.statusCode) else {
+            throw SourceError.invalidResponse
+        }
+
+        return try JSONDecoder().decode(InstagramMediaInfoResponse.self, from: data)
+    }
+
     func markStorySeen(mediaItems: [(mediaId: String, ownerId: String, takenAt: Double)]) async throws {
         guard let credentials = try credentialStore.loadInstagramCredentials() else {
             throw SourceError.notConfigured
@@ -548,6 +584,60 @@ public struct InstagramUserInfoResponse: Decodable {
     public let status: String?
 }
 
+struct InstagramMediaInfoResponse: Decodable {
+    let items: [InstagramMediaInfoItem]
+    let status: String?
+}
+
+struct InstagramMediaInfoItem: Decodable {
+    let id: String
+    let takenAt: Double?
+    let likeCount: Int?
+    let caption: InstagramMediaCaption?
+    let imageVersions2: InstagramImageVersions?
+    let carouselMedia: [InstagramMediaInfoItem]?
+    let user: InstagramMediaUser?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case takenAt = "taken_at"
+        case likeCount = "like_count"
+        case caption
+        case imageVersions2 = "image_versions2"
+        case carouselMedia = "carousel_media"
+        case user
+    }
+
+    var bestImageURLs: [URL] {
+        let ownURLString = imageVersions2?.candidates?
+            .sorted { ($0.width ?? 0) > ($1.width ?? 0) }
+            .first?
+            .url
+        let ownURL = ownURLString.flatMap { URL(string: $0) }
+        let own = ownURL.map { [$0] } ?? []
+        let carousel = carouselMedia?.flatMap(\.bestImageURLs) ?? []
+        return carousel.isEmpty ? own : carousel
+    }
+}
+
+struct InstagramMediaCaption: Decodable {
+    let text: String?
+}
+
+struct InstagramMediaUser: Decodable {
+    let pk: UInt64?
+    let username: String?
+    let fullName: String?
+    let profilePicUrl: String?
+
+    enum CodingKeys: String, CodingKey {
+        case pk
+        case username
+        case fullName = "full_name"
+        case profilePicUrl = "profile_pic_url"
+    }
+}
+
 struct InstagramReelsTrayResponse: Decodable {
     let tray: [InstagramTrayItem]
     let status: String?
@@ -662,6 +752,8 @@ struct InstagramStoryMedia: Decodable {
     let videoDuration: Double?
     let storyFeedMedia: [InstagramStoryFeedMedia]?
     let storyMusicStickers: [InstagramStoryMusicSticker]?
+    let reelMentions: [InstagramStoryMentionSticker]?
+    let storyLinkStickers: [InstagramStoryLinkSticker]?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -672,6 +764,8 @@ struct InstagramStoryMedia: Decodable {
         case videoDuration = "video_duration"
         case storyFeedMedia = "story_feed_media"
         case storyMusicStickers = "story_music_stickers"
+        case reelMentions = "reel_mentions"
+        case storyLinkStickers = "story_link_stickers"
     }
 }
 
@@ -721,10 +815,14 @@ struct InstagramStoryFeedMedia: Decodable {
 struct InstagramStoryMusicSticker: Decodable {
     let attribution: String?
     let musicAssetInfo: InstagramStoryMusicAssetInfo?
+    let startTimeMs: Double?
+    let endTimeMs: Double?
 
     enum CodingKeys: String, CodingKey {
         case attribution
         case musicAssetInfo = "music_asset_info"
+        case startTimeMs = "start_time_ms"
+        case endTimeMs = "end_time_ms"
     }
 
     var music: InstagramStoryMusic? {
@@ -737,8 +835,14 @@ struct InstagramStoryMusicSticker: Decodable {
         return InstagramStoryMusic(
             title: title,
             artist: artist?.isEmpty == true ? nil : artist,
-            artworkURL: artwork.flatMap(URL.init)
+            artworkURL: artwork.flatMap(URL.init),
+            duration: clipDuration ?? musicAssetInfo.duration
         )
+    }
+
+    private var clipDuration: Double? {
+        guard let startTimeMs, let endTimeMs, endTimeMs > startTimeMs else { return nil }
+        return (endTimeMs - startTimeMs) / 1000
     }
 }
 
@@ -747,12 +851,71 @@ struct InstagramStoryMusicAssetInfo: Decodable {
     let displayArtist: String?
     let coverArtworkThumbnailURI: String?
     let coverArtworkURI: String?
+    let durationInMs: Double?
+    let durationMs: Double?
+    let audioAssetDurationMs: Double?
 
     enum CodingKeys: String, CodingKey {
         case title
         case displayArtist = "display_artist"
         case coverArtworkThumbnailURI = "cover_artwork_thumbnail_uri"
         case coverArtworkURI = "cover_artwork_uri"
+        case durationInMs = "duration_in_ms"
+        case durationMs = "duration_ms"
+        case audioAssetDurationMs = "audio_asset_duration_ms"
+    }
+
+    var duration: Double? {
+        let milliseconds = durationInMs ?? durationMs ?? audioAssetDurationMs
+        guard let milliseconds, milliseconds > 0 else { return nil }
+        return milliseconds / 1000
+    }
+}
+
+struct InstagramStoryMentionSticker: Decodable {
+    let user: InstagramStoryMentionUser?
+
+    var mention: InstagramStoryMention? {
+        guard let username = user?.username?.trimmingCharacters(in: .whitespacesAndNewlines), !username.isEmpty else {
+            return nil
+        }
+        return InstagramStoryMention(
+            username: username,
+            userId: user?.pk.map(String.init),
+            url: URL(string: "https://www.instagram.com/\(username)/")
+        )
+    }
+}
+
+struct InstagramStoryMentionUser: Decodable {
+    let pk: UInt64?
+    let username: String?
+}
+
+struct InstagramStoryLinkSticker: Decodable {
+    let url: String?
+    let linkTitle: String?
+    let displayURL: String?
+
+    enum CodingKeys: String, CodingKey {
+        case url
+        case linkTitle = "link_title"
+        case displayURL = "display_url"
+    }
+
+    var link: InstagramStoryLink? {
+        guard let url, let parsedURL = URL(string: url) else { return nil }
+        let title = linkTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let display = displayURL?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let labels: [String?] = [title, display, parsedURL.host]
+        let label = labels.first { value in
+            guard let value else { return false }
+            return !value.isEmpty
+        } ?? nil
+        return InstagramStoryLink(
+            title: label ?? "Open link",
+            url: parsedURL
+        )
     }
 }
 
@@ -787,6 +950,7 @@ private enum InstagramNotificationParser {
 
         let parsedBlocks = parseRichTextBlocks(from: story.args.richText ?? "")
         let contentAfterColon = parseContentAfterColon(from: story.args.richText ?? "")
+        let storyLikeCount = parseStoryLikeCount(notifName: story.notifName, richText: story.args.richText ?? "", blocks: parsedBlocks)
 
         let actors = buildActors(from: story.args, blocks: parsedBlocks)
         let text = "\(buildActorSummary(actors: actors)) \(actionText)"
@@ -797,10 +961,28 @@ private enum InstagramNotificationParser {
         let linkURL = storyURL ?? imageURL
 
         let target: NotificationTarget?
+        let targetId = story.args.media?.first?.id ?? story.pk
         if let content = contentAfterColon, !content.isEmpty {
-            target = NotificationTarget(id: story.pk, text: content, url: linkURL, imageURL: imageURL)
+            target = NotificationTarget(
+                id: targetId,
+                text: content,
+                url: linkURL,
+                imageURL: imageURL,
+                imageURLs: imageURL.map { [$0] } ?? [],
+                author: actors.first,
+                postedAt: timestamp,
+                likeCount: storyLikeCount
+            )
         } else if linkURL != nil || imageURL != nil {
-            target = NotificationTarget(id: story.args.media?.first?.id ?? story.pk, text: nil, url: linkURL, imageURL: imageURL)
+            target = NotificationTarget(
+                id: targetId,
+                text: nil,
+                url: linkURL,
+                imageURL: imageURL,
+                imageURLs: imageURL.map { [$0] } ?? [],
+                postedAt: timestamp,
+                likeCount: storyLikeCount
+            )
         } else {
             target = nil
         }
@@ -872,6 +1054,20 @@ private enum InstagramNotificationParser {
         guard let colonIndex = stripped.lastIndex(of: ":") else { return nil }
         let content = stripped[stripped.index(after: colonIndex)...].trimmingCharacters(in: .whitespaces)
         return content.isEmpty ? nil : content
+    }
+
+    private static func parseStoryLikeCount(notifName: String, richText: String, blocks: [RichTextBlock]) -> Int? {
+        guard notifName == "story_like", !blocks.isEmpty else { return nil }
+        let stripped = stripRichTextBlocks(from: richText)
+        let pattern = #"and\s+(\d+)\s+others?"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
+              let match = regex.firstMatch(in: stripped, range: NSRange(stripped.startIndex..., in: stripped)),
+              let countRange = Range(match.range(at: 1), in: stripped),
+              let otherCount = Int(stripped[countRange])
+        else {
+            return blocks.count
+        }
+        return blocks.count + otherCount
     }
 
     private static func stripRichTextBlocks(from raw: String) -> String {

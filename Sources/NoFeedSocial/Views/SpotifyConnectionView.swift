@@ -9,7 +9,7 @@ struct SpotifyConnectionView: View {
 
     var body: some View {
         Form {
-            if viewModel.spotifyStatus == .notConfigured {
+            if viewModel.spotifyHandle == nil {
                 Section {
                     Button {
                         showingLoginSheet = true
@@ -32,7 +32,7 @@ struct SpotifyConnectionView: View {
                 }
             }
 
-            if devModeEnabled, viewModel.spotifyStatus == .notConfigured {
+            if devModeEnabled, viewModel.spotifyHandle == nil {
                 Section("Manual (Dev)") {
                     TextField("Bearer token", text: $viewModel.spotifyBearerToken, axis: .vertical)
                         .lineLimit(2 ... 4)
@@ -51,7 +51,7 @@ struct SpotifyConnectionView: View {
                 }
             }
 
-            if viewModel.spotifyStatus != .notConfigured {
+            if viewModel.spotifyHandle != nil || viewModel.spotifyStatus != .notConfigured {
                 Section {
                     Button("Disconnect", role: .destructive) {
                         viewModel.disconnectSpotify()

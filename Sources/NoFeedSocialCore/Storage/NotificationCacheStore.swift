@@ -34,6 +34,22 @@ public final class NotificationCacheStore {
         try context.save()
     }
 
+    func replaceNetworks(_ items: [NotificationItem], networks: Set<SocialNetwork>, now: Date = Date()) throws {
+        let allDescriptor = FetchDescriptor<CachedNotification>()
+        let networkRawValues = Set(networks.map(\.rawValue))
+        for existing in try context.fetch(allDescriptor) where networkRawValues.contains(existing.networkRawValue) {
+            context.delete(existing)
+        }
+
+        var seenIds = Set<String>()
+        for item in items where networks.contains(item.network) {
+            guard seenIds.insert(item.id).inserted else { continue }
+            try context.insert(CachedNotification(item: item, cachedAt: now))
+        }
+
+        try context.save()
+    }
+
     func deleteExpired(now: Date = Date(), retention: TimeInterval = 86400) throws {
         let cutoff = now.addingTimeInterval(-retention)
         let descriptor = FetchDescriptor<CachedNotification>(

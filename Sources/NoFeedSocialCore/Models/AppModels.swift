@@ -27,6 +27,7 @@ public enum NotificationType: String, Codable, CaseIterable, Sendable {
     case reply
     case reaction
     case follow
+    case post
     case music
     case unknown
 }
@@ -117,14 +118,35 @@ public struct NotificationTarget: Hashable, Codable, Sendable {
     public let text: String?
     public let url: URL?
     public let imageURL: URL?
+    public let imageURLs: [URL]
+    public let author: NotificationActor?
+    public let postedAt: Date?
+    public let likeCount: Int?
     public let album: String?
     public let musicAnimation: MusicAnimationMetadata?
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case text
+        case url
+        case imageURL
+        case imageURLs
+        case author
+        case postedAt
+        case likeCount
+        case album
+        case musicAnimation
+    }
 
     public init(
         id: String,
         text: String?,
         url: URL?,
         imageURL: URL? = nil,
+        imageURLs: [URL] = [],
+        author: NotificationActor? = nil,
+        postedAt: Date? = nil,
+        likeCount: Int? = nil,
         album: String? = nil,
         musicAnimation: MusicAnimationMetadata? = nil
     ) {
@@ -132,8 +154,27 @@ public struct NotificationTarget: Hashable, Codable, Sendable {
         self.text = text
         self.url = url
         self.imageURL = imageURL
+        self.imageURLs = imageURLs.isEmpty ? imageURL.map { [$0] } ?? [] : imageURLs
+        self.author = author
+        self.postedAt = postedAt
+        self.likeCount = likeCount
         self.album = album
         self.musicAnimation = musicAnimation
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        text = try container.decodeIfPresent(String.self, forKey: .text)
+        url = try container.decodeIfPresent(URL.self, forKey: .url)
+        imageURL = try container.decodeIfPresent(URL.self, forKey: .imageURL)
+        let decodedImageURLs = try container.decodeIfPresent([URL].self, forKey: .imageURLs) ?? []
+        imageURLs = decodedImageURLs.isEmpty ? imageURL.map { [$0] } ?? [] : decodedImageURLs
+        author = try container.decodeIfPresent(NotificationActor.self, forKey: .author)
+        postedAt = try container.decodeIfPresent(Date.self, forKey: .postedAt)
+        likeCount = try container.decodeIfPresent(Int.self, forKey: .likeCount)
+        album = try container.decodeIfPresent(String.self, forKey: .album)
+        musicAnimation = try container.decodeIfPresent(MusicAnimationMetadata.self, forKey: .musicAnimation)
     }
 }
 
@@ -234,6 +275,8 @@ public struct InstagramStorySlide: Identifiable, Hashable, Sendable {
     public let embedURL: URL?
     public let embedLabel: String?
     public let music: InstagramStoryMusic?
+    public let mentions: [InstagramStoryMention]
+    public let links: [InstagramStoryLink]
     public let ownerId: String
     public let takenAt: Double
 
@@ -246,6 +289,8 @@ public struct InstagramStorySlide: Identifiable, Hashable, Sendable {
         embedURL: URL? = nil,
         embedLabel: String? = nil,
         music: InstagramStoryMusic? = nil,
+        mentions: [InstagramStoryMention] = [],
+        links: [InstagramStoryLink] = [],
         ownerId: String = "",
         takenAt: Double = 0
     ) {
@@ -257,6 +302,8 @@ public struct InstagramStorySlide: Identifiable, Hashable, Sendable {
         self.embedURL = embedURL
         self.embedLabel = embedLabel
         self.music = music
+        self.mentions = mentions
+        self.links = links
         self.ownerId = ownerId
         self.takenAt = takenAt
     }
@@ -266,11 +313,46 @@ public struct InstagramStoryMusic: Hashable, Sendable {
     public let title: String
     public let artist: String?
     public let artworkURL: URL?
+    public let duration: Double?
 
-    public init(title: String, artist: String?, artworkURL: URL?) {
+    public init(title: String, artist: String?, artworkURL: URL?, duration: Double? = nil) {
         self.title = title
         self.artist = artist
         self.artworkURL = artworkURL
+        self.duration = duration
+    }
+}
+
+public struct InstagramStoryMention: Hashable, Sendable {
+    public let username: String
+    public let userId: String?
+    public let url: URL?
+
+    public var actor: NotificationActor? {
+        guard let userId else { return nil }
+        return NotificationActor(
+            id: userId,
+            network: .instagram,
+            username: username,
+            displayName: nil,
+            avatarURL: nil
+        )
+    }
+
+    public init(username: String, userId: String?, url: URL?) {
+        self.username = username
+        self.userId = userId
+        self.url = url
+    }
+}
+
+public struct InstagramStoryLink: Hashable, Sendable {
+    public let title: String
+    public let url: URL
+
+    public init(title: String, url: URL) {
+        self.title = title
+        self.url = url
     }
 }
 
@@ -345,6 +427,7 @@ public struct SpotifyActivityItem: Identifiable, Hashable, Sendable {
     public let trackName: String
     public let artistName: String?
     public let albumName: String?
+    public let contextName: String?
     public let trackURI: String
     public let trackURL: URL?
     public let imageURL: URL?
@@ -360,6 +443,7 @@ public struct SpotifyActivityItem: Identifiable, Hashable, Sendable {
         trackName: String,
         artistName: String?,
         albumName: String?,
+        contextName: String? = nil,
         trackURI: String,
         trackURL: URL?,
         imageURL: URL?,
@@ -374,6 +458,7 @@ public struct SpotifyActivityItem: Identifiable, Hashable, Sendable {
         self.trackName = trackName
         self.artistName = artistName
         self.albumName = albumName
+        self.contextName = contextName
         self.trackURI = trackURI
         self.trackURL = trackURL
         self.imageURL = imageURL

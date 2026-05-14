@@ -110,10 +110,98 @@ final class FeedServiceTests: XCTestCase {
         XCTAssertFalse(displayed[1].isUnread)
     }
 
-    private func item(id: String, timestamp: Date) -> NotificationItem {
+    @MainActor
+    func testManualRefreshReturnsCachedItemsWhenAllSourcesFail() async throws {
+        let container = try ModelContainer(
+            for: CachedNotification.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+        )
+        let cacheStore = NotificationCacheStore(context: container.mainContext)
+        let cached = item(id: "cached", timestamp: Date(timeIntervalSince1970: 100))
+        try cacheStore.replaceAll([cached])
+
+        let service = FeedService(
+            sources: [FailingNotificationSource()],
+            cacheStore: cacheStore,
+            watermarkStore: InMemoryReadWatermarkStoreForFeed()
+        )
+
+        let displayed = try await service.manualRefresh()
+
+        XCTAssertEqual(displayed.map(\.id), ["cached"])
+    }
+
+    @MainActor
+    func testManualRefreshThrowsWhenAllSourcesFailAndCacheIsEmpty() async throws {
+        let container = try ModelContainer(
+            for: CachedNotification.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+        )
+        let cacheStore = NotificationCacheStore(context: container.mainContext)
+        let service = FeedService(
+            sources: [FailingNotificationSource()],
+            cacheStore: cacheStore,
+            watermarkStore: InMemoryReadWatermarkStoreForFeed()
+        )
+
+        do {
+            _ = try await service.manualRefresh()
+            XCTFail("Expected refresh to fail without cached items")
+        } catch {
+            XCTAssertNotNil(error)
+        }
+    }
+
+    @MainActor
+    func testManualRefreshPreservesFailedNetworkCacheWhenAnotherSourceSucceeds() async throws {
+        let container = try ModelContainer(
+            for: CachedNotification.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+        )
+        let cacheStore = NotificationCacheStore(context: container.mainContext)
+        let cachedX = item(id: "cached-x", network: .x, timestamp: Date(timeIntervalSince1970: 200))
+        let cachedFarcaster = item(id: "cached-farcaster", network: .farcaster, timestamp: Date(timeIntervalSince1970: 100))
+        try cacheStore.replaceAll([cachedX, cachedFarcaster])
+
+        let service = FeedService(
+            sources: [
+                FailingNotificationSource(network: .x),
+                StubNotificationSource(network: .farcaster, items: [cachedFarcaster]),
+            ],
+            cacheStore: cacheStore,
+            watermarkStore: InMemoryReadWatermarkStoreForFeed()
+        )
+
+        let displayed = try await service.manualRefresh()
+
+        XCTAssertEqual(displayed.map(\.id), ["cached-x", "cached-farcaster"])
+    }
+
+    @MainActor
+    func testManualRefreshPreservesNetworkCacheWhenSourceReturnsEmpty() async throws {
+        let container = try ModelContainer(
+            for: CachedNotification.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+        )
+        let cacheStore = NotificationCacheStore(context: container.mainContext)
+        let cachedX = item(id: "cached-x", network: .x, timestamp: Date(timeIntervalSince1970: 100))
+        try cacheStore.replaceAll([cachedX])
+
+        let service = FeedService(
+            sources: [StubNotificationSource(network: .x, items: [])],
+            cacheStore: cacheStore,
+            watermarkStore: InMemoryReadWatermarkStoreForFeed()
+        )
+
+        let displayed = try await service.manualRefresh()
+
+        XCTAssertEqual(displayed.map(\.id), ["cached-x"])
+    }
+
+    private func item(id: String, network: SocialNetwork = .farcaster, timestamp: Date) -> NotificationItem {
         NotificationItem(
             id: id,
-            network: .farcaster,
+            network: network,
             accountId: "1",
             sourceId: id,
             type: .reply,
@@ -125,11 +213,36 @@ final class FeedServiceTests: XCTestCase {
     }
 }
 
+private final class FailingNotificationSource: NotificationSource {
+    let network: SocialNetwork
+
+    init(network: SocialNetwork = .x) {
+        self.network = network
+    }
+
+    func validateAccount() async throws -> AccountStatus {
+        .valid
+    }
+
+    func fetchUnreadCount() async throws -> Int? {
+        nil
+    }
+
+    func fetchNotifications(reason _: RefreshReason) async throws -> [NotificationItem] {
+        throw SourceError.serviceError("Failed")
+    }
+
+    func fetchProfile(id _: String) async throws -> NetworkProfile {
+        throw SourceError.unsupported
+    }
+}
+
 private final class StubNotificationSource: NotificationSource {
-    let network: SocialNetwork = .farcaster
+    let network: SocialNetwork
     private let items: [NotificationItem]
 
-    init(items: [NotificationItem]) {
+    init(network: SocialNetwork = .farcaster, items: [NotificationItem]) {
+        self.network = network
         self.items = items
     }
 

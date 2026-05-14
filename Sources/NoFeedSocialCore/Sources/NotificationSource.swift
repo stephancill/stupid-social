@@ -8,6 +8,38 @@ public protocol NotificationSource {
     func fetchUnreadCount() async throws -> Int?
     func fetchNotifications(reason: RefreshReason) async throws -> [NotificationItem]
     func fetchProfile(id: String) async throws -> NetworkProfile
+    func fetchTargetMetrics(for item: NotificationItem) async throws -> NotificationTargetMetrics
+}
+
+public extension NotificationSource {
+    func fetchTargetMetrics(for _: NotificationItem) async throws -> NotificationTargetMetrics {
+        throw SourceError.unsupported
+    }
+}
+
+public struct NotificationTargetMetrics: Hashable, Sendable {
+    public let author: NotificationActor?
+    public let text: String?
+    public let imageURLs: [URL]
+    public let postedAt: Date?
+    public let likeCount: Int?
+    public let relatedTargets: [NotificationTarget]
+
+    public init(
+        author: NotificationActor? = nil,
+        text: String? = nil,
+        imageURLs: [URL] = [],
+        postedAt: Date? = nil,
+        likeCount: Int? = nil,
+        relatedTargets: [NotificationTarget] = []
+    ) {
+        self.author = author
+        self.text = text
+        self.imageURLs = imageURLs
+        self.postedAt = postedAt
+        self.likeCount = likeCount
+        self.relatedTargets = relatedTargets
+    }
 }
 
 public enum SourceError: LocalizedError {

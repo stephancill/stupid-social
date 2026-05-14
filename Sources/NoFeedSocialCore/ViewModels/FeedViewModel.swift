@@ -35,7 +35,7 @@ public final class FeedViewModel: ObservableObject {
     }
 
     public func refresh() async {
-        guard !isRefreshing else { return }
+        guard !isRefreshing, !isForegroundRefreshing else { return }
         isRefreshing = true
         defer { isRefreshing = false }
 
@@ -57,6 +57,7 @@ public final class FeedViewModel: ObservableObject {
     }
 
     public func refreshOnForegroundActivation() async {
+        guard !isRefreshing, !isForegroundRefreshing else { return }
         isForegroundRefreshing = true
         defer { isForegroundRefreshing = false }
 
@@ -165,6 +166,7 @@ public final class FeedViewModel: ObservableObject {
             trackName: item.trackName,
             artistName: item.artistName,
             albumName: item.albumName,
+            contextName: item.contextName,
             trackURI: item.trackURI,
             trackURL: item.trackURL,
             imageURL: item.imageURL,
@@ -214,6 +216,21 @@ public final class FeedViewModel: ObservableObject {
         let updated = InstagramStoryReel(id: reel.id, user: reel.user, slides: reel.slides, isSeen: true)
         storyBarItems[itemIndex] = .instagram(updated)
         sortStoryBarItems(&storyBarItems)
+    }
+
+    public func storyViewerItems(for selectedIndex: Int) -> [StoryBarItem] {
+        guard storyBarItems.indices.contains(selectedIndex) else { return storyBarItems }
+        let selected = storyBarItems[selectedIndex]
+        switch selected {
+        case let .instagram(reel):
+            return storyBarItems.filter { $0.isSeen == reel.isSeen }
+        case let .spotify(item):
+            return storyBarItems.filter { $0.isSeen == item.isSeen }
+        }
+    }
+
+    public func storyViewerStartIndex(for selectedItem: StoryBarItem, in items: [StoryBarItem]) -> Int {
+        items.firstIndex(where: { $0.id == selectedItem.id }) ?? 0
     }
 
     public func performCredentialHealthCheck() async {

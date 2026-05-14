@@ -212,13 +212,13 @@ X must use a native Swift client. Do not shell out to `twitter-cli` in the produ
 Known behavior from `docs/CLI_DOCS.md`:
 
 - Count-only polling should not mark X notifications read.
-- Full notification timeline fetch can mark fetched entries read server-side.
+- Full notification timeline fetch can mark fetched entries read server-side; this is accepted for foreground activation and manual refresh.
 
 Implementation rule:
 
-- Background refresh uses count-only behavior.
-- Full X notification fetch happens only through explicit manual refresh.
-- Opening the feed shows cached X items and count until manual refresh.
+- True background refresh uses count-only behavior if reintroduced.
+- Foreground activation and manual refresh use a full X notification fetch.
+- Opening the feed shows cached X items first, then foreground activation refresh updates the cache.
 
 Endpoint discovery is a required implementation spike before building the X client.
 
@@ -285,15 +285,15 @@ Feed service responsibilities:
 Manual refresh behavior:
 
 - Fetch Farcaster notifications.
-- Fetch X full notifications only because the user explicitly requested refresh.
+- Fetch X full notifications.
 - Merge results into local SwiftData cache.
 - Compare incoming notification IDs against the local cache; mark only newly inserted items as new.
 
 Open/feed-load behavior:
 
 - Load cached notifications.
-- Fetch or show latest counts where safe.
-- Do not full-fetch X automatically.
+- Trigger foreground activation refresh when the scene becomes active.
+- Do not advance read watermarks.
 - Do not advance read watermarks.
 
 ## Foreground Automatic Refresh
@@ -303,7 +303,7 @@ Use scene phase changes for automatic refresh when the app enters the foreground
 Design expectations:
 
 - Trigger an automatic refresh on `scenePhase == .active`.
-- X foreground automatic refresh performs count-only polling.
+- X foreground automatic refresh performs a full notification fetch.
 - Farcaster foreground automatic refresh may fetch notifications because it does not alter server-side read state.
 - Foreground automatic refresh updates local cache/count state and marks newly inserted notification IDs as pending.
 - Pending notification items remain hidden from the visible feed until the user explicitly loads them from the feed's new-items badge/button.

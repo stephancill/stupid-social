@@ -32,6 +32,14 @@ struct XConnectionView: View {
                 }
             }
 
+            if viewModel.xStatus != .notConfigured {
+                Section("Notifications") {
+                    ForEach(XNotificationCategory.allCases, id: \.self) { category in
+                        Toggle(category.displayLabel, isOn: binding(for: category))
+                    }
+                }
+            }
+
             if devModeEnabled, viewModel.xStatus == .notConfigured {
                 Section("Manual (Dev)") {
                     TextField("Cookie header", text: $viewModel.xCookieHeader, axis: .vertical)
@@ -68,5 +76,14 @@ struct XConnectionView: View {
                 Task { await viewModel.saveXCookies(credentials) }
             }
         }
+    }
+
+    private func binding(for category: XNotificationCategory) -> Binding<Bool> {
+        Binding(
+            get: { viewModel.xEnabledCategories.contains(category) },
+            set: { enabled in
+                viewModel.toggleXCategory(category, enabled: enabled)
+            }
+        )
     }
 }

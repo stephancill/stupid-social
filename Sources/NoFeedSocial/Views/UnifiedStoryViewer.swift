@@ -7,6 +7,7 @@ struct UnifiedStoryViewer: View {
     let items: [StoryBarItem]
     let startIndex: Int
     let spotifyClient: SpotifyClient
+    let feedService: FeedService
     let onInstagramReelSeen: (String) -> Void
     let onSpotifyItemSeen: (String) -> Void
 
@@ -30,8 +31,9 @@ struct UnifiedStoryViewer: View {
     @State private var audioDuration: Double = 5
     @State private var pulsePhase: Double = 0
     @State private var rotationPhase: Double = 0
-    @State private var loadingProgressPulse = false
     @State private var loadingArtworkPulse = false
+    @State private var spotifySavedStatus: [String: Bool] = [:]
+    @State private var spotifySavingTrackIds: Set<String> = []
 
     enum PlayerStatus: Equatable {
         case idle
@@ -51,12 +53,14 @@ struct UnifiedStoryViewer: View {
         items: [StoryBarItem],
         startIndex: Int,
         spotifyClient: SpotifyClient,
+        feedService: FeedService,
         onInstagramReelSeen: @escaping (String) -> Void,
         onSpotifyItemSeen: @escaping (String) -> Void
     ) {
         self.items = items
         self.startIndex = startIndex
         self.spotifyClient = spotifyClient
+        self.feedService = feedService
         self.onInstagramReelSeen = onInstagramReelSeen
         self.onSpotifyItemSeen = onSpotifyItemSeen
         _currentItemIndex = State(initialValue: startIndex)
@@ -73,37 +77,45 @@ struct UnifiedStoryViewer: View {
     }
 
     var body: some View {
-        GeometryReader { geo in
-            ZStack {
-                Color.black.ignoresSafeArea()
+        NavigationStack {
+            GeometryReader { geo in
+                ZStack {
+                    Color.black.ignoresSafeArea()
 
-                if let currentItem {
-                    currentItem.makeSlideContent(
-                        slideIndex: currentSlideIndex,
-                        pulsePhase: pulsePhase,
-                        rotationPhase: rotationPhase,
-                        rotationDegrees: rotationDegrees,
-                        loadingArtworkPulse: $loadingArtworkPulse,
-                        player: player,
-                        playerStatus: playerStatus,
-                        reduceMotion: reduceMotion
-                    )
+                    if let currentItem {
+                        currentItem.makeSlideContent(
+                            slideIndex: currentSlideIndex,
+                            pulsePhase: pulsePhase,
+                            rotationPhase: rotationPhase,
+                            rotationDegrees: rotationDegrees,
+                            loadingArtworkPulse: $loadingArtworkPulse,
+                            feedService: feedService,
+                            player: player,
+                            playerStatus: playerStatus,
+                            reduceMotion: reduceMotion,
+                            spotifySavedStatus: $spotifySavedStatus,
+                            spotifySavingTrackIds: $spotifySavingTrackIds,
+                            spotifyClient: spotifyClient
+                        )
 
-                    progressBar(slideCount: slideCount)
-                    topBar
+                        progressBar(slideCount: slideCount)
+                        topBar
+                    }
                 }
+                .contentShape(Rectangle())
+                .gesture(storyGesture(width: geo.size.width))
             }
-            .contentShape(Rectangle())
-            .gesture(storyGesture(width: geo.size.width))
+            #if os(iOS)
+            .toolbar(.hidden, for: .navigationBar)
+            #endif
         }
         .onAppear {
             #if os(iOS)
                 try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
                 try? AVAudioSession.sharedInstance().setActive(true)
             #endif
-            loadingProgressPulse = true
             loadingArtworkPulse = true
-            markCurrentItemSeen()
+            scheduleCurrentItemSeenMark()
             prepareForCurrentItem()
         }
         .onChange(of: currentItemIndex) { _, _ in
@@ -113,7 +125,7 @@ struct UnifiedStoryViewer: View {
             pulsePhase = 0
             rotationPhase = 0
             stopPlayback()
-            markCurrentItemSeen()
+            scheduleCurrentItemSeenMark()
             prepareForCurrentItem()
         }
         .onChange(of: currentSlideIndex) { _, _ in
@@ -131,7 +143,7 @@ struct UnifiedStoryViewer: View {
                     elapsedTime = 0
                     playerStatus = .playing
                 }
-                guard playerStatus == .playing || playerStatus == .unavailable else {
+                guard playerStatus == .playing || playerStatus == .finished || playerStatus == .unavailable else {
                     return
                 }
             }
@@ -168,10 +180,12 @@ struct UnifiedStoryViewer: View {
         case let .instagram(reel):
             guard reel.slides.indices.contains(currentSlideIndex) else { return 5 }
             let slide = reel.slides[currentSlideIndex]
-            guard slide.isVideo else { return 5 }
-            return slide.videoDuration ?? audioDuration
+            if slide.isVideo {
+                return slide.videoDuration ?? audioDuration
+            }
+            return 5
         case .spotify:
-            if playerStatus == .unavailable || playerStatus == .finished {
+            if playerStatus == .unavailable {
                 return 5
             }
             return audioDuration
@@ -191,8 +205,20 @@ struct UnifiedStoryViewer: View {
         }
     }
 
+    private func scheduleCurrentItemSeenMark() {
+        let itemIndex = currentItemIndex
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(350))
+            guard currentItemIndex == itemIndex else { return }
+            markCurrentItemSeen()
+        }
+    }
+
     private func prepareForCurrentItem() {
-        defer { preloadAdjacentSpotifyPreviews() }
+        defer {
+            preloadAdjacentSpotifyPreviews()
+            preloadAdjacentInstagramStories()
+        }
 
         if case let .instagram(reel) = currentItem {
             playerStatus = .idle
@@ -208,6 +234,18 @@ struct UnifiedStoryViewer: View {
             return
         }
         loadPreviewURL(for: spotifyItem)
+        checkSavedStatus(for: spotifyItem)
+    }
+
+    private func checkSavedStatus(for item: SpotifyActivityItem) {
+        let trackId = extractTrackId(from: item.trackURI)
+        guard !trackId.isEmpty, spotifySavedStatus[trackId] == nil else { return }
+        Task {
+            let saved = await spotifyClient.isTrackSaved(trackId: trackId)
+            await MainActor.run {
+                spotifySavedStatus[trackId] = saved
+            }
+        }
     }
 
     // MARK: - Progress Bar
@@ -222,9 +260,8 @@ struct UnifiedStoryViewer: View {
                                playerStatus == .loading || playerStatus == .idle
                             {
                                 Capsule()
-                                    .fill(Color.gray.opacity(loadingProgressPulse ? 0.45 : 0.18))
+                                    .fill(Color.gray.opacity(0.28))
                                     .frame(height: 3)
-                                    .animation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true), value: loadingProgressPulse)
                             } else {
                                 Capsule()
                                     .fill(Color.white.opacity(0.3))
@@ -486,7 +523,9 @@ struct UnifiedStoryViewer: View {
             queue: .main
         ) { _ in
             Task { @MainActor in
+                guard player?.currentItem === playerItem else { return }
                 playerStatus = .finished
+                advance()
             }
         }
 
@@ -534,6 +573,19 @@ struct UnifiedStoryViewer: View {
         if let nextSpotifyItem = items.dropFirst(currentItemIndex + 1).compactMap({ spotifyItem(from: $0) }).first {
             preloadPreview(for: nextSpotifyItem)
         }
+    }
+
+    private func preloadAdjacentInstagramStories() {
+        preloadInstagramSlide(itemIndex: currentItemIndex, slideIndex: currentSlideIndex - 1)
+        preloadInstagramSlide(itemIndex: currentItemIndex, slideIndex: currentSlideIndex + 1)
+        preloadInstagramSlide(itemIndex: currentItemIndex - 1, slideIndex: 0)
+        preloadInstagramSlide(itemIndex: currentItemIndex + 1, slideIndex: 0)
+    }
+
+    private func preloadInstagramSlide(itemIndex: Int, slideIndex: Int) {
+        guard items.indices.contains(itemIndex), case let .instagram(reel) = items[itemIndex] else { return }
+        guard reel.slides.indices.contains(slideIndex) else { return }
+        StoryImageCache.shared.preload(url: reel.slides[slideIndex].imageURL)
     }
 
     private func spotifyItem(from item: StoryBarItem) -> SpotifyActivityItem? {
@@ -710,13 +762,17 @@ struct UnifiedStoryViewer: View {
         rotationPhase _: Double,
         rotationDegrees: Double,
         loadingArtworkPulse: Binding<Bool>,
+        feedService: FeedService,
         player: AVPlayer?,
         playerStatus: UnifiedStoryViewer.PlayerStatus,
-        reduceMotion: Bool
+        reduceMotion: Bool,
+        spotifySavedStatus: Binding<[String: Bool]>,
+        spotifySavingTrackIds: Binding<Set<String>>,
+        spotifyClient: SpotifyClient
     ) -> some View {
         switch self {
         case let .instagram(reel):
-            instagramSlideContent(reel: reel, slideIndex: slideIndex, player: player)
+            instagramSlideContent(reel: reel, slideIndex: slideIndex, feedService: feedService, player: player)
         case let .spotify(item):
             spotifySlideContent(
                 item: item,
@@ -724,13 +780,16 @@ struct UnifiedStoryViewer: View {
                 rotationDegrees: rotationDegrees,
                 loadingArtworkPulse: loadingArtworkPulse,
                 playerStatus: playerStatus,
-                reduceMotion: reduceMotion
+                reduceMotion: reduceMotion,
+                spotifySavedStatus: spotifySavedStatus,
+                spotifySavingTrackIds: spotifySavingTrackIds,
+                spotifyClient: spotifyClient
             )
         }
     }
 
     @ViewBuilder
-    private func instagramSlideContent(reel: InstagramStoryReel, slideIndex: Int, player: AVPlayer?) -> some View {
+    private func instagramSlideContent(reel: InstagramStoryReel, slideIndex: Int, feedService: FeedService, player: AVPlayer?) -> some View {
         if !reel.slides.isEmpty, reel.slides.indices.contains(slideIndex) {
             let slide = reel.slides[slideIndex]
             ZStack(alignment: .bottom) {
@@ -757,6 +816,10 @@ struct UnifiedStoryViewer: View {
                         musicMetadataView(music)
                     }
 
+                    if !slide.mentions.isEmpty || !slide.links.isEmpty {
+                        storyMetadataLinks(mentions: slide.mentions, links: slide.links, feedService: feedService)
+                    }
+
                     if let embedURL = slide.embedURL {
                         Link(destination: embedURL) {
                             HStack(spacing: 8) {
@@ -781,6 +844,45 @@ struct UnifiedStoryViewer: View {
             }
         } else {
             Color.gray.opacity(0.3)
+        }
+    }
+
+    private func storyMetadataLinks(mentions: [InstagramStoryMention], links: [InstagramStoryLink], feedService: FeedService) -> some View {
+        HStack(spacing: 8) {
+            ForEach(mentions.prefix(3), id: \.self) { mention in
+                if let actor = mention.actor {
+                    NavigationLink {
+                        ProfileDetailView(actor: actor, feedService: feedService)
+                    } label: {
+                        storyPillText("@\(mention.username)", systemImage: "person.crop.circle")
+                    }
+                } else {
+                    storyPillText("@\(mention.username)", systemImage: "person.crop.circle")
+                }
+            }
+
+            ForEach(links.prefix(2), id: \.self) { link in
+                Link(destination: link.url) {
+                    storyPillText(link.title, systemImage: "link")
+                }
+            }
+        }
+        .lineLimit(1)
+    }
+
+    private func storyPillText(_ text: String, systemImage: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: systemImage)
+            Text(text)
+        }
+        .font(.caption.weight(.medium))
+        .foregroundStyle(.white)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.black.opacity(0.45), in: Capsule())
+        .overlay {
+            Capsule()
+                .stroke(.white.opacity(0.14), lineWidth: 1)
         }
     }
 
@@ -829,14 +931,27 @@ struct UnifiedStoryViewer: View {
         }
     }
 
+    @ViewBuilder
     private func spotifySlideContent(
         item: SpotifyActivityItem,
         pulsePhase: Double,
         rotationDegrees: Double,
         loadingArtworkPulse: Binding<Bool>,
         playerStatus _: UnifiedStoryViewer.PlayerStatus,
-        reduceMotion: Bool
+        reduceMotion: Bool,
+        spotifySavedStatus: Binding<[String: Bool]>,
+        spotifySavingTrackIds: Binding<Set<String>>,
+        spotifyClient: SpotifyClient
     ) -> some View {
+        let trackId = item.trackURI
+            .replacingOccurrences(of: "spotify:track:", with: "")
+            .replacingOccurrences(of: "spotify:album:", with: "")
+            .replacingOccurrences(of: "spotify:playlist:", with: "")
+            .replacingOccurrences(of: "spotify:artist:", with: "")
+            .replacingOccurrences(of: "spotify:user:", with: "")
+            .replacingOccurrences(of: "spotify:socialsession:", with: "")
+        let saved = spotifySavedStatus.wrappedValue[trackId]
+        let isSaving = spotifySavingTrackIds.wrappedValue.contains(trackId)
         VStack(spacing: 32) {
             Spacer()
 
@@ -872,17 +987,73 @@ struct UnifiedStoryViewer: View {
             trackInfoView(item: item)
 
             if let trackURL = item.trackURL {
-                Link(destination: trackURL) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "arrow.up.forward.app")
-                            .font(.title3)
-                        Text("Open in Spotify")
-                            .font(.subheadline.weight(.medium))
+                HStack(spacing: 12) {
+                    Link(destination: trackURL) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "arrow.up.forward.app")
+                                .font(.title3)
+                            Text("Open in Spotify")
+                                .font(.subheadline.weight(.medium))
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 20)
+                        .frame(height: 44)
+                        .background(.white.opacity(0.12), in: Capsule())
                     }
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 10)
-                    .background(.white.opacity(0.12), in: Capsule())
+
+                    if saved == true {
+                        Button {
+                            spotifySavingTrackIds.wrappedValue.insert(trackId)
+                            Task {
+                                let removed = await spotifyClient.removeTrack(trackId: trackId)
+                                spotifySavingTrackIds.wrappedValue.remove(trackId)
+                                if removed {
+                                    spotifySavedStatus.wrappedValue[trackId] = false
+                                }
+                            }
+                        } label: {
+                            Group {
+                                if isSaving {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                } else {
+                                    Image(systemName: "checkmark")
+                                        .font(.title3.weight(.semibold))
+                                }
+                            }
+                            .foregroundStyle(.white)
+                            .frame(width: 44, height: 44)
+                            .background(.green, in: Circle())
+                        }
+                        .disabled(isSaving)
+                        .accessibilityLabel("Remove from Liked Songs")
+                    } else {
+                        Button {
+                            spotifySavingTrackIds.wrappedValue.insert(trackId)
+                            Task {
+                                let saved = await spotifyClient.saveTrack(trackId: trackId)
+                                spotifySavingTrackIds.wrappedValue.remove(trackId)
+                                if saved {
+                                    spotifySavedStatus.wrappedValue[trackId] = true
+                                }
+                            }
+                        } label: {
+                            Group {
+                                if isSaving {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                } else {
+                                    Image(systemName: "plus")
+                                        .font(.title3.weight(.semibold))
+                                }
+                            }
+                            .foregroundStyle(.white)
+                            .frame(width: 44, height: 44)
+                            .background(.white.opacity(0.12), in: Capsule())
+                        }
+                        .disabled(isSaving)
+                        .accessibilityLabel("Save track")
+                    }
                 }
             }
 
@@ -906,8 +1077,15 @@ struct UnifiedStoryViewer: View {
                     .foregroundStyle(.white.opacity(0.6))
                     .lineLimit(1)
             }
+
+            if let contextName = item.contextName, contextName != item.albumName {
+                Text("From \(contextName)")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.5))
+                    .lineLimit(1)
+            }
         }
-        .frame(height: 64)
+        .frame(height: 84)
         .padding(.horizontal, 32)
     }
 

@@ -1,5 +1,31 @@
 import Foundation
 
+public enum XNotificationCategory: String, CaseIterable, Codable, Sendable {
+    case mentions
+    case replies
+    case reactions
+    case tweets
+
+    public var displayLabel: String {
+        switch self {
+        case .mentions: "Mentions"
+        case .replies: "Replies"
+        case .reactions: "Reactions"
+        case .tweets: "Tweets"
+        }
+    }
+
+    static func category(for type: NotificationType) -> Self? {
+        switch type {
+        case .mention: .mentions
+        case .reply: .replies
+        case .reaction: .reactions
+        case .post: .tweets
+        case .follow, .music, .unknown: nil
+        }
+    }
+}
+
 @MainActor
 public struct XClient {
     private let credentialStore: KeychainCredentialStore
@@ -169,6 +195,68 @@ public struct XClient {
         return try XNotificationParser.parse(response: decoded)
     }
 
+    func tweetMetrics(tweetId: String) async throws -> NotificationTargetMetrics {
+        guard let credentials = try credentialStore.loadXCredentials() else {
+            throw SourceError.notConfigured
+        }
+
+        var components = URLComponents(string: "https://x.com/i/api/1.1/statuses/show.json")!
+        components.queryItems = [
+            URLQueryItem(name: "id", value: tweetId),
+            URLQueryItem(name: "tweet_mode", value: "extended"),
+        ]
+
+        var request = URLRequest(url: components.url!)
+        request.httpMethod = "GET"
+        request.allHTTPHeaderFields = headers(credentials: credentials)
+
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw SourceError.invalidResponse
+        }
+
+        if http.statusCode == 401 || http.statusCode == 403 {
+            throw SourceError.notConfigured
+        }
+
+        guard (200 ..< 300).contains(http.statusCode) else {
+            throw SourceError.invalidResponse
+        }
+
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let decoded = try decoder.decode(XTweetMetricsResponse.self, from: data)
+        return NotificationTargetMetrics(likeCount: decoded.favoriteCount)
+    }
+
+    func deviceFollowTargets(for item: NotificationItem) async throws -> [NotificationTarget] {
+        guard let credentials = try credentialStore.loadXCredentials() else {
+            throw SourceError.notConfigured
+        }
+
+        var request = URLRequest(url: URL(string: "https://x.com/i/api/2/notifications/device_follow.json")!)
+        request.httpMethod = "GET"
+        request.allHTTPHeaderFields = headers(credentials: credentials)
+
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw SourceError.invalidResponse
+        }
+
+        if http.statusCode == 401 || http.statusCode == 403 {
+            throw SourceError.notConfigured
+        }
+
+        guard (200 ..< 300).contains(http.statusCode) else {
+            throw SourceError.invalidResponse
+        }
+
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let decoded = try decoder.decode(XNotificationsResponse.self, from: data)
+        return XNotificationParser.deviceFollowTargets(response: decoded, matching: item)
+    }
+
     public func unreadCount(credentials: XCredentials) async throws -> Int {
         var components = URLComponents(string: "https://x.com/i/api/2/notifications/all/unread_count.json")!
         components.queryItems = [URLQueryItem(name: "include_tweet_replies", value: "true")]
@@ -308,6 +396,10 @@ private struct XUnreadCountResponse: Decodable {
     let unreadCount: Int
 }
 
+private struct XTweetMetricsResponse: Decodable {
+    let favoriteCount: Int?
+}
+
 // MARK: - Notification List Response Models
 
 private struct XNotificationsResponse: Decodable {
@@ -398,6 +490,7 @@ private struct XTweetObject: Decodable {
     let inReplyToStatusIdStr: String?
     let inReplyToUserIdStr: String?
     let extendedEntities: XExtendedEntities?
+    let favoriteCount: Int?
 
     var stableId: String {
         idStr ?? id.map(String.init) ?? ""
@@ -405,6 +498,10 @@ private struct XTweetObject: Decodable {
 
     var firstMediaUrl: String? {
         extendedEntities?.media?.first?.mediaUrlHttps
+    }
+
+    var mediaURLs: [URL] {
+        extendedEntities?.media?.compactMap { $0.mediaUrlHttps.flatMap(URL.init) } ?? []
     }
 }
 
@@ -465,6 +562,27 @@ private enum XNotificationParser {
         return items
     }
 
+    static func deviceFollowTargets(response: XNotificationsResponse, matching _: NotificationItem) -> [NotificationTarget] {
+        let users = response.globalObjects.users
+        let tweets = response.globalObjects.tweets
+
+        guard let entries = response.timeline.instructions.first(where: { $0.addEntries != nil })?.addEntries?.entries else {
+            return []
+        }
+
+        var seenTweetIds = Set<String>()
+        return entries.compactMap { entry -> NotificationTarget? in
+            guard let tweetId = entry.content.item?.content.tweet?.id,
+                  let tweet = tweets[tweetId],
+                  !seenTweetIds.contains(tweet.stableId)
+            else {
+                return nil
+            }
+            seenTweetIds.insert(tweet.stableId)
+            return target(from: tweet, users: users)
+        }
+    }
+
     private static func parseTweetEntry(
         entryId _: String,
         sortIndex _: String,
@@ -482,7 +600,9 @@ private enum XNotificationParser {
 
         let text = notificationText(element: element, actorName: user.name, tweetText: tweet.fullText)
 
-        let imageURL = tweet.firstMediaUrl.flatMap(URL.init)
+        let parentTarget = tweet.inReplyToStatusIdStr.flatMap { parentId in
+            tweets[parentId].map { target(from: $0, users: users) }
+        }
 
         return NotificationItem(
             id: "x:\(tweet.stableId):\(element)",
@@ -493,8 +613,8 @@ private enum XNotificationParser {
             timestamp: timestamp,
             text: text,
             actors: [actor],
-            target: NotificationTarget(id: tweet.stableId, text: tweet.fullText, url: nil, imageURL: imageURL),
-            parentTarget: nil
+            target: target(from: tweet, users: users),
+            parentTarget: parentTarget
         )
     }
 
@@ -514,20 +634,26 @@ private enum XNotificationParser {
         }.reversed().map { $0 }
         guard !actors.isEmpty else { return nil }
 
-        let target: NotificationTarget?
+        let notificationTarget: NotificationTarget?
         let sourceId: String
+        let timestamp = Date(timeIntervalSince1970: (Double(sortIndex) ?? 0) / 1000)
         if let targetTweetId = notificationRef.targetTweets?.first,
            let tweet = tweets[targetTweetId]
         {
-            let imageURL = tweet.firstMediaUrl.flatMap(URL.init)
-            target = NotificationTarget(id: tweet.stableId, text: tweet.fullText, url: nil, imageURL: imageURL)
+            notificationTarget = target(from: tweet, users: users)
             sourceId = tweet.stableId
         } else {
-            target = nil
+            notificationTarget = type == .post ? NotificationTarget(
+                id: notificationRef.id,
+                text: nil,
+                url: nil,
+                author: actors.first,
+                postedAt: timestamp
+            ) : nil
             sourceId = notificationRef.fromUsers.sorted().joined(separator: ",")
         }
 
-        let text = groupedNotificationText(element: element, actors: actors, tweetText: target?.text)
+        let text = groupedNotificationText(element: element, actors: actors, tweetText: notificationTarget?.text)
 
         return NotificationItem(
             id: "x:\(sourceId):\(element)",
@@ -535,10 +661,10 @@ private enum XNotificationParser {
             accountId: "x",
             sourceId: sourceId,
             type: type,
-            timestamp: Date(timeIntervalSince1970: (Double(sortIndex) ?? 0) / 1000),
+            timestamp: timestamp,
             text: text,
             actors: actors,
-            target: target,
+            target: notificationTarget,
             parentTarget: nil
         )
     }
@@ -555,6 +681,12 @@ private enum XNotificationParser {
              "user_liked_multiple_tweets",
              "users_retweeted_your_tweet":
             .reaction
+        case "device_follow_tweet_notification_entry",
+             "user_tweeted",
+             "user_tweeted_entry",
+             "tweet_notification",
+             "user_posted":
+            .post
         default:
             .unknown
         }
@@ -568,7 +700,12 @@ private enum XNotificationParser {
              "user_quoted_your_tweet",
              "users_liked_your_tweet",
              "user_liked_multiple_tweets",
-             "users_retweeted_your_tweet":
+             "users_retweeted_your_tweet",
+             "device_follow_tweet_notification_entry",
+             "user_tweeted",
+             "user_tweeted_entry",
+             "tweet_notification",
+             "user_posted":
             true
         default:
             false
@@ -593,7 +730,11 @@ private enum XNotificationParser {
         case "follow_from_recommended_user",
              "users_followed_you":
             return "\(actorName) followed you"
-        case "device_follow_tweet_notification_entry":
+        case "device_follow_tweet_notification_entry",
+             "user_tweeted",
+             "user_tweeted_entry",
+             "tweet_notification",
+             "user_posted":
             return "New post from \(actorName)"
         default:
             return tweetText ?? "New X notification"
@@ -631,6 +772,20 @@ private enum XNotificationParser {
             username: user.screenName,
             displayName: user.name,
             avatarURL: user.profileImageUrlHttps.map { URL(string: $0.replacingOccurrences(of: "_normal", with: "")) } ?? nil
+        )
+    }
+
+    private static func target(from tweet: XTweetObject, users: [String: XUserObject]) -> NotificationTarget {
+        let imageURL = tweet.firstMediaUrl.flatMap(URL.init)
+        return NotificationTarget(
+            id: tweet.stableId,
+            text: tweet.fullText,
+            url: nil,
+            imageURL: imageURL,
+            imageURLs: tweet.mediaURLs,
+            author: users[tweet.userIdStr].map(actor(from:)),
+            postedAt: parseTwitterDate(tweet.createdAt),
+            likeCount: tweet.favoriteCount
         )
     }
 

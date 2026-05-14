@@ -94,6 +94,7 @@ struct SpotifyLoginWebView: View {
                     guard let self, !self.captured else { return }
                     let spDC = cookies.first(where: { $0.name == "sp_dc" })?.value ?? ""
                     let spT = cookies.first(where: { $0.name == "sp_t" })?.value ?? ""
+                    let spKey = cookies.first(where: { $0.name == "sp_key" })?.value
                     guard !spDC.isEmpty, !spT.isEmpty else { return }
 
                     self.captured = true
@@ -102,6 +103,7 @@ struct SpotifyLoginWebView: View {
                         clientToken: self.pendingClientToken ?? "",
                         spDC: spDC,
                         spT: spT,
+                        spKey: spKey,
                         username: nil
                     )
                     DispatchQueue.main.async {
@@ -112,6 +114,7 @@ struct SpotifyLoginWebView: View {
         }
 
         private var captureScript: String {
+            // swiftlint:disable line_length
             """
             (function() {
                 const origFetch = window.fetch;
@@ -160,6 +163,7 @@ struct SpotifyLoginWebView: View {
                 };
             })();
             """
+            // swiftlint:enable line_length
         }
     }
 #else
@@ -227,6 +231,7 @@ struct SpotifyLoginWebView: View {
                     guard let self, !self.captured else { return }
                     let spDC = cookies.first(where: { $0.name == "sp_dc" })?.value ?? ""
                     let spT = cookies.first(where: { $0.name == "sp_t" })?.value ?? ""
+                    let spKey = cookies.first(where: { $0.name == "sp_key" })?.value
                     guard !spDC.isEmpty, !spT.isEmpty else { return }
 
                     self.captured = true
@@ -235,6 +240,7 @@ struct SpotifyLoginWebView: View {
                         clientToken: self.pendingClientToken ?? "",
                         spDC: spDC,
                         spT: spT,
+                        spKey: spKey,
                         username: nil
                     )
                     DispatchQueue.main.async {
@@ -245,6 +251,7 @@ struct SpotifyLoginWebView: View {
         }
 
         private var captureScript: String {
+            // swiftlint:disable line_length
             """
             (function() {
                 const origFetch = window.fetch;
@@ -277,6 +284,7 @@ struct SpotifyLoginWebView: View {
                 };
             })();
             """
+            // swiftlint:enable line_length
         }
     }
 #endif

@@ -36,35 +36,53 @@ public final class FeedService {
         logger.info("Manual refresh started")
         var incoming: [NotificationItem] = []
         var errors: [String] = []
+        var refreshedNetworks = Set<SocialNetwork>()
 
         for source in sources {
             do {
                 let items = try await source.fetchNotifications(reason: .manual)
                 logger.info("Source refresh finished: \(source.network.rawValue, privacy: .public) \(items.count, privacy: .public) items")
                 incoming.append(contentsOf: items)
+                if !items.isEmpty {
+                    refreshedNetworks.insert(source.network)
+                }
             } catch SourceError.notConfigured {
                 errors.append("\(source.network.displayName) is not configured")
             } catch SourceError.endpointSpikeRequired {
                 logger.info("Skipping source pending endpoint spike: \(source.network.rawValue, privacy: .public)")
             } catch {
-                logger.error("Source refresh failed: \(source.network.rawValue, privacy: .public)")
+                logger.error("Source refresh failed: \(source.network.rawValue, privacy: .public) \(String(describing: error), privacy: .public)")
                 errors.append("\(source.network.displayName) refresh failed")
             }
         }
 
-        let oldIds = Set((try? cacheStore.loadRecent())?.map(\.id) ?? [])
+        let oldItems = (try? cacheStore.loadRecent()) ?? []
+        let oldItemsById = Dictionary(uniqueKeysWithValues: oldItems.map { ($0.id, $0) })
+        let oldIds = Set(oldItemsById.keys)
         let incomingIds = Set(incoming.map(\.id))
-        let freshIds = incomingIds.subtracting(oldIds)
+        let changedGroupedIds = incoming.compactMap { item -> String? in
+            guard item.network != .x else { return nil }
+            guard let old = oldItemsById[item.id] else { return nil }
+            let oldActorIds = Set(old.actors.map(\.id))
+            let incomingActorIds = Set(item.actors.map(\.id))
+            guard !incomingActorIds.subtracting(oldActorIds).isEmpty else { return nil }
+            return item.id
+        }
+        let freshIds = incomingIds.subtracting(oldIds).union(changedGroupedIds)
 
         pendingIds.removeAll()
         revealedIds = freshIds
 
-        if !incoming.isEmpty {
-            try cacheStore.replaceAll(incoming)
+        if !refreshedNetworks.isEmpty {
+            try cacheStore.replaceNetworks(incoming, networks: refreshedNetworks)
         }
         try cacheStore.deleteExpired()
         logger.info("Manual refresh finished")
         if !errors.isEmpty, incoming.isEmpty {
+            let cachedItems = try loadCachedFeed()
+            if !cachedItems.isEmpty {
+                return cachedItems
+            }
             throw SourceError.serviceError(errors.joined(separator: ", "))
         }
         return try loadCachedFeed()
@@ -73,26 +91,30 @@ public final class FeedService {
     public func foregroundActivationRefresh() async throws {
         logger.info("Foreground activation refresh started")
         var incoming: [NotificationItem] = []
+        var refreshedNetworks = Set<SocialNetwork>()
 
         for source in sources {
             do {
                 let items = try await source.fetchNotifications(reason: .background)
                 logger.info("Foreground activation source refresh finished: \(source.network.rawValue, privacy: .public) \(items.count, privacy: .public) items")
                 incoming.append(contentsOf: items)
+                if !items.isEmpty {
+                    refreshedNetworks.insert(source.network)
+                }
             } catch SourceError.notConfigured, SourceError.endpointSpikeRequired {
                 continue
             } catch {
-                logger.error("Foreground activation source refresh failed: \(source.network.rawValue, privacy: .public)")
+                logger.error("Foreground activation source refresh failed: \(source.network.rawValue, privacy: .public) \(String(describing: error), privacy: .public)")
             }
         }
 
-        if !incoming.isEmpty {
+        if !refreshedNetworks.isEmpty {
             let oldIds = Set((try? cacheStore.loadRecent())?.map(\.id) ?? [])
             let incomingIds = Set(incoming.map(\.id))
             let freshIds = incomingIds.subtracting(oldIds)
             pendingIds.formUnion(freshIds)
 
-            try cacheStore.replaceAll(incoming)
+            try cacheStore.replaceNetworks(incoming, networks: refreshedNetworks)
             try cacheStore.deleteExpired()
         }
         logger.info("Foreground activation refresh finished")
@@ -117,6 +139,13 @@ public final class FeedService {
         // For X, pass the username as the id (GraphQL uses screen_name)
         let lookupId = (network == .x) ? (username ?? actorId) : actorId
         return try await source.fetchProfile(id: lookupId)
+    }
+
+    public func fetchTargetMetrics(for item: NotificationItem) async throws -> NotificationTargetMetrics {
+        guard let source = sources.first(where: { $0.network == item.network }) else {
+            throw SourceError.serviceError("No source for network \(item.network)")
+        }
+        return try await source.fetchTargetMetrics(for: item)
     }
 
     public func markAllRead(items: [DisplayNotificationItem]) -> [DisplayNotificationItem] {

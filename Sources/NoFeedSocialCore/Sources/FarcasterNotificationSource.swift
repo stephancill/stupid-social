@@ -65,6 +65,32 @@ public struct FarcasterNotificationSource: NotificationSource {
         )
     }
 
+    public func fetchTargetMetrics(for item: NotificationItem) async throws -> NotificationTargetMetrics {
+        guard let target = item.target else {
+            throw SourceError.unsupported
+        }
+        let authorFid = target.author?.id ?? item.accountId
+        let likeCount = try await client.reactionCount(castHash: target.id, authorFid: authorFid)
+        let cast = try? await client.cast(hash: target.id, fid: authorFid)
+        let imageURLs = cast?.embeds?.compactMap { $0.url.flatMap(URL.init) } ?? []
+
+        return NotificationTargetMetrics(
+            author: cast?.author.map { author in
+                NotificationActor(
+                    id: String(author.fid),
+                    network: .farcaster,
+                    username: author.username,
+                    displayName: author.displayName,
+                    avatarURL: author.pfpUrl
+                )
+            },
+            text: cast?.displayText ?? cast?.text,
+            imageURLs: imageURLs,
+            postedAt: cast?.timestamp,
+            likeCount: likeCount
+        )
+    }
+
     private func normalize(
         _ notification: FarcasterNotificationResponse,
         accountId: String
@@ -75,9 +101,10 @@ public struct FarcasterNotificationSource: NotificationSource {
         let sourceId = stableSourceId(notification, type: notification.type)
         let text = notificationText(notification, type: type, actors: actors)
 
-        let imageURL = notification.cast?
-            .embeds?.first?.url
-            .flatMap(URL.init)
+        let imageURLs = notification.cast?
+            .embeds?
+            .compactMap { $0.url.flatMap(URL.init) } ?? []
+        let imageURL = imageURLs.first
 
         return NotificationItem(
             id: "farcaster:\(accountId):\(sourceId)",
@@ -88,10 +115,46 @@ public struct FarcasterNotificationSource: NotificationSource {
             timestamp: timestamp,
             text: text,
             actors: actors,
-            target: notification.cast.map {
-                NotificationTarget(id: $0.hash, text: $0.displayText ?? $0.text, url: nil, imageURL: imageURL)
+            target: notification.cast.map { cast in
+                NotificationTarget(
+                    id: cast.hash,
+                    text: cast.displayText ?? cast.text,
+                    url: nil,
+                    imageURL: imageURL,
+                    imageURLs: imageURLs,
+                    author: cast.author.map { author in
+                        NotificationActor(
+                            id: String(author.fid),
+                            network: .farcaster,
+                            username: author.username,
+                            displayName: author.displayName,
+                            avatarURL: author.pfpUrl
+                        )
+                    },
+                    postedAt: cast.timestamp,
+                    likeCount: cast.reactions?.likesCount
+                )
             },
-            parentTarget: nil
+            parentTarget: parentTarget(from: notification.cast)
+        )
+    }
+
+    private func parentTarget(from cast: FarcasterCastResponse?) -> NotificationTarget? {
+        guard let cast, let parentHash = cast.parentHash else { return nil }
+        let author = cast.parentAuthor?.fid.map { fid in
+            NotificationActor(
+                id: String(fid),
+                network: .farcaster,
+                username: nil,
+                displayName: nil,
+                avatarURL: nil
+            )
+        }
+        return NotificationTarget(
+            id: parentHash,
+            text: nil,
+            url: nil,
+            author: author
         )
     }
 
@@ -207,6 +270,7 @@ public struct FarcasterNotificationSource: NotificationSource {
         case .reply: "\(actorName) replied to you"
         case .reaction: "\(actorName) reacted to your cast"
         case .follow: "\(actorName) followed you"
+        case .post: "New Farcaster post"
         case .music: "New Farcaster notification"
         case .unknown: notification.cast?.text ?? "New Farcaster notification"
         }

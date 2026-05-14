@@ -63,11 +63,10 @@ Build a universal macOS and iOS app with xtool that shows a combined social noti
 
 ### X
 
-- Use X unread notification count for background polling.
-- Background polling must avoid fetching the full X notifications timeline because that can mark notifications read server-side.
-- Full X notification fetch should happen only through explicit manual refresh.
-- Manual refresh should make only one X full-notifications request.
-- Opening the feed should show cached X items plus the latest count until the user manually refreshes.
+- Use X unread notification count only for future background polling paths that run while the app is not foregrounded.
+- Foreground activation and manual refresh should full-fetch X notifications so the feed stays current when the app is opened.
+- Each foreground/manual refresh should make only one X full-notifications request.
+- Opening the feed first shows cached X items, then foreground activation refresh updates the cache when credentials are available.
 - Full fetch does not advance app-local read state unless the user explicitly marks notifications as read.
 
 Reference behavior from `docs/CLI_DOCS.md`:
@@ -177,7 +176,7 @@ The MVP should not attempt to merge or link X and Farcaster actors.
 
 - Manual refresh is always available.
 - The app refreshes automatically when entering the foreground.
-- X foreground automatic refresh should poll count only and must not full-fetch X notifications.
+- X foreground automatic refresh should full-fetch X notifications, accepting the server-side read side effect in exchange for current feed content.
 - Farcaster foreground automatic refresh may fetch notifications because Hypersnap read state is app-local and the API does not mark items read.
 - Foreground automatic refresh should cache newly discovered items as pending and surface them through a user-controlled new-items badge before inserting them into the visible feed.
 

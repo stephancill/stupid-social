@@ -9,6 +9,7 @@ public struct SpotifyClient {
     private static let spclientBase = "https://spclient.wg.spotify.com"
     private static let appVersion = "1.2.90.229.g33aad738"
     private static let tokenRefreshLeeway: TimeInterval = 120
+    private static let browserUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15"
 
     public init(credentialStore: KeychainCredentialStore, session: URLSession = defaultSession) {
         self.credentialStore = credentialStore
@@ -119,42 +120,21 @@ public struct SpotifyClient {
     public func validateAccount() async throws -> String {
         let (data, _) = try await makeRequest("presence-view/v1/buddylist")
         _ = try JSONDecoder().decode(SpotifyBuddyListResponse.self, from: data)
-
-        if let username = try? await resolveUsername() {
-            return username
-        }
-        return "spotify"
+        return try await resolveUsername()
     }
 
     private func resolveUsername() async throws -> String {
         let creds = try await credentialsForRequest()
-        var request = URLRequest(url: URL(string: "https://api-partner.spotify.com/pathfinder/v2/query")!)
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(creds.bearerToken)", forHTTPHeaderField: "authorization")
-        request.setValue(creds.clientToken, forHTTPHeaderField: "client-token")
-        request.setValue(Self.appVersion, forHTTPHeaderField: "spotify-app-version")
-        request.setValue("WebPlayer", forHTTPHeaderField: "app-platform")
-        request.setValue("application/json;charset=UTF-8", forHTTPHeaderField: "content-type")
-        request.setValue("application/json", forHTTPHeaderField: "accept")
-
-        let body: [String: Any] = [
-            "variables": [:],
-            "operationName": "profileAttributes",
-            "extensions": [
-                "persistedQuery": [
-                    "version": 1,
-                    "sha256Hash": "53bcb064f6cd18c23f752bc324a791194d20df612d8e1239c735144ab0399ced",
-                ],
-            ],
-        ]
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-
-        let (data, response) = try await session.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse,
-              (200 ... 299).contains(httpResponse.statusCode)
-        else {
-            throw SourceError.serviceError("Could not resolve username")
-        }
+        let data = try await makePathfinderRequest(
+            credentials: creds,
+            bearerToken: creds.bearerToken,
+            body: pathfinderBody(
+                operationName: "profileAttributes",
+                variables: [:],
+                sha256Hash: "53bcb064f6cd18c23f752bc324a791194d20df612d8e1239c735144ab0399ced"
+            ),
+            includeBrowserHeaders: false
+        )
 
         let decoded = try JSONDecoder().decode(SpotifyProfileAttributesResponse.self, from: data)
         return decoded.data.me.profile.username
@@ -224,6 +204,123 @@ public struct SpotifyClient {
             .replacingOccurrences(of: "\\u0026", with: "&")
             .replacingOccurrences(of: "\\/", with: "/")
         return URL(string: urlString)
+    }
+
+    public func isTrackSaved(trackId: String) async -> Bool? {
+        guard let creds = try? credentials(),
+              let initToken = creds.initialBearerToken,
+              let expiresAt = creds.initialBearerTokenExpiresAt,
+              expiresAt.timeIntervalSinceNow > 0
+        else { return nil }
+
+        do {
+            let responseData = try await makePathfinderRequest(
+                credentials: creds,
+                bearerToken: initToken,
+                body: pathfinderBody(
+                    operationName: "areEntitiesInLibrary",
+                    variables: ["uris": ["spotify:track:\(trackId)"]],
+                    sha256Hash: "134337999233cc6fdd6b1e6dbf94841409f04a946c5c7b744b09ba0dfe5a85ed"
+                )
+            )
+            let decoded = try JSONDecoder().decode(SpotifyLibraryLookupResponse.self, from: responseData)
+            guard let first = decoded.data.lookup.first else { return nil }
+            return first.data.saved
+        } catch {
+            return nil
+        }
+    }
+
+    public func saveTrack(trackId: String) async -> Bool {
+        guard let creds = try? credentials(),
+              let initToken = creds.initialBearerToken,
+              let expiresAt = creds.initialBearerTokenExpiresAt,
+              expiresAt.timeIntervalSinceNow > 0
+        else { return false }
+
+        do {
+            _ = try await makePathfinderRequest(
+                credentials: creds,
+                bearerToken: initToken,
+                body: pathfinderBody(
+                    operationName: "addToLibrary",
+                    variables: ["libraryItemUris": ["spotify:track:\(trackId)"]],
+                    sha256Hash: "7c5a69420e2bfae3da5cc4e14cbc8bb3f6090f80afc00ffc179177f19be3f33d"
+                )
+            )
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    public func removeTrack(trackId: String) async -> Bool {
+        guard let creds = try? credentials(),
+              let initToken = creds.initialBearerToken,
+              let expiresAt = creds.initialBearerTokenExpiresAt,
+              expiresAt.timeIntervalSinceNow > 0
+        else { return false }
+
+        do {
+            _ = try await makePathfinderRequest(
+                credentials: creds,
+                bearerToken: initToken,
+                body: pathfinderBody(
+                    operationName: "removeFromLibrary",
+                    variables: ["libraryItemUris": ["spotify:track:\(trackId)"]],
+                    sha256Hash: "7c5a69420e2bfae3da5cc4e14cbc8bb3f6090f80afc00ffc179177f19be3f33d"
+                )
+            )
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private func pathfinderBody(operationName: String, variables: [String: Any], sha256Hash: String) -> [String: Any] {
+        [
+            "variables": variables,
+            "operationName": operationName,
+            "extensions": [
+                "persistedQuery": [
+                    "version": 1,
+                    "sha256Hash": sha256Hash,
+                ],
+            ],
+        ]
+    }
+
+    private func makePathfinderRequest(
+        credentials creds: SpotifyCredentials,
+        bearerToken: String,
+        body: [String: Any],
+        includeBrowserHeaders: Bool = true
+    ) async throws -> Data {
+        let data = try JSONSerialization.data(withJSONObject: body)
+        var request = URLRequest(url: URL(string: "https://api-partner.spotify.com/pathfinder/v2/query")!)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "authorization")
+        request.setValue(creds.clientToken, forHTTPHeaderField: "client-token")
+        request.setValue(Self.appVersion, forHTTPHeaderField: "spotify-app-version")
+        request.setValue("WebPlayer", forHTTPHeaderField: "app-platform")
+        request.setValue("application/json;charset=UTF-8", forHTTPHeaderField: "content-type")
+        request.setValue("application/json", forHTTPHeaderField: "accept")
+        request.setValue("en", forHTTPHeaderField: "accept-language")
+        if includeBrowserHeaders {
+            request.setValue("https://open.spotify.com", forHTTPHeaderField: "origin")
+            request.setValue("https://open.spotify.com/", forHTTPHeaderField: "referer")
+            request.setValue(Self.browserUserAgent, forHTTPHeaderField: "user-agent")
+        }
+        request.httpBody = data
+
+        let (responseData, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw SourceError.serviceError("Invalid response")
+        }
+        guard (200 ... 299).contains(httpResponse.statusCode) else {
+            throw SourceError.serviceError("HTTP \(httpResponse.statusCode)")
+        }
+        return responseData
     }
 
     private static var acceptLanguageHeader: String {
@@ -401,4 +498,20 @@ struct SpotifyAudioAnalysisTrack: Decodable {
         case tempoConfidence = "tempo_confidence"
         case mode
     }
+}
+
+private struct SpotifyLibraryLookupResponse: Decodable {
+    let data: SpotifyLibraryLookupData
+}
+
+private struct SpotifyLibraryLookupData: Decodable {
+    let lookup: [SpotifyLibraryLookupEntry]
+}
+
+private struct SpotifyLibraryLookupEntry: Decodable {
+    let data: SpotifyLibraryLookupEntryData
+}
+
+private struct SpotifyLibraryLookupEntryData: Decodable {
+    let saved: Bool?
 }

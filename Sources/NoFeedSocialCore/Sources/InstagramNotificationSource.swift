@@ -110,6 +110,8 @@ public final class InstagramNotificationSource: NotificationSource {
                         let videoURL: URL? = videoVersion.flatMap { URL(string: $0.url) }
                         let embed = media.storyFeedMedia?.first { $0.url != nil }
                         let music = media.storyMusicStickers?.compactMap(\.music).first
+                        let mentions = media.reelMentions?.compactMap(\.mention) ?? []
+                        let links = media.storyLinkStickers?.compactMap(\.link) ?? []
                         slides.append(InstagramStorySlide(
                             id: media.id,
                             imageURL: imageURL,
@@ -119,6 +121,8 @@ public final class InstagramNotificationSource: NotificationSource {
                             embedURL: embed?.url,
                             embedLabel: embed?.label,
                             music: music,
+                            mentions: mentions,
+                            links: links,
                             ownerId: String(reel.user?.pk ?? userId),
                             takenAt: media.takenAt ?? 0
                         ))
@@ -175,5 +179,34 @@ public final class InstagramNotificationSource: NotificationSource {
         } catch {
             throw SourceError.serviceError("Could not fetch profile.")
         }
+    }
+
+    public func fetchTargetMetrics(for item: NotificationItem) async throws -> NotificationTargetMetrics {
+        guard let mediaId = item.target?.id else {
+            throw SourceError.unsupported
+        }
+
+        let response = try await client.mediaInfo(mediaId: mediaId)
+        guard let media = response.items.first else {
+            throw SourceError.invalidResponse
+        }
+
+        let author = media.user.map { user in
+            NotificationActor(
+                id: user.pk.map(String.init) ?? user.username ?? mediaId,
+                network: .instagram,
+                username: user.username,
+                displayName: user.fullName,
+                avatarURL: user.profilePicUrl.flatMap(URL.init)
+            )
+        }
+
+        return NotificationTargetMetrics(
+            author: author,
+            text: media.caption?.text,
+            imageURLs: media.bestImageURLs,
+            postedAt: media.takenAt.map { Date(timeIntervalSince1970: $0) },
+            likeCount: media.likeCount
+        )
     }
 }

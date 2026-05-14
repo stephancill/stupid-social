@@ -322,6 +322,18 @@
 
 ## 2026-05-11
 
+### Notification detail native post section
+
+- `NotificationTarget` now carries optional display-safe native post metadata: multiple image URLs, author, posted timestamp, and cached like count. Decoding preserves compatibility with existing cached `targetData` rows that only stored `imageURL`.
+- X targets populate author, tweet creation time, all tweet media URLs from `extended_entities.media`, and `favorite_count` when present in `notifications/all.json`.
+- Farcaster targets populate cast author, cast timestamp, embed URLs, and `reactions.likes_count` when Hypersnap includes it. The detail view also loads fresh target metrics on appear via `GET /v2/farcaster/reaction/cast?hash=...&types=likes&fid=<cast_author_fid>`, counting the returned likes so the displayed value is total likes available from the detail endpoint rather than only the actors in the notification activity. Passing `fid` is required for reliable hash resolution; without it the endpoint can return zero likes.
+- Instagram targets continue using notification-safe media thumbnails and now thread them through the new multiple-image field. Detail view loads `GET /api/v1/media/{media_id}/info/` on appear, using the hydrated media owner as the post author, `like_count` as the total likes, caption text when available, and full media/carousel image URLs. If the notification media id includes an owner suffix, the client retries with the stripped media id after a failed request.
+- `NotificationDetailView` now renders target content in its own `Post` section with a native post-style header, author avatar/name, relative post time, full text, full-width images, total like count when available, and an external-link affordance when a target URL is available.
+- Added `NotificationSource.fetchTargetMetrics(for:)` and `FeedService.fetchTargetMetrics(for:)` for on-demand detail-screen target hydration. X implements this with `GET https://x.com/i/api/1.1/statuses/show.json?id=...&tweet_mode=extended` and reads `favorite_count`; unsupported sources return `.unsupported` and the UI silently falls back to cached target metadata.
+- Fixed target hydration dispatch: `fetchTargetMetrics(for:)` must be a protocol requirement, not only a protocol-extension helper, otherwise calls through `any NotificationSource` resolve to the default `.unsupported` implementation and never reach Farcaster/Instagram/X source implementations.
+- Farcaster target hydration now falls back to the notification `accountId` as the cast author FID when older cached targets do not include `target.author`. It also fetches `GET /v2/farcaster/cast?identifier=...&type=hash&fid=...` to refresh post author/display text/timestamp in detail. The post header prefers display name over username.
+- Instagram story-like notifications expose aggregate story-like counts in `rich_text` rather than `counts` or `media/info`. For `story_like`, normalization now parses patterns like `@a, @b and N others liked your story` and stores `2 + N` in `NotificationTarget.likeCount` so story details can show the total story-like count when target media hydration does not provide one.
+
 ### Instagram story rendering endpoint probe
 
 - Live-probed `POST /api/v1/feed/reels_media/` with simulator Instagram credentials, using the existing `reels_tray` IDs and redacting CDN URLs from command output. A 12-reel sample returned 50 story items: 14 video items (`media_type = 2`) and 7 post-embed items with `story_feed_media`.
@@ -480,3 +492,81 @@
 ### Spotify story preloading
 
 - `UnifiedStoryViewer` now preloads adjacent Spotify stories' preview audio in the background by resolving the previous/next preview URLs, creating `AVURLAsset`s, and loading their durations. When the user navigates to a preloaded Spotify story in either direction, playback creates the `AVPlayerItem` from the warmed asset instead of starting from a cold URL fetch.
+
+## 2026-05-13
+
+### Farcaster reply notification discrepancy
+
+- Live Hypersnap check for FID `1689` and cast `d03cc675be6caa0ae98df283a989d3341083d901` found `GET /v2/farcaster/cast/conversation` returns 4 direct replies with `parent_hash` equal to that cast and `parent_author.fid == 1689`.
+- The same cast appears repeatedly in the first `GET /v2/farcaster/notifications?fid=1689&limit=50` page as `likes` target data, but none of the 4 direct replies appear as `reply` notifications. Given the reply timestamps are interleaved with first-page like timestamps, they would be expected in the current notifications response if parent-based reply lookup were active.
+- Conclusion: Hypersnap can read the replies through the conversation path, but the deployed notifications endpoint is still omitting direct parent-based replies for this case.
+
+
+### Feed and story feedback pass
+
+- Pull-to-refresh now short-circuits while foreground/on-appear refresh is active and the refresh modifier is removed during active refresh state, preventing overlapping manual and automatic refreshes.
+- `FeedViewModel` now runs a safe foreground-style auto refresh every 15 seconds. This reuses the existing automatic policy: X stays count-only through the source path, fetch-capable sources update cache/story content, and pending new notifications remain gated behind the `N New` affordance.
+- Manual refresh now treats changed cached grouped notifications as new, not only brand-new IDs, when a non-X group gains actor IDs under the same stable group ID. X grouped notifications are excluded from this diff because the live X notifications endpoint can vary grouped actor metadata between consecutive fetches without an actual new notification.
+- Notification detail no longer displays `Loading post details`; target hydration now shows only a compact loading indicator. Multiple target images render as a horizontal carousel instead of a vertical stack.
+- Reply details render a `Parent Post` section when sources provide `parentTarget`. X reply entries populate this from in-memory parent tweets when X includes the parent in `globalObjects.tweets`; Farcaster stores parent hash/author metadata when Hypersnap provides it, but full parent text still depends on a future source response or targeted hydration.
+- Story seen marking is delayed until after the full-screen presentation animation window completes, avoiding immediate seen-state changes before the modal visibly settles.
+- Story entry behavior now depends on the tapped item: tapping an unread story opens only unread story-bar items, while tapping a seen story opens that user's story item/slides only.
+- Instagram story rendering now decodes and displays lightweight rich metadata pills for `reel_mentions` and `story_link_stickers`, linking @mentions to Instagram profiles and story links to their target URLs.
+- `UnifiedStoryViewer` preloads adjacent Instagram story images in addition to existing adjacent Spotify audio preloading.
+- Spotify activity now carries the Spotify buddylist track context name and displays it as `From ...` below album metadata when available, surfacing playlist/context information for the song.
+
+### Spotify login validation
+
+- Spotify credential saves now require `SpotifyClient.validateAccount()` to resolve the authenticated username through the `profileAttributes` API. The previous fallback username (`"spotify"`) was removed because it could make incomplete credentials look valid.
+- If username resolution fails after captured credentials are saved, the settings flow now deletes the saved Spotify credentials, clears Spotify account metadata, sets a service-error status, and shows an explicit retry message instead of treating the login as a successful connection.
+- `SpotifyConnectionView` keeps the login button visible whenever no Spotify username is connected, including service-error states, so users can immediately retry after a failed credential capture/validation.
+
+### Seen story navigation
+
+- Tapping a seen story now opens the full seen-story set, starting at the tapped item, instead of limiting navigation to only that user's story item. Tapping an unread story continues to open only unread story-bar items.
+
+### Story mention profile navigation
+
+- Instagram story @mention pills now navigate to `ProfileDetailView` when the `reel_mentions` payload includes a user id. `UnifiedStoryViewer` receives the shared `FeedService` and wraps its content in a `NavigationStack` so mention taps use the same native profile detail path as notification detail People rows. Mentions without a user id remain non-navigating text pills.
+
+### Auto refresh interval removal
+
+- Removed the 15-second foreground auto-refresh loop from `FeedView`. The app still refreshes on foreground activation and supports pull-to-refresh, but no longer polls continuously while the feed is open.
+
+### Spotify story progress behavior
+
+- Removed the animated Spotify loading-progress pulse in `UnifiedStoryViewer`; loading now uses a stable gray progress track so the full-screen modal does not show a bouncing/pulsing loader during presentation.
+- Spotify story slides now advance immediately when the preview `AVPlayerItem` reaches end-of-playback. The timer also permits `.finished` Spotify status so elapsed-duration fallback behavior remains consistent with Instagram story slides.
+
+### Instagram music story duration
+
+- Instagram story music stickers decode clip timing from `start_time_ms`/`end_time_ms` when present, with fallback duration fields from `music_asset_info` (`duration_in_ms`, `duration_ms`, `audio_asset_duration_ms`) for future audio handling.
+- Instagram story timing remains media-driven: video slides use `video_duration` when available, while still-image slides stay at the default 5 seconds even when they have a music sticker. The app does not currently play a separate Instagram music audio asset; video audio continues to come from the story video stream itself.
+
+### X tweet notification category
+
+- Added `XNotificationCategory` with configurable Mentions, Replies, Reactions, and Tweets categories. `XAccountMetadata` now persists enabled X categories with a default of all categories enabled for existing stored accounts.
+- `XConnectionView` now shows the same per-category notification toggles used by Farcaster and Instagram. `SettingsViewModel` persists X category toggle changes through `AccountMetadataStore`.
+- X post/tweet notification elements such as `device_follow_tweet_notification_entry`, `user_tweeted`, `user_tweeted_entry`, `tweet_notification`, and `user_posted` normalize to the new `.post` `NotificationType`. The X source filters normalized notifications through the configured X category set before returning items to the feed.
+- Live simulator credential testing against `GET /i/api/2/notifications/all.json` showed the missing ~21h tweet notification is a `notification` entry with `element: device_follow_tweet_notification_entry`, `url.title: Posts`, non-empty `fromUsers`, and an empty `targetTweets` array. The parser now treats these notification entries as supported even without a target tweet, rendering them from actor metadata and the notification `sortIndex` timestamp.
+- `NotificationDetailView` now hydrates X `.post` notifications on demand with `GET /i/api/2/notifications/device_follow.json`. The feed remains no-fanout; detail fetches the current device-follow timeline and renders each returned tweet as a separate native post card. Live probing confirmed the endpoint returns `globalObjects.tweets` plus tweet timeline entries; X's grouped notification entries can omit `targetTweets`, so detail intentionally shows the device-follow feed instead of trying to correlate a stale grouped notification to exact tweet IDs.
+- Updated product/technical direction so foreground activation refresh full-fetches X notifications rather than count-only polling. The app accepts X's possible server-side read side effect for foreground/manual refresh because current feed content is preferred.
+- Foreground activation cache writes now replace only the networks that successfully refreshed, instead of replacing the entire notification cache with the partial result set. This preserves cached X/Farcaster rows when another foreground source succeeds while X or Farcaster fails transiently.
+- Manual refresh now returns the existing cached feed without surfacing a blocking refresh alert when every source fails but cached notifications are available. If the cache is empty and all sources fail, the alert is still shown so first-run/account problems remain visible.
+- Manual refresh now also replaces only successfully refreshed networks that returned items, matching foreground refresh. Failed networks and networks that transiently return an empty result keep their existing cached notifications, so consecutive refreshes cannot clear the feed just because one source failed or returned no current entries.
+- Root-caused the reproducible post-auto-refresh manual refresh alert to task cancellation, not API failures: simulator logs showed X, Farcaster, and Instagram all failing with `NSURLErrorDomain Code=-999 cancelled`. `FeedView` used a conditional `.refreshableIf(!isForegroundRefreshing && !isRefreshing)` modifier; when pull-to-refresh set `isRefreshing = true`, SwiftUI recomputed the view, removed the `.refreshable` modifier, and cancelled the in-flight refresh task. The fix keeps `.refreshable` attached permanently and relies on `FeedViewModel.refresh()` guards to ignore overlapping refresh attempts.
+
+## 2026-05-14
+
+### Spotify liked-song status in full-screen viewer
+
+- Added `areEntitiesInLibrary` (hash `134337999233cc6fdd6b1e6dbf94841409f04a946c5c7b744b09ba0dfe5a85ed`) and `addToLibrary` (hash `7c5a69420e2bfae3da5cc4e14cbc8bb3f6090f80afc00ffc179177f19be3f33d`) Pathfinder GraphQL operations to `SpotifyClient` for checking and setting track library status.
+- These queries require the initial browser login Bearer token (from `reason=init`) which carries library scope. Refreshed WebPlayer transport tokens do not have sufficient scope.
+- Spotify login now captures the transport Bearer token plus `sp_dc`/`sp_t`/optional `sp_key`, then `SettingsViewModel` fetches `https://open.spotify.com/api/token?reason=init&productType=web-player` natively after account validation and stores the returned token and expiry as `initialBearerToken` / `initialBearerTokenExpiresAt` on `SpotifyCredentials`.
+- `SpotifyCredentials` gained `initialBearerToken: String?`, `initialBearerTokenExpiresAt: Date?`, and optional `spKey` to preserve the init token separately from the regular transport token and retain all relevant Spotify session cookies.
+- Live Pathfinder testing showed `areEntitiesInLibrary` returns `403 Forbidden` without browser-like `Origin`, `Referer`, and `User-Agent` headers even when the token is valid. The Spotify library check/add requests now send those headers.
+- `UnifiedStoryViewer` checks liked status for each Spotify story slide via `SpotifyClient.isTrackSaved(trackId:)`. When saved, shows a "Saved" badge with checkmark. When not saved, shows a `+` button that calls `SpotifyClient.saveTrack(trackId:)` to add the track to the user's Liked Songs.
+- The Spotify story save control is icon-only and sits to the right of the "Open in Spotify" button at the same 44-point height; saved tracks render as a white checkmark in a green circle.
+- Live mutation testing confirmed `addToLibrary` and `removeFromLibrary` share hash `7c5a69420e2bfae3da5cc4e14cbc8bb3f6090f80afc00ffc179177f19be3f33d` and require variables shaped as `{ "libraryItemUris": ["spotify:track:..."] }`. The saved checkmark now calls `removeFromLibrary` so the control toggles liked-song state both ways.
+- Refactored Spotify Pathfinder calls behind `SpotifyClient.makePathfinderRequest(...)` and `pathfinderBody(...)` so auth, app, content type, language, and browser-origin headers are defined in one place instead of repeated across profile, library check, add, and remove operations.
+- Requires re-login to Spotify in the app for the init token to be captured; existing stored credentials do not have `initialBearerToken`.
