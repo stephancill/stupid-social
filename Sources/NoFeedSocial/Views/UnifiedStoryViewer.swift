@@ -2,6 +2,9 @@ import AVFoundation
 import Combine
 import NoFeedSocialCore
 import SwiftUI
+#if os(iOS)
+    import UIKit
+#endif
 
 struct UnifiedStoryViewer: View {
     let items: [StoryBarItem]
@@ -1009,6 +1012,7 @@ struct UnifiedStoryViewer: View {
                                 spotifySavingTrackIds.wrappedValue.remove(trackId)
                                 if removed {
                                     spotifySavedStatus.wrappedValue[trackId] = false
+                                    playSpotifySaveHaptic()
                                 }
                             }
                         } label: {
@@ -1035,6 +1039,7 @@ struct UnifiedStoryViewer: View {
                                 spotifySavingTrackIds.wrappedValue.remove(trackId)
                                 if saved {
                                     spotifySavedStatus.wrappedValue[trackId] = true
+                                    playSpotifySaveHaptic()
                                 }
                             }
                         } label: {
@@ -1114,4 +1119,11 @@ struct UnifiedStoryViewer: View {
     private func spotifyPulseOpacity(_ animation: MusicAnimationMetadata?) -> Double {
         min((0.72 + loudnessIntensity(animation) * 0.28) * confidence(animation), 1)
     }
+}
+
+@MainActor
+private func playSpotifySaveHaptic() {
+    #if os(iOS)
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    #endif
 }

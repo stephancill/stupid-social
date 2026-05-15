@@ -41,6 +41,22 @@ public struct SpotifyClient {
         return try await refreshWebPlayerToken(existing: creds)
     }
 
+    private func credentialsForLibraryRequest() async throws -> (SpotifyCredentials, String) {
+        let creds = try await credentialsForRequest()
+        if let initToken = creds.initialBearerToken,
+           let expiresAt = creds.initialBearerTokenExpiresAt,
+           expiresAt.timeIntervalSinceNow > Self.tokenRefreshLeeway
+        {
+            return (creds, initToken)
+        }
+        if let refreshed = try? await refreshInitialBearerToken(existing: creds),
+           let initToken = refreshed.initialBearerToken
+        {
+            return (refreshed, initToken)
+        }
+        return (creds, creds.bearerToken)
+    }
+
     private func makeRequest(_ path: String) async throws -> (Data, HTTPURLResponse) {
         let creds = try await credentialsForRequest()
         return try await makeRequest(path, credentials: creds, allowsTokenRefresh: true)
@@ -98,7 +114,7 @@ public struct SpotifyClient {
         var request = URLRequest(url: components.url!)
         request.setValue("application/json", forHTTPHeaderField: "accept")
         request.setValue("WebPlayer", forHTTPHeaderField: "app-platform")
-        request.setValue("sp_dc=\(creds.spDC)", forHTTPHeaderField: "cookie")
+        request.setValue(spotifyCookieHeader(for: creds), forHTTPHeaderField: "cookie")
 
         let (data, response) = try await session.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
@@ -115,6 +131,62 @@ public struct SpotifyClient {
         )
         _ = try credentialStore.saveSpotifyCredentials(refreshed)
         return refreshed
+    }
+
+    private func refreshInitialBearerToken(existing creds: SpotifyCredentials) async throws -> SpotifyCredentials {
+        guard !creds.spDC.isEmpty else {
+            throw SourceError.serviceError("Spotify login expired")
+        }
+
+        var components = URLComponents(string: "https://open.spotify.com/api/token")!
+        let token = SpotifyWebPlayerToken.current()
+        let serverToken = await SpotifyWebPlayerToken.serverSynchronized(session: session) ?? token
+        components.queryItems = [
+            URLQueryItem(name: "reason", value: "init"),
+            URLQueryItem(name: "productType", value: "web-player"),
+            URLQueryItem(name: "totp", value: token),
+            URLQueryItem(name: "totpServer", value: serverToken),
+            URLQueryItem(name: "totpVer", value: SpotifyWebPlayerToken.version),
+        ]
+
+        var request = URLRequest(url: components.url!)
+        request.setValue("application/json", forHTTPHeaderField: "accept")
+        request.setValue("WebPlayer", forHTTPHeaderField: "app-platform")
+        request.setValue(spotifyCookieHeader(for: creds), forHTTPHeaderField: "cookie")
+
+        let (data, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw SourceError.serviceError("Invalid response")
+        }
+        guard (200 ... 299).contains(httpResponse.statusCode) else {
+            throw SourceError.serviceError("Spotify library token refresh failed")
+        }
+
+        let decoded = try JSONDecoder().decode(SpotifyTokenResponse.self, from: data)
+        let refreshed = SpotifyCredentials(
+            bearerToken: creds.bearerToken,
+            clientToken: creds.clientToken,
+            spDC: creds.spDC,
+            spT: creds.spT,
+            spKey: creds.spKey,
+            accessTokenExpiresAt: creds.accessTokenExpiresAt,
+            initialBearerToken: decoded.accessToken,
+            initialBearerTokenExpiresAt: decoded.accessTokenExpirationTimestampMs.map { Date(timeIntervalSince1970: TimeInterval($0) / 1000) },
+            username: creds.username
+        )
+        _ = try credentialStore.saveSpotifyCredentials(refreshed)
+        return refreshed
+    }
+
+    private func spotifyCookieHeader(for creds: SpotifyCredentials) -> String {
+        var values = ["sp_dc=\(creds.spDC)"]
+        if let spT = creds.spT, !spT.isEmpty {
+            values.append("sp_t=\(spT)")
+        }
+        if let spKey = creds.spKey, !spKey.isEmpty {
+            values.append("sp_key=\(spKey)")
+        }
+        return values.joined(separator: "; ")
     }
 
     public func validateAccount() async throws -> String {
@@ -207,16 +279,11 @@ public struct SpotifyClient {
     }
 
     public func isTrackSaved(trackId: String) async -> Bool? {
-        guard let creds = try? credentials(),
-              let initToken = creds.initialBearerToken,
-              let expiresAt = creds.initialBearerTokenExpiresAt,
-              expiresAt.timeIntervalSinceNow > 0
-        else { return nil }
-
         do {
+            let (creds, bearerToken) = try await credentialsForLibraryRequest()
             let responseData = try await makePathfinderRequest(
                 credentials: creds,
-                bearerToken: initToken,
+                bearerToken: bearerToken,
                 body: pathfinderBody(
                     operationName: "areEntitiesInLibrary",
                     variables: ["uris": ["spotify:track:\(trackId)"]],
@@ -232,16 +299,11 @@ public struct SpotifyClient {
     }
 
     public func saveTrack(trackId: String) async -> Bool {
-        guard let creds = try? credentials(),
-              let initToken = creds.initialBearerToken,
-              let expiresAt = creds.initialBearerTokenExpiresAt,
-              expiresAt.timeIntervalSinceNow > 0
-        else { return false }
-
         do {
+            let (creds, bearerToken) = try await credentialsForLibraryRequest()
             _ = try await makePathfinderRequest(
                 credentials: creds,
-                bearerToken: initToken,
+                bearerToken: bearerToken,
                 body: pathfinderBody(
                     operationName: "addToLibrary",
                     variables: ["libraryItemUris": ["spotify:track:\(trackId)"]],
@@ -255,16 +317,11 @@ public struct SpotifyClient {
     }
 
     public func removeTrack(trackId: String) async -> Bool {
-        guard let creds = try? credentials(),
-              let initToken = creds.initialBearerToken,
-              let expiresAt = creds.initialBearerTokenExpiresAt,
-              expiresAt.timeIntervalSinceNow > 0
-        else { return false }
-
         do {
+            let (creds, bearerToken) = try await credentialsForLibraryRequest()
             _ = try await makePathfinderRequest(
                 credentials: creds,
-                bearerToken: initToken,
+                bearerToken: bearerToken,
                 body: pathfinderBody(
                     operationName: "removeFromLibrary",
                     variables: ["libraryItemUris": ["spotify:track:\(trackId)"]],
