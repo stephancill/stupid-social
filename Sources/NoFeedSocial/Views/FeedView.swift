@@ -17,23 +17,36 @@ struct FeedView: View {
     var body: some View {
         NavigationStack {
             List {
-                StoriesBar(
-                    items: viewModel.storyBarItems,
-                    ownInstagramActor: viewModel.ownInstagramStoryActor,
-                    onComposeTap: {
-                        showingStoryComposer = true
-                    },
-                    onItemTap: { index in
-                        let selectedItem = viewModel.storyBarItems[index]
-                        let items = viewModel.storyViewerItems(for: index)
-                        storyViewerSelection = StoryViewerSelection(
-                            items: items,
-                            startIndex: viewModel.storyViewerStartIndex(for: selectedItem, in: items),
-                        )
-                    },
-                )
+                if hasVisibleStoriesBar {
+                    StoriesBar(
+                        items: viewModel.storyBarItems,
+                        ownInstagramActor: viewModel.ownInstagramStoryActor,
+                        ownInstagramReel: viewModel.ownInstagramStoryReel,
+                        onComposeTap: {
+                            showingStoryComposer = true
+                        },
+                        onOwnStoryTap: {
+                            if let ownInstagramStoryReel = viewModel.ownInstagramStoryReel {
+                                storyViewerSelection = StoryViewerSelection(
+                                    items: [.instagram(ownInstagramStoryReel)],
+                                    startIndex: 0,
+                                )
+                            } else {
+                                showingStoryComposer = true
+                            }
+                        },
+                        onItemTap: { index in
+                            let selectedItem = viewModel.storyBarItems[index]
+                            let items = viewModel.storyViewerItems(for: index)
+                            storyViewerSelection = StoryViewerSelection(
+                                items: items,
+                                startIndex: viewModel.storyViewerStartIndex(for: selectedItem, in: items),
+                            )
+                        },
+                    )
+                }
 
-                if notificationItems.isEmpty, viewModel.storyBarItems.isEmpty, !viewModel.storyBarLoading {
+                if notificationItems.isEmpty, !hasVisibleStoriesBar, !viewModel.storyBarLoading {
                     VStack {
                         Spacer(minLength: 0)
                         ContentUnavailableView(
@@ -177,6 +190,10 @@ struct FeedView: View {
         viewModel.items
     }
 
+    private var hasVisibleStoriesBar: Bool {
+        viewModel.storyBarContentLoaded && (viewModel.ownInstagramStoryActor != nil || !viewModel.storyBarItems.isEmpty)
+    }
+
     private var unreadItems: [DisplayNotificationItem] {
         notificationItems.filter(\.isUnread)
     }
@@ -202,18 +219,40 @@ private struct StoryViewerSelection: Identifiable {
 private struct StoriesBar: View {
     let items: [StoryBarItem]
     let ownInstagramActor: NotificationActor?
+    let ownInstagramReel: InstagramStoryReel?
     let onComposeTap: () -> Void
+    let onOwnStoryTap: () -> Void
     let onItemTap: (Int) -> Void
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(alignment: .top, spacing: 12) {
-                Button {
-                    onComposeTap()
-                } label: {
-                    StoryComposerBubble(actor: ownInstagramActor)
+                if ownInstagramActor != nil {
+                    Button {
+                        onOwnStoryTap()
+                    } label: {
+                        StoryComposerBubble(actor: ownInstagramActor, reel: ownInstagramReel)
+                    }
+                    .buttonStyle(.plain)
+                    .overlay(alignment: .topLeading) {
+                        Button {
+                            onComposeTap()
+                        } label: {
+                            Image(systemName: "plus")
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(.white)
+                                .frame(width: 24, height: 24)
+                                .background(Color.blue, in: Circle())
+                                .overlay {
+                                    Circle()
+                                        .stroke(.background, lineWidth: 2)
+                                }
+                        }
+                        .buttonStyle(.plain)
+                        .offset(x: 49, y: 49)
+                        .accessibilityLabel("Create story")
+                    }
                 }
-                .buttonStyle(.plain)
 
                 ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                     Button {
@@ -244,11 +283,12 @@ private struct StoriesBar: View {
 
 private struct StoryComposerBubble: View {
     let actor: NotificationActor?
+    let reel: InstagramStoryReel?
     @AppStorage("devModeEnabled") private var devModeEnabled = false
 
     var body: some View {
         VStack(spacing: 6) {
-            ZStack(alignment: .bottomTrailing) {
+            ZStack {
                 CachedAsyncImage(url: actor?.avatarURL, cacheKey: actor.map { "instagram-avatar-\($0.id)" }) {
                     avatarPlaceholder
                 } failure: {
@@ -258,19 +298,21 @@ private struct StoryComposerBubble: View {
                 .clipShape(Circle())
                 .overlay {
                     Circle()
-                        .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
+                        .stroke(baseStoryBorderColor, lineWidth: reel == nil ? 1 : 3)
+                        .overlay {
+                            if reel?.isSeen == false {
+                                Circle()
+                                    .stroke(
+                                        LinearGradient(
+                                            colors: [.purple, .pink, .orange],
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing,
+                                        ),
+                                        lineWidth: 3,
+                                    )
+                            }
+                        }
                 }
-
-                Image(systemName: "plus")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 24, height: 24)
-                    .background(Color.blue, in: Circle())
-                    .overlay {
-                        Circle()
-                            .stroke(.background, lineWidth: 2)
-                    }
-                    .offset(x: 3, y: 3)
             }
 
             Text(label)
@@ -279,7 +321,14 @@ private struct StoryComposerBubble: View {
                 .lineLimit(1)
                 .frame(width: 70)
         }
-        .accessibilityLabel("Create story")
+        .accessibilityLabel(reel == nil ? "Create story" : "Your Instagram story")
+    }
+
+    private var baseStoryBorderColor: Color {
+        if let reel {
+            return reel.isSeen ? Color.gray.opacity(0.4) : Color.clear
+        }
+        return Color.secondary.opacity(0.25)
     }
 
     private var label: String {

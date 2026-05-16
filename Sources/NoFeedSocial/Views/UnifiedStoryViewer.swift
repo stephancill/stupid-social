@@ -39,6 +39,7 @@ struct UnifiedStoryViewer: View {
     @State private var loadingArtworkPulse = false
     @State private var spotifySavedStatus: [String: Bool] = [:]
     @State private var spotifySavingTrackIds: Set<String> = []
+    @State private var showingStoryActions = false
     @State private var pendingDeleteSlide: InstagramStorySlide?
     @State private var isDeletingStory = false
     @State private var deleteErrorMessage: String?
@@ -112,6 +113,10 @@ struct UnifiedStoryViewer: View {
 
                         progressBar(slideCount: slideCount)
                         topBar
+
+                        if showingStoryActions {
+                            storyActionsOverlay
+                        }
                     }
                 }
                 .contentShape(Rectangle())
@@ -191,6 +196,7 @@ struct UnifiedStoryViewer: View {
             }
             Button("Cancel", role: .cancel) {
                 pendingDeleteSlide = nil
+                resumeCurrentStoryIfNeeded()
             }
         } message: {
             Text("This will remove the current Instagram story from your account.")
@@ -354,12 +360,9 @@ struct UnifiedStoryViewer: View {
             Spacer()
 
             if canDeleteCurrentInstagramStory {
-                Menu {
-                    Button("Delete Story", role: .destructive) {
-                        pendingDeleteSlide = currentInstagramSlide
-                        isPaused = true
-                        player?.pause()
-                    }
+                Button {
+                    pauseCurrentStory()
+                    showingStoryActions.toggle()
                 } label: {
                     if isDeletingStory {
                         ProgressView()
@@ -406,6 +409,52 @@ struct UnifiedStoryViewer: View {
         .padding(.horizontal, 16)
     }
 
+    private var storyActionsOverlay: some View {
+        ZStack(alignment: .topTrailing) {
+            Color.black.opacity(0.001)
+                .ignoresSafeArea()
+                .onTapGesture {
+                    hideStoryActions(resume: true)
+                }
+
+            VStack(spacing: 0) {
+                Button(role: .destructive) {
+                    pendingDeleteSlide = currentInstagramSlide
+                    showingStoryActions = false
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 11)
+                }
+                .foregroundStyle(.red)
+
+                Divider()
+
+                Button {
+                    hideStoryActions(resume: true)
+                } label: {
+                    Text("Cancel")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 11)
+                }
+                .foregroundStyle(.primary)
+            }
+            .font(.subheadline.weight(.semibold))
+            .frame(width: 170)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(.white.opacity(0.12), lineWidth: 1)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .buttonStyle(.plain)
+            .padding(.top, 58)
+            .padding(.trailing, 54)
+        }
+    }
+
     private var topBar: some View {
         EmptyView()
     }
@@ -429,7 +478,14 @@ struct UnifiedStoryViewer: View {
     private var deleteConfirmationBinding: Binding<Bool> {
         Binding(
             get: { pendingDeleteSlide != nil },
-            set: { if !$0 { pendingDeleteSlide = nil } },
+            set: {
+                if !$0 {
+                    pendingDeleteSlide = nil
+                    if !isDeletingStory {
+                        resumeCurrentStoryIfNeeded()
+                    }
+                }
+            },
         )
     }
 
@@ -496,7 +552,8 @@ struct UnifiedStoryViewer: View {
 
     private func storyGesture(width: CGFloat) -> some Gesture {
         DragGesture(minimumDistance: 0, coordinateSpace: .local)
-            .onChanged { _ in
+            .onChanged { value in
+                guard !isTopBarInteraction(value.startLocation) else { return }
                 if touchStartedAt == nil {
                     touchStartedAt = Date()
                 }
@@ -506,6 +563,11 @@ struct UnifiedStoryViewer: View {
                 }
             }
             .onEnded { value in
+                guard !isTopBarInteraction(value.startLocation) else {
+                    touchStartedAt = nil
+                    return
+                }
+
                 let touchDuration = touchStartedAt.map { Date().timeIntervalSince($0) } ?? 0
                 touchStartedAt = nil
                 isPaused = false
@@ -530,6 +592,29 @@ struct UnifiedStoryViewer: View {
                     }
                 }
             }
+    }
+
+    private func isTopBarInteraction(_ location: CGPoint) -> Bool {
+        location.y < 96
+    }
+
+    private func pauseCurrentStory() {
+        guard currentItem?.isInstagram == true else { return }
+        isPaused = true
+        player?.pause()
+    }
+
+    private func hideStoryActions(resume: Bool) {
+        showingStoryActions = false
+        if resume {
+            resumeCurrentStoryIfNeeded()
+        }
+    }
+
+    private func resumeCurrentStoryIfNeeded() {
+        guard currentItem?.isInstagram == true, pendingDeleteSlide == nil, !isDeletingStory else { return }
+        isPaused = false
+        player?.play()
     }
 
     // MARK: - Navigation

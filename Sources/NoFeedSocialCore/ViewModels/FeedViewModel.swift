@@ -5,6 +5,8 @@ public final class FeedViewModel: ObservableObject {
     @Published public private(set) var items: [DisplayNotificationItem] = []
     @Published public private(set) var storyBarItems: [StoryBarItem] = []
     @Published public private(set) var ownInstagramStoryActor: NotificationActor?
+    @Published public private(set) var ownInstagramStoryReel: InstagramStoryReel?
+    @Published public private(set) var storyBarContentLoaded = false
     @Published public private(set) var storyBarLoading = false
     @Published public private(set) var pendingNewCount = 0
     @Published public private(set) var isRefreshing = false
@@ -98,17 +100,25 @@ public final class FeedViewModel: ObservableObject {
         async let ownInstagramActor = instagramSource?.ownStoryActor()
         let fetchedReels = await reels ?? instagramStoryReels
         let fetchedSpots = await spots
-        ownInstagramStoryActor = await ownInstagramActor ?? ownInstagramStoryActor
+        let fetchedOwnInstagramActor = await ownInstagramActor ?? ownInstagramStoryActor
+        ownInstagramStoryActor = fetchedOwnInstagramActor
 
         var merged: [StoryBarItem] = []
+        var ownReel: InstagramStoryReel?
         for reel in fetchedReels {
+            if let fetchedOwnInstagramActor, reel.user.id == fetchedOwnInstagramActor.id {
+                ownReel = reel
+                continue
+            }
             merged.append(.instagram(reel))
         }
         for item in fetchedSpots {
             merged.append(.spotify(item))
         }
         sortStoryBarItems(&merged)
+        ownInstagramStoryReel = ownReel
         storyBarItems = merged
+        storyBarContentLoaded = true
         storyBarLoading = false
     }
 
@@ -219,6 +229,15 @@ public final class FeedViewModel: ObservableObject {
     }
 
     public func markInstagramReelAsSeen(reelId: String) {
+        if let reel = ownInstagramStoryReel, reel.id == reelId, !reel.isSeen {
+            Task {
+                await instagramSource?.markReelAsSeen(slides: reel.slides)
+            }
+
+            ownInstagramStoryReel = InstagramStoryReel(id: reel.id, user: reel.user, slides: reel.slides, isSeen: true, hasCloseFriendsMedia: reel.hasCloseFriendsMedia)
+            return
+        }
+
         guard let itemIndex = storyBarItems.firstIndex(where: {
             if case let .instagram(reel) = $0, reel.id == reelId { return true }
             return false
