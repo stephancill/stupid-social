@@ -138,7 +138,8 @@ public final class InstagramNotificationSource: NotificationSource {
                     id: entry.reelId,
                     user: actor,
                     slides: slides,
-                    isSeen: isSeen
+                    isSeen: isSeen,
+                    hasCloseFriendsMedia: item.hasBestiesMedia
                 ))
             }
         }

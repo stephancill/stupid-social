@@ -222,7 +222,7 @@ private struct InstagramStoryBubble: View {
 
     var body: some View {
         VStack(spacing: 6) {
-            ZStack {
+            ZStack(alignment: .bottomTrailing) {
                 CachedAsyncImage(url: reel.user.avatarURL, cacheKey: "instagram-avatar-\(reel.user.id)") {
                     ZStack {
                         Color.secondary.opacity(0.18)
@@ -261,6 +261,20 @@ private struct InstagramStoryBubble: View {
                                     )
                             }
                         }
+                }
+
+                if reel.hasCloseFriendsMedia {
+                    Image(systemName: "star.fill")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 22, height: 22)
+                        .background(Color.green, in: Circle())
+                        .overlay {
+                            Circle()
+                                .stroke(.background, lineWidth: 2)
+                        }
+                        .offset(x: 3, y: 3)
+                        .accessibilityLabel("Close Friends")
                 }
             }
 

@@ -478,6 +478,8 @@
 ### Instagram muted stories
 
 - Live `reels_tray` payload inspection confirmed Instagram includes mute metadata in tray entries: top-level `muted`, plus `user.friendship_status.is_muting_reel` and `user.friendship_status.muting`. `InstagramTrayItem` now decodes these fields and `InstagramNotificationSource.fetchStoryReels()` filters muted tray entries before deduping users or fetching story media.
+- Live `reels_tray` payload inspection confirmed Instagram exposes close-friends story availability as `has_besties_media` and `latest_besties_reel_media` on tray entries. `reels_media` did not expose a matching per-slide close-friends field in a 12-reel/61-item sample. `InstagramStoryReel` now carries `hasCloseFriendsMedia`, and Instagram story bubbles render a green star badge at the bottom-right when `has_besties_media` is true.
+- Unread Instagram Close Friends stories now sort before other unread stories in both Instagram-only reel ordering and the unified stories bar. Seen ordering remains timestamp-based after the existing seen/unseen split.
 
 ## 2026-05-12
 

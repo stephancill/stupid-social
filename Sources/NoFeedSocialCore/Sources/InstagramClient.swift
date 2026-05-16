@@ -646,6 +646,7 @@ struct InstagramReelsTrayResponse: Decodable {
 struct InstagramTrayItem: Decodable {
     let id: String
     let latestReelMedia: Double?
+    let hasBestiesMedia: Bool
     let expiringAt: Double?
     let mediaCount: Int?
     let seen: Int
@@ -660,6 +661,7 @@ struct InstagramTrayItem: Decodable {
     enum CodingKeys: String, CodingKey {
         case id
         case latestReelMedia = "latest_reel_media"
+        case hasBestiesMedia = "has_besties_media"
         case expiringAt = "expiring_at"
         case mediaCount = "media_count"
         case seen
@@ -676,6 +678,7 @@ struct InstagramTrayItem: Decodable {
             id = try container.decode(String.self, forKey: .id)
         }
         latestReelMedia = try container.decodeIfPresent(Double.self, forKey: .latestReelMedia)
+        hasBestiesMedia = try container.decodeIfPresent(Bool.self, forKey: .hasBestiesMedia) ?? false
         expiringAt = try container.decodeIfPresent(Double.self, forKey: .expiringAt)
         mediaCount = try container.decodeIfPresent(Int.self, forKey: .mediaCount)
         seen = try container.decodeIfPresent(Int.self, forKey: .seen) ?? 0

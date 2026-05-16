@@ -127,6 +127,9 @@ public final class FeedViewModel: ObservableObject {
             if a.isSeen != b.isSeen {
                 return !a.isSeen
             }
+            if !a.isSeen, a.hasCloseFriendsMedia != b.hasCloseFriendsMedia {
+                return a.hasCloseFriendsMedia
+            }
             let latestA = a.slides.first?.takenAt ?? 0
             let latestB = b.slides.first?.takenAt ?? 0
             return latestA > latestB
@@ -213,7 +216,7 @@ public final class FeedViewModel: ObservableObject {
             await instagramSource?.markReelAsSeen(slides: reel.slides)
         }
 
-        let updated = InstagramStoryReel(id: reel.id, user: reel.user, slides: reel.slides, isSeen: true)
+        let updated = InstagramStoryReel(id: reel.id, user: reel.user, slides: reel.slides, isSeen: true, hasCloseFriendsMedia: reel.hasCloseFriendsMedia)
         storyBarItems[itemIndex] = .instagram(updated)
         sortStoryBarItems(&storyBarItems)
     }
@@ -256,7 +259,19 @@ public final class FeedViewModel: ObservableObject {
             if a.isSeen != b.isSeen {
                 return !a.isSeen
             }
+            if !a.isSeen, a.hasCloseFriendsMedia != b.hasCloseFriendsMedia {
+                return a.hasCloseFriendsMedia
+            }
             return a.timestamp > b.timestamp
         }
+    }
+}
+
+private extension StoryBarItem {
+    var hasCloseFriendsMedia: Bool {
+        if case let .instagram(reel) = self {
+            return reel.hasCloseFriendsMedia
+        }
+        return false
     }
 }
