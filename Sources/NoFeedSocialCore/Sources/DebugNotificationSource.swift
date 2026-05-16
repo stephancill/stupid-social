@@ -39,10 +39,10 @@ public final class DebugNotificationSource: NotificationSource {
                         network: .debug,
                         username: notification.actorUsername,
                         displayName: notification.actorUsername,
-                        avatarURL: nil
+                        avatarURL: nil,
                     ),
                 ],
-                target: NotificationTarget(id: notification.id, text: notification.text, url: nil)
+                target: NotificationTarget(id: notification.id, text: notification.text, url: nil),
             )
         }
     }
@@ -55,7 +55,7 @@ public final class DebugNotificationSource: NotificationSource {
             displayName: id,
             avatarURL: nil,
             followerCount: nil,
-            followingCount: nil
+            followingCount: nil,
         )
     }
 }

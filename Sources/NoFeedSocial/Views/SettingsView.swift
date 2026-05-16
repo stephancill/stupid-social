@@ -14,7 +14,7 @@ struct SettingsView: View {
                 } label: {
                     connectionRow(
                         name: "X",
-                        subtitle: viewModel.xConnectionLabel
+                        subtitle: viewModel.xConnectionLabel,
                     )
                 }
 
@@ -23,7 +23,7 @@ struct SettingsView: View {
                 } label: {
                     connectionRow(
                         name: "Farcaster",
-                        subtitle: viewModel.farcasterConnectionLabel
+                        subtitle: viewModel.farcasterConnectionLabel,
                     )
                 }
 
@@ -32,7 +32,7 @@ struct SettingsView: View {
                 } label: {
                     connectionRow(
                         name: "Instagram",
-                        subtitle: viewModel.instagramConnectionLabel
+                        subtitle: viewModel.instagramConnectionLabel,
                     )
                 }
 
@@ -41,7 +41,7 @@ struct SettingsView: View {
                 } label: {
                     connectionRow(
                         name: "Spotify",
-                        subtitle: viewModel.spotifyConnectionLabel
+                        subtitle: viewModel.spotifyConnectionLabel,
                     )
                 }
 
@@ -51,7 +51,7 @@ struct SettingsView: View {
                     } label: {
                         connectionRow(
                             name: "Debug",
-                            subtitle: viewModel.debugConnectionLabel
+                            subtitle: viewModel.debugConnectionLabel,
                         )
                     }
                 }

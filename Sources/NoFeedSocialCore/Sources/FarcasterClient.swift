@@ -33,7 +33,7 @@ public struct FarcasterClient {
 
     public init(
         baseURL: URL = URL(string: "https://haatz.quilibrium.com")!,
-        session: URLSession = defaultSession
+        session: URLSession = defaultSession,
     ) {
         self.baseURL = baseURL
         self.session = session
@@ -54,7 +54,7 @@ public struct FarcasterClient {
 
         var components = URLComponents(
             url: baseURL.appending(path: "/v2/farcaster/user/by-username"),
-            resolvingAgainstBaseURL: false
+            resolvingAgainstBaseURL: false,
         )!
         components.queryItems = [URLQueryItem(name: "username", value: normalized)]
 
@@ -65,7 +65,7 @@ public struct FarcasterClient {
     func user(byFid fid: UInt64) async throws -> FarcasterUserResponse {
         var components = URLComponents(
             url: baseURL.appending(path: "/v2/farcaster/user"),
-            resolvingAgainstBaseURL: false
+            resolvingAgainstBaseURL: false,
         )!
         components.queryItems = [URLQueryItem(name: "fid", value: String(fid))]
 
@@ -76,7 +76,7 @@ public struct FarcasterClient {
     func interactions(fid: UInt64, targetFid: UInt64) async throws -> FarcasterInteractions {
         var components = URLComponents(
             url: baseURL.appending(path: "/v2/farcaster/user/interactions"),
-            resolvingAgainstBaseURL: false
+            resolvingAgainstBaseURL: false,
         )!
         components.queryItems = [
             URLQueryItem(name: "fid", value: String(fid)),
@@ -90,7 +90,7 @@ public struct FarcasterClient {
     func notifications(fid: UInt64, limit: Int = 50, cursor: String? = nil) async throws -> FarcasterNotificationsResponse {
         var components = URLComponents(
             url: baseURL.appending(path: "/v2/farcaster/notifications"),
-            resolvingAgainstBaseURL: false
+            resolvingAgainstBaseURL: false,
         )!
         components.queryItems = [
             URLQueryItem(name: "fid", value: String(fid)),
@@ -107,7 +107,7 @@ public struct FarcasterClient {
     func reactionCount(castHash: String, authorFid: String?, type: String = "likes") async throws -> Int {
         var components = URLComponents(
             url: baseURL.appending(path: "/v2/farcaster/reaction/cast"),
-            resolvingAgainstBaseURL: false
+            resolvingAgainstBaseURL: false,
         )!
         components.queryItems = [
             URLQueryItem(name: "hash", value: castHash),
@@ -126,7 +126,7 @@ public struct FarcasterClient {
     func cast(hash: String, fid: String?) async throws -> FarcasterCastResponse {
         var components = URLComponents(
             url: baseURL.appending(path: "/v2/farcaster/cast"),
-            resolvingAgainstBaseURL: false
+            resolvingAgainstBaseURL: false,
         )!
         components.queryItems = [
             URLQueryItem(name: "identifier", value: hash),

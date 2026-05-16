@@ -65,7 +65,7 @@ public struct SpotifyClient {
     private func makeRequest(
         _ path: String,
         credentials creds: SpotifyCredentials,
-        allowsTokenRefresh: Bool
+        allowsTokenRefresh: Bool,
     ) async throws -> (Data, HTTPURLResponse) {
         var request = URLRequest(url: URL(string: "\(Self.spclientBase)/\(path)")!)
         request.setValue("Bearer \(creds.bearerToken)", forHTTPHeaderField: "authorization")
@@ -127,7 +127,7 @@ public struct SpotifyClient {
         let decoded = try JSONDecoder().decode(SpotifyTokenResponse.self, from: data)
         let refreshed = creds.updatingWebPlayerToken(
             decoded.accessToken,
-            expiresAt: decoded.accessTokenExpirationTimestampMs.map { Date(timeIntervalSince1970: TimeInterval($0) / 1000) }
+            expiresAt: decoded.accessTokenExpirationTimestampMs.map { Date(timeIntervalSince1970: TimeInterval($0) / 1000) },
         )
         _ = try credentialStore.saveSpotifyCredentials(refreshed)
         return refreshed
@@ -172,7 +172,7 @@ public struct SpotifyClient {
             accessTokenExpiresAt: creds.accessTokenExpiresAt,
             initialBearerToken: decoded.accessToken,
             initialBearerTokenExpiresAt: decoded.accessTokenExpirationTimestampMs.map { Date(timeIntervalSince1970: TimeInterval($0) / 1000) },
-            username: creds.username
+            username: creds.username,
         )
         _ = try credentialStore.saveSpotifyCredentials(refreshed)
         return refreshed
@@ -203,9 +203,9 @@ public struct SpotifyClient {
             body: pathfinderBody(
                 operationName: "profileAttributes",
                 variables: [:],
-                sha256Hash: "53bcb064f6cd18c23f752bc324a791194d20df612d8e1239c735144ab0399ced"
+                sha256Hash: "53bcb064f6cd18c23f752bc324a791194d20df612d8e1239c735144ab0399ced",
             ),
-            includeBrowserHeaders: false
+            includeBrowserHeaders: false,
         )
 
         let decoded = try JSONDecoder().decode(SpotifyProfileAttributesResponse.self, from: data)
@@ -231,7 +231,7 @@ public struct SpotifyClient {
             display_name: profile.name,
             images: profile.image_url.map { [SpotifyImage(url: $0)] },
             followers: profile.followers_count.map { SpotifyFollowers(total: $0) },
-            external_urls: profile.username.map { SpotifyExternalURLs(spotify: "https://open.spotify.com/user/\($0)") }
+            external_urls: profile.username.map { SpotifyExternalURLs(spotify: "https://open.spotify.com/user/\($0)") },
         )
     }
 
@@ -287,8 +287,8 @@ public struct SpotifyClient {
                 body: pathfinderBody(
                     operationName: "areEntitiesInLibrary",
                     variables: ["uris": ["spotify:track:\(trackId)"]],
-                    sha256Hash: "134337999233cc6fdd6b1e6dbf94841409f04a946c5c7b744b09ba0dfe5a85ed"
-                )
+                    sha256Hash: "134337999233cc6fdd6b1e6dbf94841409f04a946c5c7b744b09ba0dfe5a85ed",
+                ),
             )
             let decoded = try JSONDecoder().decode(SpotifyLibraryLookupResponse.self, from: responseData)
             guard let first = decoded.data.lookup.first else { return nil }
@@ -307,8 +307,8 @@ public struct SpotifyClient {
                 body: pathfinderBody(
                     operationName: "addToLibrary",
                     variables: ["libraryItemUris": ["spotify:track:\(trackId)"]],
-                    sha256Hash: "7c5a69420e2bfae3da5cc4e14cbc8bb3f6090f80afc00ffc179177f19be3f33d"
-                )
+                    sha256Hash: "7c5a69420e2bfae3da5cc4e14cbc8bb3f6090f80afc00ffc179177f19be3f33d",
+                ),
             )
             return true
         } catch {
@@ -325,8 +325,8 @@ public struct SpotifyClient {
                 body: pathfinderBody(
                     operationName: "removeFromLibrary",
                     variables: ["libraryItemUris": ["spotify:track:\(trackId)"]],
-                    sha256Hash: "7c5a69420e2bfae3da5cc4e14cbc8bb3f6090f80afc00ffc179177f19be3f33d"
-                )
+                    sha256Hash: "7c5a69420e2bfae3da5cc4e14cbc8bb3f6090f80afc00ffc179177f19be3f33d",
+                ),
             )
             return true
         } catch {
@@ -351,7 +351,7 @@ public struct SpotifyClient {
         credentials creds: SpotifyCredentials,
         bearerToken: String,
         body: [String: Any],
-        includeBrowserHeaders: Bool = true
+        includeBrowserHeaders: Bool = true,
     ) async throws -> Data {
         let data = try JSONSerialization.data(withJSONObject: body)
         var request = URLRequest(url: URL(string: "https://api-partner.spotify.com/pathfinder/v2/query")!)

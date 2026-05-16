@@ -83,7 +83,7 @@ struct XConnectionView: View {
             get: { viewModel.xEnabledCategories.contains(category) },
             set: { enabled in
                 viewModel.toggleXCategory(category, enabled: enabled)
-            }
+            },
         )
     }
 }

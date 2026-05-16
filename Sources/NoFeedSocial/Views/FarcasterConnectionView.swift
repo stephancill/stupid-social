@@ -66,7 +66,7 @@ struct FarcasterConnectionView: View {
     private func binding(for category: FarcasterNotificationCategory) -> Binding<Bool> {
         Binding(
             get: { viewModel.farcasterEnabledCategories.contains(category) },
-            set: { viewModel.toggleFarcasterCategory(category, enabled: $0) }
+            set: { viewModel.toggleFarcasterCategory(category, enabled: $0) },
         )
     }
 }

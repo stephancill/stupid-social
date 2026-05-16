@@ -23,7 +23,7 @@ final class FeedServiceTests: XCTestCase {
     func testManualRefreshMarksOnlyNewItemsUnread() async throws {
         let container = try ModelContainer(
             for: CachedNotification.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true),
         )
         let cacheStore = NotificationCacheStore(context: container.mainContext)
         let known = item(id: "known", timestamp: Date(timeIntervalSince1970: 200))
@@ -36,7 +36,7 @@ final class FeedServiceTests: XCTestCase {
         let service = FeedService(
             sources: [source],
             cacheStore: cacheStore,
-            watermarkStore: InMemoryReadWatermarkStoreForFeed()
+            watermarkStore: InMemoryReadWatermarkStoreForFeed(),
         )
 
         let displayed = try await service.manualRefresh()
@@ -50,7 +50,7 @@ final class FeedServiceTests: XCTestCase {
     func testForegroundActivationRefreshKeepsNewItemsPendingUntilRevealed() async throws {
         let container = try ModelContainer(
             for: CachedNotification.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true),
         )
         let cacheStore = NotificationCacheStore(context: container.mainContext)
         let source = StubNotificationSource(items: [
@@ -59,7 +59,7 @@ final class FeedServiceTests: XCTestCase {
         let service = FeedService(
             sources: [source],
             cacheStore: cacheStore,
-            watermarkStore: InMemoryReadWatermarkStoreForFeed()
+            watermarkStore: InMemoryReadWatermarkStoreForFeed(),
         )
 
         try await service.foregroundActivationRefresh()
@@ -78,7 +78,7 @@ final class FeedServiceTests: XCTestCase {
     func testManualRefreshClearsPendingNewCount() async throws {
         let container = try ModelContainer(
             for: CachedNotification.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true),
         )
         let cacheStore = NotificationCacheStore(context: container.mainContext)
         let backgroundSource = StubNotificationSource(items: [
@@ -87,7 +87,7 @@ final class FeedServiceTests: XCTestCase {
         let backgroundService = FeedService(
             sources: [backgroundSource],
             cacheStore: cacheStore,
-            watermarkStore: InMemoryReadWatermarkStoreForFeed()
+            watermarkStore: InMemoryReadWatermarkStoreForFeed(),
         )
         try await backgroundService.foregroundActivationRefresh()
         XCTAssertEqual(backgroundService.pendingNewCount(), 1)
@@ -99,7 +99,7 @@ final class FeedServiceTests: XCTestCase {
         let manualService = FeedService(
             sources: [manualSource],
             cacheStore: cacheStore,
-            watermarkStore: InMemoryReadWatermarkStoreForFeed()
+            watermarkStore: InMemoryReadWatermarkStoreForFeed(),
         )
 
         let displayed = try await manualService.manualRefresh()
@@ -114,7 +114,7 @@ final class FeedServiceTests: XCTestCase {
     func testManualRefreshReturnsCachedItemsWhenAllSourcesFail() async throws {
         let container = try ModelContainer(
             for: CachedNotification.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true),
         )
         let cacheStore = NotificationCacheStore(context: container.mainContext)
         let cached = item(id: "cached", timestamp: Date(timeIntervalSince1970: 100))
@@ -123,7 +123,7 @@ final class FeedServiceTests: XCTestCase {
         let service = FeedService(
             sources: [FailingNotificationSource()],
             cacheStore: cacheStore,
-            watermarkStore: InMemoryReadWatermarkStoreForFeed()
+            watermarkStore: InMemoryReadWatermarkStoreForFeed(),
         )
 
         let displayed = try await service.manualRefresh()
@@ -135,13 +135,13 @@ final class FeedServiceTests: XCTestCase {
     func testManualRefreshThrowsWhenAllSourcesFailAndCacheIsEmpty() async throws {
         let container = try ModelContainer(
             for: CachedNotification.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true),
         )
         let cacheStore = NotificationCacheStore(context: container.mainContext)
         let service = FeedService(
             sources: [FailingNotificationSource()],
             cacheStore: cacheStore,
-            watermarkStore: InMemoryReadWatermarkStoreForFeed()
+            watermarkStore: InMemoryReadWatermarkStoreForFeed(),
         )
 
         do {
@@ -156,7 +156,7 @@ final class FeedServiceTests: XCTestCase {
     func testManualRefreshPreservesFailedNetworkCacheWhenAnotherSourceSucceeds() async throws {
         let container = try ModelContainer(
             for: CachedNotification.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true),
         )
         let cacheStore = NotificationCacheStore(context: container.mainContext)
         let cachedX = item(id: "cached-x", network: .x, timestamp: Date(timeIntervalSince1970: 200))
@@ -169,7 +169,7 @@ final class FeedServiceTests: XCTestCase {
                 StubNotificationSource(network: .farcaster, items: [cachedFarcaster]),
             ],
             cacheStore: cacheStore,
-            watermarkStore: InMemoryReadWatermarkStoreForFeed()
+            watermarkStore: InMemoryReadWatermarkStoreForFeed(),
         )
 
         let displayed = try await service.manualRefresh()
@@ -181,7 +181,7 @@ final class FeedServiceTests: XCTestCase {
     func testManualRefreshPreservesNetworkCacheWhenSourceReturnsEmpty() async throws {
         let container = try ModelContainer(
             for: CachedNotification.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true),
         )
         let cacheStore = NotificationCacheStore(context: container.mainContext)
         let cachedX = item(id: "cached-x", network: .x, timestamp: Date(timeIntervalSince1970: 100))
@@ -190,7 +190,7 @@ final class FeedServiceTests: XCTestCase {
         let service = FeedService(
             sources: [StubNotificationSource(network: .x, items: [])],
             cacheStore: cacheStore,
-            watermarkStore: InMemoryReadWatermarkStoreForFeed()
+            watermarkStore: InMemoryReadWatermarkStoreForFeed(),
         )
 
         let displayed = try await service.manualRefresh()
@@ -208,7 +208,7 @@ final class FeedServiceTests: XCTestCase {
             timestamp: timestamp,
             text: "Test",
             actors: [],
-            target: nil
+            target: nil,
         )
     }
 }
@@ -276,7 +276,7 @@ private final class InMemoryReadWatermarkStoreForFeed: ReadWatermarkProviding {
             network: first.network,
             accountId: first.accountId,
             lastReadAt: newest,
-            updatedAt: Date()
+            updatedAt: Date(),
         )
     }
 

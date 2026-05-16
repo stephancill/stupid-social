@@ -41,37 +41,37 @@ public struct ContentView: View {
 
         let instagramSource = InstagramNotificationSource(
             client: InstagramClient(credentialStore: keychainStore),
-            metadataStore: metadataStore
+            metadataStore: metadataStore,
         )
 
         let spotifyClientRef = SpotifyClient(credentialStore: keychainStore)
 
         let spotifyActivitySource = SpotifyActivitySource(
             client: spotifyClientRef,
-            metadataStore: metadataStore
+            metadataStore: metadataStore,
         )
 
         let sources: [any NotificationSource] = [
             XNotificationSource(
                 client: XClient(credentialStore: keychainStore),
-                metadataStore: metadataStore
+                metadataStore: metadataStore,
             ),
             FarcasterNotificationSource(
                 client: farcasterClient,
-                metadataStore: metadataStore
+                metadataStore: metadataStore,
             ),
             instagramSource,
             spotifyActivitySource,
             DebugNotificationSource(
                 client: DebugNotificationsClient(),
-                metadataStore: metadataStore
+                metadataStore: metadataStore,
             ),
         ]
 
         let service = FeedService(
             sources: sources,
             cacheStore: cacheStore,
-            watermarkStore: watermarkStore
+            watermarkStore: watermarkStore,
         )
 
         let feed = FeedViewModel(feedService: service, instagramSource: instagramSource, spotifyActivitySource: spotifyActivitySource)
@@ -81,7 +81,7 @@ public struct ContentView: View {
             keychainStore: keychainStore,
             metadataStore: metadataStore,
             farcasterClient: farcasterClient,
-            cacheStore: cacheStore
+            cacheStore: cacheStore,
         )
         spotifyClient = spotifyClientRef
 

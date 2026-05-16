@@ -4,6 +4,7 @@ import Foundation
 public final class FeedViewModel: ObservableObject {
     @Published public private(set) var items: [DisplayNotificationItem] = []
     @Published public private(set) var storyBarItems: [StoryBarItem] = []
+    @Published public private(set) var ownInstagramStoryActor: NotificationActor?
     @Published public private(set) var storyBarLoading = false
     @Published public private(set) var pendingNewCount = 0
     @Published public private(set) var isRefreshing = false
@@ -94,8 +95,10 @@ public final class FeedViewModel: ObservableObject {
         storyBarLoading = true
         async let reels = instagramReels()
         async let spots = spotifyItems()
+        async let ownInstagramActor = instagramSource?.ownStoryActor()
         let fetchedReels = await reels ?? instagramStoryReels
         let fetchedSpots = await spots
+        ownInstagramStoryActor = await ownInstagramActor ?? ownInstagramStoryActor
 
         var merged: [StoryBarItem] = []
         for reel in fetchedReels {
@@ -107,6 +110,18 @@ public final class FeedViewModel: ObservableObject {
         sortStoryBarItems(&merged)
         storyBarItems = merged
         storyBarLoading = false
+    }
+
+    public func postInstagramStory(jpegData: Data, width: Int, height: Int) async throws {
+        guard let instagramSource else { throw SourceError.notConfigured }
+        try await instagramSource.postPhotoStory(jpegData: jpegData, width: width, height: height)
+        await fetchStoryBarContent()
+    }
+
+    public func deleteInstagramStory(mediaId: String, isVideo: Bool) async throws {
+        guard let instagramSource else { throw SourceError.notConfigured }
+        try await instagramSource.deleteStory(mediaId: mediaId, isVideo: isVideo)
+        await fetchStoryBarContent()
     }
 
     private func instagramReels() async -> [InstagramStoryReel]? {
@@ -174,7 +189,7 @@ public final class FeedViewModel: ObservableObject {
             trackURL: item.trackURL,
             imageURL: item.imageURL,
             musicAnimation: item.musicAnimation,
-            isSeen: seenTimestamp >= item.timestamp.timeIntervalSince1970
+            isSeen: seenTimestamp >= item.timestamp.timeIntervalSince1970,
         )
     }
 

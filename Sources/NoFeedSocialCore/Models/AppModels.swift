@@ -80,7 +80,7 @@ public struct NotificationItem: Identifiable, Hashable, Codable, Sendable {
         text: String,
         actors: [NotificationActor],
         target: NotificationTarget?,
-        parentTarget: NotificationTarget? = nil
+        parentTarget: NotificationTarget? = nil,
     ) {
         self.id = id
         self.network = network
@@ -148,7 +148,7 @@ public struct NotificationTarget: Hashable, Codable, Sendable {
         postedAt: Date? = nil,
         likeCount: Int? = nil,
         album: String? = nil,
-        musicAnimation: MusicAnimationMetadata? = nil
+        musicAnimation: MusicAnimationMetadata? = nil,
     ) {
         self.id = id
         self.text = text
@@ -234,7 +234,7 @@ public struct NetworkProfile: Identifiable, Hashable, Codable, Sendable {
         joinedAt: Date? = nil,
         websiteURL: URL? = nil,
         isVerified: Bool? = nil,
-        isMutualFollow: Bool? = nil
+        isMutualFollow: Bool? = nil,
     ) {
         self.id = id
         self.network = network
@@ -294,7 +294,7 @@ public struct InstagramStorySlide: Identifiable, Hashable, Sendable {
         mentions: [InstagramStoryMention] = [],
         links: [InstagramStoryLink] = [],
         ownerId: String = "",
-        takenAt: Double = 0
+        takenAt: Double = 0,
     ) {
         self.id = id
         self.imageURL = imageURL
@@ -337,7 +337,7 @@ public struct InstagramStoryMention: Hashable, Sendable {
             network: .instagram,
             username: username,
             displayName: nil,
-            avatarURL: nil
+            avatarURL: nil,
         )
     }
 
@@ -450,7 +450,7 @@ public struct SpotifyActivityItem: Identifiable, Hashable, Sendable {
         trackURL: URL?,
         imageURL: URL?,
         musicAnimation: MusicAnimationMetadata?,
-        isSeen: Bool = false
+        isSeen: Bool = false,
     ) {
         self.id = id
         self.timestamp = timestamp

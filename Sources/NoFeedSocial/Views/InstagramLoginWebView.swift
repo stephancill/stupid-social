@@ -25,7 +25,7 @@ struct InstagramLoginWebView: View {
                     guard let creds = extractCredentials(from: cookies) else { return }
                     onLoginSuccess(creds)
                     dismiss()
-                }
+                },
             )
             .ignoresSafeArea()
             .navigationTitle("Log in to Instagram")
@@ -54,7 +54,7 @@ struct InstagramLoginWebView: View {
             dsUserId: dsUserId,
             mid: cookieDict["mid"],
             rur: cookieDict["rur"],
-            igDid: cookieDict["ig_did"]
+            igDid: cookieDict["ig_did"],
         )
     }
 }

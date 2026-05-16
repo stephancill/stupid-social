@@ -116,7 +116,7 @@ public struct XClient {
             profileImageUrlHttps: result?.avatar?.imageUrl,
             profileBannerUrl: legacy.profileBannerUrl,
             isFollowing: result?.relationshipPerspectives?.following,
-            isFollowedBy: result?.relationshipPerspectives?.followedBy
+            isFollowedBy: result?.relationshipPerspectives?.followedBy,
         )
     }
 
@@ -540,7 +540,7 @@ private enum XNotificationParser {
                     element: element,
                     type: type,
                     tweets: tweets,
-                    users: users
+                    users: users,
                 ) {
                     items.append(notificationItem)
                 }
@@ -552,7 +552,7 @@ private enum XNotificationParser {
                     element: element,
                     type: type,
                     tweets: tweets,
-                    users: users
+                    users: users,
                 ) {
                     items.append(notificationItem)
                 }
@@ -590,7 +590,7 @@ private enum XNotificationParser {
         element: String,
         type: NotificationType,
         tweets: [String: XTweetObject],
-        users: [String: XUserObject]
+        users: [String: XUserObject],
     ) -> NotificationItem? {
         guard let tweet = tweets[tweetRef.id] else { return nil }
         guard let user = users[tweet.userIdStr] else { return nil }
@@ -614,7 +614,7 @@ private enum XNotificationParser {
             text: text,
             actors: [actor],
             target: target(from: tweet, users: users),
-            parentTarget: parentTarget
+            parentTarget: parentTarget,
         )
     }
 
@@ -625,13 +625,13 @@ private enum XNotificationParser {
         element: String,
         type: NotificationType,
         tweets: [String: XTweetObject],
-        users: [String: XUserObject]
+        users: [String: XUserObject],
     ) -> NotificationItem? {
         guard isEngagementElement(element) else { return nil }
 
         let actors = notificationRef.fromUsers.compactMap { userId in
             users[userId].map(actor(from:))
-        }.reversed().map { $0 }
+        }.reversed().map(\.self)
         guard !actors.isEmpty else { return nil }
 
         let notificationTarget: NotificationTarget?
@@ -648,7 +648,7 @@ private enum XNotificationParser {
                 text: nil,
                 url: nil,
                 author: actors.first,
-                postedAt: timestamp
+                postedAt: timestamp,
             ) : nil
             sourceId = notificationRef.fromUsers.sorted().joined(separator: ",")
         }
@@ -665,7 +665,7 @@ private enum XNotificationParser {
             text: text,
             actors: actors,
             target: notificationTarget,
-            parentTarget: nil
+            parentTarget: nil,
         )
     }
 
@@ -715,36 +715,36 @@ private enum XNotificationParser {
     private static func notificationText(element: String, actorName: String, tweetText: String?) -> String {
         switch element {
         case "user_mentioned_you":
-            return "\(actorName) mentioned you"
+            "\(actorName) mentioned you"
         case "user_mentioned_you_in_a_quote_tweet":
-            return "\(actorName) mentioned you in a quote tweet"
+            "\(actorName) mentioned you in a quote tweet"
         case "user_replied_to_your_tweet":
-            return "\(actorName) replied to your tweet"
+            "\(actorName) replied to your tweet"
         case "user_quoted_your_tweet":
-            return "\(actorName) quoted your tweet"
+            "\(actorName) quoted your tweet"
         case "users_liked_your_tweet",
              "user_liked_multiple_tweets":
-            return "\(actorName) liked your tweet"
+            "\(actorName) liked your tweet"
         case "users_retweeted_your_tweet":
-            return "\(actorName) retweeted your tweet"
+            "\(actorName) retweeted your tweet"
         case "follow_from_recommended_user",
              "users_followed_you":
-            return "\(actorName) followed you"
+            "\(actorName) followed you"
         case "device_follow_tweet_notification_entry",
              "user_tweeted",
              "user_tweeted_entry",
              "tweet_notification",
              "user_posted":
-            return "New post from \(actorName)"
+            "New post from \(actorName)"
         default:
-            return tweetText ?? "New X notification"
+            tweetText ?? "New X notification"
         }
     }
 
     private static func groupedNotificationText(
         element: String,
         actors: [NotificationActor],
-        tweetText: String?
+        tweetText: String?,
     ) -> String {
         let actorName = actors.first?.username.map { "@\($0)" } ?? actors.first?.displayName ?? "Someone"
         let suffix = actors.count > 1 ? " and \(actors.count - 1) other\(actors.count == 2 ? "" : "s")" : ""
@@ -771,7 +771,7 @@ private enum XNotificationParser {
             network: .x,
             username: user.screenName,
             displayName: user.name,
-            avatarURL: user.profileImageUrlHttps.map { URL(string: $0.replacingOccurrences(of: "_normal", with: "")) } ?? nil
+            avatarURL: user.profileImageUrlHttps.map { URL(string: $0.replacingOccurrences(of: "_normal", with: "")) } ?? nil,
         )
     }
 
@@ -785,7 +785,7 @@ private enum XNotificationParser {
             imageURLs: tweet.mediaURLs,
             author: users[tweet.userIdStr].map(actor(from:)),
             postedAt: parseTwitterDate(tweet.createdAt),
-            likeCount: tweet.favoriteCount
+            likeCount: tweet.favoriteCount,
         )
     }
 

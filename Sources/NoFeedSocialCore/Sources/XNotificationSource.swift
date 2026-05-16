@@ -57,7 +57,7 @@ public struct XNotificationSource: NotificationSource {
                 postsCount: profile.statusesCount,
                 joinedAt: profile.createdAt,
                 isVerified: profile.verified,
-                isMutualFollow: (profile.isFollowing == true && profile.isFollowedBy == true) ? true : nil
+                isMutualFollow: (profile.isFollowing == true && profile.isFollowedBy == true) ? true : nil,
             )
         }
         throw SourceError.serviceError("X profile lookup failed for @\(id).")

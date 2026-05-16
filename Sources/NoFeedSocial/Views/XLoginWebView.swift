@@ -15,7 +15,7 @@ struct XLoginWebView: View {
                     guard let creds = extractCredentials(from: cookies) else { return }
                     onLoginSuccess(creds)
                     dismiss()
-                }
+                },
             )
             .ignoresSafeArea()
             .navigationTitle("Log in to X")

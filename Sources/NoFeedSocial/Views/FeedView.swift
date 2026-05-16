@@ -19,6 +19,7 @@ struct FeedView: View {
             List {
                 StoriesBar(
                     items: viewModel.storyBarItems,
+                    ownInstagramActor: viewModel.ownInstagramStoryActor,
                     onComposeTap: {
                         showingStoryComposer = true
                     },
@@ -27,18 +28,18 @@ struct FeedView: View {
                         let items = viewModel.storyViewerItems(for: index)
                         storyViewerSelection = StoryViewerSelection(
                             items: items,
-                            startIndex: viewModel.storyViewerStartIndex(for: selectedItem, in: items)
+                            startIndex: viewModel.storyViewerStartIndex(for: selectedItem, in: items),
                         )
-                    }
+                    },
                 )
 
-                if notificationItems.isEmpty && viewModel.storyBarItems.isEmpty && !viewModel.storyBarLoading {
+                if notificationItems.isEmpty, viewModel.storyBarItems.isEmpty, !viewModel.storyBarLoading {
                     VStack {
                         Spacer(minLength: 0)
                         ContentUnavailableView(
                             "No Notifications",
                             systemImage: "bell.slash",
-                            description: Text("Connect social accounts to get started.")
+                            description: Text("Connect social accounts to get started."),
                         )
                         Spacer(minLength: 0)
                     }
@@ -56,7 +57,7 @@ struct FeedView: View {
                         .listSectionSeparator(.hidden)
                     }
 
-                    if !unreadItems.isEmpty && !readItems.isEmpty {
+                    if !unreadItems.isEmpty, !readItems.isEmpty {
                         NewSeparatorRow()
                     }
 
@@ -128,16 +129,22 @@ struct FeedView: View {
                 startIndex: selection.startIndex,
                 spotifyClient: spotifyClient,
                 feedService: viewModel.service,
+                ownInstagramAccountId: viewModel.ownInstagramStoryActor?.id,
                 onInstagramReelSeen: { reelId in
                     viewModel.markInstagramReelAsSeen(reelId: reelId)
                 },
                 onSpotifyItemSeen: { userURI in
                     viewModel.markSpotifyActivityAsSeen(userURI: userURI)
-                }
+                },
+                onInstagramStoryDelete: { mediaId, isVideo in
+                    try await viewModel.deleteInstagramStory(mediaId: mediaId, isVideo: isVideo)
+                },
             )
         }
         .fullScreenCover(isPresented: $showingStoryComposer) {
-            StoryComposerView()
+            StoryComposerView { jpegData, width, height in
+                try await viewModel.postInstagramStory(jpegData: jpegData, width: width, height: height)
+            }
         }
         #else
         .sheet(item: $storyViewerSelection) { selection in
@@ -146,16 +153,22 @@ struct FeedView: View {
                         startIndex: selection.startIndex,
                         spotifyClient: spotifyClient,
                         feedService: viewModel.service,
+                        ownInstagramAccountId: viewModel.ownInstagramStoryActor?.id,
                         onInstagramReelSeen: { reelId in
                             viewModel.markInstagramReelAsSeen(reelId: reelId)
                         },
                         onSpotifyItemSeen: { userURI in
                             viewModel.markSpotifyActivityAsSeen(userURI: userURI)
-                        }
+                        },
+                        onInstagramStoryDelete: { mediaId, isVideo in
+                            try await viewModel.deleteInstagramStory(mediaId: mediaId, isVideo: isVideo)
+                        },
                     )
                 }
                 .sheet(isPresented: $showingStoryComposer) {
-                    StoryComposerView()
+                    StoryComposerView { jpegData, width, height in
+                        try await viewModel.postInstagramStory(jpegData: jpegData, width: width, height: height)
+                    }
                 }
         #endif
     }
@@ -175,7 +188,7 @@ struct FeedView: View {
     private var errorBinding: Binding<Bool> {
         Binding(
             get: { viewModel.errorMessage != nil },
-            set: { if !$0 { viewModel.errorMessage = nil } }
+            set: { if !$0 { viewModel.errorMessage = nil } },
         )
     }
 }
@@ -188,6 +201,7 @@ private struct StoryViewerSelection: Identifiable {
 
 private struct StoriesBar: View {
     let items: [StoryBarItem]
+    let ownInstagramActor: NotificationActor?
     let onComposeTap: () -> Void
     let onItemTap: (Int) -> Void
 
@@ -197,7 +211,7 @@ private struct StoriesBar: View {
                 Button {
                     onComposeTap()
                 } label: {
-                    StoryComposerBubble()
+                    StoryComposerBubble(actor: ownInstagramActor)
                 }
                 .buttonStyle(.plain)
 
@@ -229,35 +243,63 @@ private struct StoriesBar: View {
 }
 
 private struct StoryComposerBubble: View {
+    let actor: NotificationActor?
+    @AppStorage("devModeEnabled") private var devModeEnabled = false
+
     var body: some View {
         VStack(spacing: 6) {
             ZStack(alignment: .bottomTrailing) {
-                Circle()
-                    .fill(Color.secondary.opacity(0.14))
-                    .frame(width: 70, height: 70)
-                    .overlay {
-                        Circle()
-                            .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
-                    }
+                CachedAsyncImage(url: actor?.avatarURL, cacheKey: actor.map { "instagram-avatar-\($0.id)" }) {
+                    avatarPlaceholder
+                } failure: {
+                    avatarPlaceholder
+                }
+                .frame(width: 70, height: 70)
+                .clipShape(Circle())
+                .overlay {
+                    Circle()
+                        .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
+                }
 
                 Image(systemName: "plus")
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .frame(width: 30, height: 30)
-                    .background(.background, in: Circle())
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 24, height: 24)
+                    .background(Color.blue, in: Circle())
                     .overlay {
                         Circle()
-                            .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
+                            .stroke(.background, lineWidth: 2)
                     }
+                    .offset(x: 3, y: 3)
             }
 
-            Text("Create")
+            Text(label)
                 .font(.caption2)
                 .foregroundStyle(.primary)
                 .lineLimit(1)
                 .frame(width: 70)
         }
         .accessibilityLabel("Create story")
+    }
+
+    private var label: String {
+        if let actor {
+            return DebugRedaction.actorName(actor, enabled: devModeEnabled)
+        }
+        return "Create"
+    }
+
+    private var initial: String {
+        label.first.map { String($0).uppercased() } ?? "+"
+    }
+
+    private var avatarPlaceholder: some View {
+        ZStack {
+            Color.secondary.opacity(0.18)
+            Text(initial)
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.secondary)
+        }
     }
 }
 
@@ -291,7 +333,7 @@ private struct InstagramStoryBubble: View {
                             reel.isSeen
                                 ? Color.gray.opacity(0.4)
                                 : Color.clear,
-                            lineWidth: reel.isSeen ? 3 : 0
+                            lineWidth: reel.isSeen ? 3 : 0,
                         )
                         .overlay {
                             if !reel.isSeen {
@@ -300,9 +342,9 @@ private struct InstagramStoryBubble: View {
                                         LinearGradient(
                                             colors: [.purple, .pink, .orange],
                                             startPoint: .topLeading,
-                                            endPoint: .bottomTrailing
+                                            endPoint: .bottomTrailing,
                                         ),
-                                        lineWidth: 3
+                                        lineWidth: 3,
                                     )
                             }
                         }
@@ -350,7 +392,7 @@ private struct SpotifyStoryBubble: View {
             ZStack(alignment: .bottomTrailing) {
                 SpotifyAnimatedStoryThumbnail(
                     url: item.imageURL,
-                    musicAnimation: item.musicAnimation
+                    musicAnimation: item.musicAnimation,
                 )
                 .overlay {
                     Circle()
@@ -399,7 +441,7 @@ private struct SpotifyAnimatedStoryThumbnail: View {
                 .rotationEffect(.degrees(reduceMotion || !isAnimating ? 0 : 360))
                 .animation(
                     reduceMotion ? nil : .linear(duration: rotationDuration).repeatForever(autoreverses: false),
-                    value: isAnimating
+                    value: isAnimating,
                 )
         }
         .frame(width: 70, height: 70)

@@ -91,7 +91,7 @@ struct InstagramConnectionView: View {
     private func binding(for category: InstagramNotificationCategory) -> Binding<Bool> {
         Binding(
             get: { viewModel.instagramEnabledCategories.contains(category) },
-            set: { viewModel.toggleInstagramCategory(category, enabled: $0) }
+            set: { viewModel.toggleInstagramCategory(category, enabled: $0) },
         )
     }
 }

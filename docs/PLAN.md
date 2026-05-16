@@ -2,7 +2,7 @@
 
 ## Product Goal
 
-Build a universal macOS and iOS app with xtool that shows a combined social notifications feed without requiring users to open algorithmic feeds. The app starts with X and Farcaster notifications, then expands to posting and additional networks such as Bluesky and Instagram.
+Build a universal macOS and iOS app with xtool that shows a combined social notifications feed without requiring users to open algorithmic feeds. The app started with X and Farcaster notifications and now includes Instagram stories, Spotify listening stories, and Instagram story posting.
 
 ## MVP Scope
 
@@ -15,10 +15,11 @@ Build a universal macOS and iOS app with xtool that shows a combined social noti
 - Read state syncs across devices through iCloud read timestamp watermarks.
 - Background polling targets roughly 15 minutes where Apple permits it.
 - Manual refresh is supported.
+- Instagram story posting is supported from the in-app story composer.
 
 ## Out Of Scope For MVP
 
-- Posting and cross-posting.
+- Cross-posting.
 - Bluesky support.
 - Multiple accounts per network.
 - Syncing full notification items across devices.
@@ -182,15 +183,21 @@ The MVP should not attempt to merge or link X and Farcaster actors.
 
 ## Future Posting Scope
 
-Posting is not part of the first notification-only MVP, but the architecture should not block it.
+Posting is now in current scope for Instagram stories. Other posting surfaces remain future scope.
+
+Current posting requirements:
+
+- Render a local story composition into a 1080x1920 image.
+- Post image stories to the connected Instagram account.
+- Show the user's own Instagram story entry first in the stories bar with their profile picture and a `+` affordance that opens the composer.
 
 Future posting requirements:
 
 - Text posts.
 - Media attachments.
-- Posting to selected supported channels.
+- Posting to selected supported channels beyond Instagram stories.
 - Account/profile preview in the composer.
-- Eventually support X, Farcaster, Bluesky, and Instagram.
+- Eventually support X, Farcaster, and Bluesky posting.
 
 For notification-related profile preview, the app should support viewing actor account details from notification items.
 

@@ -13,7 +13,7 @@ struct SpotifyLoginWebView: View {
                 onCredentialsFound: { creds in
                     onLoginSuccess(creds)
                     dismiss()
-                }
+                },
             )
             .ignoresSafeArea()
             .navigationTitle("Log in to Spotify")
@@ -45,7 +45,7 @@ struct SpotifyLoginWebView: View {
             let script = WKUserScript(
                 source: captureScript,
                 injectionTime: .atDocumentStart,
-                forMainFrameOnly: false
+                forMainFrameOnly: false,
             )
             config.userContentController.addUserScript(script)
             config.userContentController.add(context.coordinator, name: "spotifyTokenCapture")
@@ -97,14 +97,14 @@ struct SpotifyLoginWebView: View {
                     let spKey = cookies.first(where: { $0.name == "sp_key" })?.value
                     guard !spDC.isEmpty, !spT.isEmpty else { return }
 
-                    self.captured = true
+                    captured = true
                     let creds = SpotifyCredentials(
                         bearerToken: bearer,
-                        clientToken: self.pendingClientToken ?? "",
+                        clientToken: pendingClientToken ?? "",
                         spDC: spDC,
                         spT: spT,
                         spKey: spKey,
-                        username: nil
+                        username: nil,
                     )
                     DispatchQueue.main.async {
                         self.onCredentialsFound(creds)
@@ -182,7 +182,7 @@ struct SpotifyLoginWebView: View {
             let script = WKUserScript(
                 source: captureScript,
                 injectionTime: .atDocumentStart,
-                forMainFrameOnly: false
+                forMainFrameOnly: false,
             )
             config.userContentController.addUserScript(script)
             config.userContentController.add(context.coordinator, name: "spotifyTokenCapture")
@@ -234,14 +234,14 @@ struct SpotifyLoginWebView: View {
                     let spKey = cookies.first(where: { $0.name == "sp_key" })?.value
                     guard !spDC.isEmpty, !spT.isEmpty else { return }
 
-                    self.captured = true
+                    captured = true
                     let creds = SpotifyCredentials(
                         bearerToken: bearer,
-                        clientToken: self.pendingClientToken ?? "",
+                        clientToken: pendingClientToken ?? "",
                         spDC: spDC,
                         spT: spT,
                         spKey: spKey,
-                        username: nil
+                        username: nil,
                     )
                     DispatchQueue.main.async {
                         self.onCredentialsFound(creds)

@@ -16,13 +16,44 @@ public final class InstagramNotificationSource: NotificationSource {
         metadataStore.instagramAccount?.storiesEnabled ?? true
     }
 
+    public func ownStoryActor() async -> NotificationActor? {
+        guard let account = metadataStore.instagramAccount else { return nil }
+        do {
+            let response = try await client.userInfo(uid: account.accountId)
+            return NotificationActor(
+                id: account.accountId,
+                network: .instagram,
+                username: response.user.username ?? account.username,
+                displayName: response.user.fullName,
+                avatarURL: response.user.profilePicUrl.flatMap(URL.init) ?? account.avatarURL,
+            )
+        } catch {
+            return NotificationActor(
+                id: account.accountId,
+                network: .instagram,
+                username: account.username,
+                displayName: nil,
+                avatarURL: account.avatarURL,
+            )
+        }
+    }
+
+    public func postPhotoStory(jpegData: Data, width: Int, height: Int) async throws {
+        try await client.publishPhotoStory(jpegData: jpegData, width: width, height: height)
+    }
+
+    public func deleteStory(mediaId: String, isVideo: Bool) async throws {
+        try await client.deleteStory(mediaId: mediaId, isVideo: isVideo)
+    }
+
     public func validateAccount() async throws -> AccountStatus {
         do {
             let user = try await client.verifiedUser()
             metadataStore.instagramAccount = InstagramAccountMetadata(
                 accountId: String(user.pk),
                 username: user.username,
-                status: .valid
+                avatarURL: user.profilePicURL,
+                status: .valid,
             )
             return .valid
         } catch {
@@ -96,7 +127,7 @@ public final class InstagramNotificationSource: NotificationSource {
                 network: .instagram,
                 username: item.user.username,
                 displayName: item.user.fullName,
-                avatarURL: item.user.profilePicUrl.flatMap(URL.init)
+                avatarURL: item.user.profilePicUrl.flatMap(URL.init),
             )
 
             var slides: [InstagramStorySlide] = []
@@ -124,7 +155,7 @@ public final class InstagramNotificationSource: NotificationSource {
                             mentions: mentions,
                             links: links,
                             ownerId: String(reel.user?.pk ?? userId),
-                            takenAt: media.takenAt ?? 0
+                            takenAt: media.takenAt ?? 0,
                         ))
                     }
                 }
@@ -139,7 +170,7 @@ public final class InstagramNotificationSource: NotificationSource {
                     user: actor,
                     slides: slides,
                     isSeen: isSeen,
-                    hasCloseFriendsMedia: item.hasBestiesMedia
+                    hasCloseFriendsMedia: item.hasBestiesMedia,
                 ))
             }
         }
@@ -175,7 +206,7 @@ public final class InstagramNotificationSource: NotificationSource {
                 postsCount: response.user.mediaCount,
                 websiteURL: response.user.externalUrl.flatMap(URL.init),
                 isVerified: response.user.isVerified,
-                isMutualFollow: (response.user.friendshipStatus?.following == true && response.user.friendshipStatus?.followedBy == true) ? true : nil
+                isMutualFollow: (response.user.friendshipStatus?.following == true && response.user.friendshipStatus?.followedBy == true) ? true : nil,
             )
         } catch {
             throw SourceError.serviceError("Could not fetch profile.")
@@ -198,7 +229,7 @@ public final class InstagramNotificationSource: NotificationSource {
                 network: .instagram,
                 username: user.username,
                 displayName: user.fullName,
-                avatarURL: user.profilePicUrl.flatMap(URL.init)
+                avatarURL: user.profilePicUrl.flatMap(URL.init),
             )
         }
 
@@ -207,7 +238,7 @@ public final class InstagramNotificationSource: NotificationSource {
             text: media.caption?.text,
             imageURLs: media.bestImageURLs,
             postedAt: media.takenAt.map { Date(timeIntervalSince1970: $0) },
-            likeCount: media.likeCount
+            likeCount: media.likeCount,
         )
     }
 }

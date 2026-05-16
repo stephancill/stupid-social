@@ -21,7 +21,7 @@ struct NotificationDetailView: View {
                 LabeledContent("Network", value: displayItem.item.network.displayName)
                 LabeledContent(
                     "Activity",
-                    value: DebugRedaction.text(displayItem.item.text, actors: displayItem.item.actors, enabled: devModeEnabled)
+                    value: DebugRedaction.text(displayItem.item.text, actors: displayItem.item.actors, enabled: devModeEnabled),
                 )
             }
 
@@ -35,7 +35,7 @@ struct NotificationDetailView: View {
                                 fallbackActors: displayItem.item.actors,
                                 metrics: nil,
                                 isLoadingMetrics: false,
-                                targetURL: postURL(for: relatedTarget)
+                                targetURL: postURL(for: relatedTarget),
                             ) { url in
                                 openURL(url)
                             }
@@ -47,7 +47,7 @@ struct NotificationDetailView: View {
                             fallbackActors: displayItem.item.actors,
                             metrics: targetMetrics,
                             isLoadingMetrics: isLoadingTargetMetrics,
-                            targetURL: targetURL
+                            targetURL: targetURL,
                         ) { url in
                             openURL(url)
                         }
@@ -67,7 +67,7 @@ struct NotificationDetailView: View {
                         fallbackActors: displayItem.item.actors,
                         metrics: nil,
                         isLoadingMetrics: false,
-                        targetURL: nil
+                        targetURL: nil,
                     ) { url in
                         openURL(url)
                     }

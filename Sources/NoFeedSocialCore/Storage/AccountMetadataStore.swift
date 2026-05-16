@@ -77,13 +77,15 @@ public struct FarcasterAccountMetadata: Codable, Equatable {
 public struct InstagramAccountMetadata: Codable, Equatable {
     public var accountId: String
     public var username: String?
+    public var avatarURL: URL?
     public var status: AccountStatusSnapshot
     public var enabledCategories: Set<InstagramNotificationCategory>
     public var storiesEnabled: Bool
 
-    public init(accountId: String, username: String?, status: AccountStatusSnapshot, enabledCategories: Set<InstagramNotificationCategory>? = nil, storiesEnabled: Bool = true) {
+    public init(accountId: String, username: String?, avatarURL: URL? = nil, status: AccountStatusSnapshot, enabledCategories: Set<InstagramNotificationCategory>? = nil, storiesEnabled: Bool = true) {
         self.accountId = accountId
         self.username = username
+        self.avatarURL = avatarURL
         self.status = status
         self.enabledCategories = enabledCategories ?? Set(InstagramNotificationCategory.allCases)
         self.storiesEnabled = storiesEnabled
@@ -93,6 +95,7 @@ public struct InstagramAccountMetadata: Codable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         accountId = try container.decode(String.self, forKey: .accountId)
         username = try container.decodeIfPresent(String.self, forKey: .username)
+        avatarURL = try container.decodeIfPresent(URL.self, forKey: .avatarURL)
         status = try container.decode(AccountStatusSnapshot.self, forKey: .status)
         enabledCategories = try container.decodeIfPresent(Set<InstagramNotificationCategory>.self, forKey: .enabledCategories) ?? Set(InstagramNotificationCategory.allCases)
         storiesEnabled = try container.decodeIfPresent(Bool.self, forKey: .storiesEnabled) ?? true
@@ -102,6 +105,7 @@ public struct InstagramAccountMetadata: Codable, Equatable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(accountId, forKey: .accountId)
         try container.encodeIfPresent(username, forKey: .username)
+        try container.encodeIfPresent(avatarURL, forKey: .avatarURL)
         try container.encode(status, forKey: .status)
         try container.encode(enabledCategories, forKey: .enabledCategories)
         try container.encode(storiesEnabled, forKey: .storiesEnabled)
@@ -110,6 +114,7 @@ public struct InstagramAccountMetadata: Codable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case accountId
         case username
+        case avatarURL
         case status
         case enabledCategories
         case storiesEnabled
@@ -194,7 +199,7 @@ public final class AccountMetadataStore {
         return try? decoder.decode(type, from: data)
     }
 
-    private func save<T: Encodable>(_ value: T?, key: String) {
+    private func save(_ value: (some Encodable)?, key: String) {
         guard let value else {
             defaults.removeObject(forKey: key)
             return

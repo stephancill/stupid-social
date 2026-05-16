@@ -35,7 +35,7 @@ public final class KeychainCredentialStore {
 
     public init(
         service: String = "tech.stupid.StupidSocial.credentials",
-        fallbackStore: UserDefaults = .standard
+        fallbackStore: UserDefaults = .standard,
     ) {
         self.service = service
         self.fallbackStore = fallbackStore

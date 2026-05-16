@@ -39,7 +39,7 @@ public enum CookieHeaderParser {
             dsUserId: dsUserId,
             mid: cookies["mid"],
             rur: cookies["rur"],
-            igDid: cookies["ig_did"]
+            igDid: cookies["ig_did"],
         )
     }
 }
@@ -92,7 +92,7 @@ public struct SpotifyCredentials: Codable, Equatable, Sendable {
         accessTokenExpiresAt: Date? = nil,
         initialBearerToken: String? = nil,
         initialBearerTokenExpiresAt: Date? = nil,
-        username: String?
+        username: String?,
     ) {
         self.bearerToken = bearerToken
         self.clientToken = clientToken
@@ -115,7 +115,7 @@ public struct SpotifyCredentials: Codable, Equatable, Sendable {
             accessTokenExpiresAt: expiresAt,
             initialBearerToken: initialBearerToken,
             initialBearerTokenExpiresAt: initialBearerTokenExpiresAt,
-            username: username
+            username: username,
         )
     }
 }

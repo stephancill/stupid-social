@@ -31,7 +31,7 @@ public struct NotificationTargetMetrics: Hashable, Sendable {
         imageURLs: [URL] = [],
         postedAt: Date? = nil,
         likeCount: Int? = nil,
-        relatedTargets: [NotificationTarget] = []
+        relatedTargets: [NotificationTarget] = [],
     ) {
         self.author = author
         self.text = text

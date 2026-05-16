@@ -174,7 +174,7 @@ struct ProfileDetailView: View {
             profile = try await feedService.fetchProfile(
                 for: actor.id,
                 network: actor.network,
-                username: actor.username
+                username: actor.username,
             )
         } catch {
             errorMessage = "Could not load profile."

@@ -10,6 +10,7 @@ import SwiftUI
 
 struct StoryComposerView: View {
     @Environment(\.dismiss) private var dismiss
+    let onPost: (Data, Int, Int) async throws -> Void
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var selectedImageData: Data?
     @State private var canvasSize = CGSize(width: 390, height: 844)
@@ -18,9 +19,15 @@ struct StoryComposerView: View {
     @State private var focusedCaptionID: UUID?
     @State private var selectionError: String?
     @State private var saveSucceeded = false
+    @State private var postSucceeded = false
+    @State private var isPosting = false
     @State private var composerMessage: String?
     @GestureState private var captionDrag: CaptionDrag?
     @FocusState private var swiftUIFocusedCaptionID: UUID?
+
+    init(onPost: @escaping (Data, Int, Int) async throws -> Void = { _, _, _ in }) {
+        self.onPost = onPost
+    }
 
     var body: some View {
         ZStack {
@@ -78,7 +85,7 @@ struct StoryComposerView: View {
                                     if shouldDelete {
                                         removeCaption(id)
                                     }
-                                }
+                                },
                             )
                             .frame(width: proxy.size.width, height: proxy.size.height)
                             .zIndex(focusedCaptionID == caption.id ? 2 : 0)
@@ -140,15 +147,15 @@ struct StoryComposerView: View {
                         .buttonStyle(.plain)
                         .accessibilityLabel("Change background color")
 
-                        Button {
-                            saveComposedStoryImage()
-                        } label: {
-                            ComposerToolbarIcon(systemName: saveSucceeded ? "checkmark" : "square.and.arrow.down")
+                        if hasComposerElements {
+                            Button {
+                                saveComposedStoryImage()
+                            } label: {
+                                ComposerToolbarIcon(systemName: saveSucceeded ? "checkmark" : "square.and.arrow.down")
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Save story image")
                         }
-                        .buttonStyle(.plain)
-                        .disabled(!hasComposerElements)
-                        .opacity(hasComposerElements ? 1 : 0.45)
-                        .accessibilityLabel("Save story image")
                     }
                 }
                 .padding(.horizontal, 16)
@@ -156,17 +163,33 @@ struct StoryComposerView: View {
 
                 Spacer()
 
-                VStack(spacing: 6) {
-                    Text("Instagram Story")
-                        .font(.subheadline.weight(.semibold))
-                    Text("Upload is not implemented yet.")
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.7))
+                VStack(spacing: 12) {
+                    if hasComposerElements {
+                        Button {
+                            postComposedStoryImage()
+                        } label: {
+                            HStack(spacing: 8) {
+                                if isPosting {
+                                    ProgressView()
+                                        .progressViewStyle(.circular)
+                                        .tint(.white)
+                                } else {
+                                    Image(systemName: postSucceeded ? "checkmark" : "paperplane.fill")
+                                        .font(.title3)
+                                }
+                                Text(isPosting ? "Posting..." : "Post Story")
+                                    .font(.subheadline.weight(.medium))
+                            }
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 22)
+                            .frame(height: 44)
+                            .background(.black.opacity(0.45), in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(isPosting)
+                        .accessibilityLabel("Post story")
+                    }
                 }
-                .foregroundStyle(.white)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                .background(.black.opacity(0.45), in: Capsule())
                 .padding(.bottom, 28)
             }
         }
@@ -226,14 +249,14 @@ struct StoryComposerView: View {
     private var errorBinding: Binding<Bool> {
         Binding(
             get: { selectionError != nil },
-            set: { if !$0 { selectionError = nil } }
+            set: { if !$0 { selectionError = nil } },
         )
     }
 
     private var composerMessageBinding: Binding<Bool> {
         Binding(
             get: { composerMessage != nil },
-            set: { if !$0 { composerMessage = nil } }
+            set: { if !$0 { composerMessage = nil } },
         )
     }
 
@@ -246,7 +269,7 @@ struct StoryComposerView: View {
                 } else if focusedCaptionID == id {
                     focusedCaptionID = nil
                 }
-            }
+            },
         )
     }
 
@@ -256,7 +279,7 @@ struct StoryComposerView: View {
             set: { newValue in
                 guard let index = captions.firstIndex(where: { $0.id == id }) else { return }
                 captions[index].text = newValue
-            }
+            },
         )
     }
 
@@ -268,7 +291,7 @@ struct StoryComposerView: View {
         guard captionDrag?.id == caption.id else { return caption.offset }
         return CGSize(
             width: caption.offset.width + (captionDrag?.translation.width ?? 0),
-            height: caption.offset.height + (captionDrag?.translation.height ?? 0)
+            height: caption.offset.height + (captionDrag?.translation.height ?? 0),
         )
     }
 
@@ -387,10 +410,45 @@ struct StoryComposerView: View {
         #endif
     }
 
+    private func postComposedStoryImage() {
+        #if os(iOS)
+            guard let image = renderedStoryImage(), let jpegData = image.jpegData(compressionQuality: 0.95) else {
+                composerMessage = "Add an image or text before posting."
+                return
+            }
+
+            isPosting = true
+            Task {
+                do {
+                    try await onPost(jpegData, Int(image.size.width), Int(image.size.height))
+                    await MainActor.run {
+                        isPosting = false
+                        showTemporaryPostSuccess()
+                        dismiss()
+                    }
+                } catch {
+                    await MainActor.run {
+                        isPosting = false
+                        composerMessage = "Could not post the story. Check your Instagram connection and try again."
+                    }
+                }
+            }
+        #else
+            composerMessage = "Posting stories is only available on iOS."
+        #endif
+    }
+
     private func showTemporarySaveSuccess() {
         saveSucceeded = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
             saveSucceeded = false
+        }
+    }
+
+    private func showTemporaryPostSuccess() {
+        postSucceeded = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
+            postSucceeded = false
         }
     }
 }
@@ -442,13 +500,13 @@ struct StoryComposerView: View {
                 with: CGSize(width: maxTextWidth - horizontalInset * 2, height: .greatestFiniteMagnitude),
                 options: [.usesLineFragmentOrigin, .usesFontLeading],
                 attributes: attributes,
-                context: nil
+                context: nil,
             )
             let width = min(max(ceil(textBounds.width + horizontalInset * 2), 90 * scaledText), maxTextWidth)
             let height = max(ceil(textBounds.height + verticalInset * 2), 58 * scaledText)
             let center = CGPoint(
                 x: outputSize.width / 2 + caption.offset.width * xScale,
-                y: outputSize.height / 2 + caption.offset.height * yScale
+                y: outputSize.height / 2 + caption.offset.height * yScale,
             )
             let backgroundRect = CGRect(x: center.x - width / 2, y: center.y - height / 2, width: width, height: height)
             let path = UIBezierPath(roundedRect: backgroundRect, cornerRadius: 16 * scaledText)
@@ -468,7 +526,7 @@ struct StoryComposerView: View {
                 x: rect.midX - drawSize.width / 2,
                 y: rect.midY - drawSize.height / 2,
                 width: drawSize.width,
-                height: drawSize.height
+                height: drawSize.height,
             )
             draw(in: drawRect)
         }
@@ -685,13 +743,13 @@ private enum StoryComposerBackground: Equatable, CaseIterable {
             guard let context = UIGraphicsGetCurrentContext(), let gradient = CGGradient(
                 colorsSpace: CGColorSpaceCreateDeviceRGB(),
                 colors: colors.map(\.cgColor) as CFArray,
-                locations: nil
+                locations: nil,
             ) else { return }
             context.drawLinearGradient(
                 gradient,
                 start: CGPoint(x: rect.minX, y: rect.minY),
                 end: CGPoint(x: rect.maxX, y: rect.maxY),
-                options: []
+                options: [],
             )
         }
     }
@@ -761,10 +819,10 @@ private struct BackgroundToolbarIcon: View {
                 self.textColor = textColor
             }
             view.onFocusChange = { focused in
-                self.isFocused = focused
+                isFocused = focused
             }
             view.onDragEnded = { shouldDelete in
-                self.onDragEnded(id, shouldDelete)
+                onDragEnded(id, shouldDelete)
             }
             return view
         }
@@ -801,10 +859,10 @@ private struct BackgroundToolbarIcon: View {
                 self.textColor = textColor
             }
             view.onFocusChange = { focused in
-                self.isFocused = focused
+                isFocused = focused
             }
             view.onDragEnded = { shouldDelete in
-                self.onDragEnded(id, shouldDelete)
+                onDragEnded(id, shouldDelete)
             }
 
             let displayText = text.isEmpty ? "Text" : text
@@ -961,7 +1019,7 @@ private struct BackgroundToolbarIcon: View {
         private func currentTextCenter() -> CGPoint {
             CGPoint(
                 x: bounds.midX + (isEditingCentered ? 0 : committedOffset.width),
-                y: bounds.midY + (isEditingCentered ? -96 : committedOffset.height)
+                y: bounds.midY + (isEditingCentered ? -96 : committedOffset.height),
             )
         }
 
@@ -1102,7 +1160,7 @@ private struct BackgroundToolbarIcon: View {
                 x: (bounds.width - dimension) / 2,
                 y: bounds.height - dimension - 54,
                 width: dimension,
-                height: dimension
+                height: dimension,
             )
         }
 
@@ -1146,7 +1204,7 @@ private struct BackgroundToolbarIcon: View {
                 let translation = recognizer.translation(in: self)
                 textView.center = CGPoint(
                     x: dragStartCenter.x + translation.x,
-                    y: dragStartCenter.y + translation.y
+                    y: dragStartCenter.y + translation.y,
                 )
                 setTrashActive(captionTrashHitFrame().contains(textView.center))
             case .ended, .cancelled, .failed:
@@ -1162,7 +1220,7 @@ private struct BackgroundToolbarIcon: View {
                 }
                 committedOffset = CGSize(
                     width: textView.center.x - bounds.midX,
-                    height: textView.center.y - bounds.midY
+                    height: textView.center.y - bounds.midY,
                 )
                 onOffsetChange?(committedOffset)
                 onDragEnded?(false)

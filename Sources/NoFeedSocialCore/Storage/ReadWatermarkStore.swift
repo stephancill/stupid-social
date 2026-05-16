@@ -15,7 +15,7 @@ public final class ICloudReadWatermarkStore: ReadWatermarkProviding {
 
     public init(
         cloudStore: NSUbiquitousKeyValueStore = .default,
-        localStore: UserDefaults = .standard
+        localStore: UserDefaults = .standard,
     ) {
         self.cloudStore = cloudStore
         self.localStore = localStore
@@ -25,7 +25,7 @@ public final class ICloudReadWatermarkStore: ReadWatermarkProviding {
     }
 
     public func watermark(for network: SocialNetwork, accountId: String) -> ReadWatermark? {
-        let key = self.key(network: network, accountId: accountId)
+        let key = key(network: network, accountId: accountId)
         var candidates: [ReadWatermark] = []
 
         if let data = cloudStore.data(forKey: key),
@@ -60,11 +60,11 @@ public final class ICloudReadWatermarkStore: ReadWatermarkProviding {
                 network: scope.network,
                 accountId: scope.accountId,
                 lastReadAt: newest,
-                updatedAt: Date()
+                updatedAt: Date(),
             )
 
             guard let data = try? encoder.encode(watermark) else { continue }
-            let key = self.key(network: scope.network, accountId: scope.accountId)
+            let key = key(network: scope.network, accountId: scope.accountId)
             cloudStore.set(data, forKey: key)
             localStore.set(data, forKey: key)
         }
@@ -83,7 +83,7 @@ public final class ICloudReadWatermarkStore: ReadWatermarkProviding {
     private func filtered(
         _ items: [NotificationItem],
         network: SocialNetwork?,
-        accountId: String?
+        accountId: String?,
     ) -> [NotificationItem] {
         items.filter { item in
             if let network, item.network != network { return false }

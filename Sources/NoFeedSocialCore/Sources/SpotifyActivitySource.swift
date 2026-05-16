@@ -19,7 +19,7 @@ public final class SpotifyActivitySource: NotificationSource {
             metadataStore.spotifyAccount = SpotifyAccountMetadata(
                 accountId: "spotify",
                 username: username,
-                status: .valid
+                status: .valid,
             )
             return .valid
         } catch SourceError.notConfigured {
@@ -38,11 +38,11 @@ public final class SpotifyActivitySource: NotificationSource {
     }
 
     public func fetchUnreadCount() async throws -> Int? {
-        return nil
+        nil
     }
 
     public func fetchNotifications(reason _: RefreshReason) async throws -> [NotificationItem] {
-        return []
+        []
     }
 
     public func fetchActivity(reason _: RefreshReason) async throws -> [SpotifyActivityItem] {
@@ -73,7 +73,7 @@ public final class SpotifyActivitySource: NotificationSource {
                 trackURI: friend.track.uri,
                 trackURL: URL(string: "https://open.spotify.com/track/\(trackId)"),
                 imageURL: friend.track.imageUrl.flatMap { URL(string: $0) },
-                musicAnimation: animation
+                musicAnimation: animation,
             ))
         }
 
@@ -101,7 +101,7 @@ public final class SpotifyActivitySource: NotificationSource {
                 avatarURL: avatar,
                 followerCount: followerCount,
                 followingCount: followingCount,
-                websiteURL: website
+                websiteURL: website,
             )
         } catch {
             return NetworkProfile(
@@ -111,7 +111,7 @@ public final class SpotifyActivitySource: NotificationSource {
                 displayName: username,
                 avatarURL: nil,
                 followerCount: nil,
-                followingCount: nil
+                followingCount: nil,
             )
         }
     }
@@ -134,7 +134,7 @@ public final class SpotifyActivitySource: NotificationSource {
             tempo: analysis.track.tempo,
             tempoConfidence: analysis.track.tempoConfidence,
             loudness: analysis.track.loudness,
-            mode: analysis.track.mode
+            mode: analysis.track.mode,
         )
         audioAnimationCache[trackId] = metadata
         return metadata

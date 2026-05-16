@@ -14,7 +14,7 @@ public final class FeedService {
     public init(
         sources: [any NotificationSource],
         cacheStore: NotificationCacheStore,
-        watermarkStore: ReadWatermarkProviding
+        watermarkStore: ReadWatermarkProviding,
     ) {
         self.sources = sources
         self.cacheStore = cacheStore

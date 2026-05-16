@@ -30,7 +30,7 @@ public final class SettingsViewModel: ObservableObject {
         keychainStore: KeychainCredentialStore,
         metadataStore: AccountMetadataStore,
         farcasterClient: FarcasterClient,
-        cacheStore: NotificationCacheStore
+        cacheStore: NotificationCacheStore,
     ) {
         self.keychainStore = keychainStore
         self.metadataStore = metadataStore
@@ -160,7 +160,7 @@ public final class SettingsViewModel: ObservableObject {
                 username: user.username ?? username,
                 fid: user.fid,
                 status: .valid,
-                enabledCategories: Set(FarcasterNotificationCategory.allCases)
+                enabledCategories: Set(FarcasterNotificationCategory.allCases),
             )
             farcasterEnabledCategories = Set(FarcasterNotificationCategory.allCases)
             farcasterStatus = .valid
@@ -188,8 +188,9 @@ public final class SettingsViewModel: ObservableObject {
             metadataStore.instagramAccount = InstagramAccountMetadata(
                 accountId: String(user.pk),
                 username: user.username,
+                avatarURL: user.profilePicURL,
                 status: .valid,
-                enabledCategories: categories
+                enabledCategories: categories,
             )
             instagramEnabledCategories = categories
             instagramStatus = .valid
@@ -200,7 +201,7 @@ public final class SettingsViewModel: ObservableObject {
                 accountId: "instagram",
                 username: nil,
                 status: .valid,
-                enabledCategories: categories
+                enabledCategories: categories,
             )
             instagramEnabledCategories = categories
             message = "Instagram credentials saved, but could not resolve username."
@@ -231,8 +232,9 @@ public final class SettingsViewModel: ObservableObject {
             metadataStore.instagramAccount = InstagramAccountMetadata(
                 accountId: String(user.pk),
                 username: user.username,
+                avatarURL: user.profilePicURL,
                 status: .valid,
-                enabledCategories: categories
+                enabledCategories: categories,
             )
             instagramEnabledCategories = categories
             instagramStatus = .valid
@@ -243,7 +245,7 @@ public final class SettingsViewModel: ObservableObject {
                 accountId: "instagram",
                 username: nil,
                 status: .valid,
-                enabledCategories: categories
+                enabledCategories: categories,
             )
             instagramEnabledCategories = categories
             message = "Instagram credentials saved, but could not resolve username."
@@ -352,7 +354,7 @@ public final class SettingsViewModel: ObservableObject {
             metadataStore.spotifyAccount = SpotifyAccountMetadata(
                 accountId: "spotify",
                 username: username,
-                status: .valid
+                status: .valid,
             )
             spotifyStatus = .valid
             message = "Spotify credentials saved."
@@ -402,7 +404,7 @@ public final class SettingsViewModel: ObservableObject {
                 accessTokenExpiresAt: existing.accessTokenExpiresAt,
                 initialBearerToken: decoded.accessToken,
                 initialBearerTokenExpiresAt: decoded.accessTokenExpirationTimestampMs.map { Date(timeIntervalSince1970: TimeInterval($0) / 1000) },
-                username: existing.username
+                username: existing.username,
             )
             _ = try keychainStore.saveSpotifyCredentials(enriched)
         } catch {
@@ -436,7 +438,7 @@ public final class SettingsViewModel: ObservableObject {
             bearerToken: bearer,
             clientToken: client,
             spDC: spDC,
-            username: nil
+            username: nil,
         )
 
         do {
@@ -455,7 +457,7 @@ public final class SettingsViewModel: ObservableObject {
             metadataStore.spotifyAccount = SpotifyAccountMetadata(
                 accountId: "spotify",
                 username: username,
-                status: .valid
+                status: .valid,
             )
             spotifyStatus = .valid
             message = "Spotify credentials saved."
@@ -525,12 +527,12 @@ public final class SettingsViewModel: ObservableObject {
 
     private func accountStatus(from snapshot: AccountStatusSnapshot) -> AccountStatus {
         switch snapshot {
-        case .valid: return .valid
-        case .invalidCredentials: return .invalidCredentials
-        case .iCloudUnavailable: return .iCloudUnavailable
-        case .notConfigured: return .notConfigured
-        case .networkUnavailable: return .networkUnavailable
-        case .serviceError: return .serviceError("Invalid credentials")
+        case .valid: .valid
+        case .invalidCredentials: .invalidCredentials
+        case .iCloudUnavailable: .iCloudUnavailable
+        case .notConfigured: .notConfigured
+        case .networkUnavailable: .networkUnavailable
+        case .serviceError: .serviceError("Invalid credentials")
         }
     }
 

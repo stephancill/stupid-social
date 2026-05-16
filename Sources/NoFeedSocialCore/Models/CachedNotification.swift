@@ -46,7 +46,7 @@ public final class CachedNotification {
             text: text,
             actors: actors,
             target: target,
-            parentTarget: parentTarget
+            parentTarget: parentTarget,
         )
     }
 }

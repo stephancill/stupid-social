@@ -12,7 +12,7 @@ The MVP is a universal macOS and iOS SwiftUI app built with xtool. It supports a
 
 Out of scope for this technical design:
 
-- Posting and cross-posting.
+- Cross-posting and non-Instagram posting.
 - Bluesky and Instagram.
 - Multiple accounts per network.
 - Backend services.
@@ -367,8 +367,15 @@ Expected verification once the app is scaffolded:
 - xtool build succeeds.
 - xtool run behavior is checked when feasible.
 
-## Future Posting
+## Posting
 
-Posting is deferred entirely for this design.
+Instagram story posting is current scope.
 
-Do not add composer models, posting protocols, or posting UI in the MVP unless `docs/PLAN.md` changes.
+Implementation expectations:
+
+- Keep the story composer UI local and simple.
+- Render the composer output to a 1080x1920 JPEG before upload.
+- Use the existing cookie-authenticated native Instagram client for story photo uploads.
+- Upload the JPEG to `/rupload_igphoto/{upload_name}` and finalize it with `POST /api/v1/media/configure_to_story/`.
+- Sign configure requests with the existing Instagram HMAC signing path.
+- Keep posting scoped to Instagram photo stories; do not add cross-posting abstractions until another network is implemented.

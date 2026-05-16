@@ -22,7 +22,7 @@ struct CachedAsyncImage<Placeholder: View, Failure: View>: View {
         url: URL?,
         cacheKey: String? = nil,
         @ViewBuilder placeholder: @escaping () -> Placeholder,
-        @ViewBuilder failure: @escaping () -> Failure
+        @ViewBuilder failure: @escaping () -> Failure,
     ) {
         self.url = url
         self.cacheKey = cacheKey

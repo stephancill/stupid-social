@@ -39,7 +39,7 @@ final class LiveServiceTests: XCTestCase {
             _ = try store.saveXCredentials(creds)
             sources.append(XNotificationSource(
                 client: XClient(credentialStore: store),
-                metadataStore: accountStore()
+                metadataStore: accountStore(),
             ))
         } else {
             errors.append("X: no credentials")
@@ -51,7 +51,7 @@ final class LiveServiceTests: XCTestCase {
             store.farcasterAccount = farcaster
             sources.append(FarcasterNotificationSource(
                 client: FarcasterClient(),
-                metadataStore: store
+                metadataStore: store,
             ))
         } else {
             errors.append("Farcaster: no account")
@@ -63,7 +63,7 @@ final class LiveServiceTests: XCTestCase {
             _ = try store.saveInstagramCredentials(instaCreds)
             sources.append(InstagramNotificationSource(
                 client: InstagramClient(credentialStore: store),
-                metadataStore: accountStore()
+                metadataStore: accountStore(),
             ))
         } else {
             errors.append("Instagram: no credentials")
@@ -78,13 +78,13 @@ final class LiveServiceTests: XCTestCase {
 
         let container = try ModelContainer(
             for: CachedNotification.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true),
         )
         let cacheStore = NotificationCacheStore(context: container.mainContext)
         let service = FeedService(
             sources: sources,
             cacheStore: cacheStore,
-            watermarkStore: InMemoryReadWatermarkStore()
+            watermarkStore: InMemoryReadWatermarkStore(),
         )
 
         // Refresh 1
@@ -132,7 +132,7 @@ final class LiveServiceTests: XCTestCase {
     }
 
     private func xCredentials() -> XCredentials? {
-        if let creds = (try? KeychainCredentialStore().loadXCredentials()).flatMap({ $0 }) {
+        if let creds = (try? KeychainCredentialStore().loadXCredentials()).flatMap(\.self) {
             return creds
         }
         if let auth = env("TWITTER_AUTH_TOKEN"), let ct0 = env("TWITTER_CT0") {
@@ -142,7 +142,7 @@ final class LiveServiceTests: XCTestCase {
     }
 
     private func instagramCredentials() -> InstagramCredentials? {
-        if let creds = (try? KeychainCredentialStore().loadInstagramCredentials()).flatMap({ $0 }) {
+        if let creds = (try? KeychainCredentialStore().loadInstagramCredentials()).flatMap(\.self) {
             return creds
         }
         return instagramEnvironmentCredentials()
@@ -159,7 +159,7 @@ final class LiveServiceTests: XCTestCase {
                 dsUserId: uid,
                 mid: env("INSTAGRAM_MID"),
                 rur: env("INSTAGRAM_RUR"),
-                igDid: env("INSTAGRAM_IG_DID")
+                igDid: env("INSTAGRAM_IG_DID"),
             )
         }
         return nil
@@ -192,7 +192,7 @@ private final class InMemoryReadWatermarkStore: ReadWatermarkProviding {
             network: first.network,
             accountId: first.accountId,
             lastReadAt: newest,
-            updatedAt: Date()
+            updatedAt: Date(),
         )
     }
 

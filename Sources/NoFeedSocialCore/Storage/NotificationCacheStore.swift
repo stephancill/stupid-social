@@ -13,7 +13,7 @@ public final class NotificationCacheStore {
         let cutoff = now.addingTimeInterval(-retention)
         let descriptor = FetchDescriptor<CachedNotification>(
             predicate: #Predicate { $0.cachedAt >= cutoff },
-            sortBy: [SortDescriptor(\.timestamp, order: .reverse)]
+            sortBy: [SortDescriptor(\.timestamp, order: .reverse)],
         )
 
         return try context.fetch(descriptor).compactMap { try? $0.toItem() }
@@ -53,7 +53,7 @@ public final class NotificationCacheStore {
     func deleteExpired(now: Date = Date(), retention: TimeInterval = 86400) throws {
         let cutoff = now.addingTimeInterval(-retention)
         let descriptor = FetchDescriptor<CachedNotification>(
-            predicate: #Predicate { $0.cachedAt < cutoff }
+            predicate: #Predicate { $0.cachedAt < cutoff },
         )
 
         for item in try context.fetch(descriptor) {

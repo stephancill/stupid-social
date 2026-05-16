@@ -11,8 +11,10 @@ struct UnifiedStoryViewer: View {
     let startIndex: Int
     let spotifyClient: SpotifyClient
     let feedService: FeedService
+    let ownInstagramAccountId: String?
     let onInstagramReelSeen: (String) -> Void
     let onSpotifyItemSeen: (String) -> Void
+    let onInstagramStoryDelete: (String, Bool) async throws -> Void
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -37,6 +39,9 @@ struct UnifiedStoryViewer: View {
     @State private var loadingArtworkPulse = false
     @State private var spotifySavedStatus: [String: Bool] = [:]
     @State private var spotifySavingTrackIds: Set<String> = []
+    @State private var pendingDeleteSlide: InstagramStorySlide?
+    @State private var isDeletingStory = false
+    @State private var deleteErrorMessage: String?
 
     enum PlayerStatus: Equatable {
         case idle
@@ -57,15 +62,19 @@ struct UnifiedStoryViewer: View {
         startIndex: Int,
         spotifyClient: SpotifyClient,
         feedService: FeedService,
+        ownInstagramAccountId: String?,
         onInstagramReelSeen: @escaping (String) -> Void,
-        onSpotifyItemSeen: @escaping (String) -> Void
+        onSpotifyItemSeen: @escaping (String) -> Void,
+        onInstagramStoryDelete: @escaping (String, Bool) async throws -> Void,
     ) {
         self.items = items
         self.startIndex = startIndex
         self.spotifyClient = spotifyClient
         self.feedService = feedService
+        self.ownInstagramAccountId = ownInstagramAccountId
         self.onInstagramReelSeen = onInstagramReelSeen
         self.onSpotifyItemSeen = onSpotifyItemSeen
+        self.onInstagramStoryDelete = onInstagramStoryDelete
         _currentItemIndex = State(initialValue: startIndex)
         _seenItems = State(initialValue: [])
     }
@@ -98,7 +107,7 @@ struct UnifiedStoryViewer: View {
                             reduceMotion: reduceMotion,
                             spotifySavedStatus: $spotifySavedStatus,
                             spotifySavingTrackIds: $spotifySavingTrackIds,
-                            spotifyClient: spotifyClient
+                            spotifyClient: spotifyClient,
                         )
 
                         progressBar(slideCount: slideCount)
@@ -175,6 +184,23 @@ struct UnifiedStoryViewer: View {
         }
         .onDisappear {
             stopPlayback()
+        }
+        .confirmationDialog("Delete Story?", isPresented: deleteConfirmationBinding, titleVisibility: .visible) {
+            Button("Delete Story", role: .destructive) {
+                deletePendingStory()
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDeleteSlide = nil
+            }
+        } message: {
+            Text("This will remove the current Instagram story from your account.")
+        }
+        .alert("Delete Failed", isPresented: deleteErrorBinding) {
+            Button("OK", role: .cancel) {
+                deleteErrorMessage = nil
+            }
+        } message: {
+            Text(deleteErrorMessage ?? "Could not delete the story.")
         }
     }
 
@@ -275,7 +301,7 @@ struct UnifiedStoryViewer: View {
                                         .fill(Color.white)
                                         .frame(
                                             width: geo.size.width * min(elapsedTime / slideDuration, 1.0),
-                                            height: 3
+                                            height: 3,
                                         )
                                 } else if index < currentSlideIndex {
                                     Capsule()
@@ -297,9 +323,9 @@ struct UnifiedStoryViewer: View {
             LinearGradient(
                 colors: [Color.black.opacity(0.55), Color.black.opacity(0)],
                 startPoint: .top,
-                endPoint: .bottom
+                endPoint: .bottom,
             )
-            .ignoresSafeArea()
+            .ignoresSafeArea(),
         )
         .frame(maxHeight: .infinity, alignment: .top)
     }
@@ -326,6 +352,29 @@ struct UnifiedStoryViewer: View {
             }
 
             Spacer()
+
+            if canDeleteCurrentInstagramStory {
+                Menu {
+                    Button("Delete Story", role: .destructive) {
+                        pendingDeleteSlide = currentInstagramSlide
+                        isPaused = true
+                        player?.pause()
+                    }
+                } label: {
+                    if isDeletingStory {
+                        ProgressView()
+                            .progressViewStyle(.circular)
+                            .tint(.white)
+                            .padding(8)
+                    } else {
+                        Image(systemName: "ellipsis")
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .padding(8)
+                    }
+                }
+                .disabled(isDeletingStory)
+            }
 
             Button {
                 var transaction = Transaction()
@@ -359,6 +408,65 @@ struct UnifiedStoryViewer: View {
 
     private var topBar: some View {
         EmptyView()
+    }
+
+    private var currentInstagramSlide: InstagramStorySlide? {
+        guard case let .instagram(reel) = currentItem,
+              reel.slides.indices.contains(currentSlideIndex)
+        else { return nil }
+        return reel.slides[currentSlideIndex]
+    }
+
+    private var canDeleteCurrentInstagramStory: Bool {
+        guard let ownInstagramAccountId,
+              case let .instagram(reel) = currentItem,
+              reel.user.id == ownInstagramAccountId,
+              currentInstagramSlide != nil
+        else { return false }
+        return true
+    }
+
+    private var deleteConfirmationBinding: Binding<Bool> {
+        Binding(
+            get: { pendingDeleteSlide != nil },
+            set: { if !$0 { pendingDeleteSlide = nil } },
+        )
+    }
+
+    private var deleteErrorBinding: Binding<Bool> {
+        Binding(
+            get: { deleteErrorMessage != nil },
+            set: { if !$0 { deleteErrorMessage = nil } },
+        )
+    }
+
+    private func deletePendingStory() {
+        guard let slide = pendingDeleteSlide else { return }
+        pendingDeleteSlide = nil
+        isDeletingStory = true
+        Task {
+            do {
+                try await onInstagramStoryDelete(slide.id, slide.isVideo)
+                await MainActor.run {
+                    isDeletingStory = false
+                    advanceAfterDeletion()
+                }
+            } catch {
+                await MainActor.run {
+                    isDeletingStory = false
+                    deleteErrorMessage = "Could not delete the story. Try again from Instagram if it remains visible."
+                }
+            }
+        }
+    }
+
+    private func advanceAfterDeletion() {
+        if let item = currentItem, currentSlideIndex + 1 < item.slideCount {
+            currentSlideIndex += 1
+        } else {
+            stopPlayback()
+            dismiss()
+        }
     }
 
     private var userName: String {
@@ -523,7 +631,7 @@ struct UnifiedStoryViewer: View {
         NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
             object: playerItem,
-            queue: .main
+            queue: .main,
         ) { _ in
             Task { @MainActor in
                 guard player?.currentItem === playerItem else { return }
@@ -557,7 +665,7 @@ struct UnifiedStoryViewer: View {
         NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
             object: playerItem,
-            queue: .main
+            queue: .main,
         ) { _ in
             Task { @MainActor in
                 playerStatus = .finished
@@ -619,7 +727,7 @@ struct UnifiedStoryViewer: View {
                 duration: duration.flatMap { duration in
                     guard duration.seconds > 0, duration.seconds.isFinite else { return nil }
                     return duration.seconds
-                }
+                },
             )
         }
     }
@@ -771,7 +879,7 @@ struct UnifiedStoryViewer: View {
         reduceMotion: Bool,
         spotifySavedStatus: Binding<[String: Bool]>,
         spotifySavingTrackIds: Binding<Set<String>>,
-        spotifyClient: SpotifyClient
+        spotifyClient: SpotifyClient,
     ) -> some View {
         switch self {
         case let .instagram(reel):
@@ -786,7 +894,7 @@ struct UnifiedStoryViewer: View {
                 reduceMotion: reduceMotion,
                 spotifySavedStatus: spotifySavedStatus,
                 spotifySavingTrackIds: spotifySavingTrackIds,
-                spotifyClient: spotifyClient
+                spotifyClient: spotifyClient,
             )
         }
     }
@@ -944,7 +1052,7 @@ struct UnifiedStoryViewer: View {
         reduceMotion: Bool,
         spotifySavedStatus: Binding<[String: Bool]>,
         spotifySavingTrackIds: Binding<Set<String>>,
-        spotifyClient: SpotifyClient
+        spotifyClient: SpotifyClient,
     ) -> some View {
         let trackId = item.trackURI
             .replacingOccurrences(of: "spotify:track:", with: "")
@@ -964,7 +1072,7 @@ struct UnifiedStoryViewer: View {
                     maxPhase: pulseDuration(item.musicAnimation),
                     scale: spotifyPulseScale(item.musicAnimation),
                     opacity: spotifyPulseOpacity(item.musicAnimation),
-                    size: 260
+                    size: 260,
                 )
 
                 CachedAsyncImage(url: item.imageURL) {

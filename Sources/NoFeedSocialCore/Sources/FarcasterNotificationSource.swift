@@ -61,7 +61,7 @@ public struct FarcasterNotificationSource: NotificationSource {
             avatarURL: user.pfpUrl,
             followerCount: user.followerCount,
             followingCount: user.followingCount,
-            joinedAt: user.registeredAt
+            joinedAt: user.registeredAt,
         )
     }
 
@@ -81,19 +81,19 @@ public struct FarcasterNotificationSource: NotificationSource {
                     network: .farcaster,
                     username: author.username,
                     displayName: author.displayName,
-                    avatarURL: author.pfpUrl
+                    avatarURL: author.pfpUrl,
                 )
             },
             text: cast?.displayText ?? cast?.text,
             imageURLs: imageURLs,
             postedAt: cast?.timestamp,
-            likeCount: likeCount
+            likeCount: likeCount,
         )
     }
 
     private func normalize(
         _ notification: FarcasterNotificationResponse,
-        accountId: String
+        accountId: String,
     ) -> NotificationItem {
         let timestamp = notification.notificationDate
         let type = normalizeType(notification.type, notification: notification, accountFid: accountId)
@@ -128,14 +128,14 @@ public struct FarcasterNotificationSource: NotificationSource {
                             network: .farcaster,
                             username: author.username,
                             displayName: author.displayName,
-                            avatarURL: author.pfpUrl
+                            avatarURL: author.pfpUrl,
                         )
                     },
                     postedAt: cast.timestamp,
-                    likeCount: cast.reactions?.likesCount
+                    likeCount: cast.reactions?.likesCount,
                 )
             },
-            parentTarget: parentTarget(from: notification.cast)
+            parentTarget: parentTarget(from: notification.cast),
         )
     }
 
@@ -147,20 +147,20 @@ public struct FarcasterNotificationSource: NotificationSource {
                 network: .farcaster,
                 username: nil,
                 displayName: nil,
-                avatarURL: nil
+                avatarURL: nil,
             )
         }
         return NotificationTarget(
             id: parentHash,
             text: nil,
             url: nil,
-            author: author
+            author: author,
         )
     }
 
     private func filteredItems(
         from notifications: [FarcasterNotificationResponse],
-        account: FarcasterAccountMetadata
+        account: FarcasterAccountMetadata,
     ) -> [NotificationItem] {
         notifications
             .map { normalize($0, accountId: String(account.fid)) }
@@ -230,7 +230,7 @@ public struct FarcasterNotificationSource: NotificationSource {
             username: user.username,
             displayName: user.displayName,
             avatarURL: user.pfpUrl,
-            timestamp: timestamp
+            timestamp: timestamp,
         )
     }
 
@@ -242,7 +242,7 @@ public struct FarcasterNotificationSource: NotificationSource {
             username: user.username,
             displayName: user.displayName,
             avatarURL: user.pfpUrl,
-            timestamp: timestamp
+            timestamp: timestamp,
         )
     }
 
@@ -254,14 +254,14 @@ public struct FarcasterNotificationSource: NotificationSource {
             username: user.username,
             displayName: user.displayName,
             avatarURL: user.pfpUrl,
-            timestamp: timestamp
+            timestamp: timestamp,
         )
     }
 
     private func notificationText(
         _ notification: FarcasterNotificationResponse,
         type: NotificationType,
-        actors: [NotificationActor]
+        actors: [NotificationActor],
     ) -> String {
         let actorName = actors.first?.username.map { "@\($0)" } ?? "Someone"
 
@@ -299,7 +299,7 @@ public struct FarcasterNotificationSource: NotificationSource {
 
         let groupedFollows: [NotificationItem] = followItems.isEmpty
             ? []
-            : [mergeGroup(followItems, type: .follow, accountId: accountId)].compactMap { $0 }
+            : [mergeGroup(followItems, type: .follow, accountId: accountId)].compactMap(\.self)
 
         return (ungrouped + groupedReactions + groupedFollows).sorted { $0.timestamp > $1.timestamp }
     }
@@ -337,7 +337,7 @@ public struct FarcasterNotificationSource: NotificationSource {
             text: text,
             actors: mergedActors,
             target: first.target,
-            parentTarget: first.parentTarget
+            parentTarget: first.parentTarget,
         )
     }
 }

@@ -37,7 +37,7 @@ final class ReadWatermarkTests: XCTestCase {
             timestamp: timestamp,
             text: "Test",
             actors: [],
-            target: nil
+            target: nil,
         )
     }
 }
@@ -69,7 +69,7 @@ private final class InMemoryReadWatermarkStore: ReadWatermarkProviding {
                 network: first.network,
                 accountId: first.accountId,
                 lastReadAt: newest,
-                updatedAt: Date()
+                updatedAt: Date(),
             )
         }
     }
