@@ -142,8 +142,8 @@ struct FeedView: View {
             )
         }
         .fullScreenCover(isPresented: $showingStoryComposer) {
-            StoryComposerView { jpegData, width, height in
-                try await viewModel.postInstagramStory(jpegData: jpegData, width: width, height: height)
+            StoryComposerView { imageData, width, height, mimeType in
+                try await viewModel.postInstagramStory(imageData: imageData, width: width, height: height, mimeType: mimeType)
             }
         }
         #else
@@ -166,8 +166,8 @@ struct FeedView: View {
                     )
                 }
                 .sheet(isPresented: $showingStoryComposer) {
-                    StoryComposerView { jpegData, width, height in
-                        try await viewModel.postInstagramStory(jpegData: jpegData, width: width, height: height)
+                    StoryComposerView { imageData, width, height, mimeType in
+                        try await viewModel.postInstagramStory(imageData: imageData, width: width, height: height, mimeType: mimeType)
                     }
                 }
         #endif

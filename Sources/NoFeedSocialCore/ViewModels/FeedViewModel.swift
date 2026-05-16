@@ -112,9 +112,9 @@ public final class FeedViewModel: ObservableObject {
         storyBarLoading = false
     }
 
-    public func postInstagramStory(jpegData: Data, width: Int, height: Int) async throws {
+    public func postInstagramStory(imageData: Data, width: Int, height: Int, mimeType: String) async throws {
         guard let instagramSource else { throw SourceError.notConfigured }
-        try await instagramSource.postPhotoStory(jpegData: jpegData, width: width, height: height)
+        try await instagramSource.postPhotoStory(imageData: imageData, width: width, height: height, mimeType: mimeType)
         await fetchStoryBarContent()
     }
 

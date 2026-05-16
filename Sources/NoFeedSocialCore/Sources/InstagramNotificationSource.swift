@@ -38,8 +38,8 @@ public final class InstagramNotificationSource: NotificationSource {
         }
     }
 
-    public func postPhotoStory(jpegData: Data, width: Int, height: Int) async throws {
-        try await client.publishPhotoStory(jpegData: jpegData, width: width, height: height)
+    public func postPhotoStory(imageData: Data, width: Int, height: Int, mimeType: String) async throws {
+        try await client.publishPhotoStory(imageData: imageData, width: width, height: height, mimeType: mimeType)
     }
 
     public func deleteStory(mediaId: String, isVideo: Bool) async throws {

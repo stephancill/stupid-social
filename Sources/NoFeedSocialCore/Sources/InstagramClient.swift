@@ -388,31 +388,42 @@ public struct InstagramClient {
         }
     }
 
-    public func publishPhotoStory(jpegData: Data, width: Int, height: Int) async throws {
+    public func publishPhotoStory(imageData: Data, width: Int, height: Int, mimeType: String) async throws {
         guard let credentials = try credentialStore.loadInstagramCredentials() else {
             throw SourceError.notConfigured
         }
 
-        let uploadId = String(Int(Date().timeIntervalSince1970 * 1000))
-        let uploadName = "fb_uploader_\(uploadId)"
+        let format = storyPhotoFormat(mimeType: mimeType)
+        let uploadId = String(Int64.random(in: 3_000_000_000_000 ... 3_999_999_999_999))
+        let uploadName = "\(uploadId)_0_\(Int.random(in: 1_000_000_000 ... 2_147_483_647))"
         let ruploadParams: [String: Any] = [
-            "media_type": 1,
             "upload_id": uploadId,
-            "upload_media_width": width,
-            "upload_media_height": height,
+            "session_id": uploadId,
+            "media_type": "1",
+            "upload_engine_config_enum": "0",
+            "share_type": "stories",
+            "is_optimistic_upload": "false",
+            "image_compression": imageCompressionJSON(format: format, width: width, height: height),
+            "xsharing_user_ids": "[]",
+            "retry_context": jsonString([
+                "num_reupload": 0,
+                "num_step_manual_retry": 0,
+                "num_step_auto_retry": 0,
+            ]),
         ]
         let ruploadParamsJSON = jsonString(ruploadParams)
 
         var uploadRequest = URLRequest(url: URL(string: "\(Self.baseURL)/rupload_igphoto/\(uploadName)")!)
         uploadRequest.httpMethod = "POST"
-        uploadRequest.httpBody = jpegData
-        var uploadHeaders = webHeaders(credentials: credentials, referer: "https://www.instagram.com/")
-        uploadHeaders["Content-Type"] = "image/jpeg"
-        uploadHeaders["Content-Length"] = String(jpegData.count)
+        uploadRequest.httpBody = imageData
+        var uploadHeaders = storyPostingHeaders(credentials: credentials)
+        uploadHeaders["Content-Type"] = "application/octet-stream"
+        uploadHeaders["Content-Length"] = String(imageData.count)
         uploadHeaders["Offset"] = "0"
-        uploadHeaders["X-Entity-Length"] = String(jpegData.count)
+        uploadHeaders["X-Entity-Length"] = String(imageData.count)
         uploadHeaders["X-Entity-Name"] = uploadName
-        uploadHeaders["X-Entity-Type"] = "image/jpeg"
+        uploadHeaders["X-Entity-Type"] = format.entityType
+        uploadHeaders["X_FB_PHOTO_WATERFALL_ID"] = UUID().uuidString.lowercased()
         uploadHeaders["X-Instagram-Rupload-Params"] = ruploadParamsJSON
         uploadRequest.allHTTPHeaderFields = uploadHeaders
         configureRequest(&uploadRequest)
@@ -425,19 +436,81 @@ public struct InstagramClient {
             throw SourceError.invalidResponse
         }
 
-        let body = formURLEncoded([
-            "caption": "",
-            "configure_mode": "1",
+        let now = Int(Date().timeIntervalSince1970)
+        let deviceIds = instagramDeviceIdentifiers(credentials: credentials)
+        let signedBodyObject: [String: Any] = [
             "upload_id": uploadId,
-            "jazoest": jazoest(csrfToken: credentials.csrfToken),
-        ])
-        var storyConfigureRequest = URLRequest(url: URL(string: "https://www.instagram.com/api/v1/media/configure_to_story/")!)
+            "configure_mode": "1",
+            "source_type": "3",
+            "async_publish": "1",
+            "audience": "default",
+            "original_media_type": "1",
+            "original_width": String(width),
+            "original_height": String(height),
+            "camera_entry_point": "11",
+            "camera_position": "back",
+            "client_shared_at": String(now),
+            "client_timestamp": String(now),
+            "timezone_offset": String(TimeZone.current.secondsFromGMT()),
+            "allow_multi_configures": "1",
+            "has_camera_metadata": "1",
+            "include_e2ee_mentioned_user_list": "1",
+            "hide_from_profile_grid": "false",
+            "scene_capture_type": "",
+            "edits": [
+                "crop_original_size": [Double(width), Double(height)],
+                "filter_strength": 0.5,
+                "filter_type": 0,
+            ],
+            "extra": [
+                "source_width": width,
+                "source_height": height,
+            ],
+            "media_transformation_info": jsonString([
+                "width": String(width),
+                "height": String(height),
+                "x_transform": "0",
+                "y_transform": "0",
+                "zoom": "1.0",
+                "rotation": "0.0",
+                "background_coverage": "0.0",
+            ]),
+            "supported_capabilities_new": supportedCapabilitiesJSON,
+            "bottom_camera_dial_selected": "2",
+            "camera_make": "Apple",
+            "camera_model": "NoFeedSocial",
+            "camera_session_id": UUID().uuidString.lowercased(),
+            "capture_type": "normal",
+            "composition_id": UUID().uuidString.lowercased(),
+            "creation_surface": "camera",
+            "date_time_digitized": instagramDateTimeString(),
+            "date_time_original": instagramDateTimeString(),
+            "device": [
+                "manufacturer": "Apple",
+                "model": "NoFeedSocial",
+            ],
+            "nav_chain": "MainFeedFragment:feed_timeline:1:cold_start:\(now).000:::0.000",
+            "private_mention_sharing_enabled": "1",
+            "publish_id": "1",
+            "_uid": credentials.dsUserId,
+            "_uuid": deviceIds.uuid,
+            "device_id": deviceIds.androidId,
+        ]
+        let body = try signedFormBody(object: signedBodyObject)
+
+        var storyConfigureRequest = URLRequest(url: URL(string: "\(Self.baseURL)/api/v1/media/configure_to_story/")!)
         storyConfigureRequest.httpMethod = "POST"
         storyConfigureRequest.httpBody = body.data(using: .utf8)
-        var configureHeaders = webHeaders(credentials: credentials, referer: "https://www.instagram.com/create/story/")
-        configureHeaders["Content-Type"] = "application/x-www-form-urlencoded"
-        configureHeaders["X-Requested-With"] = "XMLHttpRequest"
-        configureHeaders["X-CSRFToken"] = credentials.csrfToken
+        var configureHeaders = storyPostingHeaders(credentials: credentials)
+        configureHeaders["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"
+        configureHeaders["X-IG-Timezone-Offset"] = String(TimeZone.current.secondsFromGMT())
+        configureHeaders["X-IG-Nav-Chain"] = "MainFeedFragment:feed_timeline:1:cold_start:\(now).000:::0.000"
+        configureHeaders["X-IG-CLIENT-ENDPOINT"] = "MainFeedFragment:feed_timeline"
+        configureHeaders["retry_context"] = jsonString([
+            "num_reupload": 0,
+            "num_step_manual_retry": 0,
+            "num_step_auto_retry": 0,
+        ])
         storyConfigureRequest.allHTTPHeaderFields = configureHeaders
         configureRequest(&storyConfigureRequest)
 
@@ -484,6 +557,41 @@ public struct InstagramClient {
 
     private static let instagramSignatureKey = "9193488027538fd3450b83b7d05286d4ca9599a0f7eeed90d8c85925698a05dc"
 
+    private struct StoryPhotoFormat {
+        let entityType: String
+        let compressionLibrary: String
+        let compressionVersion: String
+    }
+
+    private func storyPhotoFormat(mimeType: String) -> StoryPhotoFormat {
+        if mimeType == "image/webp" {
+            return StoryPhotoFormat(entityType: "image/webp", compressionLibrary: "libwebp", compressionVersion: "30")
+        }
+        return StoryPhotoFormat(entityType: "image/jpeg", compressionLibrary: "libjpeg", compressionVersion: "9")
+    }
+
+    private func imageCompressionJSON(format: StoryPhotoFormat, width: Int, height: Int) -> String {
+        jsonString([
+            "lib_name": format.compressionLibrary,
+            "lib_version": format.compressionVersion,
+            "quality": "86",
+            "original_width": width,
+            "original_height": height,
+        ])
+    }
+
+    private var supportedCapabilitiesJSON: String {
+        let sdkVersions = (149 ... 202).map { "\($0).0" }.joined(separator: ",")
+        let betaVersions = (182 ... 202).map { "\($0).0-beta" }.joined(separator: ",")
+        return jsonString([
+            ["name": "SUPPORTED_SDK_VERSIONS", "value": sdkVersions],
+            ["name": "SUPPORTED_BETA_SDK_VERSIONS", "value": betaVersions],
+            ["name": "FACE_TRACKER_VERSION", "value": "14"],
+            ["name": "COMPRESSION", "value": "ETC2_COMPRESSION"],
+            ["name": "gyroscope", "value": "gyroscope_enabled"],
+        ])
+    }
+
     private func signedFormBody(object: [String: Any]) throws -> String {
         let signedBodyJSON = jsonString(object)
         let signatureData = signedBodyJSON.data(using: .utf8)!
@@ -521,6 +629,48 @@ public struct InstagramClient {
             "X-IG-Connection-Type": "WIFI",
             "X-FB-HTTP-Engine": "Liger",
         ]
+    }
+
+    private func storyPostingHeaders(credentials: InstagramCredentials) -> [String: String] {
+        let deviceIds = instagramDeviceIdentifiers(credentials: credentials)
+        var headers = [
+            "Authorization": instagramAuthorizationHeader(credentials: credentials),
+            "X-CSRFToken": credentials.csrfToken,
+            "User-Agent": Self.androidUserAgent,
+            "Accept": "*/*",
+            "Accept-Language": Self.acceptLanguageHeader,
+            "X-IG-App-Locale": "en_US",
+            "X-IG-Device-Locale": "en_US",
+            "X-IG-Mapped-Locale": "en_US",
+            "X-IG-Capabilities": "3brTv10=",
+            "X-IG-App-ID": "567067343352427",
+            "X-IG-WWW-Claim": "0",
+            "X-IG-Device-ID": deviceIds.uuid,
+            "X-IG-Android-ID": deviceIds.androidId,
+            "X-IG-Connection-Type": "WIFI",
+            "X-FB-Connection-Type": "WIFI",
+            "X-FB-HTTP-Engine": "Liger",
+        ]
+        if let mid = credentials.mid {
+            headers["X-MID"] = mid
+        }
+        return headers
+    }
+
+    private func instagramAuthorizationHeader(credentials: InstagramCredentials) -> String {
+        let payload = jsonString([
+            "ds_user_id": credentials.dsUserId,
+            "sessionid": credentials.sessionId,
+        ])
+        let encoded = Data(payload.utf8).base64EncodedString().replacingOccurrences(of: "=", with: "")
+        return "Bearer IGT:2:\(encoded)"
+    }
+
+    private func instagramDeviceIdentifiers(credentials: InstagramCredentials) -> (uuid: String, androidId: String) {
+        let uuid = (credentials.igDid ?? credentials.dsUserId).lowercased()
+        let digest = SHA256.hash(data: Data(uuid.utf8))
+        let androidSuffix = digest.prefix(8).map { String(format: "%02x", $0) }.joined()
+        return (uuid: uuid, androidId: "android-\(androidSuffix)")
     }
 
     private func webHeaders(credentials: InstagramCredentials, referer: String) -> [String: String] {
@@ -563,6 +713,13 @@ public struct InstagramClient {
         "2\(csrfToken.unicodeScalars.reduce(0) { $0 + Int($1.value) })"
     }
 
+    private func instagramDateTimeString() -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy:MM:dd HH:mm:ss"
+        return formatter.string(from: Date())
+    }
+
     private static var acceptLanguageHeader: String {
         let preferred = Locale.preferredLanguages.prefix(2)
         guard !preferred.isEmpty else { return "en-US,en;q=0.9" }
@@ -585,6 +742,16 @@ public struct InstagramClient {
 
     private func jsonString(_ value: [String]) -> String {
         guard let data = try? JSONSerialization.data(withJSONObject: value, options: []),
+              let string = String(data: data, encoding: .utf8)
+        else {
+            return "[]"
+        }
+        return string
+    }
+
+    private func jsonString(_ value: [[String: String]]) -> String {
+        guard JSONSerialization.isValidJSONObject(value),
+              let data = try? JSONSerialization.data(withJSONObject: value, options: []),
               let string = String(data: data, encoding: .utf8)
         else {
             return "[]"

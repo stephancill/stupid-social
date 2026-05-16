@@ -1,7 +1,9 @@
 import PhotosUI
 import SwiftUI
+import UniformTypeIdentifiers
 
 #if os(iOS)
+    import ImageIO
     import Photos
     import UIKit
 #elseif os(macOS)
@@ -10,7 +12,7 @@ import SwiftUI
 
 struct StoryComposerView: View {
     @Environment(\.dismiss) private var dismiss
-    let onPost: (Data, Int, Int) async throws -> Void
+    let onPost: (Data, Int, Int, String) async throws -> Void
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var selectedImageData: Data?
     @State private var canvasSize = CGSize(width: 390, height: 844)
@@ -25,7 +27,7 @@ struct StoryComposerView: View {
     @GestureState private var captionDrag: CaptionDrag?
     @FocusState private var swiftUIFocusedCaptionID: UUID?
 
-    init(onPost: @escaping (Data, Int, Int) async throws -> Void = { _, _, _ in }) {
+    init(onPost: @escaping (Data, Int, Int, String) async throws -> Void = { _, _, _, _ in }) {
         self.onPost = onPost
     }
 
@@ -412,15 +414,20 @@ struct StoryComposerView: View {
 
     private func postComposedStoryImage() {
         #if os(iOS)
-            guard let image = renderedStoryImage(), let jpegData = image.jpegData(compressionQuality: 0.95) else {
+            guard let image = renderedStoryImage() else {
                 composerMessage = "Add an image or text before posting."
+                return
+            }
+
+            guard let encodedStory = image.storyUploadData() else {
+                composerMessage = "Could not prepare the story image."
                 return
             }
 
             isPosting = true
             Task {
                 do {
-                    try await onPost(jpegData, Int(image.size.width), Int(image.size.height))
+                    try await onPost(encodedStory.data, Int(image.size.width), Int(image.size.height), encodedStory.mimeType)
                     await MainActor.run {
                         isPosting = false
                         showTemporaryPostSuccess()
@@ -519,6 +526,26 @@ struct StoryComposerView: View {
     }
 
     private extension UIImage {
+        func storyUploadData() -> (data: Data, mimeType: String)? {
+            if let webp = webpData(quality: 0.86) {
+                return (webp, "image/webp")
+            }
+            guard let jpeg = jpegData(compressionQuality: 0.86) else { return nil }
+            return (jpeg, "image/jpeg")
+        }
+
+        func webpData(quality: CGFloat) -> Data? {
+            guard let cgImage else { return nil }
+            let data = NSMutableData()
+            guard let destination = CGImageDestinationCreateWithData(data, UTType.webP.identifier as CFString, 1, nil) else {
+                return nil
+            }
+            let options: [CFString: Any] = [kCGImageDestinationLossyCompressionQuality: quality]
+            CGImageDestinationAddImage(destination, cgImage, options as CFDictionary)
+            guard CGImageDestinationFinalize(destination) else { return nil }
+            return data as Data
+        }
+
         func drawAspectFit(in rect: CGRect) {
             let scale = min(rect.width / size.width, rect.height / size.height)
             let drawSize = CGSize(width: size.width * scale, height: size.height * scale)

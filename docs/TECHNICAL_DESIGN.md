@@ -374,8 +374,8 @@ Instagram story posting is current scope.
 Implementation expectations:
 
 - Keep the story composer UI local and simple.
-- Render the composer output to a 1080x1920 JPEG before upload.
+- Render the composer output to a 1080x1920 WebP before upload when native WebP encoding is available; fall back to JPEG while the app does not bundle a WebP encoder.
 - Use the existing cookie-authenticated native Instagram client for story photo uploads.
-- Upload the JPEG to `/rupload_igphoto/{upload_name}` and finalize it with `POST /api/v1/media/configure_to_story/`.
+- Upload the image bytes to `/rupload_igphoto/{upload_id}_0_{random}` with APK-like rupload headers matching the actual byte format and finalize with a signed `POST /api/v1/media/configure_to_story/`.
 - Sign configure requests with the existing Instagram HMAC signing path.
 - Keep posting scoped to Instagram photo stories; do not add cross-posting abstractions until another network is implemented.
