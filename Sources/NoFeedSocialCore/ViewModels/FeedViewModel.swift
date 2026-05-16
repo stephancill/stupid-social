@@ -17,6 +17,8 @@ public final class FeedViewModel: ObservableObject {
     private let instagramSource: InstagramNotificationSource?
     private let spotifyActivitySource: SpotifyActivitySource?
     private let spotifySeenDefaultsKey = "spotifyActivitySeenTimestamps"
+    private let chronologicalInstagramPrefixCount = 15
+    private var orderedInstagramStoryReels: [InstagramStoryReel] = []
 
     public var service: FeedService {
         feedService
@@ -103,21 +105,18 @@ public final class FeedViewModel: ObservableObject {
         let fetchedOwnInstagramActor = await ownInstagramActor ?? ownInstagramStoryActor
         ownInstagramStoryActor = fetchedOwnInstagramActor
 
-        var merged: [StoryBarItem] = []
         var ownReel: InstagramStoryReel?
+        var instagramReels: [InstagramStoryReel] = []
         for reel in fetchedReels {
             if let fetchedOwnInstagramActor, reel.user.id == fetchedOwnInstagramActor.id {
                 ownReel = reel
                 continue
             }
-            merged.append(.instagram(reel))
+            instagramReels.append(reel)
         }
-        for item in fetchedSpots {
-            merged.append(.spotify(item))
-        }
-        sortStoryBarItems(&merged)
         ownInstagramStoryReel = ownReel
-        storyBarItems = merged
+        orderedInstagramStoryReels = instagramReels
+        storyBarItems = mergedStoryBarItems(instagramReels: instagramReels, spotifyItems: fetchedSpots)
         storyBarContentLoaded = true
         storyBarLoading = false
     }
@@ -137,27 +136,11 @@ public final class FeedViewModel: ObservableObject {
     private func instagramReels() async -> [InstagramStoryReel]? {
         guard let instagramSource, instagramSource.storiesEnabled else { return [] }
         do {
-            var reels = try await instagramSource.fetchStoryReels()
-            sortReels(&reels)
-            return reels
+            return try await instagramSource.fetchStoryReels()
         } catch SourceError.notConfigured {
             return []
         } catch {
             return nil
-        }
-    }
-
-    private func sortReels(_ reels: inout [InstagramStoryReel]) {
-        reels.sort { a, b in
-            if a.isSeen != b.isSeen {
-                return !a.isSeen
-            }
-            if !a.isSeen, a.hasCloseFriendsMedia != b.hasCloseFriendsMedia {
-                return a.hasCloseFriendsMedia
-            }
-            let latestA = a.slides.first?.takenAt ?? 0
-            let latestB = b.slides.first?.takenAt ?? 0
-            return latestA > latestB
         }
     }
 
@@ -218,7 +201,7 @@ public final class FeedViewModel: ObservableObject {
 
         let updated = spotifyItemWithSeenState(item)
         storyBarItems[itemIndex] = .spotify(updated)
-        sortStoryBarItems(&storyBarItems)
+        storyBarItems = mergedStoryBarItems(instagramReels: orderedInstagramStoryReels, spotifyItems: spotifyActivityItems)
     }
 
     public func markInstagramReelAsSeen(reelIndex: Int) {
@@ -251,8 +234,10 @@ public final class FeedViewModel: ObservableObject {
         }
 
         let updated = InstagramStoryReel(id: reel.id, user: reel.user, slides: reel.slides, isSeen: true, hasCloseFriendsMedia: reel.hasCloseFriendsMedia)
+        if let orderedIndex = orderedInstagramStoryReels.firstIndex(where: { $0.id == reel.id }) {
+            orderedInstagramStoryReels[orderedIndex] = updated
+        }
         storyBarItems[itemIndex] = .instagram(updated)
-        sortStoryBarItems(&storyBarItems)
     }
 
     public func storyViewerItems(for selectedIndex: Int) -> [StoryBarItem] {
@@ -288,24 +273,18 @@ public final class FeedViewModel: ObservableObject {
         }
     }
 
-    private func sortStoryBarItems(_ items: inout [StoryBarItem]) {
-        items.sort { a, b in
-            if a.isSeen != b.isSeen {
-                return !a.isSeen
-            }
-            if !a.isSeen, a.hasCloseFriendsMedia != b.hasCloseFriendsMedia {
-                return a.hasCloseFriendsMedia
-            }
-            return a.timestamp > b.timestamp
-        }
+    private func mergedStoryBarItems(instagramReels: [InstagramStoryReel], spotifyItems: [SpotifyActivityItem]) -> [StoryBarItem] {
+        let chronologicalInstagram = instagramReels.prefix(chronologicalInstagramPrefixCount).map(StoryBarItem.instagram)
+        let chronologicalSpotify = spotifyItems.map(StoryBarItem.spotify)
+        let chronologicalItems = (chronologicalInstagram + chronologicalSpotify).sorted { $0.timestamp > $1.timestamp }
+        let remainingInstagram = instagramReels.dropFirst(chronologicalInstagramPrefixCount).map(StoryBarItem.instagram)
+
+        return chronologicalItems + remainingInstagram
     }
 }
 
-private extension StoryBarItem {
-    var hasCloseFriendsMedia: Bool {
-        if case let .instagram(reel) = self {
-            return reel.hasCloseFriendsMedia
-        }
-        return false
+private extension InstagramStoryReel {
+    var timestamp: Date {
+        Date(timeIntervalSince1970: slides.first?.takenAt ?? 0)
     }
 }
