@@ -46,6 +46,8 @@
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Debug builds can connect to a local notifications server for background refresh testing.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Save composed story images to your photo library.</string>
 	<key>UIDeviceFamily</key>
 	<array>
 		<integer>1</integer>
