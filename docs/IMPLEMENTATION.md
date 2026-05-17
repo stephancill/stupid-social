@@ -324,6 +324,10 @@
 
 ### Android Instagram APK proxy experiment
 
+## 2026-05-17
+
+- Replaced deprecated SwiftUI `Text` concatenation in feed row summary rendering with interpolated `Text` composition so iOS 26 builds no longer warn while preserving inline badge and bold actor styling.
+
 - Set up an Android emulator experiment for the official Instagram APK at `third-party/instagram-429-0-0-32-70.apk` to compare native Android app requests against the Swift Instagram story-posting implementation from the previous commit.
 - The existing `testAVD` initially failed to boot because its referenced system image `system-images/android-30/google_apis/arm64-v8a/` was missing. Installed `system-images;android-30;google_apis;arm64-v8a` with `sdkmanager`, then started the emulator with `ANDROID_SDK_ROOT=$HOME/Library/Android/sdk`.
 - Added the mitmproxy CA as a system CA on the emulator. This required restarting the AVD with `-writable-system`, running `adb root`, `adb remount`, pushing the hash-named CA file into `/system/etc/security/cacerts/`, and rebooting.
@@ -625,6 +629,16 @@
 - Live mutation testing confirmed `addToLibrary` and `removeFromLibrary` share hash `7c5a69420e2bfae3da5cc4e14cbc8bb3f6090f80afc00ffc179177f19be3f33d` and require variables shaped as `{ "libraryItemUris": ["spotify:track:..."] }`. The saved checkmark now calls `removeFromLibrary` so the control toggles liked-song state both ways.
 - Refactored Spotify Pathfinder calls behind `SpotifyClient.makePathfinderRequest(...)` and `pathfinderBody(...)` so auth, app, content type, language, and browser-origin headers are defined in one place instead of repeated across profile, library check, add, and remove operations.
 - Spotify liked-song save/remove toggles now trigger a light iOS impact haptic after the API call succeeds and the visible state changes. macOS remains a no-op.
+
+## 2026-05-17
+
+### Instagram profile lookup and story composer polish
+
+- Live simulator probes confirmed Instagram `/api/v1/news/inbox/` and `/api/v1/users/{id}/info/` still return valid profile detail data with the saved simulator credentials.
+- Added username-based Instagram profile lookup through `/api/v1/users/{username}/usernameinfo/` and made `FeedService.fetchProfile` pass the actor username for Instagram, matching the existing X username lookup behavior. This keeps profile detail working when cached or story-derived actor ids are non-numeric/stale but a username is available.
+- Wired the iOS story composer's UIKit trash-target visibility back into SwiftUI state. The bottom `Post Story` button now hides while the trash icon is visible during caption dragging, then returns after the drag ends or the caption is deleted.
+- Live-posted `/Users/stephan/Downloads/sample-story.jpg` using simulator Instagram credentials. Rupload and `configure_to_story` both returned HTTP 200 with `status=ok`; a subsequent reels tray check showed the own-story entry present with `media_count=2`.
+- The unified stories bar now hard-splits unseen and seen story items. Unseen Instagram/Spotify items sort first by timestamp, seen items follow by timestamp, and the horizontal bar renders a compact `Seen` divider at the boundary when both groups are present.
 - Fixed the 12-hour expiry failure: liked-song check/save/remove now use the captured init token only while it is still fresh, then attempt to refresh a new `reason=init` token from the persisted Spotify session cookies and save it back to credentials. If that refresh fails, the library path falls back to `credentialsForRequest()` so the normal refreshed WebPlayer bearer token is used. Live simulator testing confirmed an expired init token returns `401` while the refreshed bearer token still succeeds for Pathfinder library operations when browser-origin headers are present.
 - Requires re-login to Spotify in the app for the init token to be captured; existing stored credentials do not have `initialBearerToken`.
 
@@ -681,3 +695,5 @@
 - The in-view story action menu now has explicit `Delete` and `Cancel` rows; `Cancel` dismisses the menu and resumes the paused story.
 - The Instagram own-story/posting bubble is hidden when no Instagram account is connected. The unified stories bar can still render non-Instagram story content such as Spotify activity without showing an unusable posting entry.
 - Live simulator tray analysis showed Instagram's `reels_tray` order is only weakly chronological while strongly separating unseen from seen reels. The story bar now takes Instagram's first 15 fetched reels, merges that prefix with Spotify listening stories in reverse chronological order, then appends the remaining Instagram reels in their original fetched order. This gives the visible head of the bar a chronological feel while preserving Instagram's algorithmic ordering for the long tail.
+- Added story-bar feed modes for `All Stories`, `Instagram`, and `Spotify` as a masked vertical pager. All rows are rendered in a fixed-height vertical scroll area so the next/previous row is visible during vertical scrolling, but only one row is visible at rest. Each row keeps independent horizontal story scrolling and launches the story viewer scoped to that row.
+- Deleting an Instagram story slide from `UnifiedStoryViewer` now removes that slide from the active viewer state immediately, so the progress tabs and visible content update without waiting for the feed/story-bar refresh. The own-story kebab menu now only contains `Delete`; cancellation happens in the system confirmation dialog.

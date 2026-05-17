@@ -35,9 +35,8 @@ struct FeedView: View {
                                 showingStoryComposer = true
                             }
                         },
-                        onItemTap: { index in
-                            let selectedItem = viewModel.storyBarItems[index]
-                            let items = viewModel.storyViewerItems(for: index)
+                        onItemTap: { selectedItem, visibleItems in
+                            let items = visibleItems.filter { $0.isSeen == selectedItem.isSeen }
                             storyViewerSelection = StoryViewerSelection(
                                 items: items,
                                 startIndex: viewModel.storyViewerStartIndex(for: selectedItem, in: items),
@@ -222,52 +221,115 @@ private struct StoriesBar: View {
     let ownInstagramReel: InstagramStoryReel?
     let onComposeTap: () -> Void
     let onOwnStoryTap: () -> Void
-    let onItemTap: (Int) -> Void
+    let onItemTap: (StoryBarItem, [StoryBarItem]) -> Void
+    @State private var visibleModeID: String?
+    @State private var pagerOffset: CGFloat = 0
+
+    private let rowHeight: CGFloat = 112
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(alignment: .top, spacing: 12) {
-                if ownInstagramActor != nil {
-                    Button {
-                        onOwnStoryTap()
-                    } label: {
-                        StoryComposerBubble(actor: ownInstagramActor, reel: ownInstagramReel)
-                    }
-                    .buttonStyle(.plain)
-                    .overlay(alignment: .topLeading) {
-                        Button {
-                            onComposeTap()
-                        } label: {
-                            Image(systemName: "plus")
-                                .font(.caption.weight(.bold))
-                                .foregroundStyle(.white)
-                                .frame(width: 24, height: 24)
-                                .background(Color.blue, in: Circle())
-                                .overlay {
-                                    Circle()
-                                        .stroke(.background, lineWidth: 2)
-                                }
-                        }
-                        .buttonStyle(.plain)
-                        .offset(x: 49, y: 49)
-                        .accessibilityLabel("Create story")
+        let modes = availableFeedModes
+        let pages = pagerModes(for: modes)
+
+        ScrollViewReader { proxy in
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(pages) { page in
+                        storyRow(mode: page.mode)
+                            .frame(height: rowHeight, alignment: .top)
+                            .containerRelativeFrame(.vertical, count: 1, spacing: 0)
+                            .id(page.id)
                     }
                 }
-
-                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                    Button {
-                        onItemTap(index)
-                    } label: {
-                        storyBubble(for: item)
-                    }
-                    .buttonStyle(.plain)
+                .scrollTargetLayout()
+            }
+            .scrollPosition(id: $visibleModeID, anchor: .top)
+            .scrollTargetBehavior(.paging)
+            .scrollBounceBehavior(.basedOnSize)
+            .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                geometry.contentOffset.y
+            } action: { _, newValue in
+                pagerOffset = newValue
+            }
+            .frame(height: rowHeight)
+            .clipped()
+            .overlay(alignment: .leading) {
+                if modes.count > 1 {
+                    storyPagerDots(modes: modes)
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
+            .onAppear {
+                visibleModeID = modes.first?.pageID
+            }
+            .onChange(of: modes) { _, newModes in
+                visibleModeID = normalizedModeID(for: visibleModeID, modes: newModes)
+            }
+            .onChange(of: visibleModeID) { _, id in
+                guard modes.count > 1 else { return }
+                if id == StoryBarFeedPage.trailingSentinelID, let first = modes.first {
+                    Task { @MainActor in
+                        jumpToMode(first, proxy: proxy)
+                    }
+                } else if id == StoryBarFeedPage.leadingSentinelID, let last = modes.last {
+                    Task { @MainActor in
+                        jumpToMode(last, proxy: proxy)
+                    }
+                }
+            }
         }
+        .padding(.vertical, 8)
         .listRowInsets(EdgeInsets())
         .listRowSeparator(.hidden)
+    }
+
+    private func storyRow(mode: StoryBarFeedMode) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(mode.label)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 16)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: 12) {
+                    if showsOwnInstagramBubble(in: mode) {
+                        StoryComposerBubble(actor: ownInstagramActor, reel: ownInstagramReel)
+                            .contentShape(Rectangle())
+                            .onTapGesture { onOwnStoryTap() }
+                            .overlay(alignment: .topLeading) {
+                                Button {
+                                    onComposeTap()
+                                } label: {
+                                    Image(systemName: "plus")
+                                        .font(.caption.weight(.bold))
+                                        .foregroundStyle(.white)
+                                        .frame(width: 24, height: 24)
+                                        .background(Color.blue, in: Circle())
+                                        .overlay {
+                                            Circle()
+                                                .stroke(.background, lineWidth: 2)
+                                        }
+                                }
+                                .buttonStyle(.plain)
+                                .offset(x: 49, y: 49)
+                                .accessibilityLabel("Create story")
+                            }
+                    }
+
+                    let rowItems = filteredItems(for: mode)
+                    ForEach(rowItems) { item in
+                        storyBubble(for: item)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                let viewerItems = rowItems.filter { $0.isSeen == item.isSeen }
+                                onItemTap(item, viewerItems)
+                            }
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .padding(.bottom, 4)
+            }
+        }
     }
 
     @ViewBuilder
@@ -279,6 +341,140 @@ private struct StoriesBar: View {
             SpotifyStoryBubble(item: spotifyItem)
         }
     }
+
+    private var availableFeedModes: [StoryBarFeedMode] {
+        StoryBarFeedMode.allCases.filter { mode in
+            switch mode {
+            case .general:
+                true
+            case .instagram:
+                ownInstagramActor != nil || items.contains(where: mode.includes)
+            case .spotify:
+                items.contains(where: mode.includes)
+            }
+        }
+    }
+
+    private func filteredItems(for mode: StoryBarFeedMode) -> [StoryBarItem] {
+        items.filter(mode.includes).sorted { lhs, rhs in
+            if lhs.isSeen != rhs.isSeen {
+                return !lhs.isSeen && rhs.isSeen
+            }
+            return lhs.timestamp > rhs.timestamp
+        }
+    }
+
+    private func showsOwnInstagramBubble(in mode: StoryBarFeedMode) -> Bool {
+        ownInstagramActor != nil && mode != .spotify
+    }
+
+    private func pagerModes(for modes: [StoryBarFeedMode]) -> [StoryBarFeedPage] {
+        guard modes.count > 1, let first = modes.first, let last = modes.last else {
+            return modes.map { StoryBarFeedPage(id: $0.pageID, mode: $0) }
+        }
+        return [StoryBarFeedPage(id: StoryBarFeedPage.leadingSentinelID, mode: last)]
+            + modes.map { StoryBarFeedPage(id: $0.pageID, mode: $0) }
+            + [StoryBarFeedPage(id: StoryBarFeedPage.trailingSentinelID, mode: first)]
+    }
+
+    private func normalizedModeID(for id: String?, modes: [StoryBarFeedMode]) -> String? {
+        guard !modes.isEmpty else { return nil }
+        if let id, modes.contains(where: { $0.pageID == id }) {
+            return id
+        }
+        return modes.first?.pageID
+    }
+
+    private func jumpToMode(_ mode: StoryBarFeedMode, proxy: ScrollViewProxy) {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            visibleModeID = mode.pageID
+            proxy.scrollTo(mode.pageID, anchor: .top)
+        }
+    }
+
+    private func storyPagerDots(modes: [StoryBarFeedMode]) -> some View {
+        VStack(spacing: 5) {
+            ForEach(Array(modes.enumerated()), id: \.element) { index, _ in
+                let progress = circularPagerProgress(modeCount: modes.count)
+                let intensity = dotIntensity(index: index, progress: progress, modeCount: modes.count)
+                Circle()
+                    .fill(Color.secondary.opacity(0.25 + (0.75 * intensity)))
+                    .frame(width: 5 + (2 * intensity), height: 5 + (2 * intensity))
+            }
+        }
+        .padding(.leading, 6)
+        .allowsHitTesting(false)
+    }
+
+    private func circularPagerProgress(modeCount: Int) -> CGFloat {
+        guard modeCount > 0 else { return 0 }
+        let rawPosition = pagerOffset / rowHeight
+        var progress = rawPosition - (modeCount > 1 ? 1 : 0)
+        while progress < 0 {
+            progress += CGFloat(modeCount)
+        }
+        while progress >= CGFloat(modeCount) {
+            progress -= CGFloat(modeCount)
+        }
+        return progress
+    }
+
+    private func dotIntensity(index: Int, progress: CGFloat, modeCount: Int) -> CGFloat {
+        guard modeCount > 0 else { return 0 }
+        let distance = abs(progress - CGFloat(index))
+        let wrappedDistance = min(distance, CGFloat(modeCount) - distance)
+        return max(0, 1 - wrappedDistance)
+    }
+}
+
+private enum StoryBarFeedMode: CaseIterable {
+    case general
+    case instagram
+    case spotify
+
+    var label: String {
+        switch self {
+        case .general: "All Stories"
+        case .instagram: "Instagram"
+        case .spotify: "Spotify"
+        }
+    }
+
+    var indicatorColor: Color {
+        switch self {
+        case .general:
+            Color.secondary
+        case .instagram:
+            Color.pink.opacity(0.75)
+        case .spotify:
+            Color.spotifyActivityBorder
+        }
+    }
+
+    var pageID: String {
+        "story-feed-\(label)"
+    }
+
+    func includes(_ item: StoryBarItem) -> Bool {
+        switch self {
+        case .general:
+            true
+        case .instagram:
+            item.network == .instagram
+        case .spotify:
+            item.network == .spotify
+        }
+    }
+}
+
+private struct StoryBarFeedPage: Identifiable {
+    static let leadingSentinelID = "story-feed-leading-sentinel"
+    static let trailingSentinelID = "story-feed-trailing-sentinel"
+
+    let id: String
+    let mode: StoryBarFeedMode
 }
 
 private struct StoryComposerBubble: View {
@@ -662,9 +858,9 @@ private struct NotificationRow: View {
     private var summaryInlineText: Text {
         let remainder = String(summaryText.dropFirst(actorSummary.count))
         if let image = networkBadgeImage(named: displayItem.item.network.badgeAssetName) {
-            return Text(image).baselineOffset(-1) + Text(" ").kerning(-2) + Text(actorSummary).bold() + Text(remainder)
+            return Text("\(Text(image).baselineOffset(-1)) \(Text(actorSummary).bold())\(Text(remainder))")
         }
-        return Text(displayItem.item.network.badgeFallbackText).bold() + Text(" ").kerning(-2) + Text(actorSummary).bold() + Text(remainder)
+        return Text("\(Text(displayItem.item.network.badgeFallbackText).bold()) \(Text(actorSummary).bold())\(Text(remainder))")
     }
 
     private var previewText: String? {

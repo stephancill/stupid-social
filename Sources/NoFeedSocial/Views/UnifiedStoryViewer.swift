@@ -20,6 +20,7 @@ struct UnifiedStoryViewer: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage("devModeEnabled") private var devModeEnabled = false
 
+    @State private var viewerItems: [StoryBarItem]
     @State private var currentItemIndex: Int
     @State private var currentSlideIndex: Int = 0
     @State private var elapsedTime: Double = 0
@@ -76,13 +77,14 @@ struct UnifiedStoryViewer: View {
         self.onInstagramReelSeen = onInstagramReelSeen
         self.onSpotifyItemSeen = onSpotifyItemSeen
         self.onInstagramStoryDelete = onInstagramStoryDelete
+        _viewerItems = State(initialValue: items)
         _currentItemIndex = State(initialValue: startIndex)
         _seenItems = State(initialValue: [])
     }
 
     private var currentItem: StoryBarItem? {
-        guard items.indices.contains(currentItemIndex) else { return nil }
-        return items[currentItemIndex]
+        guard viewerItems.indices.contains(currentItemIndex) else { return nil }
+        return viewerItems[currentItemIndex]
     }
 
     private var slideCount: Int {
@@ -153,9 +155,9 @@ struct UnifiedStoryViewer: View {
         }
         .onReceive(Timer.publish(every: frameInterval, on: .main, in: .common).autoconnect()) { _ in
             guard !isPaused else { return }
-            guard items.indices.contains(currentItemIndex) else { return }
+            guard viewerItems.indices.contains(currentItemIndex) else { return }
 
-            if case .spotify = items[currentItemIndex] {
+            if case .spotify = viewerItems[currentItemIndex] {
                 if playerStatus == .loading, player?.timeControlStatus == .playing {
                     elapsedTime = 0
                     playerStatus = .playing
@@ -171,7 +173,7 @@ struct UnifiedStoryViewer: View {
                 advance()
             }
 
-            if case let .spotify(item) = items[currentItemIndex] {
+            if case let .spotify(item) = viewerItems[currentItemIndex] {
                 let pd = pulseDuration(item.musicAnimation)
                 pulsePhase += frameInterval
                 if pulsePhase >= pd {
@@ -428,18 +430,6 @@ struct UnifiedStoryViewer: View {
                         .padding(.vertical, 11)
                 }
                 .foregroundStyle(.red)
-
-                Divider()
-
-                Button {
-                    hideStoryActions(resume: true)
-                } label: {
-                    Text("Cancel")
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 11)
-                }
-                .foregroundStyle(.primary)
             }
             .font(.subheadline.weight(.semibold))
             .frame(width: 170)
@@ -505,7 +495,7 @@ struct UnifiedStoryViewer: View {
                 try await onInstagramStoryDelete(slide.id, slide.isVideo)
                 await MainActor.run {
                     isDeletingStory = false
-                    advanceAfterDeletion()
+                    advanceAfterDeletion(deletedSlideID: slide.id)
                 }
             } catch {
                 await MainActor.run {
@@ -516,13 +506,44 @@ struct UnifiedStoryViewer: View {
         }
     }
 
-    private func advanceAfterDeletion() {
-        if let item = currentItem, currentSlideIndex + 1 < item.slideCount {
-            currentSlideIndex += 1
-        } else {
+    private func advanceAfterDeletion(deletedSlideID: String) {
+        guard case let .instagram(reel) = currentItem else {
             stopPlayback()
             dismiss()
+            return
         }
+
+        let remainingSlides = reel.slides.filter { $0.id != deletedSlideID }
+        if remainingSlides.isEmpty {
+            viewerItems.remove(at: currentItemIndex)
+            guard !viewerItems.isEmpty else {
+                stopPlayback()
+                dismiss()
+                return
+            }
+            currentItemIndex = min(currentItemIndex, viewerItems.count - 1)
+            currentSlideIndex = 0
+            resetPlaybackForVisibleStory()
+        } else {
+            viewerItems[currentItemIndex] = .instagram(
+                InstagramStoryReel(
+                    id: reel.id,
+                    user: reel.user,
+                    slides: remainingSlides,
+                    isSeen: reel.isSeen,
+                    hasCloseFriendsMedia: reel.hasCloseFriendsMedia,
+                ),
+            )
+            currentSlideIndex = min(currentSlideIndex, remainingSlides.count - 1)
+            resetPlaybackForVisibleStory()
+        }
+    }
+
+    private func resetPlaybackForVisibleStory() {
+        elapsedTime = 0
+        audioDuration = 5
+        stopPlayback()
+        prepareForCurrentItem()
     }
 
     private var userName: String {
@@ -623,7 +644,7 @@ struct UnifiedStoryViewer: View {
         guard let item = currentItem else { return }
         if currentSlideIndex + 1 < item.slideCount {
             currentSlideIndex += 1
-        } else if currentItemIndex + 1 < items.count {
+        } else if currentItemIndex + 1 < viewerItems.count {
             currentItemIndex += 1
             currentSlideIndex = 0
         } else {
@@ -637,12 +658,12 @@ struct UnifiedStoryViewer: View {
             currentSlideIndex -= 1
         } else if currentItemIndex > 0 {
             currentItemIndex -= 1
-            currentSlideIndex = max(0, (items[currentItemIndex].slideCount) - 1)
+            currentSlideIndex = max(0, (viewerItems[currentItemIndex].slideCount) - 1)
         }
     }
 
     private func goToNextItem() {
-        if currentItemIndex + 1 < items.count {
+        if currentItemIndex + 1 < viewerItems.count {
             currentItemIndex += 1
             currentSlideIndex = 0
         } else {
@@ -762,11 +783,11 @@ struct UnifiedStoryViewer: View {
     }
 
     private func preloadAdjacentSpotifyPreviews() {
-        if let previousSpotifyItem = items[..<currentItemIndex].reversed().compactMap({ spotifyItem(from: $0) }).first {
+        if let previousSpotifyItem = viewerItems[..<currentItemIndex].reversed().compactMap({ spotifyItem(from: $0) }).first {
             preloadPreview(for: previousSpotifyItem)
         }
 
-        if let nextSpotifyItem = items.dropFirst(currentItemIndex + 1).compactMap({ spotifyItem(from: $0) }).first {
+        if let nextSpotifyItem = viewerItems.dropFirst(currentItemIndex + 1).compactMap({ spotifyItem(from: $0) }).first {
             preloadPreview(for: nextSpotifyItem)
         }
     }
@@ -779,7 +800,7 @@ struct UnifiedStoryViewer: View {
     }
 
     private func preloadInstagramSlide(itemIndex: Int, slideIndex: Int) {
-        guard items.indices.contains(itemIndex), case let .instagram(reel) = items[itemIndex] else { return }
+        guard viewerItems.indices.contains(itemIndex), case let .instagram(reel) = viewerItems[itemIndex] else { return }
         guard reel.slides.indices.contains(slideIndex) else { return }
         StoryImageCache.shared.preload(url: reel.slides[slideIndex].imageURL)
     }
