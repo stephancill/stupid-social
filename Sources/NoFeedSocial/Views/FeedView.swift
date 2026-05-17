@@ -42,6 +42,11 @@ struct FeedView: View {
                                 startIndex: viewModel.storyViewerStartIndex(for: selectedItem, in: items),
                             )
                         },
+                        onItemAppear: { item in
+                            Task {
+                                await viewModel.loadNextStoryBarPageIfNeeded(currentItem: item)
+                            }
+                        },
                     )
                 }
 
@@ -228,6 +233,7 @@ private struct StoriesBar: View {
     let onComposeTap: () -> Void
     let onOwnStoryTap: () -> Void
     let onItemTap: (StoryBarItem, [StoryBarItem]) -> Void
+    let onItemAppear: (StoryBarItem) -> Void
     @State private var visibleModeID: String?
     @State private var pagerOffset: CGFloat = 0
 
@@ -296,7 +302,7 @@ private struct StoriesBar: View {
                 .padding(.horizontal, 16)
 
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(alignment: .top, spacing: 12) {
+                LazyHStack(alignment: .top, spacing: 12) {
                     if showsOwnInstagramBubble(in: mode) {
                         StoryComposerBubble(actor: ownInstagramActor, reel: ownInstagramReel)
                             .contentShape(Rectangle())
@@ -325,6 +331,9 @@ private struct StoriesBar: View {
                     ForEach(rowItems) { item in
                         storyBubble(for: item)
                             .contentShape(Rectangle())
+                            .onAppear {
+                                onItemAppear(item)
+                            }
                             .onTapGesture {
                                 let viewerItems = rowItems.filter { $0.isSeen == item.isSeen }
                                 onItemTap(item, viewerItems)

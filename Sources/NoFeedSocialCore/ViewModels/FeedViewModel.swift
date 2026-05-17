@@ -8,6 +8,7 @@ public final class FeedViewModel: ObservableObject {
     @Published public private(set) var ownInstagramStoryReel: InstagramStoryReel?
     @Published public private(set) var storyBarContentLoaded = false
     @Published public private(set) var storyBarLoading = false
+    @Published public private(set) var storyBarNextPageLoading = false
     @Published public private(set) var pendingNewCount = 0
     @Published public private(set) var isRefreshing = false
     @Published public private(set) var isForegroundRefreshing = false
@@ -19,6 +20,7 @@ public final class FeedViewModel: ObservableObject {
     private let spotifySeenDefaultsKey = "spotifyActivitySeenTimestamps"
     private let chronologicalInstagramPrefixCount = 15
     private var orderedInstagramStoryReels: [InstagramStoryReel] = []
+    private var hasMoreInstagramStoryReels = false
     private var optimisticInstagramStorySlideID: String?
 
     public var service: FeedService {
@@ -118,9 +120,50 @@ public final class FeedViewModel: ObservableObject {
         }
         ownInstagramStoryReel = preservingOptimisticStorySlide(in: ownReel)
         orderedInstagramStoryReels = instagramReels
+        hasMoreInstagramStoryReels = instagramSource?.hasMoreStoryReels ?? false
         storyBarItems = mergedStoryBarItems(instagramReels: instagramReels, spotifyItems: fetchedSpots)
         storyBarContentLoaded = true
         storyBarLoading = false
+    }
+
+    public func loadNextStoryBarPageIfNeeded(currentItem item: StoryBarItem) async {
+        switch item {
+        case let .instagram(reel):
+            guard reel.id == orderedInstagramStoryReels.last?.id else { return }
+        case .spotify:
+            guard item.id == storyBarItems.last?.id else { return }
+        }
+        await loadNextStoryBarPage()
+    }
+
+    public func loadNextStoryBarPage() async {
+        guard !storyBarLoading, !storyBarNextPageLoading, hasMoreInstagramStoryReels else { return }
+        guard let instagramSource, instagramSource.storiesEnabled else { return }
+        storyBarNextPageLoading = true
+        defer { storyBarNextPageLoading = false }
+
+        do {
+            let nextReels = try await instagramSource.fetchNextStoryReelPage()
+            hasMoreInstagramStoryReels = instagramSource.hasMoreStoryReels
+            guard !nextReels.isEmpty else { return }
+
+            let existingReelIds = Set(orderedInstagramStoryReels.map(\.id))
+            var appendedReels = nextReels.filter { !existingReelIds.contains($0.id) }
+            if let ownInstagramStoryActor {
+                appendedReels.removeAll { reel in
+                    if reel.user.id == ownInstagramStoryActor.id {
+                        ownInstagramStoryReel = preservingOptimisticStorySlide(in: reel)
+                        return true
+                    }
+                    return false
+                }
+            }
+
+            orderedInstagramStoryReels.append(contentsOf: appendedReels)
+            storyBarItems = mergedStoryBarItems(instagramReels: orderedInstagramStoryReels, spotifyItems: spotifyActivityItems)
+        } catch {
+            hasMoreInstagramStoryReels = instagramSource.hasMoreStoryReels
+        }
     }
 
     public func postInstagramStory(imageData: Data, width: Int, height: Int, mimeType: String) async throws {

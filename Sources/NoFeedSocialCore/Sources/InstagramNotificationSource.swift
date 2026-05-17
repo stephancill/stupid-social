@@ -6,6 +6,9 @@ public final class InstagramNotificationSource: NotificationSource {
 
     private let client: InstagramClient
     private let metadataStore: AccountMetadataStore
+    private let storyPageSize = 15
+    private var storyTrayEntries: [StoryTrayEntry] = []
+    private var nextStoryTrayIndex = 0
 
     public init(client: InstagramClient, metadataStore: AccountMetadataStore) {
         self.client = client
@@ -14,6 +17,10 @@ public final class InstagramNotificationSource: NotificationSource {
 
     public var storiesEnabled: Bool {
         metadataStore.instagramAccount?.storiesEnabled ?? true
+    }
+
+    public var hasMoreStoryReels: Bool {
+        nextStoryTrayIndex < storyTrayEntries.count
     }
 
     public func ownStoryActor() async -> NotificationActor? {
@@ -82,6 +89,22 @@ public final class InstagramNotificationSource: NotificationSource {
     }
 
     public func fetchStoryReels() async throws -> [InstagramStoryReel] {
+        try await refreshStoryTray()
+        return try await fetchNextStoryReelPage()
+    }
+
+    public func fetchNextStoryReelPage() async throws -> [InstagramStoryReel] {
+        guard nextStoryTrayIndex < storyTrayEntries.count else { return [] }
+
+        let endIndex = min(nextStoryTrayIndex + storyPageSize, storyTrayEntries.count)
+        let pageEntries = Array(storyTrayEntries[nextStoryTrayIndex ..< endIndex])
+        nextStoryTrayIndex = endIndex
+
+        let mediaByReelId = try await client.reelsMedia(reelIds: pageEntries.map(\.reelId))
+        return storyReels(from: pageEntries, mediaByReelId: mediaByReelId)
+    }
+
+    private func refreshStoryTray() async throws {
         let tray: [InstagramTrayItem]
         do {
             tray = try await client.reelsTray()
@@ -99,12 +122,7 @@ public final class InstagramNotificationSource: NotificationSource {
             metadataStore.instagramAccount = account
         }
 
-        struct TrayEntry {
-            let item: InstagramTrayItem
-            let reelId: String
-        }
-
-        var trayEntries: [TrayEntry] = []
+        var trayEntries: [StoryTrayEntry] = []
         var seenUserIds: Set<UInt64> = []
         for item in tray {
             let userId = item.user.pk
@@ -114,11 +132,14 @@ public final class InstagramNotificationSource: NotificationSource {
             if seenUserIds.contains(userId) { continue }
             seenUserIds.insert(userId)
 
-            trayEntries.append(TrayEntry(item: item, reelId: reelId))
+            trayEntries.append(StoryTrayEntry(item: item, reelId: reelId))
         }
 
-        let mediaByReelId = try await client.reelsMedia(reelIds: trayEntries.map(\.reelId))
+        storyTrayEntries = trayEntries
+        nextStoryTrayIndex = 0
+    }
 
+    private func storyReels(from trayEntries: [StoryTrayEntry], mediaByReelId: [String: InstagramReel]) -> [InstagramStoryReel] {
         var reels: [InstagramStoryReel] = []
         for entry in trayEntries {
             let item = entry.item
@@ -179,6 +200,11 @@ public final class InstagramNotificationSource: NotificationSource {
         }
 
         return reels
+    }
+
+    private struct StoryTrayEntry {
+        let item: InstagramTrayItem
+        let reelId: String
     }
 
     private func invalidateAccount() {
