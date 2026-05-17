@@ -1909,6 +1909,10 @@ private enum InstagramDirectMessageParser {
 
     private static func notificationText(senderName: String, item: InstagramDirectItem) -> String {
         switch item.itemType {
+        case "xma_reel_share":
+            "\(senderName) replied to your story"
+        case "xma_reel_mention":
+            "\(senderName) mentioned you in their story"
         case "xma_clip":
             "\(senderName) sent you a reel"
         case "xma_media_share":

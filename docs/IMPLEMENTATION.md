@@ -343,6 +343,7 @@
 - Instagram DM detail views now render message content as a chat-style bubble with sender avatar/name, rounded bubble background, and optional shared-media thumbnail instead of the generic post-style target view.
 - Instagram DM row titles for shared media now use media-specific wording (`username sent you a reel` / `username sent you a post`) while media context remains in the thumbnail/detail rather than in the title.
 - Instagram DM detail bubbles now show the message timestamp beside the sender name using the shared compact relative time format.
+- Instagram DM row titles for story replies now use `username replied to your story` for `xma_reel_share` items, with the reply text remaining in the subtitle.
 
 - Replaced deprecated SwiftUI `Text` concatenation in feed row summary rendering with interpolated `Text` composition so iOS 26 builds no longer warn while preserving inline badge and bold actor styling.
 
