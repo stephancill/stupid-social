@@ -17,6 +17,7 @@ public final class SettingsViewModel: ObservableObject {
     @Published public private(set) var instagramStatus: AccountStatus = .notConfigured
     @Published public var instagramEnabledCategories: Set<InstagramNotificationCategory> = []
     @Published public var instagramStoriesEnabled = true
+    @Published public var instagramDirectMediaSharesEnabled = true
     @Published public private(set) var spotifyStatus: AccountStatus = .notConfigured
     @Published public private(set) var debugStatus: AccountStatus = .notConfigured
     @Published public var message: String?
@@ -313,6 +314,7 @@ public final class SettingsViewModel: ObservableObject {
         metadataStore.instagramAccount = nil
         instagramEnabledCategories = []
         instagramStoriesEnabled = true
+        instagramDirectMediaSharesEnabled = true
         try? cacheStore.deleteNetwork(.instagram)
         instagramStatus = .notConfigured
         message = "Instagram account disconnected."
@@ -335,6 +337,15 @@ public final class SettingsViewModel: ObservableObject {
         instagramStoriesEnabled = enabled
         var account = metadataStore.instagramAccount
         account?.storiesEnabled = enabled
+        if let account {
+            metadataStore.instagramAccount = account
+        }
+    }
+
+    public func toggleInstagramDirectMediaShares(enabled: Bool) {
+        instagramDirectMediaSharesEnabled = enabled
+        var account = metadataStore.instagramAccount
+        account?.directMediaSharesEnabled = enabled
         if let account {
             metadataStore.instagramAccount = account
         }
@@ -504,10 +515,12 @@ public final class SettingsViewModel: ObservableObject {
         if let instagram = metadataStore.instagramAccount {
             instagramEnabledCategories = instagram.enabledCategories
             instagramStoriesEnabled = instagram.storiesEnabled
+            instagramDirectMediaSharesEnabled = instagram.directMediaSharesEnabled
             instagramStatus = accountStatus(from: instagram.status)
         } else {
             instagramEnabledCategories = []
             instagramStoriesEnabled = true
+            instagramDirectMediaSharesEnabled = true
             instagramStatus = .notConfigured
         }
 

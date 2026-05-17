@@ -326,6 +326,24 @@
 
 ## 2026-05-17
 
+- Made Instagram story posting optimistic: `FeedViewModel.postInstagramStory` now writes the rendered upload bytes to a temporary local preview file, inserts that as the user's own story immediately, and starts the real Instagram upload in a background task. A successful upload refetches the story tray and replaces the optimistic slide when the server story appears; a failed upload removes the optimistic slide and surfaces a feed error.
+- `CachedAsyncImage` now supports file URLs and configurable fit/fill content mode so optimistic local story previews can render in the unified story viewer without waiting for a remote CDN URL.
+
+- Curl-verified Instagram Direct inbox with saved simulator credentials: `GET https://i.instagram.com/api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20` returns HTTP 200 when using the fuller Android private API header set plus `Authorization: Bearer IGT:2:<base64 {ds_user_id,sessionid}>`. The raw live response was saved to ignored `logs/instagram-direct-inbox-sample.json` for decoder reference.
+- Added unread Instagram DM feed support. `InstagramClient.notifications` now optionally fetches Direct inbox when the new `Direct Messages` category is enabled, derives unread threads from `last_permanent_item.timestamp > last_seen_at[viewer_id].timestamp` while ignoring viewer-sent latest messages, and normalizes them as `.message` `NotificationItem`s.
+- Direct inbox failures are caught independently so existing Instagram `news/inbox` notifications are not dropped if Direct returns a gated service response.
+- Chose not to add a category metadata migration for existing Instagram accounts. Accounts saved before `Direct Messages` existed must disconnect/sign in again to get the new default category set.
+- Instagram DM notification summaries now include the message snippet directly (`username: message`) instead of only the generic `sent you a message` text, and notification detail labels the target section as `Message` for DM items.
+- Fixed group DM summary wording to use the latest message sender for normalized text instead of the actor group summary, avoiding misleading labels like `sender and 4 others sent you a message` when only one person sent the latest message.
+- Fixed Instagram DM previews for shared reels/posts by decoding `xma_clip` and `xma_media_share` payloads in addition to story XMA payloads. DM previews now use text, XMA title/caption/subtitle, or media-specific fallbacks like `Sent a reel by username` instead of generic `Sent a message`.
+- Feed rows now show the XMA thumbnail for Instagram DM media fallbacks such as `Sent a reel by username`, matching the existing story-like thumbnail treatment instead of repeating the fallback text as the subtitle.
+- Instagram DM detail views now suppress generic media fallback body text such as `Sent a reel by username` when an image preview is available, so the Message section shows the shared media preview/link rather than treating the fallback as message content.
+- Added a dedicated Instagram `Messaging` settings section with `Direct Messages` and `Posts and Reels` toggles. `directMediaSharesEnabled` is persisted on `InstagramAccountMetadata`; when disabled, Direct notifications whose latest item is `xma_clip` or `xma_media_share` are suppressed.
+- Plain/non-media Instagram DM row titles now use generic wording (`username sent you a message`) while the message content remains only in the row subtitle via `target.text`. Media-share DMs keep their media fallback summary behavior.
+- Instagram DM detail views now render message content as a chat-style bubble with sender avatar/name, rounded bubble background, and optional shared-media thumbnail instead of the generic post-style target view.
+- Instagram DM row titles for shared media now use media-specific wording (`username sent you a reel` / `username sent you a post`) while media context remains in the thumbnail/detail rather than in the title.
+- Instagram DM detail bubbles now show the message timestamp beside the sender name using the shared compact relative time format.
+
 - Replaced deprecated SwiftUI `Text` concatenation in feed row summary rendering with interpolated `Text` composition so iOS 26 builds no longer warn while preserving inline badge and bold actor styling.
 
 - Set up an Android emulator experiment for the official Instagram APK at `third-party/instagram-429-0-0-32-70.apk` to compare native Android app requests against the Swift Instagram story-posting implementation from the previous commit.

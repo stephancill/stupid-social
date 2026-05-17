@@ -379,3 +379,14 @@ Implementation expectations:
 - Upload the image bytes to `/rupload_igphoto/{upload_id}_0_{random}` with APK-like rupload headers matching the actual byte format and finalize with a signed `POST /api/v1/media/configure_to_story/`.
 - Sign configure requests with the existing Instagram HMAC signing path.
 - Keep posting scoped to Instagram photo stories; do not add cross-posting abstractions until another network is implemented.
+
+## Instagram Direct Notifications
+
+Unread Instagram DM support uses the same cookie-authenticated Android private API request stack as the rest of the Instagram integration.
+
+- Fetch direct inbox threads with `GET /api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20`.
+- Include the fuller Android private API header set used by `instagram-private-api`, including `Authorization: Bearer IGT:2:<base64 session payload>`.
+- Derive unread DM threads locally by comparing `last_permanent_item.timestamp` against `last_seen_at[viewer_id].timestamp`, ignoring latest messages sent by the viewer.
+- Normalize unread threads as `.message` `NotificationItem`s in the Instagram feed.
+- Messaging settings expose a Direct Messages toggle and a Posts and Reels toggle. When Posts and Reels is disabled, Direct threads whose latest item is `xma_clip` or `xma_media_share` are filtered out while text/story-reply messages can still appear.
+- Direct inbox failures are isolated from `news/inbox` notification failures so regular Instagram notifications continue to show if Direct is gated by a server prompt or transient response.

@@ -81,14 +81,16 @@ public struct InstagramAccountMetadata: Codable, Equatable {
     public var status: AccountStatusSnapshot
     public var enabledCategories: Set<InstagramNotificationCategory>
     public var storiesEnabled: Bool
+    public var directMediaSharesEnabled: Bool
 
-    public init(accountId: String, username: String?, avatarURL: URL? = nil, status: AccountStatusSnapshot, enabledCategories: Set<InstagramNotificationCategory>? = nil, storiesEnabled: Bool = true) {
+    public init(accountId: String, username: String?, avatarURL: URL? = nil, status: AccountStatusSnapshot, enabledCategories: Set<InstagramNotificationCategory>? = nil, storiesEnabled: Bool = true, directMediaSharesEnabled: Bool = true) {
         self.accountId = accountId
         self.username = username
         self.avatarURL = avatarURL
         self.status = status
         self.enabledCategories = enabledCategories ?? Set(InstagramNotificationCategory.allCases)
         self.storiesEnabled = storiesEnabled
+        self.directMediaSharesEnabled = directMediaSharesEnabled
     }
 
     public init(from decoder: Decoder) throws {
@@ -99,6 +101,7 @@ public struct InstagramAccountMetadata: Codable, Equatable {
         status = try container.decode(AccountStatusSnapshot.self, forKey: .status)
         enabledCategories = try container.decodeIfPresent(Set<InstagramNotificationCategory>.self, forKey: .enabledCategories) ?? Set(InstagramNotificationCategory.allCases)
         storiesEnabled = try container.decodeIfPresent(Bool.self, forKey: .storiesEnabled) ?? true
+        directMediaSharesEnabled = try container.decodeIfPresent(Bool.self, forKey: .directMediaSharesEnabled) ?? true
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -109,6 +112,7 @@ public struct InstagramAccountMetadata: Codable, Equatable {
         try container.encode(status, forKey: .status)
         try container.encode(enabledCategories, forKey: .enabledCategories)
         try container.encode(storiesEnabled, forKey: .storiesEnabled)
+        try container.encode(directMediaSharesEnabled, forKey: .directMediaSharesEnabled)
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -118,6 +122,7 @@ public struct InstagramAccountMetadata: Codable, Equatable {
         case status
         case enabledCategories
         case storiesEnabled
+        case directMediaSharesEnabled
     }
 }
 

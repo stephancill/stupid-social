@@ -66,7 +66,8 @@ public final class InstagramNotificationSource: NotificationSource {
         do {
             let categories = metadataStore.instagramAccount?.enabledCategories ?? []
             let username = metadataStore.instagramAccount?.username
-            let items = try await client.notifications(enabledCategories: categories, accountUsername: username)
+            let includeDirectMediaShares = metadataStore.instagramAccount?.directMediaSharesEnabled ?? true
+            let items = try await client.notifications(enabledCategories: categories, accountUsername: username, includeDirectMediaShares: includeDirectMediaShares)
             return items.count
         } catch SourceError.notConfigured {
             return nil
@@ -76,7 +77,8 @@ public final class InstagramNotificationSource: NotificationSource {
     public func fetchNotifications(reason _: RefreshReason) async throws -> [NotificationItem] {
         let categories = metadataStore.instagramAccount?.enabledCategories ?? Set(InstagramNotificationCategory.allCases)
         let username = metadataStore.instagramAccount?.username
-        return try await client.notifications(enabledCategories: categories, accountUsername: username)
+        let includeDirectMediaShares = metadataStore.instagramAccount?.directMediaSharesEnabled ?? true
+        return try await client.notifications(enabledCategories: categories, accountUsername: username, includeDirectMediaShares: includeDirectMediaShares)
     }
 
     public func fetchStoryReels() async throws -> [InstagramStoryReel] {

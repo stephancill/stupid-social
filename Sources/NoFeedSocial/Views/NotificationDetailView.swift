@@ -26,8 +26,17 @@ struct NotificationDetailView: View {
             }
 
             if let target = displayItem.item.target {
-                Section("Post") {
-                    if let targetMetrics, !targetMetrics.relatedTargets.isEmpty {
+                Section(targetSectionTitle) {
+                    if displayItem.item.type == .message {
+                        MessageBubbleView(
+                            target: target,
+                            actors: displayItem.item.actors,
+                            timestamp: displayItem.item.timestamp,
+                            targetURL: targetURL,
+                        ) { url in
+                            openURL(url)
+                        }
+                    } else if let targetMetrics, !targetMetrics.relatedTargets.isEmpty {
                         ForEach(targetMetrics.relatedTargets, id: \.id) { relatedTarget in
                             TargetPostView(
                                 target: relatedTarget,
@@ -36,6 +45,7 @@ struct NotificationDetailView: View {
                                 metrics: nil,
                                 isLoadingMetrics: false,
                                 targetURL: postURL(for: relatedTarget),
+                                hidesMediaFallbackText: false,
                             ) { url in
                                 openURL(url)
                             }
@@ -48,6 +58,7 @@ struct NotificationDetailView: View {
                             metrics: targetMetrics,
                             isLoadingMetrics: isLoadingTargetMetrics,
                             targetURL: targetURL,
+                            hidesMediaFallbackText: displayItem.item.type == .message,
                         ) { url in
                             openURL(url)
                         }
@@ -68,6 +79,7 @@ struct NotificationDetailView: View {
                         metrics: nil,
                         isLoadingMetrics: false,
                         targetURL: nil,
+                        hidesMediaFallbackText: false,
                     ) { url in
                         openURL(url)
                     }
@@ -105,9 +117,14 @@ struct NotificationDetailView: View {
             displayItem.item.text.localizedCaseInsensitiveContains("retweet") ? "Retweet" : "Like"
         case .follow: "Follow"
         case .post: "Tweet"
+        case .message: "Message"
         case .music: "Listening"
         case .unknown: "Notification"
         }
+    }
+
+    private var targetSectionTitle: String {
+        displayItem.item.type == .message ? "Message" : "Post"
     }
 
     private var targetURL: URL? {
@@ -140,10 +157,111 @@ struct NotificationDetailView: View {
 
     private func loadTargetMetrics() async {
         guard displayItem.item.target != nil else { return }
+        guard displayItem.item.type != .message else { return }
         targetMetrics = nil
         isLoadingTargetMetrics = true
         defer { isLoadingTargetMetrics = false }
         targetMetrics = try? await feedService.fetchTargetMetrics(for: displayItem.item)
+    }
+}
+
+private struct MessageBubbleView: View {
+    let target: NotificationTarget
+    let actors: [NotificationActor]
+    let timestamp: Date
+    let targetURL: URL?
+    let openURL: (URL) -> Void
+
+    @AppStorage("devModeEnabled") private var devModeEnabled = false
+
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 10) {
+            if let actor = actors.first {
+                DetailActorAvatar(actor: actor, size: 32)
+            } else {
+                DetailNetworkFallbackAvatar(network: .instagram)
+                    .frame(width: 32, height: 32)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                if let actorName {
+                    HStack(spacing: 6) {
+                        Text(actorName)
+                        Text("•")
+                        Text(timestamp.compactRelativeTime)
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    if let displayText {
+                        Text(DebugRedaction.text(displayText, actors: actors, enabled: devModeEnabled))
+                            .font(.body)
+                            .foregroundStyle(.primary)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    if let imageURL = target.imageURL {
+                        MessagePreviewImage(url: imageURL)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
+                .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .onTapGesture {
+                    if let targetURL {
+                        openURL(targetURL)
+                    }
+                }
+            }
+
+            Spacer(minLength: 32)
+        }
+        .padding(.vertical, 6)
+    }
+
+    private var actorName: String? {
+        guard let actor = actors.first else { return nil }
+        return DebugRedaction.actorName(actor, enabled: devModeEnabled)
+    }
+
+    private var displayText: String? {
+        guard let text = target.text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return nil }
+        guard target.imageURL != nil else { return text }
+
+        let normalized = text.lowercased()
+        if normalized.hasPrefix("sent a reel") || normalized.hasPrefix("sent a post") || normalized.hasPrefix("sent media") {
+            return nil
+        }
+        return text
+    }
+}
+
+private struct MessagePreviewImage: View {
+    let url: URL
+
+    var body: some View {
+        AsyncImage(url: url) { phase in
+            switch phase {
+            case let .success(image):
+                image
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 180, height: 180)
+                    .clipped()
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            case .empty:
+                ProgressView()
+                    .frame(width: 180, height: 120)
+            case .failure:
+                EmptyView()
+            @unknown default:
+                EmptyView()
+            }
+        }
     }
 }
 
@@ -181,6 +299,7 @@ private struct TargetPostView: View {
     let metrics: NotificationTargetMetrics?
     let isLoadingMetrics: Bool
     let targetURL: URL?
+    let hidesMediaFallbackText: Bool
     let openURL: (URL) -> Void
 
     @AppStorage("devModeEnabled") private var devModeEnabled = false
@@ -286,7 +405,13 @@ private struct TargetPostView: View {
     }
 
     private var displayText: String? {
-        metrics?.text ?? target.text
+        let text = metrics?.text ?? target.text
+        guard hidesMediaFallbackText, !displayImageURLs.isEmpty else { return text }
+        let normalized = text?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        if normalized.hasPrefix("sent a reel") || normalized.hasPrefix("sent a post") || normalized.hasPrefix("sent media") {
+            return nil
+        }
+        return text
     }
 
     private var redactionActors: [NotificationActor] {

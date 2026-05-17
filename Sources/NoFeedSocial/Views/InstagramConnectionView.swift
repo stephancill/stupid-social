@@ -54,8 +54,20 @@ struct InstagramConnectionView: View {
                         }
                 }
 
+                Section("Messaging") {
+                    Toggle(isOn: binding(for: .directMessages)) {
+                        Text("Direct Messages")
+                    }
+
+                    Toggle("Posts and Reels", isOn: $viewModel.instagramDirectMediaSharesEnabled)
+                        .disabled(!viewModel.instagramEnabledCategories.contains(.directMessages))
+                        .onChange(of: viewModel.instagramDirectMediaSharesEnabled) { _, enabled in
+                            viewModel.toggleInstagramDirectMediaShares(enabled: enabled)
+                        }
+                }
+
                 Section("Notification Types") {
-                    ForEach(InstagramNotificationCategory.allCases, id: \.self) { category in
+                    ForEach(InstagramNotificationCategory.allCases.filter { $0 != .directMessages }, id: \.self) { category in
                         Toggle(isOn: binding(for: category)) {
                             Text(category.displayLabel)
                         }

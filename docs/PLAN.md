@@ -16,6 +16,8 @@ Build a universal macOS and iOS app with xtool that shows a combined social noti
 - Background polling targets roughly 15 minutes where Apple permits it.
 - Manual refresh is supported.
 - Instagram story posting is supported from the in-app story composer.
+- Unread Instagram direct message threads are shown in the main notification feed when Instagram is connected.
+- Instagram messaging settings allow users to suppress DM notifications whose latest item is a shared post or reel.
 
 ## Out Of Scope For MVP
 
@@ -97,6 +99,7 @@ Reference behavior from `docs/CLI_DOCS.md`:
 - A horizontal stories bar appears above the list for story-like activity.
 - The stories bar currently shows Spotify listening activity; Instagram stories are planned for the bar later.
 - Instagram story likes remain in the main notifications feed.
+- Unread Instagram DMs remain in the main notifications feed.
 - Spotify listening activity is not shown in the main notifications list.
 - Spotify listening story tiles show the album/track artwork as the thumbnail with the listener's avatar overlaid in the bottom-right corner.
 - Tapping a Spotify listening story opens the Listening detail screen.

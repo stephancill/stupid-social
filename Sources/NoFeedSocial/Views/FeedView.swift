@@ -798,34 +798,49 @@ private struct NotificationRow: View {
     private var previewContent: some View {
         if displayItem.item.type == .follow {
             EmptyView()
+        } else if displayItem.item.type == .message,
+                  shouldShowMessageImagePreview,
+                  let imageUrl = displayItem.item.target?.imageURL
+        {
+            messageImagePreview(url: imageUrl)
         } else if let targetText = displayItem.item.target?.text, !targetText.isEmpty,
-                  displayItem.item.type == .reaction || displayItem.item.type == .reply || displayItem.item.type == .mention || displayItem.item.type == .music
+                  displayItem.item.type == .reaction || displayItem.item.type == .reply || displayItem.item.type == .mention || displayItem.item.type == .message || displayItem.item.type == .music
         {
             Text(DebugRedaction.text(targetText, actors: displayItem.item.actors, enabled: devModeEnabled))
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
         } else if let imageUrl = displayItem.item.target?.imageURL {
-            AsyncImage(url: imageUrl) { phase in
-                switch phase {
-                case let .success(image):
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .frame(width: 48, height: 48)
-                        .clipped()
-                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                case .failure, .empty:
-                    Color.clear.frame(width: 48, height: 48)
-                @unknown default:
-                    Color.clear.frame(width: 48, height: 48)
-                }
-            }
+            messageImagePreview(url: imageUrl)
         } else if let actor = displayItem.item.actors.first {
             Text(DebugRedaction.actorName(actor, enabled: devModeEnabled))
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
+        }
+    }
+
+    private var shouldShowMessageImagePreview: Bool {
+        guard let target = displayItem.item.target, target.imageURL != nil else { return false }
+        let text = target.text?.lowercased() ?? ""
+        return text.hasPrefix("sent a reel") || text.hasPrefix("sent a post") || text.hasPrefix("sent media")
+    }
+
+    private func messageImagePreview(url: URL) -> some View {
+        AsyncImage(url: url) { phase in
+            switch phase {
+            case let .success(image):
+                image
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 48, height: 48)
+                    .clipped()
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            case .failure, .empty:
+                Color.clear.frame(width: 48, height: 48)
+            @unknown default:
+                Color.clear.frame(width: 48, height: 48)
+            }
         }
     }
 
@@ -840,6 +855,8 @@ private struct NotificationRow: View {
         case .follow:
             "\(actorSummary) followed you"
         case .post:
+            sanitizedItemText
+        case .message:
             sanitizedItemText
         case .music:
             sanitizedItemText
@@ -874,6 +891,7 @@ private struct NotificationRow: View {
             || displayItem.item.type == .reply
             || displayItem.item.type == .mention
             || displayItem.item.type == .post
+            || displayItem.item.type == .message
             || displayItem.item.type == .music,
             let targetText = displayItem.item.target?.text, !targetText.isEmpty
         {
@@ -1032,6 +1050,8 @@ private struct NotificationTypeIcon: View {
             "person.fill.badge.plus"
         case .post:
             "bubble.left.and.bubble.right.fill"
+        case .message:
+            "message.fill"
         case .music:
             "music.note"
         case .unknown:
@@ -1051,6 +1071,8 @@ private struct NotificationTypeIcon: View {
             .green
         case .post:
             .primary
+        case .message:
+            .blue
         case .music:
             Color(red: 0.12, green: 0.73, blue: 0.26)
         case .unknown:
@@ -1070,6 +1092,8 @@ private struct NotificationTypeIcon: View {
             "Follow"
         case .post:
             "Tweet"
+        case .message:
+            "Message"
         case .music:
             "Music"
         case .unknown:

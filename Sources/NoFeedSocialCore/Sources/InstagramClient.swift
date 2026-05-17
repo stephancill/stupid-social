@@ -6,6 +6,7 @@ public enum InstagramNotificationCategory: String, CaseIterable, Codable, Sendab
     case comments
     case likes
     case storyHighlights
+    case directMessages
 
     public var displayLabel: String {
         switch self {
@@ -13,6 +14,7 @@ public enum InstagramNotificationCategory: String, CaseIterable, Codable, Sendab
         case .comments: "Comments"
         case .likes: "Likes"
         case .storyHighlights: "Story Highlights"
+        case .directMessages: "Direct Messages"
         }
     }
 
@@ -121,6 +123,7 @@ public struct InstagramClient {
     func notifications(
         enabledCategories: Set<InstagramNotificationCategory>,
         accountUsername: String? = nil,
+        includeDirectMediaShares: Bool = true,
     ) async throws -> [NotificationItem] {
         guard let credentials = try credentialStore.loadInstagramCredentials() else {
             throw SourceError.notConfigured
@@ -146,12 +149,53 @@ public struct InstagramClient {
 
         let decoded = try JSONDecoder().decode(InstagramNewsInboxResponse.self, from: data)
         let allStories = (decoded.priorityStories ?? []) + (decoded.newStories ?? []) + (decoded.oldStories ?? [])
-        return InstagramNotificationParser.parse(
+        var items = InstagramNotificationParser.parse(
             stories: allStories,
             accountId: credentials.dsUserId,
             accountUsername: accountUsername,
             enabledCategories: enabledCategories,
         )
+
+        if enabledCategories.contains(.directMessages) {
+            do {
+                try await items.append(contentsOf: directMessages(credentials: credentials, includeMediaShares: includeDirectMediaShares))
+            } catch {
+                // Direct has separate server-side gating; keep regular Instagram notifications available.
+            }
+        }
+
+        return items
+    }
+
+    private func directMessages(credentials: InstagramCredentials, includeMediaShares: Bool) async throws -> [NotificationItem] {
+        var components = URLComponents(string: "\(Self.baseURL)/api/v1/direct_v2/inbox/")!
+        components.queryItems = [
+            URLQueryItem(name: "visual_message_return_type", value: "unseen"),
+            URLQueryItem(name: "thread_message_limit", value: "10"),
+            URLQueryItem(name: "persistentBadging", value: "true"),
+            URLQueryItem(name: "limit", value: "20"),
+        ]
+
+        var request = URLRequest(url: components.url!)
+        request.httpMethod = "GET"
+        request.allHTTPHeaderFields = directInboxHeaders(credentials: credentials)
+        configureRequest(&request)
+
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw SourceError.invalidResponse
+        }
+
+        if http.statusCode == 401 || http.statusCode == 403 {
+            throw SourceError.notConfigured
+        }
+
+        guard (200 ..< 300).contains(http.statusCode) else {
+            throw SourceError.invalidResponse
+        }
+
+        let decoded = try JSONDecoder().decode(InstagramDirectInboxResponse.self, from: data)
+        return InstagramDirectMessageParser.parse(response: decoded, accountId: credentials.dsUserId, includeMediaShares: includeMediaShares)
     }
 
     func reelsTray() async throws -> [InstagramTrayItem] {
@@ -682,6 +726,33 @@ public struct InstagramClient {
         ]
     }
 
+    private func directInboxHeaders(credentials: InstagramCredentials) -> [String: String] {
+        let deviceIds = instagramDeviceIdentifiers(credentials: credentials)
+        var directHeaders = headers(credentials: credentials)
+        directHeaders["Authorization"] = instagramAuthorizationHeader(credentials: credentials)
+        directHeaders["X-Ads-Opt-Out"] = "0"
+        directHeaders["X-CM-Bandwidth-KBPS"] = "-1.000"
+        directHeaders["X-CM-Latency"] = "-1.000"
+        directHeaders["X-IG-App-Locale"] = "en_US"
+        directHeaders["X-IG-Device-Locale"] = "en_US"
+        directHeaders["X-Pigeon-Session-Id"] = UUID().uuidString.lowercased()
+        directHeaders["X-Pigeon-Rawclienttime"] = String(format: "%.3f", Date().timeIntervalSince1970)
+        directHeaders["X-IG-Connection-Speed"] = "2500kbps"
+        directHeaders["X-IG-Bandwidth-Speed-KBPS"] = "-1.000"
+        directHeaders["X-IG-Bandwidth-TotalBytes-B"] = "0"
+        directHeaders["X-IG-Bandwidth-TotalTime-MS"] = "0"
+        directHeaders["X-IG-Extended-CDN-Thumbnail-Cache-Busting-Value"] = "1000"
+        directHeaders["X-Bloks-Version-Id"] = "388ece79ebc0e70e87873505ed1b0ff335ae2868a978cc951b6721c41d46a30a"
+        directHeaders["X-IG-WWW-Claim"] = "0"
+        directHeaders["X-Bloks-Is-Layout-RTL"] = "false"
+        directHeaders["X-IG-Device-ID"] = deviceIds.uuid
+        directHeaders["X-IG-Android-ID"] = deviceIds.androidId
+        if let mid = credentials.mid {
+            directHeaders["X-MID"] = mid
+        }
+        return directHeaders
+    }
+
     private func storyPostingHeaders(credentials: InstagramCredentials) -> [String: String] {
         let deviceIds = instagramDeviceIdentifiers(credentials: credentials)
         var headers = [
@@ -948,6 +1019,151 @@ struct InstagramNewsStoryArgs: Decodable {
 struct InstagramMediaThumbnail: Decodable {
     let id: String
     let image: String
+}
+
+private struct InstagramDirectInboxResponse: Decodable {
+    let inbox: InstagramDirectInbox
+    let status: String?
+}
+
+private struct InstagramDirectInbox: Decodable {
+    let threads: [InstagramDirectThread]
+    let unseenCount: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case threads
+        case unseenCount = "unseen_count"
+    }
+}
+
+private struct InstagramDirectThread: Decodable {
+    let threadId: String
+    let threadV2Id: String?
+    let threadTitle: String?
+    let users: [InstagramDirectUser]
+    let lastActivityAt: Int64?
+    let markedAsUnread: Bool?
+    let viewerId: String?
+    let lastSeenAt: [String: InstagramDirectSeen]?
+    let lastPermanentItem: InstagramDirectItem?
+
+    enum CodingKeys: String, CodingKey {
+        case threadId = "thread_id"
+        case threadV2Id = "thread_v2_id"
+        case threadTitle = "thread_title"
+        case users
+        case lastActivityAt = "last_activity_at"
+        case markedAsUnread = "marked_as_unread"
+        case viewerId = "viewer_id"
+        case lastSeenAt = "last_seen_at"
+        case lastPermanentItem = "last_permanent_item"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        threadId = try container.decodeFlexibleString(forKey: .threadId)
+        threadV2Id = try container.decodeFlexibleStringIfPresent(forKey: .threadV2Id)
+        threadTitle = try container.decodeIfPresent(String.self, forKey: .threadTitle)
+        users = try container.decodeIfPresent([InstagramDirectUser].self, forKey: .users) ?? []
+        lastActivityAt = try container.decodeFlexibleInt64IfPresent(forKey: .lastActivityAt)
+        markedAsUnread = try container.decodeIfPresent(Bool.self, forKey: .markedAsUnread)
+        viewerId = try container.decodeFlexibleStringIfPresent(forKey: .viewerId)
+        lastSeenAt = try container.decodeIfPresent([String: InstagramDirectSeen].self, forKey: .lastSeenAt)
+        lastPermanentItem = try container.decodeIfPresent(InstagramDirectItem.self, forKey: .lastPermanentItem)
+    }
+}
+
+private struct InstagramDirectUser: Decodable {
+    let pk: String
+    let username: String?
+    let fullName: String?
+    let profilePicURL: String?
+
+    enum CodingKeys: String, CodingKey {
+        case pk
+        case username
+        case fullName = "full_name"
+        case profilePicURL = "profile_pic_url"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        pk = try container.decodeFlexibleString(forKey: .pk)
+        username = try container.decodeIfPresent(String.self, forKey: .username)
+        fullName = try container.decodeIfPresent(String.self, forKey: .fullName)
+        profilePicURL = try container.decodeIfPresent(String.self, forKey: .profilePicURL)
+    }
+}
+
+private struct InstagramDirectSeen: Decodable {
+    let timestamp: Int64?
+
+    enum CodingKeys: String, CodingKey {
+        case timestamp
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        timestamp = try container.decodeFlexibleInt64IfPresent(forKey: .timestamp)
+    }
+}
+
+private struct InstagramDirectItem: Decodable {
+    let itemId: String
+    let userId: String?
+    let timestamp: Int64?
+    let itemType: String?
+    let text: String?
+    let auxiliaryText: String?
+    let xmaReelShare: [InstagramDirectXMA]?
+    let xmaReelMention: [InstagramDirectXMA]?
+    let xmaClip: [InstagramDirectXMA]?
+    let xmaMediaShare: [InstagramDirectXMA]?
+
+    enum CodingKeys: String, CodingKey {
+        case itemId = "item_id"
+        case userId = "user_id"
+        case timestamp
+        case itemType = "item_type"
+        case text
+        case auxiliaryText = "auxiliary_text"
+        case xmaReelShare = "xma_reel_share"
+        case xmaReelMention = "xma_reel_mention"
+        case xmaClip = "xma_clip"
+        case xmaMediaShare = "xma_media_share"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        itemId = try container.decodeFlexibleString(forKey: .itemId)
+        userId = try container.decodeFlexibleStringIfPresent(forKey: .userId)
+        timestamp = try container.decodeFlexibleInt64IfPresent(forKey: .timestamp)
+        itemType = try container.decodeIfPresent(String.self, forKey: .itemType)
+        text = try container.decodeIfPresent(String.self, forKey: .text)
+        auxiliaryText = try container.decodeIfPresent(String.self, forKey: .auxiliaryText)
+        xmaReelShare = try container.decodeIfPresent([InstagramDirectXMA].self, forKey: .xmaReelShare)
+        xmaReelMention = try container.decodeIfPresent([InstagramDirectXMA].self, forKey: .xmaReelMention)
+        xmaClip = try container.decodeIfPresent([InstagramDirectXMA].self, forKey: .xmaClip)
+        xmaMediaShare = try container.decodeIfPresent([InstagramDirectXMA].self, forKey: .xmaMediaShare)
+    }
+}
+
+private struct InstagramDirectXMA: Decodable {
+    let previewURL: String?
+    let targetURL: String?
+    let titleText: String?
+    let subtitleText: String?
+    let headerTitleText: String?
+    let captionBodyText: String?
+
+    enum CodingKeys: String, CodingKey {
+        case previewURL = "preview_url"
+        case targetURL = "target_url"
+        case titleText = "title_text"
+        case subtitleText = "subtitle_text"
+        case headerTitleText = "header_title_text"
+        case captionBodyText = "caption_body_text"
+    }
 }
 
 struct InstagramStatusResponse: Decodable {
@@ -1581,5 +1797,170 @@ private enum InstagramNotificationParser {
 
         // Highlight stories or other reel types
         return URL(string: "https://www.instagram.com/stories/archive/\(reelId)/?initial_media_id=\(mediaId)")
+    }
+}
+
+private enum InstagramDirectMessageParser {
+    static func parse(response: InstagramDirectInboxResponse, accountId: String, includeMediaShares: Bool) -> [NotificationItem] {
+        response.inbox.threads.compactMap { thread in
+            parse(thread: thread, accountId: accountId, includeMediaShares: includeMediaShares)
+        }
+    }
+
+    private static func parse(thread: InstagramDirectThread, accountId: String, includeMediaShares: Bool) -> NotificationItem? {
+        guard let item = thread.lastPermanentItem else { return nil }
+        let viewerId = thread.viewerId ?? accountId
+        guard item.userId != viewerId else { return nil }
+        guard includeMediaShares || !item.isMediaShare else { return nil }
+
+        let itemTimestamp = item.timestamp ?? thread.lastActivityAt ?? 0
+        let seenTimestamp = thread.lastSeenAt?[viewerId]?.timestamp ?? 0
+        guard thread.markedAsUnread == true || itemTimestamp > seenTimestamp else { return nil }
+
+        let actors = buildActors(thread: thread, senderId: item.userId, viewerId: viewerId)
+        let senderName = actors.first?.username ?? actors.first?.displayName ?? thread.threadTitle ?? "Someone"
+        let timestamp = Date(timeIntervalSince1970: TimeInterval(itemTimestamp) / 1_000_000)
+        let preview = messagePreview(from: item)
+        let text = notificationText(senderName: senderName, item: item)
+        let xma = primaryXMA(from: item)
+        let imageURL = xma?.previewURL.flatMap(URL.init)
+        let targetURL = xma?.targetURL.flatMap(URL.init) ?? URL(string: "https://www.instagram.com/direct/t/\(thread.threadV2Id ?? thread.threadId)/")
+
+        return NotificationItem(
+            id: "instagram:direct:\(thread.threadId):\(item.itemId)",
+            network: .instagram,
+            accountId: accountId,
+            sourceId: item.itemId,
+            type: .message,
+            timestamp: timestamp,
+            text: text,
+            actors: actors,
+            target: NotificationTarget(
+                id: thread.threadV2Id ?? thread.threadId,
+                text: preview,
+                url: targetURL,
+                imageURL: imageURL,
+                imageURLs: imageURL.map { [$0] } ?? [],
+                author: actors.first,
+                postedAt: timestamp,
+            ),
+            parentTarget: nil,
+        )
+    }
+
+    private static func buildActors(thread: InstagramDirectThread, senderId: String?, viewerId: String) -> [NotificationActor] {
+        let users = thread.users.filter { $0.pk != viewerId }
+        let sortedUsers: [InstagramDirectUser] = if let senderId, let sender = users.first(where: { $0.pk == senderId }) {
+            [sender] + users.filter { $0.pk != senderId }
+        } else {
+            users
+        }
+
+        return sortedUsers.prefix(5).map { user in
+            NotificationActor(
+                id: user.pk,
+                network: .instagram,
+                username: user.username,
+                displayName: user.fullName,
+                avatarURL: user.profilePicURL.flatMap(URL.init),
+            )
+        }
+    }
+
+    private static func messagePreview(from item: InstagramDirectItem) -> String? {
+        if let text = item.text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
+            return text
+        }
+        if let auxiliary = item.auxiliaryText?.trimmingCharacters(in: .whitespacesAndNewlines), !auxiliary.isEmpty {
+            return auxiliary
+        }
+        if let xma = primaryXMA(from: item) {
+            let values = [xma.titleText, xma.captionBodyText, xma.subtitleText]
+            if let value = values.compactMap({ cleaned($0) }).first {
+                return value
+            }
+
+            if item.itemType == "xma_clip", let username = cleaned(xma.headerTitleText) {
+                return "Sent a reel by \(username)"
+            }
+            if item.itemType == "xma_media_share", let username = cleaned(xma.headerTitleText) {
+                return "Sent a post by \(username)"
+            }
+        }
+        switch item.itemType {
+        case "xma_reel_mention":
+            return "Mentioned you in a story"
+        case "xma_reel_share":
+            return "Replied to a story"
+        case "xma_clip":
+            return "Sent a reel"
+        case "xma_media_share":
+            return "Sent a post"
+        case "voice_media":
+            return "Sent a voice message"
+        case "media", "raven_media":
+            return "Sent media"
+        case "animated_media":
+            return "Sent an animation"
+        default:
+            return "Sent a message"
+        }
+    }
+
+    private static func notificationText(senderName: String, item: InstagramDirectItem) -> String {
+        switch item.itemType {
+        case "xma_clip":
+            "\(senderName) sent you a reel"
+        case "xma_media_share":
+            "\(senderName) sent you a post"
+        default:
+            "\(senderName) sent you a message"
+        }
+    }
+
+    private static func primaryXMA(from item: InstagramDirectItem) -> InstagramDirectXMA? {
+        item.xmaReelMention?.first
+            ?? item.xmaReelShare?.first
+            ?? item.xmaClip?.first
+            ?? item.xmaMediaShare?.first
+    }
+
+    private static func cleaned(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed?.isEmpty == false ? trimmed : nil
+    }
+
+    private static func buildActorSummary(actors: [NotificationActor]) -> String {
+        guard let first = actors.first, let firstName = first.username ?? first.displayName else { return "Someone" }
+        let remainingCount = actors.count - 1
+        guard remainingCount > 0 else { return firstName }
+        return "\(firstName) and \(remainingCount) other\(remainingCount == 1 ? "" : "s")"
+    }
+}
+
+private extension KeyedDecodingContainer {
+    func decodeFlexibleString(forKey key: Key) throws -> String {
+        if let string = try? decode(String.self, forKey: key) { return string }
+        if let int = try? decode(Int64.self, forKey: key) { return String(int) }
+        if let uint = try? decode(UInt64.self, forKey: key) { return String(uint) }
+        throw DecodingError.typeMismatch(String.self, DecodingError.Context(codingPath: codingPath + [key], debugDescription: "Expected string-like value"))
+    }
+
+    func decodeFlexibleStringIfPresent(forKey key: Key) throws -> String? {
+        guard contains(key), try !decodeNil(forKey: key) else { return nil }
+        return try decodeFlexibleString(forKey: key)
+    }
+
+    func decodeFlexibleInt64IfPresent(forKey key: Key) throws -> Int64? {
+        guard contains(key), try !decodeNil(forKey: key) else { return nil }
+        if let int = try? decode(Int64.self, forKey: key) { return int }
+        if let string = try? decode(String.self, forKey: key) { return Int64(string) }
+        return nil
+    }
+}
+
+private extension InstagramDirectItem {
+    var isMediaShare: Bool {
+        itemType == "xma_clip" || itemType == "xma_media_share"
     }
 }

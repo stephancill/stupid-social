@@ -21,7 +21,7 @@ public enum FarcasterNotificationCategory: String, CaseIterable, Codable, Sendab
         case .reply: .replies
         case .reaction: .reactions
         case .follow: .follows
-        case .post, .music, .unknown: nil
+        case .post, .message, .music, .unknown: nil
         }
     }
 }

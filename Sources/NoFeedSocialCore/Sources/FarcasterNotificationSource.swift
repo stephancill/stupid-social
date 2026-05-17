@@ -271,6 +271,7 @@ public struct FarcasterNotificationSource: NotificationSource {
         case .reaction: "\(actorName) reacted to your cast"
         case .follow: "\(actorName) followed you"
         case .post: "New Farcaster post"
+        case .message: "New Farcaster notification"
         case .music: "New Farcaster notification"
         case .unknown: notification.cast?.text ?? "New Farcaster notification"
         }
