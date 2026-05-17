@@ -430,6 +430,7 @@
 - Slides within each reel are now sorted by `takenAt` descending (newest first) in `InstagramNotificationSource.fetchStoryReels()`.
 - Reels are sorted by: (1) unseen first, then (2) latest slide timestamp descending. Shared `sortReels` helper used in both `instagramReels()` and `markInstagramReelAsSeen()`.
 - The `latestReelMedia` field from the Instagram tray model is available but not used for sorting since actual slide `takenAt` is more reliable.
+- Story bar display ordering remains newest-first, but opening an unread story now starts an oldest-first viewer queue. Unread Instagram reels also reorder their slides oldest-first only for playback so unread story sessions advance chronologically without changing the bar's visual ordering.
 
 ### StoriesBar loading gate
 

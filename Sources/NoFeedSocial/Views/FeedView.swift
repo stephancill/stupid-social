@@ -36,7 +36,7 @@ struct FeedView: View {
                             }
                         },
                         onItemTap: { selectedItem, visibleItems in
-                            let items = visibleItems.filter { $0.isSeen == selectedItem.isSeen }
+                            let items = viewModel.storyViewerItems(for: selectedItem, in: visibleItems)
                             storyViewerSelection = StoryViewerSelection(
                                 items: items,
                                 startIndex: viewModel.storyViewerStartIndex(for: selectedItem, in: items),

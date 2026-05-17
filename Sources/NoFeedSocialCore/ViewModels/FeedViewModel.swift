@@ -284,19 +284,34 @@ public final class FeedViewModel: ObservableObject {
         storyBarItems[itemIndex] = .instagram(updated)
     }
 
-    public func storyViewerItems(for selectedIndex: Int) -> [StoryBarItem] {
-        guard storyBarItems.indices.contains(selectedIndex) else { return storyBarItems }
-        let selected = storyBarItems[selectedIndex]
-        switch selected {
-        case let .instagram(reel):
-            return storyBarItems.filter { $0.isSeen == reel.isSeen }
-        case let .spotify(item):
-            return storyBarItems.filter { $0.isSeen == item.isSeen }
-        }
+    public func storyViewerItems(for selectedItem: StoryBarItem, in visibleItems: [StoryBarItem]) -> [StoryBarItem] {
+        let items = visibleItems.filter { $0.isSeen == selectedItem.isSeen }
+        guard !selectedItem.isSeen else { return items }
+
+        return items
+            .map(storyItemWithOldestFirstSlides)
+            .sorted { lhs, rhs in
+                if lhs.timestamp == rhs.timestamp {
+                    return lhs.id < rhs.id
+                }
+                return lhs.timestamp < rhs.timestamp
+            }
     }
 
     public func storyViewerStartIndex(for selectedItem: StoryBarItem, in items: [StoryBarItem]) -> Int {
-        items.firstIndex(where: { $0.id == selectedItem.id }) ?? 0
+        guard selectedItem.isSeen else { return 0 }
+        return items.firstIndex(where: { $0.id == selectedItem.id }) ?? 0
+    }
+
+    private func storyItemWithOldestFirstSlides(_ item: StoryBarItem) -> StoryBarItem {
+        guard case let .instagram(reel) = item else { return item }
+        let slides = reel.slides.sorted { lhs, rhs in
+            if lhs.takenAt == rhs.takenAt {
+                return lhs.id < rhs.id
+            }
+            return lhs.takenAt < rhs.takenAt
+        }
+        return .instagram(InstagramStoryReel(id: reel.id, user: reel.user, slides: slides, isSeen: reel.isSeen, hasCloseFriendsMedia: reel.hasCloseFriendsMedia))
     }
 
     public func performCredentialHealthCheck() async {
