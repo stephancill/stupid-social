@@ -19,6 +19,7 @@ public final class FeedViewModel: ObservableObject {
     private let spotifySeenDefaultsKey = "spotifyActivitySeenTimestamps"
     private let chronologicalInstagramPrefixCount = 15
     private var orderedInstagramStoryReels: [InstagramStoryReel] = []
+    private var optimisticInstagramStorySlideID: String?
 
     public var service: FeedService {
         feedService
@@ -100,7 +101,8 @@ public final class FeedViewModel: ObservableObject {
         async let reels = instagramReels()
         async let spots = spotifyItems()
         async let ownInstagramActor = instagramSource?.ownStoryActor()
-        let fetchedReels = await reels ?? instagramStoryReels
+        let fallbackInstagramReels = ([ownInstagramStoryReel].compactMap(\.self) + instagramStoryReels)
+        let fetchedReels = await reels ?? fallbackInstagramReels
         let fetchedSpots = await spots
         let fetchedOwnInstagramActor = await ownInstagramActor ?? ownInstagramStoryActor
         ownInstagramStoryActor = fetchedOwnInstagramActor
@@ -114,7 +116,7 @@ public final class FeedViewModel: ObservableObject {
             }
             instagramReels.append(reel)
         }
-        ownInstagramStoryReel = ownReel
+        ownInstagramStoryReel = preservingOptimisticStorySlide(in: ownReel)
         orderedInstagramStoryReels = instagramReels
         storyBarItems = mergedStoryBarItems(instagramReels: instagramReels, spotifyItems: fetchedSpots)
         storyBarContentLoaded = true
@@ -123,8 +125,28 @@ public final class FeedViewModel: ObservableObject {
 
     public func postInstagramStory(imageData: Data, width: Int, height: Int, mimeType: String) async throws {
         guard let instagramSource else { throw SourceError.notConfigured }
-        try await instagramSource.postPhotoStory(imageData: imageData, width: width, height: height, mimeType: mimeType)
-        await fetchStoryBarContent()
+        let actor: NotificationActor? = if let ownInstagramStoryActor {
+            ownInstagramStoryActor
+        } else {
+            await instagramSource.ownStoryActor()
+        }
+        guard let actor else { throw SourceError.notConfigured }
+
+        let previewURL = try writeOptimisticStoryPreview(imageData: imageData, mimeType: mimeType)
+        let slideID = "optimistic-instagram-story-\(UUID().uuidString)"
+        optimisticInstagramStorySlideID = slideID
+        ownInstagramStoryActor = actor
+        insertOptimisticInstagramStory(actor: actor, slideID: slideID, imageURL: previewURL)
+
+        Task {
+            do {
+                try await instagramSource.postPhotoStory(imageData: imageData, width: width, height: height, mimeType: mimeType)
+                await fetchStoryBarContent()
+            } catch {
+                removeOptimisticInstagramStory(slideID: slideID)
+                errorMessage = "Could not post Instagram story."
+            }
+        }
     }
 
     public func deleteInstagramStory(mediaId: String, isVideo: Bool) async throws {
@@ -302,6 +324,75 @@ public final class FeedViewModel: ObservableObject {
         let remainingInstagram = instagramReels.dropFirst(chronologicalInstagramPrefixCount).map(StoryBarItem.instagram)
 
         return chronologicalItems + remainingInstagram
+    }
+
+    private func writeOptimisticStoryPreview(imageData: Data, mimeType: String) throws -> URL {
+        let fileExtension = mimeType == "image/webp" ? "webp" : "jpg"
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("NoFeedSocialOptimisticStories", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent(UUID().uuidString).appendingPathExtension(fileExtension)
+        try imageData.write(to: url, options: .atomic)
+        return url
+    }
+
+    private func insertOptimisticInstagramStory(actor: NotificationActor, slideID: String, imageURL: URL) {
+        let optimisticSlide = InstagramStorySlide(
+            id: slideID,
+            imageURL: imageURL,
+            videoURL: nil,
+            isVideo: false,
+            ownerId: actor.id,
+            takenAt: Date().timeIntervalSince1970,
+        )
+
+        let existingSlides = ownInstagramStoryReel?.slides.filter { $0.id != slideID } ?? []
+        ownInstagramStoryReel = InstagramStoryReel(
+            id: actor.id,
+            user: actor,
+            slides: [optimisticSlide] + existingSlides,
+            isSeen: false,
+            hasCloseFriendsMedia: ownInstagramStoryReel?.hasCloseFriendsMedia ?? false,
+        )
+        storyBarContentLoaded = true
+    }
+
+    private func preservingOptimisticStorySlide(in fetchedReel: InstagramStoryReel?) -> InstagramStoryReel? {
+        guard let optimisticInstagramStorySlideID,
+              let optimisticSlide = ownInstagramStoryReel?.slides.first(where: { $0.id == optimisticInstagramStorySlideID })
+        else { return fetchedReel }
+
+        if let fetchedReel {
+            guard !fetchedReel.slides.contains(where: { $0.id == optimisticInstagramStorySlideID }) else { return fetchedReel }
+            if fetchedReel.slides.contains(where: { $0.takenAt >= optimisticSlide.takenAt - 60 }) {
+                self.optimisticInstagramStorySlideID = nil
+                return fetchedReel
+            }
+            return InstagramStoryReel(
+                id: fetchedReel.id,
+                user: fetchedReel.user,
+                slides: [optimisticSlide] + fetchedReel.slides,
+                isSeen: false,
+                hasCloseFriendsMedia: fetchedReel.hasCloseFriendsMedia,
+            )
+        }
+
+        guard let actor = ownInstagramStoryActor ?? ownInstagramStoryReel?.user else { return nil }
+        return InstagramStoryReel(id: actor.id, user: actor, slides: [optimisticSlide], isSeen: false)
+    }
+
+    private func removeOptimisticInstagramStory(slideID: String) {
+        guard optimisticInstagramStorySlideID == slideID, let reel = ownInstagramStoryReel else { return }
+        optimisticInstagramStorySlideID = nil
+        let slides = reel.slides.filter { $0.id != slideID }
+        ownInstagramStoryReel = slides.isEmpty
+            ? nil
+            : InstagramStoryReel(
+                id: reel.id,
+                user: reel.user,
+                slides: slides,
+                isSeen: reel.isSeen,
+                hasCloseFriendsMedia: reel.hasCloseFriendsMedia,
+            )
     }
 
     private func updateInstagramStorySlide(mediaId: String, transform: @escaping (InstagramStorySlide) -> InstagramStorySlide) {

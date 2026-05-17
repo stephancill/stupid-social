@@ -1133,17 +1133,10 @@ struct UnifiedStoryViewer: View {
                     StoryVideoPlayer(player: player)
                         .ignoresSafeArea()
                 } else {
-                    AsyncImage(url: slide.imageURL) { phase in
-                        switch phase {
-                        case let .success(image):
-                            image
-                                .resizable()
-                                .scaledToFit()
-                        case .failure, .empty:
-                            Color.gray.opacity(0.3)
-                        @unknown default:
-                            Color.clear
-                        }
+                    CachedAsyncImage(url: slide.imageURL, contentMode: .fit) {
+                        Color.gray.opacity(0.3)
+                    } failure: {
+                        Color.gray.opacity(0.3)
                     }
                 }
 

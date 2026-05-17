@@ -13,6 +13,7 @@ import SwiftUI
 struct CachedAsyncImage<Placeholder: View, Failure: View>: View {
     let url: URL?
     let cacheKey: String?
+    let contentMode: ContentMode
     @ViewBuilder let placeholder: () -> Placeholder
     @ViewBuilder let failure: () -> Failure
     @State private var loadedImage: PlatformImage?
@@ -21,11 +22,13 @@ struct CachedAsyncImage<Placeholder: View, Failure: View>: View {
     init(
         url: URL?,
         cacheKey: String? = nil,
+        contentMode: ContentMode = .fill,
         @ViewBuilder placeholder: @escaping () -> Placeholder,
         @ViewBuilder failure: @escaping () -> Failure,
     ) {
         self.url = url
         self.cacheKey = cacheKey
+        self.contentMode = contentMode
         self.placeholder = placeholder
         self.failure = failure
     }
@@ -35,7 +38,7 @@ struct CachedAsyncImage<Placeholder: View, Failure: View>: View {
             if let loadedImage {
                 platformImage(loadedImage)
                     .resizable()
-                    .scaledToFill()
+                    .aspectRatio(contentMode: contentMode)
             } else if failedURL == url {
                 failure()
             } else {
@@ -66,6 +69,19 @@ struct CachedAsyncImage<Placeholder: View, Failure: View>: View {
             loadedImage = nil
         }
         failedURL = nil
+
+        if url.isFileURL {
+            guard let data = try? Data(contentsOf: url), let image = PlatformImage(data: data) else {
+                failedURL = url
+                return
+            }
+            StoryImageCache.shared.setImage(image, for: url)
+            if let cacheKey {
+                StoryImageCache.shared.setImage(image, forKey: cacheKey)
+            }
+            loadedImage = image
+            return
+        }
 
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
