@@ -136,8 +136,8 @@ public final class FeedService {
         guard let source = sources.first(where: { $0.network == network }) else {
             throw SourceError.serviceError("No source for network \(network)")
         }
-        // For X, pass the username as the id (GraphQL uses screen_name)
-        let lookupId = (network == .x) ? (username ?? actorId) : actorId
+        // X and Instagram can resolve profiles by username; this avoids stale or non-numeric source ids breaking detail lookup.
+        let lookupId = (network == .x || network == .instagram) ? (username ?? actorId) : actorId
         return try await source.fetchProfile(id: lookupId)
     }
 

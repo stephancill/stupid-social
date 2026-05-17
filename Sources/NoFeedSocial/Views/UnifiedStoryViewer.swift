@@ -15,6 +15,7 @@ struct UnifiedStoryViewer: View {
     let onInstagramReelSeen: (String) -> Void
     let onSpotifyItemSeen: (String) -> Void
     let onInstagramStoryDelete: (String, Bool) async throws -> Void
+    let onInstagramStoryLike: (String, Bool) async throws -> Void
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -44,6 +45,9 @@ struct UnifiedStoryViewer: View {
     @State private var pendingDeleteSlide: InstagramStorySlide?
     @State private var isDeletingStory = false
     @State private var deleteErrorMessage: String?
+    @State private var likedInstagramSlideIds: Set<String>
+    @State private var likingInstagramSlideIds: Set<String> = []
+    @State private var likeErrorMessage: String?
 
     enum PlayerStatus: Equatable {
         case idle
@@ -68,6 +72,7 @@ struct UnifiedStoryViewer: View {
         onInstagramReelSeen: @escaping (String) -> Void,
         onSpotifyItemSeen: @escaping (String) -> Void,
         onInstagramStoryDelete: @escaping (String, Bool) async throws -> Void,
+        onInstagramStoryLike: @escaping (String, Bool) async throws -> Void,
     ) {
         self.items = items
         self.startIndex = startIndex
@@ -77,9 +82,16 @@ struct UnifiedStoryViewer: View {
         self.onInstagramReelSeen = onInstagramReelSeen
         self.onSpotifyItemSeen = onSpotifyItemSeen
         self.onInstagramStoryDelete = onInstagramStoryDelete
+        self.onInstagramStoryLike = onInstagramStoryLike
         _viewerItems = State(initialValue: items)
         _currentItemIndex = State(initialValue: startIndex)
         _seenItems = State(initialValue: [])
+        _likedInstagramSlideIds = State(initialValue: Set(items.flatMap { item in
+            if case let .instagram(reel) = item {
+                return reel.slides.filter(\.isLiked).map(\.id)
+            }
+            return []
+        }))
     }
 
     private var currentItem: StoryBarItem? {
@@ -209,6 +221,13 @@ struct UnifiedStoryViewer: View {
             }
         } message: {
             Text(deleteErrorMessage ?? "Could not delete the story.")
+        }
+        .alert("Like Failed", isPresented: likeErrorBinding) {
+            Button("OK", role: .cancel) {
+                likeErrorMessage = nil
+            }
+        } message: {
+            Text(likeErrorMessage ?? "Could not update the story like.")
         }
     }
 
@@ -361,6 +380,29 @@ struct UnifiedStoryViewer: View {
 
             Spacer()
 
+            if canLikeCurrentInstagramStory, let slide = currentInstagramSlide {
+                let isLiked = likedInstagramSlideIds.contains(slide.id)
+                let isLiking = likingInstagramSlideIds.contains(slide.id)
+                Button {
+                    toggleInstagramStoryLike(slide: slide)
+                } label: {
+                    Group {
+                        if isLiking {
+                            ProgressView()
+                                .controlSize(.small)
+                                .tint(.white)
+                        } else {
+                            Image(systemName: isLiked ? "heart.fill" : "heart")
+                                .font(.body.weight(.semibold))
+                        }
+                    }
+                    .foregroundStyle(isLiked ? .red : .white)
+                    .padding(8)
+                }
+                .disabled(isLiking)
+                .accessibilityLabel(isLiked ? "Unlike story" : "Like story")
+            }
+
             if canDeleteCurrentInstagramStory {
                 Button {
                     pauseCurrentStory()
@@ -465,6 +507,15 @@ struct UnifiedStoryViewer: View {
         return true
     }
 
+    private var canLikeCurrentInstagramStory: Bool {
+        guard let ownInstagramAccountId,
+              case let .instagram(reel) = currentItem,
+              reel.user.id != ownInstagramAccountId,
+              currentInstagramSlide != nil
+        else { return false }
+        return true
+    }
+
     private var deleteConfirmationBinding: Binding<Bool> {
         Binding(
             get: { pendingDeleteSlide != nil },
@@ -483,6 +534,74 @@ struct UnifiedStoryViewer: View {
         Binding(
             get: { deleteErrorMessage != nil },
             set: { if !$0 { deleteErrorMessage = nil } },
+        )
+    }
+
+    private var likeErrorBinding: Binding<Bool> {
+        Binding(
+            get: { likeErrorMessage != nil },
+            set: { if !$0 { likeErrorMessage = nil } },
+        )
+    }
+
+    private func toggleInstagramStoryLike(slide: InstagramStorySlide) {
+        let nextLiked = !likedInstagramSlideIds.contains(slide.id)
+        likingInstagramSlideIds.insert(slide.id)
+        Task {
+            do {
+                try await onInstagramStoryLike(slide.id, nextLiked)
+                await MainActor.run {
+                    likingInstagramSlideIds.remove(slide.id)
+                    setInstagramSlideLiked(slideId: slide.id, liked: nextLiked)
+                    playStoryLikeHaptic()
+                }
+            } catch {
+                await MainActor.run {
+                    likingInstagramSlideIds.remove(slide.id)
+                    likeErrorMessage = "Could not update the story like. Try again from Instagram if it remains unchanged."
+                }
+            }
+        }
+    }
+
+    private func setInstagramSlideLiked(slideId: String, liked: Bool) {
+        if liked {
+            likedInstagramSlideIds.insert(slideId)
+        } else {
+            likedInstagramSlideIds.remove(slideId)
+        }
+        updateViewerInstagramSlide(slideId: slideId) { slide in
+            InstagramStorySlide(
+                id: slide.id,
+                imageURL: slide.imageURL,
+                videoURL: slide.videoURL,
+                isVideo: slide.isVideo,
+                videoDuration: slide.videoDuration,
+                embedURL: slide.embedURL,
+                embedLabel: slide.embedLabel,
+                music: slide.music,
+                mentions: slide.mentions,
+                links: slide.links,
+                ownerId: slide.ownerId,
+                takenAt: slide.takenAt,
+                isLiked: liked,
+            )
+        }
+    }
+
+    private func updateViewerInstagramSlide(slideId: String, transform: (InstagramStorySlide) -> InstagramStorySlide) {
+        guard case let .instagram(reel) = currentItem else { return }
+        let slides = reel.slides.map { slide in
+            slide.id == slideId ? transform(slide) : slide
+        }
+        viewerItems[currentItemIndex] = .instagram(
+            InstagramStoryReel(
+                id: reel.id,
+                user: reel.user,
+                slides: slides,
+                isSeen: reel.isSeen,
+                hasCloseFriendsMedia: reel.hasCloseFriendsMedia,
+            ),
         )
     }
 
@@ -1337,6 +1456,13 @@ struct UnifiedStoryViewer: View {
 
 @MainActor
 private func playSpotifySaveHaptic() {
+    #if os(iOS)
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    #endif
+}
+
+@MainActor
+private func playStoryLikeHaptic() {
     #if os(iOS)
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
     #endif

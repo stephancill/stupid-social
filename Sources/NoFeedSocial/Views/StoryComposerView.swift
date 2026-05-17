@@ -24,6 +24,7 @@ struct StoryComposerView: View {
     @State private var postSucceeded = false
     @State private var isPosting = false
     @State private var composerMessage: String?
+    @State private var captionTrashVisible = false
     @GestureState private var captionDrag: CaptionDrag?
     @FocusState private var swiftUIFocusedCaptionID: UUID?
 
@@ -87,6 +88,9 @@ struct StoryComposerView: View {
                                     if shouldDelete {
                                         removeCaption(id)
                                     }
+                                },
+                                onTrashVisibilityChange: { visible in
+                                    captionTrashVisible = visible
                                 },
                             )
                             .frame(width: proxy.size.width, height: proxy.size.height)
@@ -166,7 +170,7 @@ struct StoryComposerView: View {
                 Spacer()
 
                 VStack(spacing: 12) {
-                    if hasComposerElements {
+                    if hasComposerElements, !captionTrashVisible {
                         Button {
                             postComposedStoryImage()
                         } label: {
@@ -220,13 +224,9 @@ struct StoryComposerView: View {
             Image(systemName: "photo.on.rectangle.angled")
                 .font(.system(size: 46, weight: .regular))
                 .foregroundStyle(.white.opacity(0.52))
-            Text("Select an image to start")
+            Text("Select an image or add text to start")
                 .font(.headline)
                 .foregroundStyle(.white)
-            Text("The image will fit centered on the story canvas.")
-                .font(.subheadline)
-                .foregroundStyle(.white.opacity(0.68))
-                .multilineTextAlignment(.center)
         }
         .padding(.horizontal, 32)
     }
@@ -367,6 +367,7 @@ struct StoryComposerView: View {
 
     private func removeCaption(_ id: UUID) {
         captions.removeAll { $0.id == id }
+        captionTrashVisible = false
         if focusedCaptionID == id {
             focusedCaptionID = nil
         }
@@ -378,6 +379,7 @@ struct StoryComposerView: View {
     private func clearFocusedCaption() {
         focusedCaptionID = nil
         swiftUIFocusedCaptionID = nil
+        captionTrashVisible = false
     }
 
     private func saveComposedStoryImage() {
@@ -826,6 +828,7 @@ private struct BackgroundToolbarIcon: View {
         @Binding var textColor: StoryTextColor
         let maxTextWidth: CGFloat
         let onDragEnded: (UUID, Bool) -> Void
+        let onTrashVisibilityChange: (Bool) -> Void
 
         func makeUIView(context: Context) -> DraggableTextCanvasView {
             let view = DraggableTextCanvasView()
@@ -850,6 +853,9 @@ private struct BackgroundToolbarIcon: View {
             }
             view.onDragEnded = { shouldDelete in
                 onDragEnded(id, shouldDelete)
+            }
+            view.onTrashVisibilityChange = { visible in
+                onTrashVisibilityChange(visible)
             }
             return view
         }
@@ -890,6 +896,9 @@ private struct BackgroundToolbarIcon: View {
             }
             view.onDragEnded = { shouldDelete in
                 onDragEnded(id, shouldDelete)
+            }
+            view.onTrashVisibilityChange = { visible in
+                onTrashVisibilityChange(visible)
             }
 
             let displayText = text.isEmpty ? "Text" : text
@@ -969,6 +978,7 @@ private struct BackgroundToolbarIcon: View {
         var onTextColorChange: ((StoryTextColor) -> Void)?
         var onFocusChange: ((Bool) -> Void)?
         var onDragEnded: ((Bool) -> Void)?
+        var onTrashVisibilityChange: ((Bool) -> Void)?
         private(set) var isDragging = false
         private(set) var isResizing = false
         var isInteracting: Bool {
@@ -1196,6 +1206,7 @@ private struct BackgroundToolbarIcon: View {
         }
 
         private func setTrashVisible(_ visible: Bool) {
+            onTrashVisibilityChange?(visible)
             trashContainer.isHidden = false
             UIView.animate(withDuration: 0.12, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) {
                 self.trashContainer.alpha = visible ? 1 : 0

@@ -273,7 +273,13 @@ public struct InstagramClient {
             throw SourceError.notConfigured
         }
 
-        var request = URLRequest(url: URL(string: "\(Self.baseURL)/api/v1/users/\(uid)/info/")!)
+        let trimmedIdentifier = uid.trimmingCharacters(in: .whitespacesAndNewlines)
+        let escapedIdentifier = trimmedIdentifier.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? trimmedIdentifier
+        let path = trimmedIdentifier.allSatisfy(\.isNumber)
+            ? "/api/v1/users/\(escapedIdentifier)/info/"
+            : "/api/v1/users/\(escapedIdentifier)/usernameinfo/"
+
+        var request = URLRequest(url: URL(string: "\(Self.baseURL)\(path)")!)
         request.httpMethod = "GET"
         request.allHTTPHeaderFields = headers(credentials: credentials)
         configureRequest(&request)
@@ -384,6 +390,45 @@ public struct InstagramClient {
             throw SourceError.invalidResponse
         }
         guard (200 ..< 300).contains(http.statusCode) else {
+            throw SourceError.invalidResponse
+        }
+    }
+
+    func setMediaLiked(mediaId: String, liked: Bool) async throws {
+        guard let credentials = try credentialStore.loadInstagramCredentials() else {
+            throw SourceError.notConfigured
+        }
+
+        let action = liked ? "send_story_like" : "unsend_story_like"
+        let body = formURLEncoded([
+            "module_name": "feed_timeline",
+            "media_id": mediaId,
+            "container_module": "reel_feed_timeline",
+            "tray_session_id": UUID().uuidString.lowercased(),
+            "tray_position": "0",
+            "viewer_session_id": UUID().uuidString.lowercased(),
+            "delivery_class": "organic",
+            "like_type": "REGULAR",
+            "like_duration": "0",
+        ])
+
+        var request = URLRequest(url: URL(string: "\(Self.baseURL)/api/v1/story_interactions/\(action)/")!)
+        request.httpMethod = "POST"
+        request.httpBody = body.data(using: .utf8)
+        var hdrs = storyPostingHeaders(credentials: credentials)
+        hdrs["Content-Type"] = "application/x-www-form-urlencoded"
+        request.allHTTPHeaderFields = hdrs
+        configureRequest(&request)
+
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw SourceError.invalidResponse
+        }
+        guard (200 ..< 300).contains(http.statusCode) else {
+            throw SourceError.invalidResponse
+        }
+
+        if let response = try? JSONDecoder().decode(InstagramStatusResponse.self, from: data), response.status != "ok" {
             throw SourceError.invalidResponse
         }
     }
@@ -871,6 +916,10 @@ struct InstagramMediaThumbnail: Decodable {
     let image: String
 }
 
+struct InstagramStatusResponse: Decodable {
+    let status: String?
+}
+
 public struct InstagramUserInfoResponse: Decodable {
     public struct InfoUser: Decodable {
         public let pk: UInt64?
@@ -1085,6 +1134,7 @@ struct InstagramStoryMedia: Decodable {
     let storyMusicStickers: [InstagramStoryMusicSticker]?
     let reelMentions: [InstagramStoryMentionSticker]?
     let storyLinkStickers: [InstagramStoryLinkSticker]?
+    let hasLiked: Bool?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -1097,6 +1147,7 @@ struct InstagramStoryMedia: Decodable {
         case storyMusicStickers = "story_music_stickers"
         case reelMentions = "reel_mentions"
         case storyLinkStickers = "story_link_stickers"
+        case hasLiked = "has_liked"
     }
 }
 

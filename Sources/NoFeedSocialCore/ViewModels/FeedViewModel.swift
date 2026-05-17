@@ -133,6 +133,28 @@ public final class FeedViewModel: ObservableObject {
         await fetchStoryBarContent()
     }
 
+    public func setInstagramStoryLiked(mediaId: String, liked: Bool) async throws {
+        guard let instagramSource else { throw SourceError.notConfigured }
+        try await instagramSource.setStoryLiked(mediaId: mediaId, liked: liked)
+        updateInstagramStorySlide(mediaId: mediaId) { slide in
+            InstagramStorySlide(
+                id: slide.id,
+                imageURL: slide.imageURL,
+                videoURL: slide.videoURL,
+                isVideo: slide.isVideo,
+                videoDuration: slide.videoDuration,
+                embedURL: slide.embedURL,
+                embedLabel: slide.embedLabel,
+                music: slide.music,
+                mentions: slide.mentions,
+                links: slide.links,
+                ownerId: slide.ownerId,
+                takenAt: slide.takenAt,
+                isLiked: liked,
+            )
+        }
+    }
+
     private func instagramReels() async -> [InstagramStoryReel]? {
         guard let instagramSource, instagramSource.storiesEnabled else { return [] }
         do {
@@ -280,6 +302,27 @@ public final class FeedViewModel: ObservableObject {
         let remainingInstagram = instagramReels.dropFirst(chronologicalInstagramPrefixCount).map(StoryBarItem.instagram)
 
         return chronologicalItems + remainingInstagram
+    }
+
+    private func updateInstagramStorySlide(mediaId: String, transform: @escaping (InstagramStorySlide) -> InstagramStorySlide) {
+        let updateReel: (InstagramStoryReel) -> InstagramStoryReel = { reel in
+            let slides = reel.slides.map { slide in
+                slide.id == mediaId ? transform(slide) : slide
+            }
+            return InstagramStoryReel(id: reel.id, user: reel.user, slides: slides, isSeen: reel.isSeen, hasCloseFriendsMedia: reel.hasCloseFriendsMedia)
+        }
+
+        if let ownReel = ownInstagramStoryReel, ownReel.slides.contains(where: { $0.id == mediaId }) {
+            ownInstagramStoryReel = updateReel(ownReel)
+        }
+
+        orderedInstagramStoryReels = orderedInstagramStoryReels.map { reel in
+            reel.slides.contains(where: { $0.id == mediaId }) ? updateReel(reel) : reel
+        }
+        storyBarItems = storyBarItems.map { item in
+            guard case let .instagram(reel) = item, reel.slides.contains(where: { $0.id == mediaId }) else { return item }
+            return .instagram(updateReel(reel))
+        }
     }
 }
 

@@ -151,6 +151,9 @@ struct FeedView: View {
                 onInstagramStoryDelete: { mediaId, isVideo in
                     try await viewModel.deleteInstagramStory(mediaId: mediaId, isVideo: isVideo)
                 },
+                onInstagramStoryLike: { mediaId, liked in
+                    try await viewModel.setInstagramStoryLiked(mediaId: mediaId, liked: liked)
+                },
             )
         }
         .fullScreenCover(isPresented: $showingStoryComposer) {
@@ -174,6 +177,9 @@ struct FeedView: View {
                         },
                         onInstagramStoryDelete: { mediaId, isVideo in
                             try await viewModel.deleteInstagramStory(mediaId: mediaId, isVideo: isVideo)
+                        },
+                        onInstagramStoryLike: { mediaId, liked in
+                            try await viewModel.setInstagramStoryLiked(mediaId: mediaId, liked: liked)
                         },
                     )
                 }

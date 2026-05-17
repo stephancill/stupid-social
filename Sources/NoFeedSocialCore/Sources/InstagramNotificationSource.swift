@@ -156,6 +156,7 @@ public final class InstagramNotificationSource: NotificationSource {
                             links: links,
                             ownerId: String(reel.user?.pk ?? userId),
                             takenAt: media.takenAt ?? 0,
+                            isLiked: media.hasLiked ?? false,
                         ))
                     }
                 }
@@ -189,6 +190,10 @@ public final class InstagramNotificationSource: NotificationSource {
             (mediaId: slide.id, ownerId: slide.ownerId, takenAt: slide.takenAt)
         }
         try? await client.markStorySeen(mediaItems: items)
+    }
+
+    public func setStoryLiked(mediaId: String, liked: Bool) async throws {
+        try await client.setMediaLiked(mediaId: mediaId, liked: liked)
     }
 
     public func fetchProfile(id: String) async throws -> NetworkProfile {

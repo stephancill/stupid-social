@@ -281,6 +281,7 @@ public struct InstagramStorySlide: Identifiable, Hashable, Sendable {
     public let links: [InstagramStoryLink]
     public let ownerId: String
     public let takenAt: Double
+    public let isLiked: Bool
 
     public init(
         id: String,
@@ -295,6 +296,7 @@ public struct InstagramStorySlide: Identifiable, Hashable, Sendable {
         links: [InstagramStoryLink] = [],
         ownerId: String = "",
         takenAt: Double = 0,
+        isLiked: Bool = false,
     ) {
         self.id = id
         self.imageURL = imageURL
@@ -308,6 +310,7 @@ public struct InstagramStorySlide: Identifiable, Hashable, Sendable {
         self.links = links
         self.ownerId = ownerId
         self.takenAt = takenAt
+        self.isLiked = isLiked
     }
 }
 
