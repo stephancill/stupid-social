@@ -438,7 +438,7 @@ struct StoryComposerView: View {
                 } catch {
                     await MainActor.run {
                         isPosting = false
-                        composerMessage = "Could not post the story. Check your Instagram connection and try again."
+                        composerMessage = error.localizedDescription
                     }
                 }
             }

@@ -461,7 +461,7 @@ public struct InstagramClient {
         var uploadRequest = URLRequest(url: URL(string: "\(Self.baseURL)/rupload_igphoto/\(uploadName)")!)
         uploadRequest.httpMethod = "POST"
         uploadRequest.httpBody = imageData
-        var uploadHeaders = storyPostingHeaders(credentials: credentials)
+        var uploadHeaders = storyUploadHeaders(credentials: credentials)
         uploadHeaders["Content-Type"] = "application/octet-stream"
         uploadHeaders["Content-Length"] = String(imageData.count)
         uploadHeaders["Offset"] = "0"
@@ -473,12 +473,15 @@ public struct InstagramClient {
         uploadRequest.allHTTPHeaderFields = uploadHeaders
         configureRequest(&uploadRequest)
 
-        let (_, uploadResponse) = try await session.data(for: uploadRequest)
+        let (uploadData, uploadResponse) = try await session.data(for: uploadRequest)
         guard let uploadHTTP = uploadResponse as? HTTPURLResponse else {
             throw SourceError.invalidResponse
         }
         guard (200 ..< 300).contains(uploadHTTP.statusCode) else {
-            throw SourceError.invalidResponse
+            throw SourceError.serviceError(instagramPublishError(step: "upload", statusCode: uploadHTTP.statusCode, data: uploadData))
+        }
+        if let response = try? JSONDecoder().decode(InstagramStatusResponse.self, from: uploadData), response.status != "ok" {
+            throw SourceError.serviceError(instagramPublishError(step: "upload", statusCode: uploadHTTP.statusCode, data: uploadData))
         }
 
         let now = Int(Date().timeIntervalSince1970)
@@ -559,12 +562,15 @@ public struct InstagramClient {
         storyConfigureRequest.allHTTPHeaderFields = configureHeaders
         configureRequest(&storyConfigureRequest)
 
-        let (_, configureResponse) = try await session.data(for: storyConfigureRequest)
+        let (configureData, configureResponse) = try await session.data(for: storyConfigureRequest)
         guard let configureHTTP = configureResponse as? HTTPURLResponse else {
             throw SourceError.invalidResponse
         }
         guard (200 ..< 300).contains(configureHTTP.statusCode) else {
-            throw SourceError.invalidResponse
+            throw SourceError.serviceError(instagramPublishError(step: "configure", statusCode: configureHTTP.statusCode, data: configureData))
+        }
+        if let response = try? JSONDecoder().decode(InstagramStatusResponse.self, from: configureData), response.status != "ok" {
+            throw SourceError.serviceError(instagramPublishError(step: "configure", statusCode: configureHTTP.statusCode, data: configureData))
         }
     }
 
@@ -702,12 +708,40 @@ public struct InstagramClient {
         return headers
     }
 
+    private func storyUploadHeaders(credentials: InstagramCredentials) -> [String: String] {
+        var uploadHeaders = headers(credentials: credentials)
+        let deviceIds = instagramDeviceIdentifiers(credentials: credentials)
+        uploadHeaders["X-IG-Device-ID"] = deviceIds.uuid
+        uploadHeaders["X-IG-Android-ID"] = deviceIds.androidId
+        uploadHeaders["X-IG-App-Locale"] = "en_US"
+        uploadHeaders["X-IG-Device-Locale"] = "en_US"
+        uploadHeaders["X-IG-Mapped-Locale"] = "en_US"
+        uploadHeaders["X-IG-WWW-Claim"] = "0"
+        uploadHeaders["X-FB-Connection-Type"] = "WIFI"
+        if let mid = credentials.mid {
+            uploadHeaders["X-MID"] = mid
+        }
+        return uploadHeaders
+    }
+
+    private func instagramPublishError(step: String, statusCode: Int, data: Data) -> String {
+        let responseMessage = (try? JSONDecoder().decode(InstagramErrorResponse.self, from: data))?.message
+        if let responseMessage, !responseMessage.isEmpty {
+            return "Instagram story \(step) failed (HTTP \(statusCode)): \(responseMessage)"
+        }
+        let responseStatus = (try? JSONDecoder().decode(InstagramErrorResponse.self, from: data))?.status
+        if let responseStatus, !responseStatus.isEmpty, responseStatus != "ok" {
+            return "Instagram story \(step) failed (HTTP \(statusCode)): \(responseStatus)"
+        }
+        return "Instagram story \(step) failed (HTTP \(statusCode))."
+    }
+
     private func instagramAuthorizationHeader(credentials: InstagramCredentials) -> String {
         let payload = jsonString([
             "ds_user_id": credentials.dsUserId,
             "sessionid": credentials.sessionId,
         ])
-        let encoded = Data(payload.utf8).base64EncodedString().replacingOccurrences(of: "=", with: "")
+        let encoded = Data(payload.utf8).base64EncodedString()
         return "Bearer IGT:2:\(encoded)"
     }
 
@@ -917,6 +951,11 @@ struct InstagramMediaThumbnail: Decodable {
 }
 
 struct InstagramStatusResponse: Decodable {
+    let status: String?
+}
+
+private struct InstagramErrorResponse: Decodable {
+    let message: String?
     let status: String?
 }
 
