@@ -326,6 +326,8 @@
 
 ## 2026-05-17
 
+- Hid the stories vertical cycling affordance when only one visible stories source is available. `StoriesBar` now shows a single Instagram or Spotify row for one-source content and only enables the All/Instagram/Spotify pager when both sources have visible content.
+
 - Made Instagram story posting optimistic: `FeedViewModel.postInstagramStory` now writes the rendered upload bytes to a temporary local preview file, inserts that as the user's own story immediately, and starts the real Instagram upload in a background task. A successful upload refetches the story tray and replaces the optimistic slide when the server story appears; a failed upload removes the optimistic slide and surfaces a feed error.
 - `CachedAsyncImage` now supports file URLs and configurable fit/fill content mode so optimistic local story previews can render in the unified story viewer without waiting for a remote CDN URL.
 

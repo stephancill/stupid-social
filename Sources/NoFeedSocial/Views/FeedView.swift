@@ -358,15 +358,18 @@ private struct StoriesBar: View {
     }
 
     private var availableFeedModes: [StoryBarFeedMode] {
-        StoryBarFeedMode.allCases.filter { mode in
-            switch mode {
-            case .general:
-                true
-            case .instagram:
-                ownInstagramActor != nil || items.contains(where: mode.includes)
-            case .spotify:
-                items.contains(where: mode.includes)
-            }
+        let hasInstagramStories = ownInstagramActor != nil || items.contains(where: StoryBarFeedMode.instagram.includes)
+        let hasSpotifyStories = items.contains(where: StoryBarFeedMode.spotify.includes)
+
+        switch (hasInstagramStories, hasSpotifyStories) {
+        case (true, true):
+            return StoryBarFeedMode.allCases
+        case (true, false):
+            return [.instagram]
+        case (false, true):
+            return [.spotify]
+        case (false, false):
+            return []
         }
     }
 
