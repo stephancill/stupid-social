@@ -58,6 +58,17 @@ struct FeedView: View {
                             systemImage: "bell.slash",
                             description: Text("Connect social accounts to get started."),
                         )
+                        NavigationLink {
+                            SettingsView(viewModel: settingsViewModel)
+                                .onDisappear {
+                                    Task {
+                                        await viewModel.refreshOnForegroundActivation()
+                                    }
+                                }
+                        } label: {
+                            Text("Open Settings")
+                        }
+                        .buttonStyle(.borderedProminent)
                         Spacer(minLength: 0)
                     }
                     .frame(minHeight: 600)

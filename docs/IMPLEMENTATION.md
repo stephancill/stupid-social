@@ -1,5 +1,9 @@
 # Implementation Notes
 
+## 2026-05-24
+
+- Added an `Open Settings` call-to-action to the home feed empty state so users with no notifications or visible story content can navigate directly to connection setup. The CTA uses the same settings destination and return refresh behavior as the toolbar gear.
+
 ## 2026-04-27
 
 - Scaffolded an xtool SwiftPM app in the repository root with bundle id `tech.stupid.StupidSocial`.
@@ -727,6 +731,13 @@
 - Live simulator tray analysis showed Instagram's `reels_tray` order is only weakly chronological while strongly separating unseen from seen reels. The story bar now takes Instagram's first 15 fetched reels, merges that prefix with Spotify listening stories in reverse chronological order, then appends the remaining Instagram reels in their original fetched order. This gives the visible head of the bar a chronological feel while preserving Instagram's algorithmic ordering for the long tail.
 - Added story-bar feed modes for `All Stories`, `Instagram`, and `Spotify` as a masked vertical pager. All rows are rendered in a fixed-height vertical scroll area so the next/previous row is visible during vertical scrolling, but only one row is visible at rest. Each row keeps independent horizontal story scrolling and launches the story viewer scoped to that row.
 - Deleting an Instagram story slide from `UnifiedStoryViewer` now removes that slide from the active viewer state immediately, so the progress tabs and visible content update without waiting for the feed/story-bar refresh. The own-story kebab menu now only contains `Delete`; cancellation happens in the system confirmation dialog.
+- Fixed tapped-story/viewer mismatch for unseen stories. The viewer now preserves the tapped story row's newest-first user ordering and starts at the tapped user; only the slides inside unseen Instagram reels are reordered oldest-first for chronological playback.
 - Lowered the Swift package iOS platform minimum from `.v26` to `.v18`; macOS remains `.v26`.
 - Added `UIDesignRequiresCompatibility=false` to `Info.plist` so generated iOS app plists explicitly opt out of compatibility-mode design requirements.
 - Diagnosed iOS 26 Liquid Glass disappearing after lowering the minimum iOS version: xtool's SwiftPM packer produced a Mach-O `LC_BUILD_VERSION` with both `minos 18.0` and `sdk 18.0`, so the app was not treated as linked against the iOS 26 SDK. Patched local xtool to pass explicit linker `-platform_version` flags using deployment target `18.0` and active SDK `26.1`; rebuilt app binaries now report `minos 18.0` and `sdk 26.1`.
+
+## 2026-05-29
+
+- Fixed TestFlight crash `EXC_BREAKPOINT` during X WebView login credential extraction. `WKHTTPCookieStore.getAllCookies()` can return duplicate cookie names for different domains/paths, and `Dictionary(uniqueKeysWithValues:)` traps on duplicates. X and Instagram WebView login credential extraction now folds cookies into a dictionary with later values replacing earlier duplicates.
+- Reply notification details now render the parent post and reply together in a single `Thread` section when both `parentTarget` and `target` are available. The parent appears first, followed by a compact reply connector and the reply post, instead of showing separate `Post` and `Parent Post` sections.
+- Thread rendering now applies to mentions that are replies too, based on the presence of both `parentTarget` and `target` rather than only `.reply` notification type. Removed the `Reply` text label beside the thread connector line.

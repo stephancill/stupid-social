@@ -41,7 +41,9 @@ struct InstagramLoginWebView: View {
     }
 
     private func extractCredentials(from cookies: [HTTPCookie]) -> InstagramCredentials? {
-        let cookieDict = Dictionary(uniqueKeysWithValues: cookies.map { ($0.name, $0.value) })
+        let cookieDict = cookies.reduce(into: [String: String]()) { values, cookie in
+            values[cookie.name] = cookie.value
+        }
         guard let sessionId = cookieDict["sessionid"],
               let csrfToken = cookieDict["csrftoken"],
               let dsUserId = cookieDict["ds_user_id"]

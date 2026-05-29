@@ -331,19 +331,11 @@ public final class FeedViewModel: ObservableObject {
         let items = visibleItems.filter { $0.isSeen == selectedItem.isSeen }
         guard !selectedItem.isSeen else { return items }
 
-        return items
-            .map(storyItemWithOldestFirstSlides)
-            .sorted { lhs, rhs in
-                if lhs.timestamp == rhs.timestamp {
-                    return lhs.id < rhs.id
-                }
-                return lhs.timestamp < rhs.timestamp
-            }
+        return items.map(storyItemWithOldestFirstSlides)
     }
 
     public func storyViewerStartIndex(for selectedItem: StoryBarItem, in items: [StoryBarItem]) -> Int {
-        guard selectedItem.isSeen else { return 0 }
-        return items.firstIndex(where: { $0.id == selectedItem.id }) ?? 0
+        items.firstIndex(where: { $0.id == selectedItem.id }) ?? 0
     }
 
     private func storyItemWithOldestFirstSlides(_ item: StoryBarItem) -> StoryBarItem {

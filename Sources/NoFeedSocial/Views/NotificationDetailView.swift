@@ -25,7 +25,24 @@ struct NotificationDetailView: View {
                 )
             }
 
-            if let target = displayItem.item.target {
+            if let parentTarget = displayItem.item.parentTarget,
+               let target = displayItem.item.target
+            {
+                Section("Thread") {
+                    ReplyThreadView(
+                        parentTarget: parentTarget,
+                        replyTarget: target,
+                        network: displayItem.item.network,
+                        actors: displayItem.item.actors,
+                        replyMetrics: targetMetrics,
+                        isLoadingReplyMetrics: displayItem.item.type == .message ? false : isLoadingTargetMetrics,
+                        parentURL: postURL(for: parentTarget),
+                        replyURL: targetURL,
+                    ) { url in
+                        openURL(url)
+                    }
+                }
+            } else if let target = displayItem.item.target {
                 Section(targetSectionTitle) {
                     if displayItem.item.type == .message {
                         MessageBubbleView(
@@ -67,22 +84,6 @@ struct NotificationDetailView: View {
             } else {
                 Section("Content") {
                     Text(DebugRedaction.text(displayItem.item.text, actors: displayItem.item.actors, enabled: devModeEnabled))
-                }
-            }
-
-            if displayItem.item.type == .reply, let parentTarget = displayItem.item.parentTarget {
-                Section("Parent Post") {
-                    TargetPostView(
-                        target: parentTarget,
-                        fallbackNetwork: displayItem.item.network,
-                        fallbackActors: displayItem.item.actors,
-                        metrics: nil,
-                        isLoadingMetrics: false,
-                        targetURL: nil,
-                        hidesMediaFallbackText: false,
-                    ) { url in
-                        openURL(url)
-                    }
                 }
             }
 
@@ -289,6 +290,60 @@ private struct PersonRow: View {
             }
         }
         .padding(.vertical, 1)
+    }
+}
+
+private struct ReplyThreadView: View {
+    let parentTarget: NotificationTarget
+    let replyTarget: NotificationTarget
+    let network: SocialNetwork
+    let actors: [NotificationActor]
+    let replyMetrics: NotificationTargetMetrics?
+    let isLoadingReplyMetrics: Bool
+    let parentURL: URL?
+    let replyURL: URL?
+    let openURL: (URL) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            TargetPostView(
+                target: parentTarget,
+                fallbackNetwork: network,
+                fallbackActors: actors,
+                metrics: nil,
+                isLoadingMetrics: false,
+                targetURL: parentURL,
+                hidesMediaFallbackText: false,
+                openURL: openURL,
+            )
+
+            ThreadConnector()
+
+            TargetPostView(
+                target: replyTarget,
+                fallbackNetwork: network,
+                fallbackActors: actors,
+                metrics: replyMetrics,
+                isLoadingMetrics: isLoadingReplyMetrics,
+                targetURL: replyURL,
+                hidesMediaFallbackText: false,
+                openURL: openURL,
+            )
+        }
+    }
+}
+
+private struct ThreadConnector: View {
+    var body: some View {
+        HStack(spacing: 10) {
+            Rectangle()
+                .fill(Color.secondary.opacity(0.28))
+                .frame(width: 2, height: 18)
+                .padding(.leading, 17)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 2)
     }
 }
 

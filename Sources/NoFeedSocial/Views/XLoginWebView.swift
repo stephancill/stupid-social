@@ -31,7 +31,9 @@ struct XLoginWebView: View {
     }
 
     private func extractCredentials(from cookies: [HTTPCookie]) -> XCredentials? {
-        let cookieDict = Dictionary(uniqueKeysWithValues: cookies.map { ($0.name, $0.value) })
+        let cookieDict = cookies.reduce(into: [String: String]()) { values, cookie in
+            values[cookie.name] = cookie.value
+        }
         guard let authToken = cookieDict["auth_token"], let ct0 = cookieDict["ct0"] else {
             return nil
         }
