@@ -29,6 +29,8 @@ from typing import Any
 
 
 BASE_URL = "https://www.instagram.com"
+DEFAULT_CACHE_FILE = "logs/instagram-web-client-cache.json"
+DEFAULT_CACHE_TTL_SECONDS = 60 * 60
 SIM_PREFS_SCRIPT = os.path.expanduser(
     "~/.config/opencode/skills/sim-prefs/sim-prefs/scripts/read_prefs.py"
 )
@@ -41,10 +43,14 @@ IPHONE_SAFARI_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) Apple
 OPERATION_NAMES = {
     "activity": "PolarisActivityFeedStoriesViewQuery",
     "stories-tray": "PolarisStoriesV3TrayContainerQuery",
-    "reels-media-standalone": "PolarisStoriesV3ReelPageStandaloneQuery",
-    "reels-media-gallery": "PolarisStoriesV3ReelPageGalleryQuery",
-    "profile-content": "PolarisProfilePageContentQuery",
     "delete-story": "usePolarisStoriesV3DeleteMediaMutation",
+    "like-media": "usePolarisLikeMediaXIGLikeMutation",
+    "unlike-media": "usePolarisLikeMediaXIGUnlikeMutation",
+    "story-seen": "PolarisStoriesV3SeenMutation",
+    "api-reel-seen": "PolarisAPIReelSeenMutation",
+    "force-story-seen": "PolarisAPIForceStorySeenMutation",
+    "like-story": "usePolarisStoriesV4LikeMutationLikeMutation",
+    "unlike-story": "usePolarisStoriesV4LikeMutationUnlikeMutation",
 }
 
 OPERATION_RE = re.compile(
@@ -88,10 +94,23 @@ class WebState:
     bloks_version_id: str | None = None
 
 
+@dataclass
+class LocalCache:
+    expires_at: float
+    doc_ids: dict[str, str]
+    csrf_token: str | None = None
+
+    @property
+    def is_valid(self) -> bool:
+        return self.expires_at > time.time()
+
+
 class InstagramWebClient:
-    def __init__(self, credentials: dict[str, Any], user_agent: str) -> None:
+    def __init__(self, credentials: dict[str, Any], user_agent: str, cache_path: str | None, cache_ttl_seconds: int) -> None:
         self.credentials = credentials
         self.user_agent = user_agent
+        self.cache_path = cache_path
+        self.cache_ttl_seconds = cache_ttl_seconds
         self.cookie_jar = http.cookiejar.CookieJar()
         self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.cookie_jar))
         self.request_count = 0
@@ -99,7 +118,9 @@ class InstagramWebClient:
         self.www_claim: str | None = None
         self.state: WebState | None = None
         self.doc_ids: dict[str, str] = {}
+        self.cached_csrf_token: str | None = None
         self._seed_cookies(credentials)
+        self._load_cache()
 
     def bootstrap(self) -> WebState:
         return self.refresh_state()
@@ -107,12 +128,15 @@ class InstagramWebClient:
     def refresh_state(self) -> WebState:
         html = self.request_text("GET", BASE_URL + "/", headers=self._base_page_headers())
         state = parse_web_state(html)
-        state.csrf_token = cookie_value(self.cookie_jar, "csrftoken") or state.csrf_token
+        state.csrf_token = cookie_value(self.cookie_jar, "csrftoken") or state.csrf_token or self.cached_csrf_token
         if not state.user_id or state.user_id == "0":
             state.user_id = cookie_value(self.cookie_jar, "ds_user_id") or self.credentials.get("dsUserId")
         state.device_id = state.device_id or cookie_value(self.cookie_jar, "ig_did") or self.credentials.get("igDid")
         state.machine_id = state.machine_id or cookie_value(self.cookie_jar, "mid") or self.credentials.get("mid")
         self.state = state
+        if state.csrf_token:
+            self.cached_csrf_token = state.csrf_token
+            self._save_cache()
         return state
 
     def discover_doc_ids(self, extra_pages: list[str] | None = None) -> dict[str, str]:
@@ -144,6 +168,7 @@ class InstagramWebClient:
             doc_ids.update(parse_doc_ids(source))
 
         self.doc_ids = doc_ids
+        self._save_cache()
         return doc_ids
 
     def doc_id(self, command_name: str) -> str:
@@ -162,6 +187,27 @@ class InstagramWebClient:
         if not username:
             return
         self.discover_doc_ids([BASE_URL + f"/stories/{urllib.parse.quote(username)}/"])
+
+    def story_page(self, username: str) -> dict[str, Any]:
+        self._ensure_bootstrapped()
+        username = username.strip().lstrip("@")
+        html = self.request_text("GET", BASE_URL + f"/stories/{urllib.parse.quote(username)}/", headers=self._base_page_headers())
+        doc_ids = parse_doc_ids(html)
+        for script_url in script_urls(html):
+            try:
+                source = self.request_text("GET", script_url, headers=self._base_asset_headers())
+            except InstagramHTTPError:
+                continue
+            doc_ids.update(parse_doc_ids(source))
+        if doc_ids:
+            self.doc_ids.update(doc_ids)
+            self._save_cache()
+        return {
+            "status": "ok",
+            "username": username,
+            "doc_ids": len(doc_ids),
+            "payload": extract_story_payload(html),
+        }
 
     def graphql_get(self, doc_id: str, variables: dict[str, Any]) -> dict[str, Any]:
         self._ensure_bootstrapped()
@@ -234,8 +280,98 @@ class InstagramWebClient:
 
     def rest_direct_inbox(self) -> dict[str, Any]:
         self._ensure_bootstrapped()
-        url = BASE_URL + "/api/v1/direct_v2/inbox/?persistentBadging=true"
+        params = urllib.parse.urlencode(
+            {
+                "visual_message_return_type": "unseen",
+                "thread_message_limit": "10",
+                "persistentBadging": "true",
+                "limit": "20",
+            }
+        )
+        url = BASE_URL + "/api/v1/direct_v2/inbox/?" + params
         return self.request_json_with_refresh("GET", url, headers=self.web_headers())
+
+    def current_user(self) -> dict[str, Any]:
+        response = self.graphql_get(self.doc_id("stories-tray"), DEFAULT_VARIABLES["stories-tray"])
+        viewer = response.get("data", {}).get("xdt_viewer")
+        return {"status": response.get("status"), "xdt_viewer": viewer}
+
+    def rest_profile_by_username(self, username: str) -> dict[str, Any]:
+        self._ensure_bootstrapped()
+        username = username.strip().lstrip("@")
+        params = urllib.parse.urlencode({"username": username})
+        return self.request_json_with_refresh(
+            "GET",
+            BASE_URL + "/api/v1/users/web_profile_info/?" + params,
+            headers=self.web_headers(),
+        )
+
+    def story_seen(
+        self,
+        reel_id: str,
+        media_id: str,
+        owner_id: str,
+        taken_at: int,
+        seen_at: int | None,
+        username: str | None,
+    ) -> dict[str, Any]:
+        if username:
+            self.story_page(username)
+        variables = {
+            "reelId": reel_id,
+            "reelMediaId": media_id,
+            "reelMediaOwnerId": owner_id,
+            "reelMediaTakenAt": taken_at,
+            "viewSeenAt": seen_at or int(time.time()),
+        }
+        try:
+            return self.graphql_post(
+                self.doc_id("story-seen"),
+                variables,
+                endpoint="/graphql/query",
+            )
+        except SystemExit:
+            return self.graphql_post(
+                self.doc_id("api-reel-seen"),
+                variables,
+                endpoint="/graphql/query",
+            )
+
+    def force_story_seen(self, story_owner_id: str, username: str | None) -> dict[str, Any]:
+        if username:
+            self.story_page(username)
+        return self.graphql_post(
+            self.doc_id("force-story-seen"),
+            {"storyOwnerId": story_owner_id},
+            endpoint="/graphql/query",
+        )
+
+    def set_media_liked(self, media_id: str, liked: bool, tracking_token: str | None, container_module: str) -> dict[str, Any]:
+        command_name = "like-media" if liked else "unlike-media"
+        input_data = {"media_id": media_id}
+        if liked:
+            input_data["container_module"] = container_module
+        if tracking_token:
+            input_data["tracking_token"] = tracking_token
+        return self.graphql_post(
+            self.doc_id(command_name),
+            {"input": input_data},
+            friendly_name=OPERATION_NAMES[command_name],
+            root_field_name="xig_media_like" if liked else "xig_media_unlike",
+            endpoint="/graphql/query",
+        )
+
+    def set_story_liked(self, media_id: str, liked: bool, username: str | None) -> dict[str, Any]:
+        if username:
+            self.story_page(username)
+        command_name = "like-story" if liked else "unlike-story"
+        return self.graphql_post(
+            self.doc_id(command_name),
+            {"input": {"media_id": media_id}},
+            friendly_name=OPERATION_NAMES[command_name],
+            root_field_name="xig_send_story_like" if liked else "xig_unsend_story_like",
+            endpoint="/graphql/query",
+        )
 
     def upload_story_image(self, image_path: str, width: int, height: int, caption: str) -> dict[str, Any]:
         self._ensure_bootstrapped()
@@ -451,6 +587,39 @@ class InstagramWebClient:
             raise RuntimeError("Client is not bootstrapped")
         return self.state
 
+    def _load_cache(self) -> None:
+        if not self.cache_path:
+            return
+        try:
+            with open(self.cache_path, "r", encoding="utf-8") as handle:
+                raw = json.load(handle)
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return
+        cache = LocalCache(
+            expires_at=float(raw.get("expires_at", 0)),
+            doc_ids={str(key): str(value) for key, value in raw.get("doc_ids", {}).items()},
+            csrf_token=raw.get("csrf_token"),
+        )
+        if not cache.is_valid:
+            return
+        self.doc_ids = cache.doc_ids
+        self.cached_csrf_token = cache.csrf_token
+
+    def _save_cache(self) -> None:
+        if not self.cache_path:
+            return
+        cache = {
+            "expires_at": time.time() + self.cache_ttl_seconds,
+            "doc_ids": self.doc_ids,
+            "csrf_token": self.cached_csrf_token,
+        }
+        directory = os.path.dirname(self.cache_path)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+        with open(self.cache_path, "w", encoding="utf-8") as handle:
+            json.dump(cache, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+
 
 def parse_web_state(html: str) -> WebState:
     decoded = unescape(html)
@@ -489,6 +658,35 @@ def script_urls(html: str) -> list[str]:
             seen.add(absolute)
             urls.append(absolute)
     return urls
+
+
+def extract_story_payload(html: str) -> dict[str, Any] | None:
+    for match in re.finditer(r'<script\b[^>]*\bdata-sjs[^>]*>(.*?)</script>', html, re.DOTALL):
+        source = unescape(match.group(1))
+        try:
+            data = json.loads(source)
+        except json.JSONDecodeError:
+            continue
+        payload = find_story_payload(data)
+        if payload is not None:
+            return payload
+    return None
+
+
+def find_story_payload(value: Any) -> dict[str, Any] | None:
+    if isinstance(value, dict):
+        if "xdt_api__v1__feed__reels_media" in value:
+            return value
+        for child in value.values():
+            found = find_story_payload(child)
+            if found is not None:
+                return found
+    elif isinstance(value, list):
+        for child in value:
+            found = find_story_payload(child)
+            if found is not None:
+                return found
+    return None
 
 
 class InstagramHTTPError(Exception):
@@ -612,6 +810,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--raw-output", action="store_true", help="Print full JSON responses instead of summaries. May expose account data.")
     parser.add_argument("--output", help="Write full JSON response for request commands to this path.")
     parser.add_argument("--save-credentials", help="Write updated cookie credentials to this JSON path after the command.")
+    parser.add_argument("--cache-file", default=DEFAULT_CACHE_FILE, help="Path for cached doc IDs and CSRF token metadata.")
+    parser.add_argument("--cache-ttl-seconds", type=int, default=DEFAULT_CACHE_TTL_SECONDS, help="Cache expiry window in seconds.")
+    parser.add_argument("--no-cache", action="store_true", help="Disable reading and writing the local probe cache.")
 
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("bootstrap", help="Load homepage and print extracted token/config presence.")
@@ -620,27 +821,53 @@ def build_parser() -> argparse.ArgumentParser:
     docids.add_argument("--story-username", help="Also load /stories/<username>/ assets before scanning for doc IDs.")
     subparsers.add_parser("activity", help="Call PolarisActivityFeedStoriesViewQuery.")
     subparsers.add_parser("stories-tray", help="Call PolarisStoriesV3TrayContainerQuery.")
+    story_page = subparsers.add_parser("story-page", help="Fetch /stories/<username>/ and extract the preloaded Relay story payload.")
+    story_page.add_argument("username", help="Instagram username with an active story.")
+    subparsers.add_parser("current-user", help="Resolve the current viewer through web GraphQL data.")
     subparsers.add_parser("news-inbox", help="Call web-visible REST /api/v1/news/inbox/.")
     subparsers.add_parser("direct-inbox", help="Call web-visible REST /api/v1/direct_v2/inbox/.")
 
-    profile = subparsers.add_parser("profile", help="Call PolarisProfilePageContentQuery.")
-    profile.add_argument("user_id", help="Instagram numeric user ID.")
+    username_profile = subparsers.add_parser("profile-username", help="Call web-visible /api/v1/users/web_profile_info/.")
+    username_profile.add_argument("username", help="Instagram username.")
 
-    standalone = subparsers.add_parser("reels-media", help="Call PolarisStoriesV3ReelPageStandaloneQuery.")
-    standalone.add_argument("reel_id", help="Reel/user ID.")
-    standalone.add_argument("--media-id", default="", help="Optional initial media ID.")
+    story_seen = subparsers.add_parser("story-seen", help="Mark one story media item seen with PolarisStoriesV3SeenMutation.")
+    story_seen.add_argument("--reel-id", required=True, help="Story reel/user ID.")
+    story_seen.add_argument("--media-id", required=True, help="Story media ID.")
+    story_seen.add_argument("--owner-id", required=True, help="Story media owner ID.")
+    story_seen.add_argument("--taken-at", required=True, type=int, help="Story media taken_at Unix timestamp.")
+    story_seen.add_argument("--seen-at", type=int, help="Seen-at Unix timestamp. Defaults to now.")
+    story_seen.add_argument("--story-username", help="Username whose story page should be loaded to discover story-only doc IDs.")
 
-    upload = subparsers.add_parser("upload-story-image", help="Upload a JPEG as an Instagram story. Requires --confirm-upload.")
+    force_seen = subparsers.add_parser("force-story-seen", help="Force-mark a reel owner seen.")
+    force_seen.add_argument("story_owner_id", help="Story owner/reel ID.")
+    force_seen.add_argument("--story-username", help="Username whose story page should be loaded to discover story-only doc IDs.")
+
+    like = subparsers.add_parser("like-media", help="Like media with the web Relay mutation.")
+    like.add_argument("media_id", help="Media PK to like.")
+    like.add_argument("--tracking-token", help="Optional organic/ad tracking token from media data.")
+    like.add_argument("--container-module", default="story_viewer", help="Container module for the like request.")
+
+    unlike = subparsers.add_parser("unlike-media", help="Unlike media with the web Relay mutation.")
+    unlike.add_argument("media_id", help="Media PK to unlike.")
+    unlike.add_argument("--tracking-token", help="Optional organic/ad tracking token from media data.")
+
+    like_story = subparsers.add_parser("like-story", help="Like a story with the web story Relay mutation.")
+    like_story.add_argument("media_id", help="Story media PK to like.")
+    like_story.add_argument("--story-username", help="Username whose story page should be loaded to discover story-only doc IDs.")
+
+    unlike_story = subparsers.add_parser("unlike-story", help="Unlike a story with the web story Relay mutation.")
+    unlike_story.add_argument("media_id", help="Story media PK to unlike.")
+    unlike_story.add_argument("--story-username", help="Username whose story page should be loaded to discover story-only doc IDs.")
+
+    upload = subparsers.add_parser("upload-story-image", help="Upload a JPEG as an Instagram story.")
     upload.add_argument("--image", required=True, help="Path to JPEG image bytes.")
     upload.add_argument("--width", type=int, required=True, help="Image width in pixels.")
     upload.add_argument("--height", type=int, required=True, help="Image height in pixels.")
     upload.add_argument("--caption", default="", help="Story caption text.")
-    upload.add_argument("--confirm-upload", action="store_true", help="Required to actually publish the story.")
 
-    delete = subparsers.add_parser("delete-story", help="Delete an Instagram story by numeric media ID. Requires --confirm-delete.")
+    delete = subparsers.add_parser("delete-story", help="Delete an Instagram story by numeric media ID.")
     delete.add_argument("media_id", help="Numeric story media ID without the owner suffix.")
     delete.add_argument("--story-username", help="Username whose story page should be loaded to discover the current delete doc ID.")
-    delete.add_argument("--confirm-delete", action="store_true", help="Required to actually delete the story.")
 
     custom = subparsers.add_parser("graphql", help="Call a custom GraphQL doc ID.")
     custom.add_argument("doc_id", help="GraphQL document ID.")
@@ -661,7 +888,8 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
     credentials = load_credentials(args)
-    client = InstagramWebClient(credentials, args.user_agent)
+    cache_path = None if args.no_cache else args.cache_file
+    client = InstagramWebClient(credentials, args.user_agent, cache_path, args.cache_ttl_seconds)
 
     if args.command == "bootstrap" or args.command == "refresh":
         state = client.refresh_state()
@@ -681,6 +909,12 @@ def main() -> None:
                     "device_id": bool(state.device_id),
                     "machine_id": bool(state.machine_id),
                     "bloks_version_id": bool(state.bloks_version_id),
+                },
+                "cache": {
+                    "enabled": cache_path is not None,
+                    "path": cache_path,
+                    "doc_ids": len(client.doc_ids),
+                    "csrf_token": bool(client.cached_csrf_token),
                 },
             },
             raw=True,
@@ -702,24 +936,31 @@ def main() -> None:
         result = client.graphql_get(client.doc_id("activity"), DEFAULT_VARIABLES["activity"])
     elif args.command == "stories-tray":
         result = client.graphql_get(client.doc_id("stories-tray"), DEFAULT_VARIABLES["stories-tray"])
+    elif args.command == "story-page":
+        result = client.story_page(args.username)
+    elif args.command == "current-user":
+        result = client.current_user()
     elif args.command == "news-inbox":
         result = client.rest_news_inbox()
     elif args.command == "direct-inbox":
         result = client.rest_direct_inbox()
-    elif args.command == "profile":
-        result = client.graphql_get(client.doc_id("profile-content"), {"enable_integrity_filters": True, "id": args.user_id})
-    elif args.command == "reels-media":
-        result = client.graphql_get(
-            client.doc_id("reels-media-standalone"),
-            {"media_id": args.media_id, "reel_ids_arr": [args.reel_id]},
-        )
+    elif args.command == "profile-username":
+        result = client.rest_profile_by_username(args.username)
+    elif args.command == "story-seen":
+        result = client.story_seen(args.reel_id, args.media_id, args.owner_id, args.taken_at, args.seen_at, args.story_username)
+    elif args.command == "force-story-seen":
+        result = client.force_story_seen(args.story_owner_id, args.story_username)
+    elif args.command == "like-media":
+        result = client.set_media_liked(args.media_id, True, args.tracking_token, args.container_module)
+    elif args.command == "unlike-media":
+        result = client.set_media_liked(args.media_id, False, args.tracking_token, "")
+    elif args.command == "like-story":
+        result = client.set_story_liked(args.media_id, True, args.story_username)
+    elif args.command == "unlike-story":
+        result = client.set_story_liked(args.media_id, False, args.story_username)
     elif args.command == "upload-story-image":
-        if not args.confirm_upload:
-            raise SystemExit("Refusing to upload without --confirm-upload")
         result = client.upload_story_image(args.image, args.width, args.height, args.caption)
     elif args.command == "delete-story":
-        if not args.confirm_delete:
-            raise SystemExit("Refusing to delete without --confirm-delete")
         result = client.delete_story(args.media_id, args.story_username)
     elif args.command == "graphql":
         variables = load_variables(args.variables)
