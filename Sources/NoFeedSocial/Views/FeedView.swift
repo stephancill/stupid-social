@@ -13,6 +13,7 @@ struct FeedView: View {
     let spotifyClient: SpotifyClient
     @State private var storyViewerSelection: StoryViewerSelection?
     @State private var showingStoryComposer = false
+    @State private var showingEmptyStateSettings = false
 
     var body: some View {
         NavigationStack {
@@ -53,22 +54,19 @@ struct FeedView: View {
                 if notificationItems.isEmpty, !hasVisibleStoriesBar, !viewModel.storyBarLoading {
                     VStack {
                         Spacer(minLength: 0)
-                        ContentUnavailableView(
-                            "No Notifications",
-                            systemImage: "bell.slash",
-                            description: Text("Connect social accounts to get started."),
-                        )
-                        NavigationLink {
-                            SettingsView(viewModel: settingsViewModel)
-                                .onDisappear {
-                                    Task {
-                                        await viewModel.refreshOnForegroundActivation()
-                                    }
-                                }
-                        } label: {
-                            Text("Open Settings")
+                        VStack(spacing: 8) {
+                            ContentUnavailableView(
+                                "No Notifications",
+                                systemImage: "bell.slash",
+                                description: Text("Connect social accounts to get started."),
+                            )
+                            .fixedSize(horizontal: false, vertical: true)
+
+                            Button("Open Settings") {
+                                showingEmptyStateSettings = true
+                            }
+                            .buttonStyle(.bordered)
                         }
-                        .buttonStyle(.borderedProminent)
                         Spacer(minLength: 0)
                     }
                     .frame(minHeight: 600)
@@ -110,6 +108,14 @@ struct FeedView: View {
                 await viewModel.refresh()
             }
             .navigationTitle("Notifications")
+            .navigationDestination(isPresented: $showingEmptyStateSettings) {
+                SettingsView(viewModel: settingsViewModel)
+                    .onDisappear {
+                        Task {
+                            await viewModel.refreshOnForegroundActivation()
+                        }
+                    }
+            }
             .toolbar {
                 if viewModel.isForegroundRefreshing || viewModel.pendingNewCount > 0 {
                     ToolbarItem(placement: .navigation) {

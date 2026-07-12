@@ -64,6 +64,7 @@ struct SpotifyLoginWebView: View {
             private var pendingBearerToken: String?
             private var pendingClientToken: String?
             private weak var webView: WKWebView?
+            private var forcedWebNavigationURL: URL?
 
             init(onCredentialsFound: @escaping (SpotifyCredentials) -> Void) {
                 self.onCredentialsFound = onCredentialsFound
@@ -82,9 +83,40 @@ struct SpotifyLoginWebView: View {
                 tryExtractCredentials()
             }
 
-            func webView(_ webView: WKWebView, decidePolicyFor _: WKNavigationAction, decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void) {
+            func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void) {
                 self.webView = webView
+                guard let url = navigationAction.request.url else {
+                    decisionHandler(.allow)
+                    return
+                }
+
+                if shouldBlockExternalSpotifyNavigation(url) {
+                    decisionHandler(.cancel)
+                    return
+                }
+
+                if shouldForceSpotifyWebNavigation(url) {
+                    forcedWebNavigationURL = url
+                    webView.load(URLRequest(url: url))
+                    decisionHandler(.cancel)
+                    return
+                }
+
+                if forcedWebNavigationURL == url {
+                    forcedWebNavigationURL = nil
+                }
+
                 decisionHandler(.allow)
+            }
+
+            private func shouldBlockExternalSpotifyNavigation(_ url: URL) -> Bool {
+                guard let scheme = url.scheme?.lowercased() else { return false }
+                return !["http", "https", "about"].contains(scheme)
+            }
+
+            private func shouldForceSpotifyWebNavigation(_ url: URL) -> Bool {
+                guard forcedWebNavigationURL != url else { return false }
+                return url.host?.lowercased() == "open.spotify.com"
             }
 
             private func tryExtractCredentials() {
@@ -201,6 +233,7 @@ struct SpotifyLoginWebView: View {
             private var pendingBearerToken: String?
             private var pendingClientToken: String?
             private weak var webView: WKWebView?
+            private var forcedWebNavigationURL: URL?
 
             init(onCredentialsFound: @escaping (SpotifyCredentials) -> Void) {
                 self.onCredentialsFound = onCredentialsFound
@@ -219,9 +252,40 @@ struct SpotifyLoginWebView: View {
                 tryExtractCredentials()
             }
 
-            func webView(_ webView: WKWebView, decidePolicyFor _: WKNavigationAction, decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void) {
+            func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void) {
                 self.webView = webView
+                guard let url = navigationAction.request.url else {
+                    decisionHandler(.allow)
+                    return
+                }
+
+                if shouldBlockExternalSpotifyNavigation(url) {
+                    decisionHandler(.cancel)
+                    return
+                }
+
+                if shouldForceSpotifyWebNavigation(url) {
+                    forcedWebNavigationURL = url
+                    webView.load(URLRequest(url: url))
+                    decisionHandler(.cancel)
+                    return
+                }
+
+                if forcedWebNavigationURL == url {
+                    forcedWebNavigationURL = nil
+                }
+
                 decisionHandler(.allow)
+            }
+
+            private func shouldBlockExternalSpotifyNavigation(_ url: URL) -> Bool {
+                guard let scheme = url.scheme?.lowercased() else { return false }
+                return !["http", "https", "about"].contains(scheme)
+            }
+
+            private func shouldForceSpotifyWebNavigation(_ url: URL) -> Bool {
+                guard forcedWebNavigationURL != url else { return false }
+                return url.host?.lowercased() == "open.spotify.com"
             }
 
             private func tryExtractCredentials() {

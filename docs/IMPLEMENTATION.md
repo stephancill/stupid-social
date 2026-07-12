@@ -2,6 +2,8 @@
 
 ## 2026-07-12
 
+- Simplified the feed empty state back to the native `ContentUnavailableView` with a vanilla bordered `Open Settings` button directly below it, grouped with tight spacing so the button stays near the centered empty-state content.
+- Fixed Spotify WebView login completion handing off to the Spotify app. `SpotifyLoginWebView` now cancels non-web navigation schemes such as `spotify:`/app-store links and forces `open.spotify.com` completion redirects to load in the existing `WKWebView`, preserving WebPlayer token capture inside the app.
 - Rebuilt the production Swift Instagram client around the proven mobile web behavior from `scripts/instagram-web-client.py`. `InstagramClient` is now stateful: it bootstraps `https://www.instagram.com/` with the iPhone Safari user agent, parses web runtime tokens/config, tracks `x-ig-www-claim`, discovers current Relay doc IDs from the loaded web bundles at runtime, and sends explicit selected-cookie headers instead of Android-private request headers for Instagram reads/writes.
 - Moved Instagram notifications, Direct inbox, current-user validation, stories tray, profile lookup, story media extraction, story seen marking, story like/unlike, story upload, and story deletion to the web API path. Story tray data comes from `PolarisStoriesV3TrayContainerQuery`; story slide media is extracted from server-rendered `/stories/<username>/` Relay payloads; story upload uses `rupload_igphoto/fb_uploader_<upload_id>` plus web `configure_to_story`; delete and like/seen actions use dynamically discovered Relay mutation doc IDs. Media metrics lookup is temporarily unsupported because the previous Android `media/info` endpoint was intentionally removed from the production path.
 - Fixed app story liking after the web rebuild by using the homepage-discoverable media like/unlike Relay mutations (`usePolarisLikeMediaXIGLikeMutation` / `usePolarisLikeMediaXIGUnlikeMutation`) with root fields `xig_media_like` / `xig_media_unlike`. The story-specific V4 like mutations can require story-page bundle discovery and the app's like call only has a media ID, not a username to pre-load `/stories/<username>/`.
@@ -22,7 +24,7 @@
 
 ## 2026-05-24
 
-- Added an `Open Settings` call-to-action to the home feed empty state so users with no notifications or visible story content can navigate directly to connection setup. The CTA uses the same settings destination and return refresh behavior as the toolbar gear.
+- Added an `Open Settings` call-to-action to the home feed empty state so users with no notifications or visible story content can navigate directly to connection setup. Restyled on 2026-07-12 as a compact prominent button close to the empty-state content.
 
 ## 2026-04-27
 
