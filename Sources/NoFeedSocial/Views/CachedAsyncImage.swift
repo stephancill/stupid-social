@@ -14,6 +14,7 @@ struct CachedAsyncImage<Placeholder: View, Failure: View>: View {
     let url: URL?
     let cacheKey: String?
     let contentMode: ContentMode
+    let onComplete: (() -> Void)?
     @ViewBuilder let placeholder: () -> Placeholder
     @ViewBuilder let failure: () -> Failure
     @State private var loadedImage: PlatformImage?
@@ -23,12 +24,14 @@ struct CachedAsyncImage<Placeholder: View, Failure: View>: View {
         url: URL?,
         cacheKey: String? = nil,
         contentMode: ContentMode = .fill,
+        onComplete: (() -> Void)? = nil,
         @ViewBuilder placeholder: @escaping () -> Placeholder,
         @ViewBuilder failure: @escaping () -> Failure,
     ) {
         self.url = url
         self.cacheKey = cacheKey
         self.contentMode = contentMode
+        self.onComplete = onComplete
         self.placeholder = placeholder
         self.failure = failure
     }
@@ -54,12 +57,14 @@ struct CachedAsyncImage<Placeholder: View, Failure: View>: View {
         guard let url else {
             loadedImage = nil
             failedURL = nil
+            onComplete?()
             return
         }
 
         if let cached = StoryImageCache.shared.image(for: url) {
             loadedImage = cached
             failedURL = nil
+            onComplete?()
             return
         }
 
@@ -73,6 +78,7 @@ struct CachedAsyncImage<Placeholder: View, Failure: View>: View {
         if url.isFileURL {
             guard let data = try? Data(contentsOf: url), let image = PlatformImage(data: data) else {
                 failedURL = url
+                onComplete?()
                 return
             }
             StoryImageCache.shared.setImage(image, for: url)
@@ -80,6 +86,7 @@ struct CachedAsyncImage<Placeholder: View, Failure: View>: View {
                 StoryImageCache.shared.setImage(image, forKey: cacheKey)
             }
             loadedImage = image
+            onComplete?()
             return
         }
 
@@ -87,6 +94,7 @@ struct CachedAsyncImage<Placeholder: View, Failure: View>: View {
             let (data, _) = try await URLSession.shared.data(from: url)
             guard let image = PlatformImage(data: data) else {
                 failedURL = url
+                onComplete?()
                 return
             }
             StoryImageCache.shared.setImage(image, for: url)
@@ -94,8 +102,10 @@ struct CachedAsyncImage<Placeholder: View, Failure: View>: View {
                 StoryImageCache.shared.setImage(image, forKey: cacheKey)
             }
             loadedImage = image
+            onComplete?()
         } catch {
             failedURL = url
+            onComplete?()
         }
     }
 

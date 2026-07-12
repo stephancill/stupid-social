@@ -48,6 +48,7 @@ struct UnifiedStoryViewer: View {
     @State private var likedInstagramSlideIds: Set<String>
     @State private var likingInstagramSlideIds: Set<String> = []
     @State private var likeErrorMessage: String?
+    @State private var loadedInstagramSlideIds: Set<String> = []
 
     enum PlayerStatus: Equatable {
         case idle
@@ -123,6 +124,7 @@ struct UnifiedStoryViewer: View {
                             spotifySavedStatus: $spotifySavedStatus,
                             spotifySavingTrackIds: $spotifySavingTrackIds,
                             spotifyClient: spotifyClient,
+                            onInstagramSlideLoaded: markInstagramSlideLoaded,
                         )
 
                         progressBar(slideCount: slideCount)
@@ -177,6 +179,8 @@ struct UnifiedStoryViewer: View {
                 guard playerStatus == .playing || playerStatus == .finished || playerStatus == .unavailable else {
                     return
                 }
+            } else if case .instagram = viewerItems[currentItemIndex] {
+                guard currentInstagramSlideIsReady else { return }
             }
 
             elapsedTime += frameInterval
@@ -312,9 +316,7 @@ struct UnifiedStoryViewer: View {
                 ForEach(0 ..< slideCount, id: \.self) { index in
                     GeometryReader { geo in
                         ZStack(alignment: .leading) {
-                            if case .spotify = currentItem,
-                               playerStatus == .loading || playerStatus == .idle
-                            {
+                            if isCurrentSlideWaitingToLoad {
                                 Capsule()
                                     .fill(Color.gray.opacity(0.28))
                                     .frame(height: 3)
@@ -386,18 +388,10 @@ struct UnifiedStoryViewer: View {
                 Button {
                     toggleInstagramStoryLike(slide: slide)
                 } label: {
-                    Group {
-                        if isLiking {
-                            ProgressView()
-                                .controlSize(.small)
-                                .tint(.white)
-                        } else {
-                            Image(systemName: isLiked ? "heart.fill" : "heart")
-                                .font(.body.weight(.semibold))
-                        }
-                    }
-                    .foregroundStyle(isLiked ? .red : .white)
-                    .padding(8)
+                    Image(systemName: isLiked ? "heart.fill" : "heart")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(isLiked ? .red : .white)
+                        .padding(8)
                 }
                 .disabled(isLiking)
                 .accessibilityLabel(isLiked ? "Unlike story" : "Like story")
@@ -516,6 +510,28 @@ struct UnifiedStoryViewer: View {
         return true
     }
 
+    private var currentInstagramSlideIsReady: Bool {
+        guard let slide = currentInstagramSlide else { return true }
+        if slide.isVideo {
+            return playerStatus == .playing || playerStatus == .finished || playerStatus == .unavailable
+        }
+        return loadedInstagramSlideIds.contains(slide.id)
+    }
+
+    private var isCurrentSlideWaitingToLoad: Bool {
+        if case .spotify = currentItem {
+            return playerStatus == .loading || playerStatus == .idle
+        }
+        if case .instagram = currentItem {
+            return !currentInstagramSlideIsReady
+        }
+        return false
+    }
+
+    private func markInstagramSlideLoaded(_ slideId: String) {
+        loadedInstagramSlideIds.insert(slideId)
+    }
+
     private var deleteConfirmationBinding: Binding<Bool> {
         Binding(
             get: { pendingDeleteSlide != nil },
@@ -545,19 +561,21 @@ struct UnifiedStoryViewer: View {
     }
 
     private func toggleInstagramStoryLike(slide: InstagramStorySlide) {
+        guard !likingInstagramSlideIds.contains(slide.id) else { return }
         let nextLiked = !likedInstagramSlideIds.contains(slide.id)
         likingInstagramSlideIds.insert(slide.id)
+        setInstagramSlideLiked(slideId: slide.id, liked: nextLiked)
+        playStoryLikeHaptic()
         Task {
             do {
                 try await onInstagramStoryLike(slide.id, nextLiked)
                 await MainActor.run {
-                    likingInstagramSlideIds.remove(slide.id)
-                    setInstagramSlideLiked(slideId: slide.id, liked: nextLiked)
-                    playStoryLikeHaptic()
+                    _ = likingInstagramSlideIds.remove(slide.id)
                 }
             } catch {
                 await MainActor.run {
-                    likingInstagramSlideIds.remove(slide.id)
+                    _ = likingInstagramSlideIds.remove(slide.id)
+                    setInstagramSlideLiked(slideId: slide.id, liked: !nextLiked)
                     likeErrorMessage = "Could not update the story like. Try again from Instagram if it remains unchanged."
                 }
             }
@@ -1105,10 +1123,11 @@ struct UnifiedStoryViewer: View {
         spotifySavedStatus: Binding<[String: Bool]>,
         spotifySavingTrackIds: Binding<Set<String>>,
         spotifyClient: SpotifyClient,
+        onInstagramSlideLoaded: @escaping (String) -> Void,
     ) -> some View {
         switch self {
         case let .instagram(reel):
-            instagramSlideContent(reel: reel, slideIndex: slideIndex, feedService: feedService, player: player)
+            instagramSlideContent(reel: reel, slideIndex: slideIndex, feedService: feedService, player: player, onSlideLoaded: onInstagramSlideLoaded)
         case let .spotify(item):
             spotifySlideContent(
                 item: item,
@@ -1125,7 +1144,13 @@ struct UnifiedStoryViewer: View {
     }
 
     @ViewBuilder
-    private func instagramSlideContent(reel: InstagramStoryReel, slideIndex: Int, feedService: FeedService, player: AVPlayer?) -> some View {
+    private func instagramSlideContent(
+        reel: InstagramStoryReel,
+        slideIndex: Int,
+        feedService: FeedService,
+        player: AVPlayer?,
+        onSlideLoaded: @escaping (String) -> Void,
+    ) -> some View {
         if !reel.slides.isEmpty, reel.slides.indices.contains(slideIndex) {
             let slide = reel.slides[slideIndex]
             ZStack(alignment: .bottom) {
@@ -1133,7 +1158,7 @@ struct UnifiedStoryViewer: View {
                     StoryVideoPlayer(player: player)
                         .ignoresSafeArea()
                 } else {
-                    CachedAsyncImage(url: slide.imageURL, contentMode: .fit) {
+                    CachedAsyncImage(url: slide.imageURL, contentMode: .fit, onComplete: { onSlideLoaded(slide.id) }) {
                         Color.gray.opacity(0.3)
                     } failure: {
                         Color.gray.opacity(0.3)
