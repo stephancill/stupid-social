@@ -26,13 +26,13 @@ public final class InstagramNotificationSource: NotificationSource {
     public func ownStoryActor() async -> NotificationActor? {
         guard let account = metadataStore.instagramAccount else { return nil }
         do {
-            let response = try await client.userInfo(uid: account.accountId)
+            let profile = try await client.currentUserProfile()
             return NotificationActor(
-                id: account.accountId,
+                id: String(profile.pk),
                 network: .instagram,
-                username: response.user.username ?? account.username,
-                displayName: response.user.fullName,
-                avatarURL: response.user.profilePicUrl.flatMap(URL.init) ?? account.avatarURL,
+                username: profile.username,
+                displayName: profile.fullName,
+                avatarURL: profile.profilePicURL ?? account.avatarURL,
             )
         } catch {
             return NotificationActor(
@@ -55,12 +55,16 @@ public final class InstagramNotificationSource: NotificationSource {
 
     public func validateAccount() async throws -> AccountStatus {
         do {
-            let user = try await client.verifiedUser()
+            let user = try await client.currentUserProfile()
+            let existing = metadataStore.instagramAccount
             metadataStore.instagramAccount = InstagramAccountMetadata(
                 accountId: String(user.pk),
                 username: user.username,
                 avatarURL: user.profilePicURL,
                 status: .valid,
+                enabledCategories: existing?.enabledCategories,
+                storiesEnabled: existing?.storiesEnabled ?? true,
+                directMediaSharesEnabled: existing?.directMediaSharesEnabled ?? true,
             )
             return .valid
         } catch {
@@ -100,8 +104,7 @@ public final class InstagramNotificationSource: NotificationSource {
         let pageEntries = Array(storyTrayEntries[nextStoryTrayIndex ..< endIndex])
         nextStoryTrayIndex = endIndex
 
-        let mediaByReelId = try await client.reelsMedia(reelIds: pageEntries.map(\.reelId))
-        return storyReels(from: pageEntries, mediaByReelId: mediaByReelId)
+        return try await storyReels(from: pageEntries)
     }
 
     private func refreshStoryTray() async throws {
@@ -139,7 +142,7 @@ public final class InstagramNotificationSource: NotificationSource {
         nextStoryTrayIndex = 0
     }
 
-    private func storyReels(from trayEntries: [StoryTrayEntry], mediaByReelId: [String: InstagramReel]) -> [InstagramStoryReel] {
+    private func storyReels(from trayEntries: [StoryTrayEntry]) async throws -> [InstagramStoryReel] {
         var reels: [InstagramStoryReel] = []
         for entry in trayEntries {
             let item = entry.item
@@ -154,7 +157,7 @@ public final class InstagramNotificationSource: NotificationSource {
             )
 
             var slides: [InstagramStorySlide] = []
-            if let reel = mediaByReelId[entry.reelId] {
+            if let username = item.user.username, let reel = try await client.storyReel(username: username) {
                 for media in reel.items ?? [] {
                     if let candidates = media.imageVersions2?.candidates,
                        let best = candidates.sorted(by: { (a: InstagramMediaCandidate, b: InstagramMediaCandidate) in (a.width ?? 0) > (b.width ?? 0) }).first,
@@ -166,8 +169,9 @@ public final class InstagramNotificationSource: NotificationSource {
                         let music = media.storyMusicStickers?.compactMap(\.music).first
                         let mentions = media.reelMentions?.compactMap(\.mention) ?? []
                         let links = media.storyLinkStickers?.compactMap(\.link) ?? []
+                        let mediaId = media.pk ?? media.id.split(separator: "_").first.map(String.init) ?? media.id
                         slides.append(InstagramStorySlide(
-                            id: media.id,
+                            id: mediaId,
                             imageURL: imageURL,
                             videoURL: videoURL,
                             isVideo: media.mediaType == 2,

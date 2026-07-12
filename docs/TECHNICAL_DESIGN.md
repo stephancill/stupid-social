@@ -369,23 +369,24 @@ Expected verification once the app is scaffolded:
 
 ## Posting
 
-Instagram story posting is current scope.
+Instagram story posting is current scope and uses the mobile web API path validated by `scripts/instagram-web-client.py`.
 
 Implementation expectations:
 
 - Keep the story composer UI local and simple.
 - Render the composer output to a 1080x1920 WebP before upload when native WebP encoding is available; fall back to JPEG while the app does not bundle a WebP encoder.
-- Use the existing cookie-authenticated native Instagram client for story photo uploads.
-- Upload the image bytes to `/rupload_igphoto/{upload_id}_0_{random}` with APK-like rupload headers matching the actual byte format and finalize with a signed `POST /api/v1/media/configure_to_story/`.
-- Sign configure requests with the existing Instagram HMAC signing path.
+- Use the cookie-authenticated mobile web Instagram client for story photo uploads.
+- Bootstrap `https://www.instagram.com/` with an iPhone Safari user agent, parse web runtime state (`csrf_token`, `lsd`, `fb_dtsg`, revision/session metadata), and dynamically discover Relay document IDs from Instagram web bundles.
+- Upload image bytes to `https://i.instagram.com/rupload_igphoto/fb_uploader_<upload_id>` with web rupload headers and finalize with web `POST https://www.instagram.com/api/v1/media/configure_to_story/` form fields.
+- Do not hardcode Instagram Relay document IDs in source; discover them at runtime from the current web bundles.
 - Keep posting scoped to Instagram photo stories; do not add cross-posting abstractions until another network is implemented.
 
 ## Instagram Direct Notifications
 
-Unread Instagram DM support uses the same cookie-authenticated Android private API request stack as the rest of the Instagram integration.
+Unread Instagram DM support uses the same cookie-authenticated mobile web request stack as the rest of the Instagram integration.
 
 - Fetch direct inbox threads with `GET /api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20`.
-- Include the fuller Android private API header set used by `instagram-private-api`, including `Authorization: Bearer IGT:2:<base64 session payload>`.
+- Include mobile web headers (`X-IG-App-ID: 1217981644879628`, `X-ASBD-ID`, CSRF, LSD when present, web session/device IDs, and explicit selected-cookie header).
 - Derive unread DM threads locally by comparing `last_permanent_item.timestamp` against `last_seen_at[viewer_id].timestamp`, ignoring latest messages sent by the viewer.
 - Normalize unread threads as `.message` `NotificationItem`s in the Instagram feed.
 - Messaging settings expose a Direct Messages toggle and a Posts and Reels toggle. When Posts and Reels is disabled, Direct threads whose latest item is `xma_clip` or `xma_media_share` are filtered out while text/story-reply messages can still appear.

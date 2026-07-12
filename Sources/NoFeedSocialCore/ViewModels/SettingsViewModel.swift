@@ -184,15 +184,9 @@ public final class SettingsViewModel: ObservableObject {
         }
 
         do {
-            let user = try await InstagramClient(credentialStore: keychainStore).verifiedUser()
+            let user = try await InstagramClient(credentialStore: keychainStore).currentUserProfile()
             let categories = Set(InstagramNotificationCategory.allCases)
-            metadataStore.instagramAccount = InstagramAccountMetadata(
-                accountId: String(user.pk),
-                username: user.username,
-                avatarURL: user.profilePicURL,
-                status: .valid,
-                enabledCategories: categories,
-            )
+            metadataStore.instagramAccount = instagramMetadata(from: user, categories: categories)
             instagramEnabledCategories = categories
             instagramStatus = .valid
             message = "Instagram credentials saved."
@@ -228,15 +222,9 @@ public final class SettingsViewModel: ObservableObject {
         }
 
         do {
-            let user = try await InstagramClient(credentialStore: keychainStore).verifiedUser()
+            let user = try await InstagramClient(credentialStore: keychainStore).currentUserProfile()
             let categories = Set(InstagramNotificationCategory.allCases)
-            metadataStore.instagramAccount = InstagramAccountMetadata(
-                accountId: String(user.pk),
-                username: user.username,
-                avatarURL: user.profilePicURL,
-                status: .valid,
-                enabledCategories: categories,
-            )
+            metadataStore.instagramAccount = instagramMetadata(from: user, categories: categories)
             instagramEnabledCategories = categories
             instagramStatus = .valid
             message = "Instagram credentials saved."
@@ -549,13 +537,29 @@ public final class SettingsViewModel: ObservableObject {
         }
     }
 
+    private func instagramMetadata(from profile: InstagramCurrentUserProfile, categories: Set<InstagramNotificationCategory>) -> InstagramAccountMetadata {
+        let existing = metadataStore.instagramAccount
+        return InstagramAccountMetadata(
+            accountId: String(profile.pk),
+            username: profile.username,
+            avatarURL: profile.profilePicURL,
+            status: .valid,
+            enabledCategories: categories,
+            storiesEnabled: existing?.storiesEnabled ?? true,
+            directMediaSharesEnabled: existing?.directMediaSharesEnabled ?? true,
+        )
+    }
+
     public func revalidateInstagram() async {
         guard metadataStore.instagramAccount != nil else { return }
         do {
             let client = InstagramClient(credentialStore: keychainStore)
-            _ = try await client.verifiedUser()
+            let profile = try await client.currentUserProfile()
             instagramStatus = .valid
             if var account = metadataStore.instagramAccount {
+                account.accountId = String(profile.pk)
+                account.username = profile.username
+                account.avatarURL = profile.profilePicURL
                 account.status = .valid
                 metadataStore.instagramAccount = account
             }

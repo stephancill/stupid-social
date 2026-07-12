@@ -35,13 +35,20 @@ public enum InstagramNotificationCategory: String, CaseIterable, Codable, Sendab
 }
 
 @MainActor
-public struct InstagramClient {
+public final class InstagramClient {
     private let credentialStore: KeychainCredentialStore
     private let session: URLSession
 
-    private static let baseURL = "https://i.instagram.com"
-    private static let androidUserAgent = "Instagram 416.0.0.47.66 Android (35/35; 480dpi; 1080x2400; samsung; SM-S938U; qcom; en_US; 718621835)"
-    private static let webUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Mobile/15E148 Safari/604.1"
+    fileprivate static let baseURL = "https://www.instagram.com"
+    private static let uploadBaseURL = "https://i.instagram.com"
+    private static let webUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1"
+    private static let webAppID = "1217981644879628"
+    private static let asbdID = "359341"
+    private var webState: InstagramWebState?
+    private var docIds: [String: String] = [:]
+    private var requestCount = 0
+    private let webSessionID = InstagramClient.randomBase36(length: 6)
+    private var wwwClaim: String?
 
     public init(credentialStore: KeychainCredentialStore, session: URLSession = defaultSession) {
         self.credentialStore = credentialStore
@@ -58,61 +65,36 @@ public struct InstagramClient {
         return URLSession(configuration: config)
     }()
 
-    private func ensureCookies(credentials: InstagramCredentials) {
-        let storage = HTTPCookieStorage.shared
-        storage.cookieAcceptPolicy = .always
-
-        let properties: [HTTPCookiePropertyKey: Any] = [
-            .domain: ".instagram.com",
-            .path: "/",
-        ]
-
-        let setCookie: (String, String) -> Void = { name, value in
-            var props = properties
-            props[.name] = name
-            props[.value] = value
-            if let cookie = HTTPCookie(properties: props) {
-                storage.setCookie(cookie)
-            }
-        }
-
-        setCookie("ds_user_id", credentials.dsUserId)
-        setCookie("csrftoken", credentials.csrfToken)
-        setCookie("sessionid", credentials.sessionId)
-        if let mid = credentials.mid { setCookie("mid", mid) }
-        if let rur = credentials.rur { setCookie("rur", rur) }
-        if let igDid = credentials.igDid { setCookie("ig_did", igDid) }
+    public func verifiedUser() async throws -> InstagramVerifiedUser {
+        let user = try await currentUserProfile()
+        return InstagramVerifiedUser(
+            pk: user.pk,
+            username: user.username,
+            fullName: user.fullName ?? user.username,
+            profilePicURL: user.profilePicURL,
+        )
     }
 
-    public func verifiedUser() async throws -> InstagramVerifiedUser {
+    public func currentUserProfile() async throws -> InstagramCurrentUserProfile {
         guard let credentials = try credentialStore.loadInstagramCredentials() else {
             throw SourceError.notConfigured
         }
-
-        var request = URLRequest(url: URL(string: "\(Self.baseURL)/api/v1/accounts/current_user/")!)
-        request.httpMethod = "GET"
-        request.allHTTPHeaderFields = headers(credentials: credentials)
-        configureRequest(&request)
-
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw SourceError.invalidResponse
-        }
-
-        if http.statusCode == 401 || http.statusCode == 403 {
-            throw SourceError.notConfigured
-        }
-
-        guard (200 ..< 300).contains(http.statusCode) else {
-            throw SourceError.invalidResponse
-        }
-
-        let decoded = try JSONDecoder().decode(InstagramCurrentUserResponse.self, from: data)
-        return InstagramVerifiedUser(
-            pk: decoded.user.pk,
-            username: decoded.user.username,
-            fullName: decoded.user.fullName,
-            profilePicURL: decoded.user.profilePicUrl.flatMap(URL.init),
+        let viewerResponse = try await storiesTrayResponse(credentials: credentials)
+        guard let viewer = viewerResponse.data.xdtViewer?.user else { throw SourceError.invalidResponse }
+        let profileResponse = try await webProfile(username: viewer.username, credentials: credentials)
+        let profile = profileResponse.data.user
+        return InstagramCurrentUserProfile(
+            pk: profile.id.flatMap(UInt64.init) ?? UInt64(viewer.id) ?? UInt64(credentials.dsUserId) ?? 0,
+            username: profile.username ?? viewer.username,
+            fullName: profile.fullName,
+            profilePicURL: profile.profilePicUrl.flatMap(URL.init) ?? viewer.profilePicUrl.flatMap(URL.init),
+            followerCount: profile.edgeFollowedBy?.count,
+            followingCount: profile.edgeFollow?.count,
+            postsCount: profile.edgeOwnerToTimelineMedia?.count,
+            bio: profile.biography,
+            websiteURL: profile.externalUrl.flatMap(URL.init),
+            isVerified: profile.isVerified,
+            isPrivate: profile.isPrivate,
         )
     }
 
@@ -129,24 +111,14 @@ public struct InstagramClient {
             throw SourceError.notConfigured
         }
 
-        var request = URLRequest(url: URL(string: "\(Self.baseURL)/api/v1/news/inbox/")!)
-        request.httpMethod = "GET"
-        request.allHTTPHeaderFields = headers(credentials: credentials)
-        configureRequest(&request)
-
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw SourceError.invalidResponse
-        }
-
-        if http.statusCode == 401 || http.statusCode == 403 {
-            throw SourceError.notConfigured
-        }
-
-        guard (200 ..< 300).contains(http.statusCode) else {
-            throw SourceError.invalidResponse
-        }
-
+        let fields = ["selected_filters": "", "max_id": "", "jazoest": jazoest(csrfToken: credentials.csrfToken)]
+        let data = try await webJSONRequest(
+            credentials: credentials,
+            method: "POST",
+            path: "/api/v1/news/inbox/",
+            headers: ["Content-Type": "application/x-www-form-urlencoded"],
+            body: formURLEncoded(fields).data(using: .utf8),
+        )
         let decoded = try JSONDecoder().decode(InstagramNewsInboxResponse.self, from: data)
         let allStories = (decoded.priorityStories ?? []) + (decoded.newStories ?? []) + (decoded.oldStories ?? [])
         var items = InstagramNotificationParser.parse(
@@ -176,24 +148,7 @@ public struct InstagramClient {
             URLQueryItem(name: "limit", value: "20"),
         ]
 
-        var request = URLRequest(url: components.url!)
-        request.httpMethod = "GET"
-        request.allHTTPHeaderFields = directInboxHeaders(credentials: credentials)
-        configureRequest(&request)
-
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw SourceError.invalidResponse
-        }
-
-        if http.statusCode == 401 || http.statusCode == 403 {
-            throw SourceError.notConfigured
-        }
-
-        guard (200 ..< 300).contains(http.statusCode) else {
-            throw SourceError.invalidResponse
-        }
-
+        let data = try await webJSONRequest(credentials: credentials, method: "GET", url: components.url!)
         let decoded = try JSONDecoder().decode(InstagramDirectInboxResponse.self, from: data)
         return InstagramDirectMessageParser.parse(response: decoded, accountId: credentials.dsUserId, includeMediaShares: includeMediaShares)
     }
@@ -203,111 +158,23 @@ public struct InstagramClient {
             throw SourceError.notConfigured
         }
 
-        let caps = "supported_capabilities_new=%5B%7B%22name%22%3A%22SUPPORTED_SDK_VERSIONS%22%2C%22value%22%3A%2266.0%2C67.0%2C68.0%2C69.0%2C70.0%22%7D%2C%7B%22name%22%3A%22FACE_TRACKER_VERSION%22%2C%22value%22%3A14%7D%2C%7B%22name%22%3A%22COMPRESSION%22%2C%22value%22%3A%22ETC2_COMPRESSION%22%7D%5D"
-        let body = "\(caps)&reason=cold_start&_csrftoken=\(credentials.csrfToken)&_uuid=\(credentials.dsUserId)"
-        var request = URLRequest(url: URL(string: "\(Self.baseURL)/api/v1/feed/reels_tray/")!)
-        request.httpMethod = "POST"
-        request.httpBody = body.data(using: .utf8)
-        var hdrs = headers(credentials: credentials)
-        hdrs["Content-Type"] = "application/x-www-form-urlencoded"
-        request.allHTTPHeaderFields = hdrs
-        configureRequest(&request)
-
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw SourceError.invalidResponse
-        }
-        if http.statusCode == 401 || http.statusCode == 403 {
-            throw SourceError.notConfigured
-        }
-        guard (200 ..< 300).contains(http.statusCode) else {
-            throw SourceError.invalidResponse
-        }
-
-        let decoded = try JSONDecoder().decode(InstagramReelsTrayResponse.self, from: data)
-        return decoded.tray
+        return try await storiesTrayResponse(credentials: credentials).data.reelsTray?.tray ?? []
     }
 
-    func userStory(userId: String) async throws -> InstagramUserStoryResponse {
+    func storyReel(username: String) async throws -> InstagramReel? {
         guard let credentials = try credentialStore.loadInstagramCredentials() else {
             throw SourceError.notConfigured
         }
-
-        var request = URLRequest(url: URL(string: "\(Self.baseURL)/api/v1/feed/user/\(userId)/story/")!)
-        request.httpMethod = "GET"
-        request.allHTTPHeaderFields = headers(credentials: credentials)
-        configureRequest(&request)
-
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw SourceError.invalidResponse
-        }
-        if http.statusCode == 401 || http.statusCode == 403 {
-            throw SourceError.notConfigured
-        }
-        guard (200 ..< 300).contains(http.statusCode) else {
-            throw SourceError.invalidResponse
-        }
-
-        return try JSONDecoder().decode(InstagramUserStoryResponse.self, from: data)
+        let pageURL = Self.baseURL + "/stories/\(username.urlPathEncoded)/"
+        let html = try await webTextRequest(credentials: credentials, method: "GET", url: URL(string: pageURL)!, headers: basePageHeaders(credentials: credentials))
+        docIds.merge(parseDocIds(source: html)) { _, new in new }
+        guard let payloadData = extractStoryPayloadData(from: html) else { return nil }
+        let payload = try JSONDecoder().decode(InstagramStoryPagePayload.self, from: payloadData)
+        return payload.xdtAPIReelsMedia.reelsMedia.first
     }
 
-    func reelsMedia(reelIds: [String]) async throws -> [String: InstagramReel] {
-        guard !reelIds.isEmpty else { return [:] }
-
-        var reels: [String: InstagramReel] = [:]
-        let batches = stride(from: 0, to: reelIds.count, by: Self.reelsMediaBatchSize).map { start in
-            let end = min(start + Self.reelsMediaBatchSize, reelIds.count)
-            return Array(reelIds[start ..< end])
-        }
-
-        try await withThrowingTaskGroup(of: [String: InstagramReel].self) { group in
-            for batch in batches {
-                group.addTask {
-                    try await reelsMediaBatch(reelIds: batch)
-                }
-            }
-
-            for try await batchReels in group {
-                reels.merge(batchReels) { current, _ in current }
-            }
-        }
-
-        return reels
-    }
-
-    private func reelsMediaBatch(reelIds: [String]) async throws -> [String: InstagramReel] {
-        guard let credentials = try credentialStore.loadInstagramCredentials() else {
-            throw SourceError.notConfigured
-        }
-
-        let body = formURLEncoded([
-            "reel_ids": jsonString(reelIds),
-            "source": "reel_feed_timeline",
-            "_csrftoken": credentials.csrfToken,
-            "_uuid": credentials.igDid ?? credentials.dsUserId,
-        ])
-
-        var request = URLRequest(url: URL(string: "\(Self.baseURL)/api/v1/feed/reels_media/")!)
-        request.httpMethod = "POST"
-        request.httpBody = body.data(using: .utf8)
-        var hdrs = headers(credentials: credentials)
-        hdrs["Content-Type"] = "application/x-www-form-urlencoded"
-        request.allHTTPHeaderFields = hdrs
-        configureRequest(&request)
-
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw SourceError.invalidResponse
-        }
-        if http.statusCode == 401 || http.statusCode == 403 {
-            throw SourceError.notConfigured
-        }
-        guard (200 ..< 300).contains(http.statusCode) else {
-            throw SourceError.invalidResponse
-        }
-
-        return try JSONDecoder().decode(InstagramReelsMediaResponse.self, from: data).reels
+    func reelsMedia(reelIds _: [String]) async throws -> [String: InstagramReel] {
+        [:]
     }
 
     private static let reelsMediaBatchSize = 30
@@ -319,29 +186,18 @@ public struct InstagramClient {
 
         let trimmedIdentifier = uid.trimmingCharacters(in: .whitespacesAndNewlines)
         let escapedIdentifier = trimmedIdentifier.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? trimmedIdentifier
-        let path = trimmedIdentifier.allSatisfy(\.isNumber)
-            ? "/api/v1/users/\(escapedIdentifier)/info/"
-            : "/api/v1/users/\(escapedIdentifier)/usernameinfo/"
-
-        var request = URLRequest(url: URL(string: "\(Self.baseURL)\(path)")!)
-        request.httpMethod = "GET"
-        request.allHTTPHeaderFields = headers(credentials: credentials)
-        configureRequest(&request)
-
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw SourceError.invalidResponse
+        let username: String = if trimmedIdentifier.allSatisfy(\.isNumber), let account = try? await verifiedUser(), String(account.pk) == trimmedIdentifier {
+            account.username
+        } else {
+            escapedIdentifier
         }
+        let decoded = try await webProfile(username: username, credentials: credentials)
+        return InstagramUserInfoResponse(user: decoded.data.user.asInfoUser, status: decoded.status)
+    }
 
-        if http.statusCode == 401 || http.statusCode == 403 {
-            throw SourceError.notConfigured
-        }
-
-        guard (200 ..< 300).contains(http.statusCode) else {
-            throw SourceError.invalidResponse
-        }
-
-        return try JSONDecoder().decode(InstagramUserInfoResponse.self, from: data)
+    private func webProfile(username: String, credentials: InstagramCredentials) async throws -> InstagramWebProfileInfoResponse {
+        let data = try await webJSONRequest(credentials: credentials, method: "GET", path: "/api/v1/users/web_profile_info/?username=\(username.urlFormEncoded)")
+        return try JSONDecoder().decode(InstagramWebProfileInfoResponse.self, from: data)
     }
 
     func mediaInfo(mediaId: String) async throws -> InstagramMediaInfoResponse {
@@ -354,30 +210,12 @@ public struct InstagramClient {
         }
     }
 
-    private func mediaInfoRequest(mediaId: String) async throws -> InstagramMediaInfoResponse {
-        guard let credentials = try credentialStore.loadInstagramCredentials() else {
+    private func mediaInfoRequest(mediaId _: String) async throws -> InstagramMediaInfoResponse {
+        guard try (credentialStore.loadInstagramCredentials()) != nil else {
             throw SourceError.notConfigured
         }
 
-        var request = URLRequest(url: URL(string: "\(Self.baseURL)/api/v1/media/\(mediaId)/info/")!)
-        request.httpMethod = "GET"
-        request.allHTTPHeaderFields = headers(credentials: credentials)
-        configureRequest(&request)
-
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw SourceError.invalidResponse
-        }
-
-        if http.statusCode == 401 || http.statusCode == 403 {
-            throw SourceError.notConfigured
-        }
-
-        guard (200 ..< 300).contains(http.statusCode) else {
-            throw SourceError.invalidResponse
-        }
-
-        return try JSONDecoder().decode(InstagramMediaInfoResponse.self, from: data)
+        throw SourceError.unsupported
     }
 
     func markStorySeen(mediaItems: [(mediaId: String, ownerId: String, takenAt: Double)]) async throws {
@@ -385,56 +223,17 @@ public struct InstagramClient {
             throw SourceError.notConfigured
         }
 
-        let seenAt = Int(Date().timeIntervalSince1970)
-        var reels: [String: [String]] = [:]
+        try await ensureBootstrapped(credentials: credentials)
         for item in mediaItems {
-            let takenAt = Int(item.takenAt)
-            let seenKey = "\(item.mediaId)_\(item.ownerId)"
-            reels[seenKey, default: []].append("\(takenAt)_\(seenAt)")
-        }
-
-        let signedBodyObject: [String: Any] = [
-            "reels": reels,
-            "container_module": "feed_timeline",
-            "reel_media_skipped": [],
-            "live_vods": [],
-            "live_vods_skipped": [],
-            "nuxes": [],
-            "nuxes_skipped": [],
-            "_uuid": credentials.igDid ?? credentials.dsUserId,
-            "_uid": credentials.dsUserId,
-            "_csrftoken": credentials.csrfToken,
-            "device_id": credentials.dsUserId,
-        ]
-        let signedBodyData = try JSONSerialization.data(withJSONObject: signedBodyObject, options: [])
-        guard let signedBodyJSON = String(data: signedBodyData, encoding: .utf8) else {
-            throw SourceError.invalidResponse
-        }
-
-        let signatureData = signedBodyJSON.data(using: .utf8)!
-        let hmacKey = Self.instagramSignatureKey.data(using: .utf8)!
-        let hmac = HMAC<SHA256>.authenticationCode(for: signatureData, using: SymmetricKey(data: hmacKey))
-        let signatureHex = hmac.map { String(format: "%02x", $0) }.joined()
-
-        let body = formURLEncoded([
-            "signed_body": "\(signatureHex).\(signedBodyJSON)",
-            "ig_sig_key_version": "4",
-        ])
-
-        var request = URLRequest(url: URL(string: "\(Self.baseURL)/api/v2/media/seen/?reel=1&live_vod=0")!)
-        request.httpMethod = "POST"
-        var hdrs = headers(credentials: credentials)
-        hdrs["Content-Type"] = "application/x-www-form-urlencoded"
-        request.allHTTPHeaderFields = hdrs
-        request.httpBody = body.data(using: .utf8)
-        configureRequest(&request)
-
-        let (_, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw SourceError.invalidResponse
-        }
-        guard (200 ..< 300).contains(http.statusCode) else {
-            throw SourceError.invalidResponse
+            let variables: [String: Any] = [
+                "reelId": item.ownerId,
+                "reelMediaId": item.mediaId,
+                "reelMediaOwnerId": item.ownerId,
+                "reelMediaTakenAt": Int(item.takenAt),
+                "viewSeenAt": Int(Date().timeIntervalSince1970),
+            ]
+            let docID = try await docId(credentials: credentials, command: "story-seen")
+            _ = try await graphqlPost(credentials: credentials, docID: docID, variables: variables, endpoint: "/graphql/query")
         }
     }
 
@@ -443,38 +242,20 @@ public struct InstagramClient {
             throw SourceError.notConfigured
         }
 
-        let action = liked ? "send_story_like" : "unsend_story_like"
-        let body = formURLEncoded([
-            "module_name": "feed_timeline",
-            "media_id": mediaId,
-            "container_module": "reel_feed_timeline",
-            "tray_session_id": UUID().uuidString.lowercased(),
-            "tray_position": "0",
-            "viewer_session_id": UUID().uuidString.lowercased(),
-            "delivery_class": "organic",
-            "like_type": "REGULAR",
-            "like_duration": "0",
-        ])
-
-        var request = URLRequest(url: URL(string: "\(Self.baseURL)/api/v1/story_interactions/\(action)/")!)
-        request.httpMethod = "POST"
-        request.httpBody = body.data(using: .utf8)
-        var hdrs = storyPostingHeaders(credentials: credentials)
-        hdrs["Content-Type"] = "application/x-www-form-urlencoded"
-        request.allHTTPHeaderFields = hdrs
-        configureRequest(&request)
-
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw SourceError.invalidResponse
+        let command = liked ? "like-story" : "unlike-story"
+        let docID = try await docId(credentials: credentials, command: command)
+        var input = ["media_id": mediaId]
+        if liked {
+            input["container_module"] = "story_viewer"
         }
-        guard (200 ..< 300).contains(http.statusCode) else {
-            throw SourceError.invalidResponse
-        }
-
-        if let response = try? JSONDecoder().decode(InstagramStatusResponse.self, from: data), response.status != "ok" {
-            throw SourceError.invalidResponse
-        }
+        _ = try await graphqlPost(
+            credentials: credentials,
+            docID: docID,
+            variables: ["input": input],
+            friendlyName: operationNames[command],
+            rootFieldName: liked ? "xig_media_like" : "xig_media_unlike",
+            endpoint: "/graphql/query",
+        )
     }
 
     public func publishPhotoStory(imageData: Data, width: Int, height: Int, mimeType: String) async throws {
@@ -482,38 +263,29 @@ public struct InstagramClient {
             throw SourceError.notConfigured
         }
 
-        let format = storyPhotoFormat(mimeType: mimeType)
-        let uploadId = String(Int64.random(in: 3_000_000_000_000 ... 3_999_999_999_999))
-        let uploadName = "\(uploadId)_0_\(Int.random(in: 1_000_000_000 ... 2_147_483_647))"
+        try await ensureBootstrapped(credentials: credentials)
+        let uploadId = String(Int(Date().timeIntervalSince1970 * 1000))
+        let uploadName = "fb_uploader_\(uploadId)"
         let ruploadParams: [String: Any] = [
+            "media_type": 1,
             "upload_id": uploadId,
-            "session_id": uploadId,
-            "media_type": "1",
-            "upload_engine_config_enum": "0",
-            "share_type": "stories",
-            "is_optimistic_upload": "false",
-            "image_compression": imageCompressionJSON(format: format, width: width, height: height),
-            "xsharing_user_ids": "[]",
-            "retry_context": jsonString([
-                "num_reupload": 0,
-                "num_step_manual_retry": 0,
-                "num_step_auto_retry": 0,
-            ]),
+            "upload_media_height": height,
+            "upload_media_width": width,
         ]
-        let ruploadParamsJSON = jsonString(ruploadParams)
 
-        var uploadRequest = URLRequest(url: URL(string: "\(Self.baseURL)/rupload_igphoto/\(uploadName)")!)
+        var uploadRequest = URLRequest(url: URL(string: "\(Self.uploadBaseURL)/rupload_igphoto/\(uploadName)")!)
         uploadRequest.httpMethod = "POST"
         uploadRequest.httpBody = imageData
-        var uploadHeaders = storyUploadHeaders(credentials: credentials)
+        var uploadHeaders = webHeaders(credentials: credentials, referer: Self.baseURL + "/")
+        uploadHeaders.removeValue(forKey: "X-IG-WWW-Claim")
+        uploadHeaders.removeValue(forKey: "X-Web-Device-Id")
         uploadHeaders["Content-Type"] = "application/octet-stream"
         uploadHeaders["Content-Length"] = String(imageData.count)
         uploadHeaders["Offset"] = "0"
         uploadHeaders["X-Entity-Length"] = String(imageData.count)
         uploadHeaders["X-Entity-Name"] = uploadName
-        uploadHeaders["X-Entity-Type"] = format.entityType
-        uploadHeaders["X_FB_PHOTO_WATERFALL_ID"] = UUID().uuidString.lowercased()
-        uploadHeaders["X-Instagram-Rupload-Params"] = ruploadParamsJSON
+        uploadHeaders["X-Entity-Type"] = mimeType == "image/webp" ? "image/webp" : "image/jpeg"
+        uploadHeaders["X-Instagram-Rupload-Params"] = jsonString(ruploadParams)
         uploadRequest.allHTTPHeaderFields = uploadHeaders
         configureRequest(&uploadRequest)
 
@@ -528,81 +300,21 @@ public struct InstagramClient {
             throw SourceError.serviceError(instagramPublishError(step: "upload", statusCode: uploadHTTP.statusCode, data: uploadData))
         }
 
-        let now = Int(Date().timeIntervalSince1970)
-        let deviceIds = instagramDeviceIdentifiers(credentials: credentials)
-        let signedBodyObject: [String: Any] = [
-            "upload_id": uploadId,
+        let body = formURLEncoded([
+            "caption": "",
             "configure_mode": "1",
-            "source_type": "3",
-            "async_publish": "1",
-            "audience": "default",
-            "original_media_type": "1",
-            "original_width": String(width),
-            "original_height": String(height),
-            "camera_entry_point": "11",
-            "camera_position": "back",
-            "client_shared_at": String(now),
-            "client_timestamp": String(now),
-            "timezone_offset": String(TimeZone.current.secondsFromGMT()),
-            "allow_multi_configures": "1",
-            "has_camera_metadata": "1",
-            "include_e2ee_mentioned_user_list": "1",
-            "hide_from_profile_grid": "false",
-            "scene_capture_type": "",
-            "edits": [
-                "crop_original_size": [Double(width), Double(height)],
-                "filter_strength": 0.5,
-                "filter_type": 0,
-            ],
-            "extra": [
-                "source_width": width,
-                "source_height": height,
-            ],
-            "media_transformation_info": jsonString([
-                "width": String(width),
-                "height": String(height),
-                "x_transform": "0",
-                "y_transform": "0",
-                "zoom": "1.0",
-                "rotation": "0.0",
-                "background_coverage": "0.0",
-            ]),
-            "supported_capabilities_new": supportedCapabilitiesJSON,
-            "bottom_camera_dial_selected": "2",
-            "camera_make": "Apple",
-            "camera_model": "NoFeedSocial",
-            "camera_session_id": UUID().uuidString.lowercased(),
-            "capture_type": "normal",
-            "composition_id": UUID().uuidString.lowercased(),
-            "creation_surface": "camera",
-            "date_time_digitized": instagramDateTimeString(),
-            "date_time_original": instagramDateTimeString(),
-            "device": [
-                "manufacturer": "Apple",
-                "model": "NoFeedSocial",
-            ],
-            "nav_chain": "MainFeedFragment:feed_timeline:1:cold_start:\(now).000:::0.000",
-            "private_mention_sharing_enabled": "1",
-            "publish_id": "1",
-            "_uid": credentials.dsUserId,
-            "_uuid": deviceIds.uuid,
-            "device_id": deviceIds.androidId,
-        ]
-        let body = try signedFormBody(object: signedBodyObject)
+            "share_to_facebook": "",
+            "share_to_fb_destination_id": "",
+            "share_to_fb_destination_type": "USER",
+            "upload_id": uploadId,
+            "jazoest": jazoest(csrfToken: credentials.csrfToken),
+        ])
 
         var storyConfigureRequest = URLRequest(url: URL(string: "\(Self.baseURL)/api/v1/media/configure_to_story/")!)
         storyConfigureRequest.httpMethod = "POST"
         storyConfigureRequest.httpBody = body.data(using: .utf8)
-        var configureHeaders = storyPostingHeaders(credentials: credentials)
-        configureHeaders["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"
-        configureHeaders["X-IG-Timezone-Offset"] = String(TimeZone.current.secondsFromGMT())
-        configureHeaders["X-IG-Nav-Chain"] = "MainFeedFragment:feed_timeline:1:cold_start:\(now).000:::0.000"
-        configureHeaders["X-IG-CLIENT-ENDPOINT"] = "MainFeedFragment:feed_timeline"
-        configureHeaders["retry_context"] = jsonString([
-            "num_reupload": 0,
-            "num_step_manual_retry": 0,
-            "num_step_auto_retry": 0,
-        ])
+        var configureHeaders = webHeaders(credentials: credentials, referer: Self.baseURL + "/")
+        configureHeaders["Content-Type"] = "application/x-www-form-urlencoded"
         storyConfigureRequest.allHTTPHeaderFields = configureHeaders
         configureRequest(&storyConfigureRequest)
 
@@ -618,36 +330,19 @@ public struct InstagramClient {
         }
     }
 
-    public func deleteStory(mediaId: String, isVideo: Bool) async throws {
+    public func deleteStory(mediaId: String, isVideo _: Bool) async throws {
         guard let credentials = try credentialStore.loadInstagramCredentials() else {
             throw SourceError.notConfigured
         }
-
-        let mediaType = isVideo ? "VIDEO" : "PHOTO"
-        let signedBodyObject: [String: Any] = [
-            "igtv_feed_preview": "false",
-            "media_id": mediaId,
-            "_uuid": credentials.igDid ?? credentials.dsUserId,
-            "_uid": credentials.dsUserId,
-            "_csrftoken": credentials.csrfToken,
-        ]
-        let body = try signedFormBody(object: signedBodyObject)
-
-        var request = URLRequest(url: URL(string: "\(Self.baseURL)/api/v1/media/\(mediaId)/delete/?media_type=\(mediaType)")!)
-        request.httpMethod = "POST"
-        request.httpBody = body.data(using: .utf8)
-        var hdrs = headers(credentials: credentials)
-        hdrs["Content-Type"] = "application/x-www-form-urlencoded"
-        request.allHTTPHeaderFields = hdrs
-        configureRequest(&request)
-
-        let (_, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw SourceError.invalidResponse
-        }
-        guard (200 ..< 300).contains(http.statusCode) else {
-            throw SourceError.invalidResponse
-        }
+        let docID = try await docId(credentials: credentials, command: "delete-story")
+        _ = try await graphqlPost(
+            credentials: credentials,
+            docID: docID,
+            variables: ["mediaId": mediaId.split(separator: "_").first.map(String.init) ?? mediaId],
+            friendlyName: operationNames["delete-story"],
+            rootFieldName: "xdt_api__v1__create__delete",
+            endpoint: "/graphql/query",
+        )
     }
 
     private static let instagramSignatureKey = "9193488027538fd3450b83b7d05286d4ca9599a0f7eeed90d8c85925698a05dc"
@@ -714,7 +409,7 @@ public struct InstagramClient {
         return [
             "Cookie": cookieParts.joined(separator: "; "),
             "X-CSRFToken": credentials.csrfToken,
-            "User-Agent": Self.androidUserAgent,
+            "User-Agent": Self.webUserAgent,
             "Accept": "*/*",
             "Accept-Language": Self.acceptLanguageHeader,
             "X-IG-Capabilities": "3brTv10=",
@@ -758,7 +453,7 @@ public struct InstagramClient {
         var headers = [
             "Authorization": instagramAuthorizationHeader(credentials: credentials),
             "X-CSRFToken": credentials.csrfToken,
-            "User-Agent": Self.androidUserAgent,
+            "User-Agent": Self.webUserAgent,
             "Accept": "*/*",
             "Accept-Language": Self.acceptLanguageHeader,
             "X-IG-App-Locale": "en_US",
@@ -824,19 +519,196 @@ public struct InstagramClient {
     }
 
     private func webHeaders(credentials: InstagramCredentials, referer: String) -> [String: String] {
-        [
+        var headers = [
             "Cookie": cookieHeader(credentials: credentials),
             "Referer": referer,
             "Origin": "https://www.instagram.com",
             "User-Agent": Self.webUserAgent,
             "Accept": "*/*",
             "Accept-Language": Self.acceptLanguageHeader,
-            "X-IG-App-ID": "1217981644879628",
-            "X-ASBD-ID": "359341",
+            "X-IG-App-ID": Self.webAppID,
+            "X-ASBD-ID": Self.asbdID,
             "X-IG-Max-Touch-Points": "5",
-            "X-Web-Session-ID": webSessionId(),
-            "X-Instagram-AJAX": "1039660005",
+            "X-Web-Session-ID": webSessionID,
         ]
+        let state = webState
+        headers["X-CSRFToken"] = state?.csrfToken ?? credentials.csrfToken
+        if let lsd = state?.lsd { headers["X-FB-LSD"] = lsd }
+        if let deviceID = state?.deviceID ?? credentials.igDid { headers["X-Web-Device-Id"] = deviceID }
+        if let mid = state?.machineID ?? credentials.mid { headers["X-Mid"] = mid }
+        if let wwwClaim { headers["X-IG-WWW-Claim"] = wwwClaim }
+        if let bloks = state?.bloksVersionID { headers["X-BLOKS-VERSION-ID"] = bloks }
+        return headers
+    }
+
+    private func basePageHeaders(credentials: InstagramCredentials) -> [String: String] {
+        [
+            "Cookie": cookieHeader(credentials: credentials),
+            "User-Agent": Self.webUserAgent,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": Self.acceptLanguageHeader,
+        ]
+    }
+
+    private func baseAssetHeaders(credentials: InstagramCredentials) -> [String: String] {
+        [
+            "Cookie": cookieHeader(credentials: credentials),
+            "User-Agent": Self.webUserAgent,
+            "Accept": "*/*",
+            "Accept-Language": Self.acceptLanguageHeader,
+            "Referer": Self.baseURL + "/",
+        ]
+    }
+
+    private func ensureBootstrapped(credentials: InstagramCredentials) async throws {
+        if webState == nil {
+            _ = try await refreshState(credentials: credentials)
+        }
+    }
+
+    @discardableResult
+    private func refreshState(credentials: InstagramCredentials) async throws -> InstagramWebState {
+        let html = try await webTextRequest(credentials: credentials, method: "GET", url: URL(string: Self.baseURL + "/")!, headers: basePageHeaders(credentials: credentials))
+        var state = InstagramWebState(html: html)
+        state.csrfToken = firstMatch(html, pattern: #""csrf_token"\s*:\s*"([^"]+)""#) ?? credentials.csrfToken
+        state.lsd = firstMatch(html, pattern: #""LSD"[^\n]*?"token"\s*:\s*"([^"]+)""#)
+            ?? firstMatch(html, pattern: #""token"\s*:\s*"([A-Za-z0-9_\-]+)"[^\n]{0,120}"LSD""#)
+        state.fbDtsg = firstMatch(html, pattern: #""DTSGInitialData"[^\n]*?"token"\s*:\s*"([^"]*)""#)
+        state.userID = firstMatch(html, pattern: #""USER_ID"\s*:\s*"([0-9]+)""#) ?? credentials.dsUserId
+        state.revision = firstMatch(html, pattern: #""rev"\s*:\s*(\d+)"#)
+        state.hsi = firstMatch(html, pattern: #""hsi"\s*:\s*"?([0-9]+)"?"#)
+        state.hasteSession = firstMatch(html, pattern: #""haste_session"\s*:\s*"([^"]+)""#)
+        state.deviceID = firstMatch(html, pattern: #""device_id"\s*:\s*"([^"]+)""#) ?? credentials.igDid
+        state.machineID = firstMatch(html, pattern: #""machine_id"\s*:\s*"([^"]+)""#) ?? credentials.mid
+        state.bloksVersionID = firstMatch(html, pattern: #""WebBloksVersioningID"[^\n]*?"versioningID"\s*:\s*"([^"]+)""#)
+        webState = state
+        docIds.merge(parseDocIds(source: html)) { _, new in new }
+        return state
+    }
+
+    private func storiesTrayResponse(credentials: InstagramCredentials) async throws -> InstagramWebStoriesTrayResponse {
+        let variables: [String: Any] = [
+            "data": ["is_following_feed": false, "reason": "web_home"],
+            "suggestedUsersData": ["max_id": "", "max_number_to_display": 0, "module": "discover_people", "paginate": false],
+        ]
+        let data = try await graphqlGet(credentials: credentials, docID: docId(credentials: credentials, command: "stories-tray"), variables: variables)
+        return try JSONDecoder().decode(InstagramWebStoriesTrayResponse.self, from: data)
+    }
+
+    private func docId(credentials: InstagramCredentials, command: String) async throws -> String {
+        let operation = try operationName(command: command)
+        if let docID = docIds[operation] { return docID }
+        try await discoverDocIds(credentials: credentials)
+        if let docID = docIds[operation] { return docID }
+        throw SourceError.serviceError("Could not discover Instagram operation.")
+    }
+
+    private func discoverDocIds(credentials: InstagramCredentials) async throws {
+        let state = try await refreshState(credentials: credentials)
+        var discovered = parseDocIds(source: state.html)
+        for scriptURL in scriptURLs(html: state.html) {
+            do {
+                let source = try await webTextRequest(credentials: credentials, method: "GET", url: scriptURL, headers: baseAssetHeaders(credentials: credentials))
+                discovered.merge(parseDocIds(source: source)) { _, new in new }
+            } catch {
+                continue
+            }
+        }
+        docIds.merge(discovered) { _, new in new }
+    }
+
+    private func graphqlGet(credentials: InstagramCredentials, docID: String, variables: [String: Any]) async throws -> Data {
+        let variablesData = try JSONSerialization.data(withJSONObject: variables, options: [])
+        guard let variablesJSON = String(data: variablesData, encoding: .utf8) else { throw SourceError.invalidResponse }
+        var components = URLComponents(string: Self.baseURL + "/graphql/query/")!
+        components.queryItems = [
+            URLQueryItem(name: "doc_id", value: docID),
+            URLQueryItem(name: "variables", value: variablesJSON),
+        ]
+        return try await webJSONRequest(credentials: credentials, method: "GET", url: components.url!)
+    }
+
+    private func graphqlPost(
+        credentials: InstagramCredentials,
+        docID: String,
+        variables: [String: Any],
+        friendlyName: String? = nil,
+        rootFieldName: String? = nil,
+        endpoint: String = "/api/graphql",
+    ) async throws -> Data {
+        try await ensureBootstrapped(credentials: credentials)
+        let state = webState
+        let variablesData = try JSONSerialization.data(withJSONObject: variables, options: [])
+        guard let variablesJSON = String(data: variablesData, encoding: .utf8) else { throw SourceError.invalidResponse }
+        var fields = [
+            "doc_id": docID,
+            "variables": variablesJSON,
+            "server_timestamps": "true",
+            "__user": state?.userID ?? credentials.dsUserId,
+            "__a": "1",
+            "__req": Self.requestID(count: requestCount),
+        ]
+        if let revision = state?.revision { fields["__rev"] = revision }
+        if let hsi = state?.hsi { fields["__hsi"] = hsi }
+        if let haste = state?.hasteSession { fields["__hs"] = haste }
+        if let lsd = state?.lsd { fields["lsd"] = lsd }
+        if let fbDtsg = state?.fbDtsg { fields["fb_dtsg"] = fbDtsg }
+        fields["jazoest"] = jazoest(csrfToken: state?.csrfToken ?? credentials.csrfToken)
+        if let friendlyName {
+            fields["fb_api_caller_class"] = "RelayModern"
+            fields["fb_api_req_friendly_name"] = friendlyName
+        }
+        requestCount += 1
+        var headers = ["Content-Type": "application/x-www-form-urlencoded"]
+        if let friendlyName { headers["X-FB-Friendly-Name"] = friendlyName }
+        if let rootFieldName { headers["X-Root-Field-Name"] = rootFieldName }
+        return try await webJSONRequest(credentials: credentials, method: "POST", path: endpoint, headers: headers, body: formURLEncoded(fields).data(using: .utf8))
+    }
+
+    private func webJSONRequest(credentials: InstagramCredentials, method: String, path: String, headers: [String: String] = [:], body: Data? = nil) async throws -> Data {
+        try await webJSONRequest(credentials: credentials, method: method, url: URL(string: Self.baseURL + path)!, headers: headers, body: body)
+    }
+
+    private func webJSONRequest(credentials: InstagramCredentials, method: String, url: URL, headers: [String: String] = [:], body: Data? = nil) async throws -> Data {
+        try await ensureBootstrapped(credentials: credentials)
+        do {
+            return try await webDataRequest(credentials: credentials, method: method, url: url, headers: headers, body: body)
+        } catch SourceError.notConfigured {
+            _ = try await refreshState(credentials: credentials)
+            return try await webDataRequest(credentials: credentials, method: method, url: url, headers: headers, body: body)
+        }
+    }
+
+    private func webDataRequest(credentials: InstagramCredentials, method: String, url: URL, headers: [String: String] = [:], body: Data? = nil) async throws -> Data {
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.httpBody = body
+        request.allHTTPHeaderFields = webHeaders(credentials: credentials, referer: Self.baseURL + "/").merging(headers) { _, new in new }
+        configureRequest(&request)
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw SourceError.invalidResponse }
+        if let claim = http.value(forHTTPHeaderField: "x-ig-set-www-claim") ?? http.value(forHTTPHeaderField: "x-ig-www-claim") {
+            wwwClaim = claim
+        }
+        if http.statusCode == 401 || http.statusCode == 403 { throw SourceError.notConfigured }
+        guard (200 ..< 300).contains(http.statusCode) else { throw SourceError.invalidResponse }
+        return data
+    }
+
+    private func webTextRequest(credentials _: InstagramCredentials, method: String, url: URL, headers: [String: String], body: Data? = nil) async throws -> String {
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.httpBody = body
+        request.allHTTPHeaderFields = headers
+        configureRequest(&request)
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw SourceError.invalidResponse }
+        if let claim = http.value(forHTTPHeaderField: "x-ig-set-www-claim") ?? http.value(forHTTPHeaderField: "x-ig-www-claim") {
+            wwwClaim = claim
+        }
+        if http.statusCode == 401 || http.statusCode == 403 { throw SourceError.notConfigured }
+        guard (200 ..< 300).contains(http.statusCode) else { throw SourceError.invalidResponse }
+        return String(data: data, encoding: .utf8) ?? ""
     }
 
     private func cookieHeader(credentials: InstagramCredentials) -> String {
@@ -849,14 +721,6 @@ public struct InstagramClient {
         if let rur = credentials.rur { cookieParts.append("rur=\(rur)") }
         if let igDid = credentials.igDid { cookieParts.append("ig_did=\(igDid)") }
         return cookieParts.joined(separator: "; ")
-    }
-
-    private func webSessionId() -> String {
-        func segment() -> String {
-            let alphabet = Array("abcdefghijklmnopqrstuvwxyz0123456789")
-            return String((0 ..< 6).compactMap { _ in alphabet.randomElement() })
-        }
-        return "\(segment()):\(segment()):\(segment())"
     }
 
     private func jazoest(csrfToken: String) -> String {
@@ -924,6 +788,110 @@ private extension String {
     var urlFormEncoded: String {
         addingPercentEncoding(withAllowedCharacters: .instagramFormAllowed) ?? self
     }
+
+    var urlPathEncoded: String {
+        addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? self
+    }
+}
+
+private let operationNames = [
+    "stories-tray": "PolarisStoriesV3TrayContainerQuery",
+    "delete-story": "usePolarisStoriesV3DeleteMediaMutation",
+    "story-seen": "PolarisAPIReelSeenMutation",
+    "like-story": "usePolarisLikeMediaXIGLikeMutation",
+    "unlike-story": "usePolarisLikeMediaXIGUnlikeMutation",
+]
+
+private func operationName(command: String) throws -> String {
+    guard let name = operationNames[command] else { throw SourceError.unsupported }
+    return name
+}
+
+private func parseDocIds(source: String) -> [String: String] {
+    let pattern = #"__d\("([^"]+?)_instagramRelayOperation",\[\],\(function\([^)]*\)\{.*?\.exports="(\d+)""#
+    guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else { return [:] }
+    let range = NSRange(source.startIndex..., in: source)
+    var result: [String: String] = [:]
+    for match in regex.matches(in: source, range: range) {
+        guard let nameRange = Range(match.range(at: 1), in: source),
+              let idRange = Range(match.range(at: 2), in: source) else { continue }
+        result[String(source[nameRange])] = String(source[idRange])
+    }
+    return result
+}
+
+private func scriptURLs(html: String) -> [URL] {
+    let pattern = #"<script\b[^>]*\bsrc="([^"]+)""#
+    guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+    let range = NSRange(html.startIndex..., in: html)
+    var urls: [URL] = []
+    var seen: Set<URL> = []
+    for match in regex.matches(in: html, range: range) {
+        guard let urlRange = Range(match.range(at: 1), in: html) else { continue }
+        let raw = String(html[urlRange]).replacingOccurrences(of: "&amp;", with: "&")
+        guard raw.contains("static.cdninstagram.com") else { continue }
+        let absolute = URL(string: raw, relativeTo: URL(string: "https://www.instagram.com/")!)!.absoluteURL
+        if seen.insert(absolute).inserted { urls.append(absolute) }
+    }
+    return urls
+}
+
+private func extractStoryPayloadData(from html: String) -> Data? {
+    let pattern = #"<script\b[^>]*\bdata-sjs[^>]*>(.*?)</script>"#
+    guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else { return nil }
+    let range = NSRange(html.startIndex..., in: html)
+    for match in regex.matches(in: html, range: range) {
+        guard let sourceRange = Range(match.range(at: 1), in: html) else { continue }
+        let source = String(html[sourceRange]).replacingOccurrences(of: "&quot;", with: "\"").replacingOccurrences(of: "&amp;", with: "&")
+        guard let data = source.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data),
+              let payload = findStoryPayload(json),
+              let payloadData = try? JSONSerialization.data(withJSONObject: payload)
+        else { continue }
+        return payloadData
+    }
+    return nil
+}
+
+private func findStoryPayload(_ value: Any) -> [String: Any]? {
+    if let dict = value as? [String: Any] {
+        if dict["xdt_api__v1__feed__reels_media"] != nil { return dict }
+        for child in dict.values {
+            if let found = findStoryPayload(child) { return found }
+        }
+    } else if let array = value as? [Any] {
+        for child in array {
+            if let found = findStoryPayload(child) { return found }
+        }
+    }
+    return nil
+}
+
+private func firstMatch(_ text: String, pattern: String) -> String? {
+    guard let regex = try? NSRegularExpression(pattern: pattern),
+          let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+          let range = Range(match.range(at: 1), in: text)
+    else { return nil }
+    return String(text[range])
+}
+
+private extension InstagramClient {
+    static func randomBase36(length: Int) -> String {
+        let alphabet = Array("abcdefghijklmnopqrstuvwxyz0123456789")
+        return String((0 ..< length).compactMap { _ in alphabet.randomElement() })
+    }
+
+    static func requestID(count: Int) -> String {
+        let alphabet = Array("abcdefghijklmnopqrstuvwxyz0123456789")
+        var value = count + 1
+        var result = ""
+        while value > 0 {
+            let remainder = value % alphabet.count
+            value /= alphabet.count
+            result = String(alphabet[remainder]) + result
+        }
+        return result.isEmpty ? "1" : result
+    }
 }
 
 private extension CharacterSet {
@@ -941,6 +909,139 @@ public struct InstagramVerifiedUser {
     public let username: String
     public let fullName: String
     public let profilePicURL: URL?
+}
+
+public struct InstagramCurrentUserProfile {
+    public let pk: UInt64
+    public let username: String
+    public let fullName: String?
+    public let profilePicURL: URL?
+    public let followerCount: Int?
+    public let followingCount: Int?
+    public let postsCount: Int?
+    public let bio: String?
+    public let websiteURL: URL?
+    public let isVerified: Bool?
+    public let isPrivate: Bool?
+}
+
+private struct InstagramWebState {
+    let html: String
+    var csrfToken: String?
+    var lsd: String?
+    var fbDtsg: String?
+    var userID: String?
+    var revision: String?
+    var hsi: String?
+    var hasteSession: String?
+    var deviceID: String?
+    var machineID: String?
+    var bloksVersionID: String?
+}
+
+private struct InstagramWebStoriesTrayResponse: Decodable {
+    struct Payload: Decodable {
+        let reelsTray: InstagramReelsTrayResponse?
+        let xdtViewer: InstagramWebViewer?
+
+        enum CodingKeys: String, CodingKey {
+            case reelsTray = "xdt_api__v1__feed__reels_tray"
+            case xdtViewer = "xdt_viewer"
+        }
+    }
+
+    let data: Payload
+    let status: String?
+}
+
+private struct InstagramWebViewer: Decodable {
+    struct User: Decodable {
+        let id: String
+        let username: String
+        let profilePicUrl: String?
+
+        enum CodingKeys: String, CodingKey {
+            case id
+            case username
+            case profilePicUrl = "profile_pic_url"
+        }
+    }
+
+    let user: User
+}
+
+private struct InstagramStoryPagePayload: Decodable {
+    let xdtAPIReelsMedia: InstagramStoryPageReelsMedia
+
+    enum CodingKeys: String, CodingKey {
+        case xdtAPIReelsMedia = "xdt_api__v1__feed__reels_media"
+    }
+}
+
+private struct InstagramStoryPageReelsMedia: Decodable {
+    let reelsMedia: [InstagramReel]
+
+    enum CodingKeys: String, CodingKey {
+        case reelsMedia = "reels_media"
+    }
+}
+
+private struct InstagramWebProfileInfoResponse: Decodable {
+    struct Payload: Decodable {
+        let user: User
+    }
+
+    struct User: Decodable {
+        let id: String?
+        let username: String?
+        let fullName: String?
+        let profilePicUrl: String?
+        let edgeFollowedBy: CountEdge?
+        let edgeFollow: CountEdge?
+        let biography: String?
+        let edgeOwnerToTimelineMedia: CountEdge?
+        let isVerified: Bool?
+        let isPrivate: Bool?
+        let externalUrl: String?
+
+        enum CodingKeys: String, CodingKey {
+            case id
+            case username
+            case fullName = "full_name"
+            case profilePicUrl = "profile_pic_url"
+            case edgeFollowedBy = "edge_followed_by"
+            case edgeFollow = "edge_follow"
+            case biography
+            case edgeOwnerToTimelineMedia = "edge_owner_to_timeline_media"
+            case isVerified = "is_verified"
+            case isPrivate = "is_private"
+            case externalUrl = "external_url"
+        }
+
+        var asInfoUser: InstagramUserInfoResponse.InfoUser {
+            InstagramUserInfoResponse.InfoUser(
+                pk: id.flatMap(UInt64.init),
+                username: username,
+                fullName: fullName,
+                profilePicUrl: profilePicUrl,
+                followerCount: edgeFollowedBy?.count,
+                followingCount: edgeFollow?.count,
+                biography: biography,
+                mediaCount: edgeOwnerToTimelineMedia?.count,
+                isVerified: isVerified,
+                isPrivate: isPrivate,
+                externalUrl: externalUrl,
+                friendshipStatus: nil,
+            )
+        }
+    }
+
+    struct CountEdge: Decodable {
+        let count: Int?
+    }
+
+    let data: Payload
+    let status: String?
 }
 
 private struct InstagramCurrentUserResponse: Decodable {
@@ -1337,6 +1438,26 @@ struct InstagramTrayUser: Decodable {
         case isPrivate = "is_private"
         case isVerified = "is_verified"
         case friendshipStatus = "friendship_status"
+        case id
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let uint = try? container.decode(UInt64.self, forKey: .pk) {
+            pk = uint
+        } else if let string = try? container.decode(String.self, forKey: .pk), let uint = UInt64(string) {
+            pk = uint
+        } else if let string = try? container.decode(String.self, forKey: .id), let uint = UInt64(string) {
+            pk = uint
+        } else {
+            throw DecodingError.typeMismatch(UInt64.self, DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Expected Instagram user pk"))
+        }
+        username = try container.decodeIfPresent(String.self, forKey: .username)
+        fullName = try container.decodeIfPresent(String.self, forKey: .fullName)
+        profilePicUrl = try container.decodeIfPresent(String.self, forKey: .profilePicUrl)
+        isPrivate = try container.decodeIfPresent(Bool.self, forKey: .isPrivate)
+        isVerified = try container.decodeIfPresent(Bool.self, forKey: .isVerified)
+        friendshipStatus = try container.decodeIfPresent(InstagramTrayFriendshipStatus.self, forKey: .friendshipStatus)
     }
 }
 
@@ -1376,10 +1497,27 @@ struct InstagramReel: Decodable {
         case items
         case user
     }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let uint = try? container.decode(UInt64.self, forKey: .id) {
+            id = uint
+        } else if let string = try? container.decode(String.self, forKey: .id), let uint = UInt64(string) {
+            id = uint
+        } else {
+            throw DecodingError.typeMismatch(UInt64.self, DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Expected Instagram reel id"))
+        }
+        latestReelMedia = try container.decodeIfPresent(Double.self, forKey: .latestReelMedia)
+        expiringAt = try container.decodeIfPresent(Double.self, forKey: .expiringAt)
+        mediaCount = try container.decodeIfPresent(Int.self, forKey: .mediaCount)
+        items = try container.decodeIfPresent([InstagramStoryMedia].self, forKey: .items)
+        user = try container.decodeIfPresent(InstagramTrayUser.self, forKey: .user)
+    }
 }
 
 struct InstagramStoryMedia: Decodable {
     let id: String
+    let pk: String?
     let takenAt: Double?
     let mediaType: Int?
     let imageVersions2: InstagramImageVersions?
@@ -1393,6 +1531,7 @@ struct InstagramStoryMedia: Decodable {
 
     enum CodingKeys: String, CodingKey {
         case id
+        case pk
         case takenAt = "taken_at"
         case mediaType = "media_type"
         case imageVersions2 = "image_versions2"
