@@ -12,3 +12,4 @@ DerivedData/
 /.sourcekit-lsp
 /.xcode-derived
 logs/
+__pycache__/
