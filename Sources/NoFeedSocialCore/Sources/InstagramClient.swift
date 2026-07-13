@@ -79,12 +79,11 @@ public final class InstagramClient {
         guard let credentials = try credentialStore.loadInstagramCredentials() else {
             throw SourceError.notConfigured
         }
-        let viewerResponse = try await storiesTrayResponse(credentials: credentials)
-        guard let viewer = viewerResponse.data.xdtViewer?.user else { throw SourceError.invalidResponse }
+        let viewer = try await directInboxViewer(credentials: credentials)
         let profileResponse = try await webProfile(username: viewer.username, credentials: credentials)
         let profile = profileResponse.data.user
         return InstagramCurrentUserProfile(
-            pk: profile.id.flatMap(UInt64.init) ?? UInt64(viewer.id) ?? UInt64(credentials.dsUserId) ?? 0,
+            pk: profile.id.flatMap(UInt64.init) ?? UInt64(viewer.pk) ?? UInt64(credentials.dsUserId) ?? 0,
             username: profile.username ?? viewer.username,
             fullName: profile.fullName,
             profilePicURL: profile.profilePicUrl.flatMap(URL.init) ?? viewer.profilePicUrl.flatMap(URL.init),
@@ -158,7 +157,7 @@ public final class InstagramClient {
             throw SourceError.notConfigured
         }
 
-        return try await storiesTrayResponse(credentials: credentials).data.reelsTray?.tray ?? []
+        return try await storiesTrayResponse(credentials: credentials).tray
     }
 
     func storyReel(username: String) async throws -> InstagramReel? {
@@ -167,7 +166,7 @@ public final class InstagramClient {
         }
         let pageURL = Self.baseURL + "/stories/\(username.urlPathEncoded)/"
         let html = try await webTextRequest(credentials: credentials, method: "GET", url: URL(string: pageURL)!, headers: basePageHeaders(credentials: credentials))
-        docIds.merge(parseDocIds(source: html)) { _, new in new }
+        try await mergeStoryPageDocIds(html: html, credentials: credentials)
         guard let payloadData = extractStoryPayloadData(from: html) else { return nil }
         let payload = try JSONDecoder().decode(InstagramStoryPagePayload.self, from: payloadData)
         return payload.xdtAPIReelsMedia.reelsMedia.first
@@ -586,13 +585,41 @@ public final class InstagramClient {
         return state
     }
 
-    private func storiesTrayResponse(credentials: InstagramCredentials) async throws -> InstagramWebStoriesTrayResponse {
-        let variables: [String: Any] = [
-            "data": ["is_following_feed": false, "reason": "web_home"],
-            "suggestedUsersData": ["max_id": "", "max_number_to_display": 0, "module": "discover_people", "paginate": false],
+    private func storiesTrayResponse(credentials: InstagramCredentials) async throws -> InstagramReelsTrayResponse {
+        let state = try await ensureBootstrappedState(credentials: credentials)
+        let fields = [
+            "_csrftoken": state.csrfToken ?? credentials.csrfToken,
+            "jazoest": jazoest(csrfToken: state.csrfToken ?? credentials.csrfToken),
         ]
-        let data = try await graphqlGet(credentials: credentials, docID: docId(credentials: credentials, command: "stories-tray"), variables: variables)
-        return try JSONDecoder().decode(InstagramWebStoriesTrayResponse.self, from: data)
+        let data = try await webJSONRequest(
+            credentials: credentials,
+            method: "POST",
+            path: "/api/v1/feed/reels_tray/",
+            headers: ["Content-Type": "application/x-www-form-urlencoded"],
+            body: formURLEncoded(fields).data(using: .utf8),
+        )
+        return try JSONDecoder().decode(InstagramReelsTrayResponse.self, from: data)
+    }
+
+    private func directInboxViewer(credentials: InstagramCredentials) async throws -> InstagramDirectViewer {
+        var components = URLComponents(string: Self.baseURL + "/api/v1/direct_v2/inbox/")!
+        components.queryItems = [
+            URLQueryItem(name: "visual_message_return_type", value: "unseen"),
+            URLQueryItem(name: "thread_message_limit", value: "1"),
+            URLQueryItem(name: "persistentBadging", value: "true"),
+            URLQueryItem(name: "limit", value: "1"),
+        ]
+        let data = try await webJSONRequest(credentials: credentials, method: "GET", url: components.url!)
+        let decoded = try JSONDecoder().decode(InstagramDirectInboxResponse.self, from: data)
+        guard let viewer = decoded.viewer else { throw SourceError.invalidResponse }
+        return viewer
+    }
+
+    @discardableResult
+    private func ensureBootstrappedState(credentials: InstagramCredentials) async throws -> InstagramWebState {
+        try await ensureBootstrapped(credentials: credentials)
+        if let webState { return webState }
+        return try await refreshState(credentials: credentials)
     }
 
     private func docId(credentials: InstagramCredentials, command: String) async throws -> String {
@@ -607,6 +634,19 @@ public final class InstagramClient {
         let state = try await refreshState(credentials: credentials)
         var discovered = parseDocIds(source: state.html)
         for scriptURL in scriptURLs(html: state.html) {
+            do {
+                let source = try await webTextRequest(credentials: credentials, method: "GET", url: scriptURL, headers: baseAssetHeaders(credentials: credentials))
+                discovered.merge(parseDocIds(source: source)) { _, new in new }
+            } catch {
+                continue
+            }
+        }
+        docIds.merge(discovered) { _, new in new }
+    }
+
+    private func mergeStoryPageDocIds(html: String, credentials: InstagramCredentials) async throws {
+        var discovered = parseDocIds(source: html)
+        for scriptURL in scriptURLs(html: html) {
             do {
                 let source = try await webTextRequest(credentials: credentials, method: "GET", url: scriptURL, headers: baseAssetHeaders(credentials: credentials))
                 discovered.merge(parseDocIds(source: source)) { _, new in new }
@@ -1124,7 +1164,35 @@ struct InstagramMediaThumbnail: Decodable {
 
 private struct InstagramDirectInboxResponse: Decodable {
     let inbox: InstagramDirectInbox
+    let viewer: InstagramDirectViewer?
     let status: String?
+}
+
+private struct InstagramDirectViewer: Decodable {
+    let pk: String
+    let username: String
+    let fullName: String?
+    let profilePicUrl: String?
+
+    enum CodingKeys: String, CodingKey {
+        case pk
+        case username
+        case fullName = "full_name"
+        case profilePicUrl = "profile_pic_url"
+        case id
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let pk = try container.decodeFlexibleStringIfPresent(forKey: .pk) {
+            self.pk = pk
+        } else {
+            pk = try container.decodeFlexibleString(forKey: .id)
+        }
+        username = try container.decode(String.self, forKey: .username)
+        fullName = try container.decodeIfPresent(String.self, forKey: .fullName)
+        profilePicUrl = try container.decodeIfPresent(String.self, forKey: .profilePicUrl)
+    }
 }
 
 private struct InstagramDirectInbox: Decodable {

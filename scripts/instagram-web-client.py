@@ -291,10 +291,23 @@ class InstagramWebClient:
         url = BASE_URL + "/api/v1/direct_v2/inbox/?" + params
         return self.request_json_with_refresh("GET", url, headers=self.web_headers())
 
+    def rest_stories_tray(self) -> dict[str, Any]:
+        self._ensure_bootstrapped()
+        state = self._state()
+        fields = {}
+        if state.csrf_token:
+            fields["_csrftoken"] = state.csrf_token
+            fields["jazoest"] = jazoest(state.csrf_token)
+        return self.request_json_with_refresh(
+            "POST",
+            BASE_URL + "/api/v1/feed/reels_tray/",
+            headers={**self.web_headers(), "Content-Type": "application/x-www-form-urlencoded"},
+            body=urllib.parse.urlencode(fields).encode(),
+        )
+
     def current_user(self) -> dict[str, Any]:
-        response = self.graphql_get(self.doc_id("stories-tray"), DEFAULT_VARIABLES["stories-tray"])
-        viewer = response.get("data", {}).get("xdt_viewer")
-        return {"status": response.get("status"), "xdt_viewer": viewer}
+        response = self.rest_direct_inbox()
+        return {"status": response.get("status"), "viewer": response.get("viewer")}
 
     def rest_profile_by_username(self, username: str) -> dict[str, Any]:
         self._ensure_bootstrapped()
@@ -935,7 +948,7 @@ def main() -> None:
     if args.command == "activity":
         result = client.graphql_get(client.doc_id("activity"), DEFAULT_VARIABLES["activity"])
     elif args.command == "stories-tray":
-        result = client.graphql_get(client.doc_id("stories-tray"), DEFAULT_VARIABLES["stories-tray"])
+        result = client.rest_stories_tray()
     elif args.command == "story-page":
         result = client.story_page(args.username)
     elif args.command == "current-user":
