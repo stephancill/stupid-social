@@ -12,8 +12,8 @@ struct NotificationDetailView: View {
     let feedService: FeedService
     @Environment(\.openURL) private var openURL
     @AppStorage("devModeEnabled") private var devModeEnabled = false
-    @State private var targetMetrics: NotificationTargetMetrics?
-    @State private var isLoadingTargetMetrics = false
+    @State private var targetDetails: NotificationTargetDetails?
+    @State private var isLoadingTargetDetails = false
 
     var body: some View {
         Form {
@@ -34,8 +34,8 @@ struct NotificationDetailView: View {
                         replyTarget: target,
                         network: displayItem.item.network,
                         actors: displayItem.item.actors,
-                        replyMetrics: targetMetrics,
-                        isLoadingReplyMetrics: displayItem.item.type == .message ? false : isLoadingTargetMetrics,
+                        replyDetails: targetDetails,
+                        isLoadingReplyDetails: displayItem.item.type == .message ? false : isLoadingTargetDetails,
                         parentURL: postURL(for: parentTarget),
                         replyURL: targetURL,
                     ) { url in
@@ -53,14 +53,14 @@ struct NotificationDetailView: View {
                         ) { url in
                             openURL(url)
                         }
-                    } else if let targetMetrics, !targetMetrics.relatedTargets.isEmpty {
-                        ForEach(targetMetrics.relatedTargets, id: \.id) { relatedTarget in
+                    } else if let targetDetails, !targetDetails.relatedTargets.isEmpty {
+                        ForEach(targetDetails.relatedTargets, id: \.id) { relatedTarget in
                             TargetPostView(
                                 target: relatedTarget,
                                 fallbackNetwork: displayItem.item.network,
                                 fallbackActors: displayItem.item.actors,
-                                metrics: nil,
-                                isLoadingMetrics: false,
+                                details: nil,
+                                isLoadingDetails: false,
                                 targetURL: postURL(for: relatedTarget),
                                 hidesMediaFallbackText: false,
                             ) { url in
@@ -72,8 +72,8 @@ struct NotificationDetailView: View {
                             target: target,
                             fallbackNetwork: displayItem.item.network,
                             fallbackActors: displayItem.item.actors,
-                            metrics: targetMetrics,
-                            isLoadingMetrics: isLoadingTargetMetrics,
+                            details: targetDetails,
+                            isLoadingDetails: isLoadingTargetDetails,
                             targetURL: targetURL,
                             hidesMediaFallbackText: displayItem.item.type == .message,
                         ) { url in
@@ -106,7 +106,7 @@ struct NotificationDetailView: View {
         #endif
         .navigationTitle(title)
         .task(id: displayItem.id) {
-            await loadTargetMetrics()
+            await loadTargetDetails()
         }
     }
 
@@ -156,13 +156,13 @@ struct NotificationDetailView: View {
         }
     }
 
-    private func loadTargetMetrics() async {
+    private func loadTargetDetails() async {
         guard displayItem.item.target != nil else { return }
         guard displayItem.item.type != .message else { return }
-        targetMetrics = nil
-        isLoadingTargetMetrics = true
-        defer { isLoadingTargetMetrics = false }
-        targetMetrics = try? await feedService.fetchTargetMetrics(for: displayItem.item)
+        targetDetails = nil
+        isLoadingTargetDetails = true
+        defer { isLoadingTargetDetails = false }
+        targetDetails = try? await feedService.fetchTargetDetails(for: displayItem.item)
     }
 }
 
@@ -298,8 +298,8 @@ private struct ReplyThreadView: View {
     let replyTarget: NotificationTarget
     let network: SocialNetwork
     let actors: [NotificationActor]
-    let replyMetrics: NotificationTargetMetrics?
-    let isLoadingReplyMetrics: Bool
+    let replyDetails: NotificationTargetDetails?
+    let isLoadingReplyDetails: Bool
     let parentURL: URL?
     let replyURL: URL?
     let openURL: (URL) -> Void
@@ -310,8 +310,8 @@ private struct ReplyThreadView: View {
                 target: parentTarget,
                 fallbackNetwork: network,
                 fallbackActors: actors,
-                metrics: nil,
-                isLoadingMetrics: false,
+                details: nil,
+                isLoadingDetails: false,
                 targetURL: parentURL,
                 hidesMediaFallbackText: false,
                 openURL: openURL,
@@ -323,8 +323,8 @@ private struct ReplyThreadView: View {
                 target: replyTarget,
                 fallbackNetwork: network,
                 fallbackActors: actors,
-                metrics: replyMetrics,
-                isLoadingMetrics: isLoadingReplyMetrics,
+                details: replyDetails,
+                isLoadingDetails: isLoadingReplyDetails,
                 targetURL: replyURL,
                 hidesMediaFallbackText: false,
                 openURL: openURL,
@@ -351,8 +351,8 @@ private struct TargetPostView: View {
     let target: NotificationTarget
     let fallbackNetwork: SocialNetwork
     let fallbackActors: [NotificationActor]
-    let metrics: NotificationTargetMetrics?
-    let isLoadingMetrics: Bool
+    let details: NotificationTargetDetails?
+    let isLoadingDetails: Bool
     let targetURL: URL?
     let hidesMediaFallbackText: Bool
     let openURL: (URL) -> Void
@@ -361,7 +361,7 @@ private struct TargetPostView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if isLoadingMetrics, metrics == nil {
+            if isLoadingDetails, details == nil {
                 ProgressView()
                     .frame(maxWidth: .infinity, minHeight: 72)
             } else {
@@ -371,7 +371,7 @@ private struct TargetPostView: View {
         .padding(.vertical, 6)
         .contentShape(Rectangle())
         .onTapGesture {
-            if let targetURL, !(isLoadingMetrics && metrics == nil) {
+            if let targetURL, !(isLoadingDetails && details == nil) {
                 openURL(targetURL)
             }
         }
@@ -398,7 +398,7 @@ private struct TargetPostView: View {
                             Text(fallbackNetwork.displayName)
                         }
 
-                        if let postedAt = metrics?.postedAt ?? target.postedAt {
+                        if let postedAt = details?.postedAt ?? target.postedAt {
                             Text("•")
                             Text(postedAt.compactRelativeTime)
                         }
@@ -428,11 +428,11 @@ private struct TargetPostView: View {
                 ImageCarousel(imageURLs: displayImageURLs)
             }
 
-            if isLoadingMetrics {
+            if isLoadingDetails {
                 loadingRow
             }
 
-            if let likeCount = metrics?.likeCount ?? target.likeCount {
+            if let likeCount = details?.likeCount ?? target.likeCount {
                 HStack(spacing: 2) {
                     Image(systemName: "heart")
                     Text(likeCountText(likeCount))
@@ -456,11 +456,11 @@ private struct TargetPostView: View {
     }
 
     private var displayAuthor: NotificationActor? {
-        metrics?.author ?? target.author
+        details?.author ?? target.author
     }
 
     private var displayText: String? {
-        let text = metrics?.text ?? target.text
+        let text = details?.text ?? target.text
         guard hidesMediaFallbackText, !displayImageURLs.isEmpty else { return text }
         let normalized = text?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
         if normalized.hasPrefix("sent a reel") || normalized.hasPrefix("sent a post") || normalized.hasPrefix("sent media") {
@@ -477,8 +477,8 @@ private struct TargetPostView: View {
     }
 
     private var displayImageURLs: [URL] {
-        if let metrics, !metrics.imageURLs.isEmpty {
-            return metrics.imageURLs
+        if let details, !details.imageURLs.isEmpty {
+            return details.imageURLs
         }
         if !target.imageURLs.isEmpty {
             return target.imageURLs

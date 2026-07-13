@@ -3,24 +3,22 @@ import SwiftData
 import XCTest
 
 final class FeedServiceTests: XCTestCase {
-    func testDisplayItemsSortDescendingAndDeriveUnread() {
-        let store = InMemoryReadWatermarkStoreForFeed()
+    func testDisplayItemsSortDescendingAndExposeNewState() {
         let older = item(id: "older", timestamp: Date(timeIntervalSince1970: 100))
         let newer = item(id: "newer", timestamp: Date(timeIntervalSince1970: 200))
-
-        store.markAllRead(items: [older], network: nil, accountId: nil)
+        let newIds: Set<String> = [newer.id]
 
         let displayed = [older, newer]
             .sorted { $0.timestamp > $1.timestamp }
-            .map { DisplayNotificationItem(item: $0, isUnread: store.isUnread($0)) }
+            .map { DisplayNotificationItem(item: $0, isNew: newIds.contains($0.id)) }
 
         XCTAssertEqual(displayed.map(\.id), ["newer", "older"])
-        XCTAssertTrue(displayed[0].isUnread)
-        XCTAssertFalse(displayed[1].isUnread)
+        XCTAssertTrue(displayed[0].isNew)
+        XCTAssertFalse(displayed[1].isNew)
     }
 
     @MainActor
-    func testManualRefreshMarksOnlyNewItemsUnread() async throws {
+    func testManualRefreshMarksOnlyFreshItemsNew() async throws {
         let container = try ModelContainer(
             for: CachedNotification.self,
             configurations: ModelConfiguration(isStoredInMemoryOnly: true),
@@ -29,12 +27,15 @@ final class FeedServiceTests: XCTestCase {
         let known = item(id: "known", timestamp: Date(timeIntervalSince1970: 200))
         try cacheStore.replaceAll([known])
 
-        let source = StubNotificationSource(items: [
+        let source = StubNotificationFetcher(items: [
             known,
             item(id: "new", timestamp: Date(timeIntervalSince1970: 100)),
         ])
         let service = FeedService(
-            sources: [source],
+            notificationSources: [source],
+            accountValidators: [],
+            profileFetchersByNetwork: [:],
+            targetDetailFetchersByNetwork: [:],
             cacheStore: cacheStore,
             watermarkStore: InMemoryReadWatermarkStoreForFeed(),
         )
@@ -42,8 +43,8 @@ final class FeedServiceTests: XCTestCase {
         let displayed = try await service.manualRefresh()
 
         XCTAssertEqual(displayed.map(\.id), ["known", "new"])
-        XCTAssertFalse(displayed[0].isUnread)
-        XCTAssertTrue(displayed[1].isUnread)
+        XCTAssertFalse(displayed[0].isNew)
+        XCTAssertTrue(displayed[1].isNew)
     }
 
     @MainActor
@@ -53,11 +54,14 @@ final class FeedServiceTests: XCTestCase {
             configurations: ModelConfiguration(isStoredInMemoryOnly: true),
         )
         let cacheStore = NotificationCacheStore(context: container.mainContext)
-        let source = StubNotificationSource(items: [
+        let source = StubNotificationFetcher(items: [
             item(id: "background-new", timestamp: Date(timeIntervalSince1970: 100)),
         ])
         let service = FeedService(
-            sources: [source],
+            notificationSources: [source],
+            accountValidators: [],
+            profileFetchersByNetwork: [:],
+            targetDetailFetchersByNetwork: [:],
             cacheStore: cacheStore,
             watermarkStore: InMemoryReadWatermarkStoreForFeed(),
         )
@@ -71,7 +75,7 @@ final class FeedServiceTests: XCTestCase {
 
         XCTAssertEqual(service.pendingNewCount(), 0)
         XCTAssertEqual(displayed.map(\.id), ["background-new"])
-        XCTAssertTrue(displayed[0].isUnread)
+        XCTAssertTrue(displayed[0].isNew)
     }
 
     @MainActor
@@ -81,23 +85,29 @@ final class FeedServiceTests: XCTestCase {
             configurations: ModelConfiguration(isStoredInMemoryOnly: true),
         )
         let cacheStore = NotificationCacheStore(context: container.mainContext)
-        let backgroundSource = StubNotificationSource(items: [
+        let backgroundSource = StubNotificationFetcher(items: [
             item(id: "background-new", timestamp: Date(timeIntervalSince1970: 100)),
         ])
         let backgroundService = FeedService(
-            sources: [backgroundSource],
+            notificationSources: [backgroundSource],
+            accountValidators: [],
+            profileFetchersByNetwork: [:],
+            targetDetailFetchersByNetwork: [:],
             cacheStore: cacheStore,
             watermarkStore: InMemoryReadWatermarkStoreForFeed(),
         )
         try await backgroundService.foregroundActivationRefresh()
         XCTAssertEqual(backgroundService.pendingNewCount(), 1)
 
-        let manualSource = StubNotificationSource(items: [
+        let manualSource = StubNotificationFetcher(items: [
             item(id: "manual-new", timestamp: Date(timeIntervalSince1970: 200)),
             item(id: "background-new", timestamp: Date(timeIntervalSince1970: 100)),
         ])
         let manualService = FeedService(
-            sources: [manualSource],
+            notificationSources: [manualSource],
+            accountValidators: [],
+            profileFetchersByNetwork: [:],
+            targetDetailFetchersByNetwork: [:],
             cacheStore: cacheStore,
             watermarkStore: InMemoryReadWatermarkStoreForFeed(),
         )
@@ -106,8 +116,8 @@ final class FeedServiceTests: XCTestCase {
 
         XCTAssertEqual(manualService.pendingNewCount(), 0)
         XCTAssertEqual(displayed.map(\.id), ["manual-new", "background-new"])
-        XCTAssertTrue(displayed[0].isUnread)
-        XCTAssertFalse(displayed[1].isUnread)
+        XCTAssertTrue(displayed[0].isNew)
+        XCTAssertFalse(displayed[1].isNew)
     }
 
     @MainActor
@@ -121,7 +131,10 @@ final class FeedServiceTests: XCTestCase {
         try cacheStore.replaceAll([cached])
 
         let service = FeedService(
-            sources: [FailingNotificationSource()],
+            notificationSources: [FailingNotificationFetcher()],
+            accountValidators: [],
+            profileFetchersByNetwork: [:],
+            targetDetailFetchersByNetwork: [:],
             cacheStore: cacheStore,
             watermarkStore: InMemoryReadWatermarkStoreForFeed(),
         )
@@ -139,7 +152,10 @@ final class FeedServiceTests: XCTestCase {
         )
         let cacheStore = NotificationCacheStore(context: container.mainContext)
         let service = FeedService(
-            sources: [FailingNotificationSource()],
+            notificationSources: [FailingNotificationFetcher()],
+            accountValidators: [],
+            profileFetchersByNetwork: [:],
+            targetDetailFetchersByNetwork: [:],
             cacheStore: cacheStore,
             watermarkStore: InMemoryReadWatermarkStoreForFeed(),
         )
@@ -164,10 +180,13 @@ final class FeedServiceTests: XCTestCase {
         try cacheStore.replaceAll([cachedX, cachedFarcaster])
 
         let service = FeedService(
-            sources: [
-                FailingNotificationSource(network: .x),
-                StubNotificationSource(network: .farcaster, items: [cachedFarcaster]),
+            notificationSources: [
+                FailingNotificationFetcher(network: .x),
+                StubNotificationFetcher(network: .farcaster, items: [cachedFarcaster]),
             ],
+            accountValidators: [],
+            profileFetchersByNetwork: [:],
+            targetDetailFetchersByNetwork: [:],
             cacheStore: cacheStore,
             watermarkStore: InMemoryReadWatermarkStoreForFeed(),
         )
@@ -188,7 +207,10 @@ final class FeedServiceTests: XCTestCase {
         try cacheStore.replaceAll([cachedX])
 
         let service = FeedService(
-            sources: [StubNotificationSource(network: .x, items: [])],
+            notificationSources: [StubNotificationFetcher(network: .x, items: [])],
+            accountValidators: [],
+            profileFetchersByNetwork: [:],
+            targetDetailFetchersByNetwork: [:],
             cacheStore: cacheStore,
             watermarkStore: InMemoryReadWatermarkStoreForFeed(),
         )
@@ -213,31 +235,19 @@ final class FeedServiceTests: XCTestCase {
     }
 }
 
-private final class FailingNotificationSource: NotificationSource {
+private final class FailingNotificationFetcher: NotificationFetching {
     let network: SocialNetwork
 
     init(network: SocialNetwork = .x) {
         self.network = network
     }
 
-    func validateAccount() async throws -> AccountStatus {
-        .valid
-    }
-
-    func fetchUnreadCount() async throws -> Int? {
-        nil
-    }
-
     func fetchNotifications(reason _: RefreshReason) async throws -> [NotificationItem] {
         throw SourceError.serviceError("Failed")
     }
-
-    func fetchProfile(id _: String) async throws -> NetworkProfile {
-        throw SourceError.unsupported
-    }
 }
 
-private final class StubNotificationSource: NotificationSource {
+private final class StubNotificationFetcher: NotificationFetching {
     let network: SocialNetwork
     private let items: [NotificationItem]
 
@@ -246,20 +256,8 @@ private final class StubNotificationSource: NotificationSource {
         self.items = items
     }
 
-    func validateAccount() async throws -> AccountStatus {
-        .valid
-    }
-
-    func fetchUnreadCount() async throws -> Int? {
-        nil
-    }
-
     func fetchNotifications(reason _: RefreshReason) async throws -> [NotificationItem] {
         items
-    }
-
-    func fetchProfile(id _: String) async throws -> NetworkProfile {
-        throw SourceError.unsupported
     }
 }
 

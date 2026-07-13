@@ -3,7 +3,10 @@ import OSLog
 
 @MainActor
 public final class FeedService {
-    private let sources: [any NotificationSource]
+    private let notificationSources: [any NotificationFetching]
+    private let accountValidators: [any AccountValidating]
+    private let profileFetchersByNetwork: [SocialNetwork: any ProfileFetching]
+    private let targetDetailFetchersByNetwork: [SocialNetwork: any NotificationTargetDetailFetching]
     private let cacheStore: NotificationCacheStore
     private let watermarkStore: ReadWatermarkProviding
     private let logger = Logger(subsystem: "tech.stupid.StupidSocial", category: "FeedService")
@@ -12,11 +15,17 @@ public final class FeedService {
     private var revealedIds = Set<String>()
 
     public init(
-        sources: [any NotificationSource],
+        notificationSources: [any NotificationFetching],
+        accountValidators: [any AccountValidating],
+        profileFetchersByNetwork: [SocialNetwork: any ProfileFetching],
+        targetDetailFetchersByNetwork: [SocialNetwork: any NotificationTargetDetailFetching],
         cacheStore: NotificationCacheStore,
         watermarkStore: ReadWatermarkProviding,
     ) {
-        self.sources = sources
+        self.notificationSources = notificationSources
+        self.accountValidators = accountValidators
+        self.profileFetchersByNetwork = profileFetchersByNetwork
+        self.targetDetailFetchersByNetwork = targetDetailFetchersByNetwork
         self.cacheStore = cacheStore
         self.watermarkStore = watermarkStore
     }
@@ -25,7 +34,7 @@ public final class FeedService {
         let items = try cacheStore.loadRecent()
         return items
             .filter { !pendingIds.contains($0.id) }
-            .map { DisplayNotificationItem(item: $0, isUnread: revealedIds.contains($0.id)) }
+            .map { DisplayNotificationItem(item: $0, isNew: revealedIds.contains($0.id)) }
     }
 
     public func pendingNewCount() -> Int {
@@ -38,7 +47,7 @@ public final class FeedService {
         var errors: [String] = []
         var refreshedNetworks = Set<SocialNetwork>()
 
-        for source in sources {
+        for source in notificationSources {
             do {
                 let items = try await source.fetchNotifications(reason: .manual)
                 logger.info("Source refresh finished: \(source.network.rawValue, privacy: .public) \(items.count, privacy: .public) items")
@@ -93,7 +102,7 @@ public final class FeedService {
         var incoming: [NotificationItem] = []
         var refreshedNetworks = Set<SocialNetwork>()
 
-        for source in sources {
+        for source in notificationSources {
             do {
                 let items = try await source.fetchNotifications(reason: .background)
                 logger.info("Foreground activation source refresh finished: \(source.network.rawValue, privacy: .public) \(items.count, privacy: .public) items")
@@ -127,13 +136,13 @@ public final class FeedService {
     }
 
     public func healthCheckAllSources() async {
-        for source in sources {
+        for source in accountValidators {
             _ = try? await source.validateAccount()
         }
     }
 
     public func fetchProfile(for actorId: String, network: SocialNetwork, username: String? = nil) async throws -> NetworkProfile {
-        guard let source = sources.first(where: { $0.network == network }) else {
+        guard let source = profileFetchersByNetwork[network] else {
             throw SourceError.serviceError("No source for network \(network)")
         }
         // X and Instagram can resolve profiles by username; this avoids stale or non-numeric source ids breaking detail lookup.
@@ -141,16 +150,16 @@ public final class FeedService {
         return try await source.fetchProfile(id: lookupId)
     }
 
-    public func fetchTargetMetrics(for item: NotificationItem) async throws -> NotificationTargetMetrics {
-        guard let source = sources.first(where: { $0.network == item.network }) else {
+    public func fetchTargetDetails(for item: NotificationItem) async throws -> NotificationTargetDetails {
+        guard let source = targetDetailFetchersByNetwork[item.network] else {
             throw SourceError.serviceError("No source for network \(item.network)")
         }
-        return try await source.fetchTargetMetrics(for: item)
+        return try await source.fetchTargetDetails(for: item)
     }
 
     public func markAllRead(items: [DisplayNotificationItem]) -> [DisplayNotificationItem] {
         watermarkStore.markAllRead(items: items.map(\.item), network: nil, accountId: nil)
         revealedIds.removeAll()
-        return items.map { DisplayNotificationItem(item: $0.item, isUnread: false) }
+        return items.map { DisplayNotificationItem(item: $0.item, isNew: false) }
     }
 }

@@ -1,6 +1,6 @@
 import Foundation
 
-public struct XNotificationSource: NotificationSource {
+public struct XNotificationSource: NotificationFetching, AccountValidating, ProfileFetching, NotificationTargetDetailFetching {
     public let network: SocialNetwork = .x
 
     private let client: XClient
@@ -25,10 +25,6 @@ public struct XNotificationSource: NotificationSource {
             }
             return .serviceError(error.localizedDescription)
         }
-    }
-
-    public func fetchUnreadCount() async throws -> Int? {
-        try await client.unreadCount()
     }
 
     public func fetchNotifications(reason _: RefreshReason) async throws -> [NotificationItem] {
@@ -63,10 +59,10 @@ public struct XNotificationSource: NotificationSource {
         throw SourceError.serviceError("X profile lookup failed for @\(id).")
     }
 
-    public func fetchTargetMetrics(for item: NotificationItem) async throws -> NotificationTargetMetrics {
+    public func fetchTargetDetails(for item: NotificationItem) async throws -> NotificationTargetDetails {
         if item.type == .post {
             let relatedTargets = try await client.deviceFollowTargets(for: item)
-            return NotificationTargetMetrics(relatedTargets: relatedTargets)
+            return NotificationTargetDetails(relatedTargets: relatedTargets)
         }
 
         guard let tweetId = item.target?.id ?? item.sourceId,
@@ -75,6 +71,6 @@ public struct XNotificationSource: NotificationSource {
             throw SourceError.unsupported
         }
 
-        return try await client.tweetMetrics(tweetId: tweetId)
+        return try await client.tweetDetails(tweetId: tweetId)
     }
 }

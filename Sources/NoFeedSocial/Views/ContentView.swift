@@ -5,88 +5,45 @@ import SwiftUI
 public struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.scenePhase) private var scenePhase
-    @State private var feedViewModel: FeedViewModel?
-    @State private var settingsViewModel: SettingsViewModel?
-    @State private var spotifyClient: SpotifyClient?
+    @State private var container: AppContainer?
 
     public init() {}
 
     public var body: some View {
         Group {
-            if let feedViewModel, let settingsViewModel, let spotifyClient {
-                FeedView(viewModel: feedViewModel, settingsViewModel: settingsViewModel, spotifyClient: spotifyClient)
+            if let container {
+                FeedView(
+                    viewModel: container.feedViewModel,
+                    storyViewModel: container.storyBarViewModel,
+                    settingsViewModel: container.settingsViewModel,
+                    spotifyClient: container.spotifyClient,
+                )
             } else {
                 ProgressView()
             }
         }
         .task {
-            if feedViewModel == nil || settingsViewModel == nil {
+            if container == nil {
                 configureDependencies()
             }
         }
         .onChange(of: scenePhase) { _, phase in
-            guard phase == .active, let feedViewModel else { return }
+            guard phase == .active, let container else { return }
             Task {
-                await feedViewModel.refreshOnForegroundActivation()
+                let refreshed = await container.feedViewModel.refreshOnForegroundActivation()
+                if refreshed {
+                    await container.storyBarViewModel.fetchStoryBarContent()
+                }
             }
         }
     }
 
     private func configureDependencies() {
-        let metadataStore = AccountMetadataStore()
-        let keychainStore = KeychainCredentialStore()
-        let farcasterClient = FarcasterClient()
-        let cacheStore = NotificationCacheStore(context: modelContext)
-        let watermarkStore = ICloudReadWatermarkStore()
-
-        let instagramSource = InstagramNotificationSource(
-            client: InstagramClient(credentialStore: keychainStore),
-            metadataStore: metadataStore,
-        )
-
-        let spotifyClientRef = SpotifyClient(credentialStore: keychainStore)
-
-        let spotifyActivitySource = SpotifyActivitySource(
-            client: spotifyClientRef,
-            metadataStore: metadataStore,
-        )
-
-        let sources: [any NotificationSource] = [
-            XNotificationSource(
-                client: XClient(credentialStore: keychainStore),
-                metadataStore: metadataStore,
-            ),
-            FarcasterNotificationSource(
-                client: farcasterClient,
-                metadataStore: metadataStore,
-            ),
-            instagramSource,
-            spotifyActivitySource,
-            DebugNotificationSource(
-                client: DebugNotificationsClient(),
-                metadataStore: metadataStore,
-            ),
-        ]
-
-        let service = FeedService(
-            sources: sources,
-            cacheStore: cacheStore,
-            watermarkStore: watermarkStore,
-        )
-
-        let feed = FeedViewModel(feedService: service, instagramSource: instagramSource, spotifyActivitySource: spotifyActivitySource)
-        feed.loadCachedFeed()
-        feedViewModel = feed
-        settingsViewModel = SettingsViewModel(
-            keychainStore: keychainStore,
-            metadataStore: metadataStore,
-            farcasterClient: farcasterClient,
-            cacheStore: cacheStore,
-        )
-        spotifyClient = spotifyClientRef
+        let appContainer = AppContainer(modelContext: modelContext)
+        container = appContainer
 
         Task {
-            await feed.fetchStoryBarContent()
+            await appContainer.storyBarViewModel.fetchStoryBarContent()
         }
     }
 }

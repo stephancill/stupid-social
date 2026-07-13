@@ -1,6 +1,6 @@
 import Foundation
 
-public struct FarcasterNotificationSource: NotificationSource {
+public struct FarcasterNotificationSource: NotificationFetching, AccountValidating, ProfileFetching, NotificationTargetDetailFetching {
     public let network: SocialNetwork = .farcaster
 
     private let client: FarcasterClient
@@ -25,16 +25,6 @@ public struct FarcasterNotificationSource: NotificationSource {
             metadataStore.farcasterAccount = updated
             return .serviceError(error.localizedDescription)
         }
-    }
-
-    public func fetchUnreadCount() async throws -> Int? {
-        guard let account = metadataStore.farcasterAccount else {
-            throw SourceError.notConfigured
-        }
-
-        let response = try await client.notifications(fid: account.fid)
-        let items = filteredItems(from: response.notifications, account: account)
-        return groupItems(items, accountId: String(account.fid)).count
     }
 
     public func fetchNotifications(reason _: RefreshReason) async throws -> [NotificationItem] {
@@ -65,7 +55,7 @@ public struct FarcasterNotificationSource: NotificationSource {
         )
     }
 
-    public func fetchTargetMetrics(for item: NotificationItem) async throws -> NotificationTargetMetrics {
+    public func fetchTargetDetails(for item: NotificationItem) async throws -> NotificationTargetDetails {
         guard let target = item.target else {
             throw SourceError.unsupported
         }
@@ -74,7 +64,7 @@ public struct FarcasterNotificationSource: NotificationSource {
         let cast = try? await client.cast(hash: target.id, fid: authorFid)
         let imageURLs = cast?.embeds?.compactMap { $0.url.flatMap(URL.init) } ?? []
 
-        return NotificationTargetMetrics(
+        return NotificationTargetDetails(
             author: cast?.author.map { author in
                 NotificationActor(
                     id: String(author.fid),

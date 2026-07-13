@@ -195,15 +195,15 @@ public struct MusicAnimationMetadata: Hashable, Codable, Sendable {
 
 public struct DisplayNotificationItem: Identifiable, Hashable {
     public let item: NotificationItem
-    public let isUnread: Bool
+    public let isNew: Bool
 
     public var id: String {
         item.id
     }
 
-    public init(item: NotificationItem, isUnread: Bool) {
+    public init(item: NotificationItem, isNew: Bool) {
         self.item = item
-        self.isUnread = isUnread
+        self.isNew = isNew
     }
 }
 

@@ -1,23 +1,43 @@
 import Foundation
 
 @MainActor
-public protocol NotificationSource {
+public protocol SocialSource {
     var network: SocialNetwork { get }
+}
 
+public protocol AccountValidating: SocialSource {
     func validateAccount() async throws -> AccountStatus
-    func fetchUnreadCount() async throws -> Int?
+}
+
+public protocol NotificationFetching: SocialSource {
     func fetchNotifications(reason: RefreshReason) async throws -> [NotificationItem]
+}
+
+public protocol ProfileFetching: SocialSource {
     func fetchProfile(id: String) async throws -> NetworkProfile
-    func fetchTargetMetrics(for item: NotificationItem) async throws -> NotificationTargetMetrics
 }
 
-public extension NotificationSource {
-    func fetchTargetMetrics(for _: NotificationItem) async throws -> NotificationTargetMetrics {
-        throw SourceError.unsupported
-    }
+public protocol NotificationTargetDetailFetching: SocialSource {
+    func fetchTargetDetails(for item: NotificationItem) async throws -> NotificationTargetDetails
 }
 
-public struct NotificationTargetMetrics: Hashable, Sendable {
+public protocol StoryFetching: SocialSource {
+    var hasMoreStoryReels: Bool { get }
+    func fetchStoryReels() async throws -> [InstagramStoryReel]
+    func fetchNextStoryReelPage() async throws -> [InstagramStoryReel]
+}
+
+public protocol StoryPosting: SocialSource {
+    func postPhotoStory(imageData: Data, width: Int, height: Int, mimeType: String) async throws
+    func deleteStory(mediaId: String, isVideo: Bool) async throws
+    func setStoryLiked(mediaId: String, liked: Bool) async throws
+}
+
+public protocol ActivityFetching: SocialSource {
+    func fetchActivity(reason: RefreshReason) async throws -> [SpotifyActivityItem]
+}
+
+public struct NotificationTargetDetails: Hashable, Sendable {
     public let author: NotificationActor?
     public let text: String?
     public let imageURLs: [URL]

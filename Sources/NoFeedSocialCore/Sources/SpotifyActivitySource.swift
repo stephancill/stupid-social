@@ -1,7 +1,7 @@
 import Foundation
 
 @MainActor
-public final class SpotifyActivitySource: NotificationSource {
+public final class SpotifyActivitySource: ActivityFetching, AccountValidating, ProfileFetching {
     public let network: SocialNetwork = .spotify
 
     private let client: SpotifyClient
@@ -35,14 +35,6 @@ public final class SpotifyActivitySource: NotificationSource {
             }
             return .serviceError(error.localizedDescription)
         }
-    }
-
-    public func fetchUnreadCount() async throws -> Int? {
-        nil
-    }
-
-    public func fetchNotifications(reason _: RefreshReason) async throws -> [NotificationItem] {
-        []
     }
 
     public func fetchActivity(reason _: RefreshReason) async throws -> [SpotifyActivityItem] {

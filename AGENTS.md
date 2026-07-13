@@ -5,9 +5,10 @@
 ```
 Sources/
   NoFeedSocial/                     # App UI layer (SwiftUI views)
+    AppContainer.swift              # App-layer composition root
     NoFeedSocialApp.swift           # iOS @main entry point
     Views/
-      ContentView.swift             # Root view, dependency wiring
+      ContentView.swift             # Root view, container wiring
       FeedView.swift                # Main list + StoriesBar + story viewer triggers
       StoryComposerView.swift       # Full-screen story composer scaffold
       NotificationDetailView.swift  # Standard form-based notification detail
@@ -31,7 +32,7 @@ Sources/
       FeedService.swift             # Central feed orchestration
     Sources/                        # Network clients + notification sources
       NotificationSource.swift      # Protocol definition
-      InstagramClient.swift / InstagramNotificationSource.swift
+      InstagramClient.swift / InstagramSession.swift / Instagram*Models.swift / Instagram*Parser.swift / InstagramNotificationSource.swift
       SpotifyClient.swift / SpotifyActivitySource.swift
       XClient.swift / XNotificationSource.swift
       FarcasterClient.swift / FarcasterNotificationSource.swift
@@ -42,8 +43,10 @@ Sources/
       KeychainCredentialStore.swift
       NotificationCacheStore.swift
       ReadWatermarkStore.swift
+      SpotifyActivitySeenStore.swift
     ViewModels/
       FeedViewModel.swift
+      StoryBarViewModel.swift
       SettingsViewModel.swift
   NoFeedSocialMac/                  # macOS app entry point
     NoFeedSocialMacApp.swift

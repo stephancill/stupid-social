@@ -1,7 +1,7 @@
 import Foundation
 
 @MainActor
-public final class InstagramNotificationSource: NotificationSource {
+public final class InstagramNotificationSource: NotificationFetching, AccountValidating, ProfileFetching, NotificationTargetDetailFetching, StoryFetching, StoryPosting {
     public let network: SocialNetwork = .instagram
 
     private let client: InstagramClient
@@ -70,18 +70,6 @@ public final class InstagramNotificationSource: NotificationSource {
         } catch {
             invalidateAccount()
             return .notConfigured
-        }
-    }
-
-    public func fetchUnreadCount() async throws -> Int? {
-        do {
-            let categories = metadataStore.instagramAccount?.enabledCategories ?? []
-            let username = metadataStore.instagramAccount?.username
-            let includeDirectMediaShares = metadataStore.instagramAccount?.directMediaSharesEnabled ?? true
-            let items = try await client.notifications(enabledCategories: categories, accountUsername: username, includeDirectMediaShares: includeDirectMediaShares)
-            return items.count
-        } catch SourceError.notConfigured {
-            return nil
         }
     }
 
@@ -250,7 +238,7 @@ public final class InstagramNotificationSource: NotificationSource {
         }
     }
 
-    public func fetchTargetMetrics(for item: NotificationItem) async throws -> NotificationTargetMetrics {
+    public func fetchTargetDetails(for item: NotificationItem) async throws -> NotificationTargetDetails {
         guard let mediaId = item.target?.id else {
             throw SourceError.unsupported
         }
@@ -270,7 +258,7 @@ public final class InstagramNotificationSource: NotificationSource {
             )
         }
 
-        return NotificationTargetMetrics(
+        return NotificationTargetDetails(
             author: author,
             text: media.caption?.text,
             imageURLs: media.bestImageURLs,

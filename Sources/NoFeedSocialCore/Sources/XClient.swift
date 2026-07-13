@@ -195,7 +195,7 @@ public struct XClient {
         return try XNotificationParser.parse(response: decoded)
     }
 
-    func tweetMetrics(tweetId: String) async throws -> NotificationTargetMetrics {
+    func tweetDetails(tweetId: String) async throws -> NotificationTargetDetails {
         guard let credentials = try credentialStore.loadXCredentials() else {
             throw SourceError.notConfigured
         }
@@ -226,7 +226,7 @@ public struct XClient {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         let decoded = try decoder.decode(XTweetMetricsResponse.self, from: data)
-        return NotificationTargetMetrics(likeCount: decoded.favoriteCount)
+        return NotificationTargetDetails(likeCount: decoded.favoriteCount)
     }
 
     func deviceFollowTargets(for item: NotificationItem) async throws -> [NotificationTarget] {

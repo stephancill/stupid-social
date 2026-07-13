@@ -9,6 +9,7 @@ import SwiftUI
 
 struct FeedView: View {
     @ObservedObject var viewModel: FeedViewModel
+    @ObservedObject var storyViewModel: StoryBarViewModel
     let settingsViewModel: SettingsViewModel
     let spotifyClient: SpotifyClient
     @State private var storyViewerSelection: StoryViewerSelection?
@@ -20,14 +21,14 @@ struct FeedView: View {
             List {
                 if hasVisibleStoriesBar {
                     StoriesBar(
-                        items: viewModel.storyBarItems,
-                        ownInstagramActor: viewModel.ownInstagramStoryActor,
-                        ownInstagramReel: viewModel.ownInstagramStoryReel,
+                        items: storyViewModel.storyBarItems,
+                        ownInstagramActor: storyViewModel.ownInstagramStoryActor,
+                        ownInstagramReel: storyViewModel.ownInstagramStoryReel,
                         onComposeTap: {
                             showingStoryComposer = true
                         },
                         onOwnStoryTap: {
-                            if let ownInstagramStoryReel = viewModel.ownInstagramStoryReel {
+                            if let ownInstagramStoryReel = storyViewModel.ownInstagramStoryReel {
                                 storyViewerSelection = StoryViewerSelection(
                                     items: [.instagram(ownInstagramStoryReel)],
                                     startIndex: 0,
@@ -37,21 +38,21 @@ struct FeedView: View {
                             }
                         },
                         onItemTap: { selectedItem, visibleItems in
-                            let items = viewModel.storyViewerItems(for: selectedItem, in: visibleItems)
+                            let items = storyViewModel.storyViewerItems(for: selectedItem, in: visibleItems)
                             storyViewerSelection = StoryViewerSelection(
                                 items: items,
-                                startIndex: viewModel.storyViewerStartIndex(for: selectedItem, in: items),
+                                startIndex: storyViewModel.storyViewerStartIndex(for: selectedItem, in: items),
                             )
                         },
                         onItemAppear: { item in
                             Task {
-                                await viewModel.loadNextStoryBarPageIfNeeded(currentItem: item)
+                                await storyViewModel.loadNextStoryBarPageIfNeeded(currentItem: item)
                             }
                         },
                     )
                 }
 
-                if notificationItems.isEmpty, !hasVisibleStoriesBar, !viewModel.storyBarLoading {
+                if notificationItems.isEmpty, !hasVisibleStoriesBar, !storyViewModel.storyBarLoading {
                     VStack {
                         Spacer(minLength: 0)
                         VStack(spacing: 8) {
@@ -73,9 +74,9 @@ struct FeedView: View {
                     .listRowSeparator(.hidden)
                     .listRowBackground(Color.clear)
                 } else {
-                    if !unreadItems.isEmpty {
+                    if !newItems.isEmpty {
                         Section {
-                            ForEach(Array(unreadItems.enumerated()), id: \.element.id) { index, displayItem in
+                            ForEach(Array(newItems.enumerated()), id: \.element.id) { index, displayItem in
                                 NotificationLink(displayItem: displayItem, feedService: viewModel.service)
                                     .listRowSeparator(index == 0 ? .hidden : .visible, edges: .top)
                             }
@@ -83,13 +84,13 @@ struct FeedView: View {
                         .listSectionSeparator(.hidden)
                     }
 
-                    if !unreadItems.isEmpty, !readItems.isEmpty {
+                    if !newItems.isEmpty, !knownItems.isEmpty {
                         NewSeparatorRow()
                     }
 
-                    if !readItems.isEmpty {
+                    if !knownItems.isEmpty {
                         Section {
-                            ForEach(Array(readItems.enumerated()), id: \.element.id) { index, displayItem in
+                            ForEach(Array(knownItems.enumerated()), id: \.element.id) { index, displayItem in
                                 NotificationLink(displayItem: displayItem, feedService: viewModel.service)
                                     .listRowSeparator(index == 0 ? .hidden : .visible, edges: .top)
                             }
@@ -105,14 +106,14 @@ struct FeedView: View {
             .toolbarBackground(.hidden, for: .navigationBar)
             #endif
             .refreshable {
-                await viewModel.refresh()
+                await refreshFeedAndStories()
             }
             .navigationTitle("Notifications")
             .navigationDestination(isPresented: $showingEmptyStateSettings) {
                 SettingsView(viewModel: settingsViewModel)
                     .onDisappear {
                         Task {
-                            await viewModel.refreshOnForegroundActivation()
+                            await foregroundRefreshFeedAndStories()
                         }
                     }
             }
@@ -140,7 +141,7 @@ struct FeedView: View {
                         SettingsView(viewModel: settingsViewModel)
                             .onDisappear {
                                 Task {
-                                    await viewModel.refreshOnForegroundActivation()
+                                    await foregroundRefreshFeedAndStories()
                                 }
                             }
                     } label: {
@@ -151,9 +152,10 @@ struct FeedView: View {
             .alert("Refresh Issue", isPresented: errorBinding) {
                 Button("OK", role: .cancel) {
                     viewModel.errorMessage = nil
+                    storyViewModel.errorMessage = nil
                 }
             } message: {
-                Text(viewModel.errorMessage ?? "Refresh failed.")
+                Text(alertMessage)
             }
         }
         #if os(iOS)
@@ -163,24 +165,24 @@ struct FeedView: View {
                 startIndex: selection.startIndex,
                 spotifyClient: spotifyClient,
                 feedService: viewModel.service,
-                ownInstagramAccountId: viewModel.ownInstagramStoryActor?.id,
+                ownInstagramAccountId: storyViewModel.ownInstagramStoryActor?.id,
                 onInstagramReelSeen: { reelId in
-                    viewModel.markInstagramReelAsSeen(reelId: reelId)
+                    storyViewModel.markInstagramReelAsSeen(reelId: reelId)
                 },
                 onSpotifyItemSeen: { userURI in
-                    viewModel.markSpotifyActivityAsSeen(userURI: userURI)
+                    storyViewModel.markSpotifyActivityAsSeen(userURI: userURI)
                 },
                 onInstagramStoryDelete: { mediaId, isVideo in
-                    try await viewModel.deleteInstagramStory(mediaId: mediaId, isVideo: isVideo)
+                    try await storyViewModel.deleteInstagramStory(mediaId: mediaId, isVideo: isVideo)
                 },
                 onInstagramStoryLike: { mediaId, liked in
-                    try await viewModel.setInstagramStoryLiked(mediaId: mediaId, liked: liked)
+                    try await storyViewModel.setInstagramStoryLiked(mediaId: mediaId, liked: liked)
                 },
             )
         }
         .fullScreenCover(isPresented: $showingStoryComposer) {
             StoryComposerView { imageData, width, height, mimeType in
-                try await viewModel.postInstagramStory(imageData: imageData, width: width, height: height, mimeType: mimeType)
+                try await storyViewModel.postInstagramStory(imageData: imageData, width: width, height: height, mimeType: mimeType)
             }
         }
         #else
@@ -190,24 +192,24 @@ struct FeedView: View {
                         startIndex: selection.startIndex,
                         spotifyClient: spotifyClient,
                         feedService: viewModel.service,
-                        ownInstagramAccountId: viewModel.ownInstagramStoryActor?.id,
+                        ownInstagramAccountId: storyViewModel.ownInstagramStoryActor?.id,
                         onInstagramReelSeen: { reelId in
-                            viewModel.markInstagramReelAsSeen(reelId: reelId)
+                            storyViewModel.markInstagramReelAsSeen(reelId: reelId)
                         },
                         onSpotifyItemSeen: { userURI in
-                            viewModel.markSpotifyActivityAsSeen(userURI: userURI)
+                            storyViewModel.markSpotifyActivityAsSeen(userURI: userURI)
                         },
                         onInstagramStoryDelete: { mediaId, isVideo in
-                            try await viewModel.deleteInstagramStory(mediaId: mediaId, isVideo: isVideo)
+                            try await storyViewModel.deleteInstagramStory(mediaId: mediaId, isVideo: isVideo)
                         },
                         onInstagramStoryLike: { mediaId, liked in
-                            try await viewModel.setInstagramStoryLiked(mediaId: mediaId, liked: liked)
+                            try await storyViewModel.setInstagramStoryLiked(mediaId: mediaId, liked: liked)
                         },
                     )
                 }
                 .sheet(isPresented: $showingStoryComposer) {
                     StoryComposerView { imageData, width, height, mimeType in
-                        try await viewModel.postInstagramStory(imageData: imageData, width: width, height: height, mimeType: mimeType)
+                        try await storyViewModel.postInstagramStory(imageData: imageData, width: width, height: height, mimeType: mimeType)
                     }
                 }
         #endif
@@ -218,22 +220,45 @@ struct FeedView: View {
     }
 
     private var hasVisibleStoriesBar: Bool {
-        viewModel.storyBarContentLoaded && (viewModel.ownInstagramStoryActor != nil || !viewModel.storyBarItems.isEmpty)
+        storyViewModel.storyBarContentLoaded && (storyViewModel.ownInstagramStoryActor != nil || !storyViewModel.storyBarItems.isEmpty)
     }
 
-    private var unreadItems: [DisplayNotificationItem] {
-        notificationItems.filter(\.isUnread)
+    private var newItems: [DisplayNotificationItem] {
+        notificationItems.filter(\.isNew)
     }
 
-    private var readItems: [DisplayNotificationItem] {
-        notificationItems.filter { !$0.isUnread }
+    private var knownItems: [DisplayNotificationItem] {
+        notificationItems.filter { !$0.isNew }
     }
 
     private var errorBinding: Binding<Bool> {
         Binding(
-            get: { viewModel.errorMessage != nil },
-            set: { if !$0 { viewModel.errorMessage = nil } },
+            get: { viewModel.errorMessage != nil || storyViewModel.errorMessage != nil },
+            set: {
+                if !$0 {
+                    viewModel.errorMessage = nil
+                    storyViewModel.errorMessage = nil
+                }
+            },
         )
+    }
+
+    private var alertMessage: String {
+        viewModel.errorMessage ?? storyViewModel.errorMessage ?? "Refresh failed."
+    }
+
+    private func refreshFeedAndStories() async {
+        let refreshed = await viewModel.refresh()
+        if refreshed {
+            await storyViewModel.fetchStoryBarContent()
+        }
+    }
+
+    private func foregroundRefreshFeedAndStories() async {
+        let refreshed = await viewModel.refreshOnForegroundActivation()
+        if refreshed {
+            await storyViewModel.fetchStoryBarContent()
+        }
     }
 }
 

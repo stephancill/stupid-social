@@ -42,7 +42,7 @@ Suggested high-level modules:
 
 Use built-in SwiftUI and platform primitives wherever possible.
 
-- Feed: a single chronological `List` with network badges and unread styling.
+- Feed: a single chronological `List` with network badges and a cache-diff `New` presentation boundary.
 - Settings: minimal `Form` for account setup/status.
 - Account detail: simple detail screen with avatar, name, follower count, and following count.
 - Actions: standard toolbar/menu buttons for refresh and `Mark all as read`.
@@ -68,7 +68,7 @@ struct NotificationItem: Identifiable, Hashable {
 }
 ```
 
-`isUnread` should be derived from read watermarks, not persisted as source truth.
+Cache-diff feed presentation state should stay outside `NotificationItem`. Explicit app-unread state should be derived from read watermarks when needed, not persisted as source truth.
 
 Suggested supporting models:
 

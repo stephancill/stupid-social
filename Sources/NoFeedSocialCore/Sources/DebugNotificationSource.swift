@@ -1,6 +1,6 @@
 import Foundation
 
-public final class DebugNotificationSource: NotificationSource {
+public final class DebugNotificationSource: NotificationFetching, AccountValidating {
     public let network: SocialNetwork = .debug
 
     private let client: DebugNotificationsClient
@@ -13,10 +13,6 @@ public final class DebugNotificationSource: NotificationSource {
 
     public func validateAccount() async throws -> AccountStatus {
         metadataStore.debugAccount == nil ? .notConfigured : .valid
-    }
-
-    public func fetchUnreadCount() async throws -> Int? {
-        nil
     }
 
     public func fetchNotifications(reason _: RefreshReason) async throws -> [NotificationItem] {
@@ -45,17 +41,5 @@ public final class DebugNotificationSource: NotificationSource {
                 target: NotificationTarget(id: notification.id, text: notification.text, url: nil),
             )
         }
-    }
-
-    public func fetchProfile(id: String) async throws -> NetworkProfile {
-        NetworkProfile(
-            id: id,
-            network: .debug,
-            username: id,
-            displayName: id,
-            avatarURL: nil,
-            followerCount: nil,
-            followingCount: nil,
-        )
     }
 }

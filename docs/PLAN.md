@@ -104,7 +104,7 @@ Reference behavior from `docs/CLI_DOCS.md`:
 - Spotify listening story tiles show the album/track artwork as the thumbnail with the listener's avatar overlaid in the bottom-right corner.
 - Tapping a Spotify listening story opens the Listening detail screen.
 - Each item shows a network badge.
-- The feed shows unread items plus recent cached items.
+- The feed shows newly discovered notification items plus known recent cached items.
 - Recent notification cache retention is 24 hours.
 - Notification items are normalized into one app model for display.
 - The normalized notification schema should be a minimal display model.
@@ -217,6 +217,6 @@ Use a minimal display model first. Suggested fields:
 - `text`: display text or summary
 - `actors`: people/accounts responsible for the notification
 - `target`: referenced post, cast, profile, or other object needed for display/navigation
-- `isUnread`: derived from the synced read watermark, not persisted as source truth
+- Presentation state such as cache-diff `new` is modeled outside the source notification item. App-unread state is derived from the synced read watermark only when explicit read-state UI needs it, not persisted as source truth.
 
 Do not persist raw source payloads for the MVP unless needed during development diagnostics, and never log or store secrets with notification data.

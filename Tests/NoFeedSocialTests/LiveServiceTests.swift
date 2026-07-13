@@ -30,7 +30,7 @@ final class LiveServiceTests: XCTestCase {
     }
 
     func testConsecutiveRefreshesAllSources() async throws {
-        var sources: [any NotificationSource] = []
+        var sources: [any NotificationFetching] = []
         var errors: [String] = []
 
         // X
@@ -82,7 +82,10 @@ final class LiveServiceTests: XCTestCase {
         )
         let cacheStore = NotificationCacheStore(context: container.mainContext)
         let service = FeedService(
-            sources: sources,
+            notificationSources: sources,
+            accountValidators: [],
+            profileFetchersByNetwork: [:],
+            targetDetailFetchersByNetwork: [:],
             cacheStore: cacheStore,
             watermarkStore: InMemoryReadWatermarkStore(),
         )
@@ -95,8 +98,8 @@ final class LiveServiceTests: XCTestCase {
         let firstById = Dictionary(uniqueKeysWithValues: first.map { ($0.item.id, $0.item) })
         XCTAssertEqual(firstIds.count, first.count, "First refresh contains duplicate IDs")
 
-        let firstUnreadCount = first.filter(\.isUnread).count
-        Swift.print("Refresh 1: \(first.count) total, \(firstUnreadCount) unread, \(first.count - firstUnreadCount) read")
+        let firstNewCount = first.filter(\.isNew).count
+        Swift.print("Refresh 1: \(first.count) total, \(firstNewCount) new, \(first.count - firstNewCount) known")
 
         // Refresh 2
         let second = try await service.manualRefresh()
@@ -105,26 +108,26 @@ final class LiveServiceTests: XCTestCase {
         let secondIds = Set(second.map(\.item.id))
         XCTAssertEqual(secondIds.count, second.count, "Second refresh contains duplicate IDs")
 
-        let secondUnreadIds = Set(second.filter(\.isUnread).map(\.item.id))
-        let secondReadIds = Set(second.filter { !$0.isUnread }.map(\.item.id))
+        let secondNewIds = Set(second.filter(\.isNew).map(\.item.id))
+        let secondKnownIds = Set(second.filter { !$0.isNew }.map(\.item.id))
 
-        let freshIds = secondUnreadIds.subtracting(firstIds)
-        let staleUnreadIds = Set(second.filter { displayItem in
-            guard displayItem.isUnread, let oldItem = firstById[displayItem.item.id] else { return false }
+        let freshIds = secondNewIds.subtracting(firstIds)
+        let staleNewIds = Set(second.filter { displayItem in
+            guard displayItem.isNew, let oldItem = firstById[displayItem.item.id] else { return false }
             let oldActorIds = Set(oldItem.actors.map(\.id))
             let currentActorIds = Set(displayItem.item.actors.map(\.id))
             return currentActorIds.subtracting(oldActorIds).isEmpty
         }.map(\.item.id))
-        XCTAssertTrue(staleUnreadIds.isEmpty, "Items from first refresh should not be unread in second: \(staleUnreadIds)")
+        XCTAssertTrue(staleNewIds.isEmpty, "Items from first refresh should not be new in second: \(staleNewIds)")
 
         let missingIds = firstIds.subtracting(secondIds)
 
         let bySource = Dictionary(grouping: second, by: { $0.item.network })
         for (network, items) in bySource.sorted(by: { $0.key.rawValue < $1.key.rawValue }) {
-            let unread = items.filter(\.isUnread).count
-            Swift.print("  \(network.displayName): \(items.count) total, \(unread) unread")
+            let new = items.filter(\.isNew).count
+            Swift.print("  \(network.displayName): \(items.count) total, \(new) new")
         }
-        Swift.print("Refresh 2: \(second.count) total, \(secondUnreadIds.count) unread, \(secondReadIds.count) read")
+        Swift.print("Refresh 2: \(second.count) total, \(secondNewIds.count) new, \(secondKnownIds.count) known")
         Swift.print("New items since refresh 1: \(freshIds.count)")
         if !missingIds.isEmpty {
             Swift.print("Missing from refresh 2: \(missingIds.count)")
