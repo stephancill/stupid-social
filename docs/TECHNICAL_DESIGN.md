@@ -380,6 +380,7 @@ Implementation expectations:
 - Upload image bytes to `https://i.instagram.com/rupload_igphoto/fb_uploader_<upload_id>` with web rupload headers and finalize with web `POST https://www.instagram.com/api/v1/media/configure_to_story/` form fields.
 - Do not hardcode Instagram Relay document IDs in source; discover them at runtime from the current web bundles.
 - Keep posting scoped to Instagram photo stories; do not add cross-posting abstractions until another network is implemented.
+- In the combined All Stories context, use a native inline menu from the story `+` affordance to choose the destination. Instagram is currently the only destination. In the Instagram stories context, skip the menu and open the composer directly.
 
 ## Instagram Direct Notifications
 

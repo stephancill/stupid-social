@@ -193,6 +193,7 @@ Current posting requirements:
 - Render a local story composition into a 1080x1920 image.
 - Post image stories to the connected Instagram account.
 - Show the user's own Instagram story entry first in the stories bar with their profile picture and a `+` affordance that opens the composer.
+- In the combined All Stories bar, the `+` affordance first asks for the story destination; Instagram is the only current destination. In the Instagram-only stories bar, Instagram is implied and the `+` opens the composer directly.
 
 Future posting requirements:
 

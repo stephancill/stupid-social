@@ -350,22 +350,8 @@ private struct StoriesBar: View {
                             .contentShape(Rectangle())
                             .onTapGesture { onOwnStoryTap() }
                             .overlay(alignment: .topLeading) {
-                                Button {
-                                    onComposeTap()
-                                } label: {
-                                    Image(systemName: "plus")
-                                        .font(.caption.weight(.bold))
-                                        .foregroundStyle(.white)
-                                        .frame(width: 24, height: 24)
-                                        .background(Color.blue, in: Circle())
-                                        .overlay {
-                                            Circle()
-                                                .stroke(.background, lineWidth: 2)
-                                        }
-                                }
-                                .buttonStyle(.plain)
-                                .offset(x: 49, y: 49)
-                                .accessibilityLabel("Create story")
+                                CreateStoryDestinationButton(mode: mode, onComposeTap: onComposeTap)
+                                    .offset(x: 49, y: 49)
                             }
                     }
 
@@ -486,6 +472,46 @@ private struct StoriesBar: View {
         let distance = abs(progress - CGFloat(index))
         let wrappedDistance = min(distance, CGFloat(modeCount) - distance)
         return max(0, 1 - wrappedDistance)
+    }
+}
+
+private struct CreateStoryDestinationButton: View {
+    let mode: StoryBarFeedMode
+    let onComposeTap: () -> Void
+
+    var body: some View {
+        if mode == .general {
+            Menu {
+                Button {
+                    onComposeTap()
+                } label: {
+                    Label("Instagram", systemImage: "camera")
+                }
+            } label: {
+                plusBadge
+            }
+            .accessibilityLabel("Choose story destination")
+        } else {
+            Button {
+                onComposeTap()
+            } label: {
+                plusBadge
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Create Instagram story")
+        }
+    }
+
+    private var plusBadge: some View {
+        Image(systemName: "plus")
+            .font(.caption.weight(.bold))
+            .foregroundStyle(.white)
+            .frame(width: 24, height: 24)
+            .background(Color.blue, in: Circle())
+            .overlay {
+                Circle()
+                    .stroke(.background, lineWidth: 2)
+            }
     }
 }
 
