@@ -2,6 +2,9 @@
 
 ## 2026-07-14
 
+- Added a small red dot to the pending `N New` toolbar button so newly available background/foreground notifications are more visibly actionable.
+- Changed story refresh orchestration so story loading starts at the same time as notification feed refresh on initial launch, foreground activation, and pull-to-refresh. Story fetching is no longer gated on the feed refresh completing successfully, so the stories skeleton can appear immediately while both requests are in flight.
+- Added an initial stories-bar loading skeleton. While `StoryBarViewModel` is fetching story content for the first time, `FeedView` now renders a placeholder stories row with pulsing avatar and label shapes instead of hiding the stories area until results arrive. Existing loaded stories remain visible during later refreshes.
 - Fixed Farcaster reply detail rendering for parent casts. The detail view now hydrates `parentTarget` separately from the reply target and passes the fetched parent author/text/media/timestamp into the thread renderer. Previously the parent row used only the lightweight notification payload, which often contains just a parent hash/FID and therefore rendered as an incomplete Farcaster fallback row.
 - Removed Farcaster reply-detail flicker and reduced parent-row relayout jank. Parent and reply rows now keep rendering their fallback post shells while details hydrate; rows with no text yet reserve space with lightweight placeholder bars instead of swapping between a spinner-only row and the final post content. Thread rows suppress the inline loading row because it briefly appeared below the already-rendered reply after parent hydration and caused visible layout jank.
 - Refined the Farcaster parent loading skeleton so it does not show placeholder author fallback values such as a bare FID or generic network username while parent details are still loading.

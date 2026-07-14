@@ -30,10 +30,9 @@ public struct ContentView: View {
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active, let container else { return }
             Task {
-                let refreshed = await container.feedViewModel.refreshOnForegroundActivation()
-                if refreshed {
-                    await container.storyBarViewModel.fetchStoryBarContent()
-                }
+                async let feedRefresh = container.feedViewModel.refreshOnForegroundActivation()
+                async let storyRefresh: Void = container.storyBarViewModel.fetchStoryBarContent()
+                _ = await (feedRefresh, storyRefresh)
             }
         }
     }
@@ -43,8 +42,9 @@ public struct ContentView: View {
         container = appContainer
 
         Task {
-            _ = await appContainer.feedViewModel.refreshOnForegroundActivation()
-            await appContainer.storyBarViewModel.fetchStoryBarContent()
+            async let feedRefresh = appContainer.feedViewModel.refreshOnForegroundActivation()
+            async let storyRefresh: Void = appContainer.storyBarViewModel.fetchStoryBarContent()
+            _ = await (feedRefresh, storyRefresh)
         }
     }
 }

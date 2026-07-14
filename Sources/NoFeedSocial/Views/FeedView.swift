@@ -19,6 +19,10 @@ struct FeedView: View {
     var body: some View {
         NavigationStack {
             List {
+                if showsStoryBarSkeleton {
+                    StoriesBarSkeleton()
+                }
+
                 if hasVisibleStoriesBar {
                     StoriesBar(
                         items: storyViewModel.storyBarItems,
@@ -129,7 +133,13 @@ struct FeedView: View {
                                 Button {
                                     viewModel.revealPendingNotifications()
                                 } label: {
-                                    Text("\(viewModel.pendingNewCount) New")
+                                    Label {
+                                        Text("\(viewModel.pendingNewCount) New")
+                                    } icon: {
+                                        Circle()
+                                            .fill(Color.red)
+                                            .frame(width: 7, height: 7)
+                                    }
                                 }
                             }
                         }
@@ -223,6 +233,10 @@ struct FeedView: View {
         storyViewModel.storyBarContentLoaded && (storyViewModel.ownInstagramStoryActor != nil || !storyViewModel.storyBarItems.isEmpty)
     }
 
+    private var showsStoryBarSkeleton: Bool {
+        storyViewModel.storyBarLoading && !storyViewModel.storyBarContentLoaded
+    }
+
     private var newItems: [DisplayNotificationItem] {
         notificationItems.filter(\.isNew)
     }
@@ -248,17 +262,15 @@ struct FeedView: View {
     }
 
     private func refreshFeedAndStories() async {
-        let refreshed = await viewModel.refresh()
-        if refreshed {
-            await storyViewModel.fetchStoryBarContent()
-        }
+        async let feedRefresh = viewModel.refresh()
+        async let storyRefresh: Void = storyViewModel.fetchStoryBarContent()
+        _ = await (feedRefresh, storyRefresh)
     }
 
     private func foregroundRefreshFeedAndStories() async {
-        let refreshed = await viewModel.refreshOnForegroundActivation()
-        if refreshed {
-            await storyViewModel.fetchStoryBarContent()
-        }
+        async let feedRefresh = viewModel.refreshOnForegroundActivation()
+        async let storyRefresh: Void = storyViewModel.fetchStoryBarContent()
+        _ = await (feedRefresh, storyRefresh)
     }
 }
 
@@ -266,6 +278,59 @@ private struct StoryViewerSelection: Identifiable {
     let id = UUID()
     let items: [StoryBarItem]
     let startIndex: Int
+}
+
+private struct StoriesBarSkeleton: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isAnimating = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                .fill(Color.secondary.opacity(0.18))
+                .frame(width: 72, height: 10)
+                .padding(.horizontal, 16)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: 12) {
+                    ForEach(0 ..< 6, id: \.self) { _ in
+                        StoryBubbleSkeleton()
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .padding(.bottom, 4)
+            }
+        }
+        .frame(height: 112, alignment: .top)
+        .padding(.vertical, 8)
+        .opacity(isAnimating ? 0.45 : 1)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: isAnimating)
+        .onAppear { isAnimating = true }
+        .listRowInsets(EdgeInsets())
+        .listRowSeparator(.hidden)
+        .accessibilityLabel("Loading stories")
+    }
+}
+
+private struct StoryBubbleSkeleton: View {
+    var body: some View {
+        VStack(spacing: 6) {
+            Circle()
+                .fill(Color.secondary.opacity(0.18))
+                .frame(width: 70, height: 70)
+                .overlay {
+                    Circle()
+                        .stroke(Color.secondary.opacity(0.08), lineWidth: 1)
+                }
+
+            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                .fill(Color.secondary.opacity(0.18))
+                .frame(width: 52, height: 8)
+        }
+        .frame(width: 70)
+        .accessibilityHidden(true)
+    }
 }
 
 private struct StoriesBar: View {
