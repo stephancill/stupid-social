@@ -43,6 +43,7 @@ public struct ContentView: View {
         container = appContainer
 
         Task {
+            _ = await appContainer.feedViewModel.refreshOnForegroundActivation()
             await appContainer.storyBarViewModel.fetchStoryBarContent()
         }
     }

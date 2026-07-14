@@ -5,10 +5,11 @@ enum InstagramNotificationParser {
         stories: [InstagramNewsStory],
         accountId: String,
         accountUsername: String?,
+        accountAvatarURL: URL? = nil,
         enabledCategories: Set<InstagramNotificationCategory>,
     ) -> [NotificationItem] {
         stories.compactMap { story in
-            parseSingle(story: story, accountId: accountId, accountUsername: accountUsername, enabledCategories: enabledCategories)
+            parseSingle(story: story, accountId: accountId, accountUsername: accountUsername, accountAvatarURL: accountAvatarURL, enabledCategories: enabledCategories)
         }
     }
 
@@ -16,6 +17,7 @@ enum InstagramNotificationParser {
         story: InstagramNewsStory,
         accountId: String,
         accountUsername: String?,
+        accountAvatarURL: URL?,
         enabledCategories: Set<InstagramNotificationCategory>,
     ) -> NotificationItem? {
         guard let category = InstagramNotificationCategory.category(for: story.notifName),
@@ -41,6 +43,7 @@ enum InstagramNotificationParser {
 
         let target: NotificationTarget?
         let targetId = story.args.media?.first?.id ?? story.pk
+        let targetAuthor = accountOwnerActor(accountId: accountId, accountUsername: accountUsername, accountAvatarURL: accountAvatarURL)
         if let content = contentAfterColon, !content.isEmpty {
             target = NotificationTarget(
                 id: targetId,
@@ -48,7 +51,7 @@ enum InstagramNotificationParser {
                 url: linkURL,
                 imageURL: imageURL,
                 imageURLs: imageURL.map { [$0] } ?? [],
-                author: actors.first,
+                author: targetAuthor,
                 postedAt: timestamp,
                 likeCount: storyLikeCount,
             )
@@ -59,6 +62,7 @@ enum InstagramNotificationParser {
                 url: linkURL,
                 imageURL: imageURL,
                 imageURLs: imageURL.map { [$0] } ?? [],
+                author: targetAuthor,
                 postedAt: timestamp,
                 likeCount: storyLikeCount,
             )
@@ -174,7 +178,7 @@ enum InstagramNotificationParser {
 
         if actors.isEmpty, let id = args.profileId, let name = args.profileName {
             actors.append(NotificationActor(
-                id: String(id),
+                id: id,
                 network: .instagram,
                 username: name,
                 displayName: nil,
@@ -185,13 +189,23 @@ enum InstagramNotificationParser {
         return actors
     }
 
+    private static func accountOwnerActor(accountId: String, accountUsername: String?, accountAvatarURL: URL?) -> NotificationActor {
+        NotificationActor(
+            id: accountId,
+            network: .instagram,
+            username: accountUsername,
+            displayName: nil,
+            avatarURL: accountAvatarURL,
+        )
+    }
+
     private static func avatarMap(from args: InstagramNewsStoryArgs) -> [String: String] {
         var map: [String: String] = [:]
         if let id = args.profileId, let image = args.profileImage {
-            map[String(id)] = image
+            map[id] = image
         }
         if let id = args.secondProfileId, let image = args.secondProfileImage {
-            map[String(id)] = image
+            map[id] = image
         }
         return map
     }

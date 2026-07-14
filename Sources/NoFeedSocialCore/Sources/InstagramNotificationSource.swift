@@ -74,10 +74,33 @@ public final class InstagramNotificationSource: NotificationFetching, AccountVal
     }
 
     public func fetchNotifications(reason _: RefreshReason) async throws -> [NotificationItem] {
-        let categories = metadataStore.instagramAccount?.enabledCategories ?? Set(InstagramNotificationCategory.allCases)
-        let username = metadataStore.instagramAccount?.username
-        let includeDirectMediaShares = metadataStore.instagramAccount?.directMediaSharesEnabled ?? true
-        return try await client.notifications(enabledCategories: categories, accountUsername: username, includeDirectMediaShares: includeDirectMediaShares)
+        let account = await currentAccountForNotificationTargets()
+        let categories = account?.enabledCategories ?? Set(InstagramNotificationCategory.allCases)
+        let includeDirectMediaShares = account?.directMediaSharesEnabled ?? true
+        return try await client.notifications(
+            enabledCategories: categories,
+            accountUsername: account?.username,
+            accountAvatarURL: account?.avatarURL,
+            includeDirectMediaShares: includeDirectMediaShares,
+        )
+    }
+
+    private func currentAccountForNotificationTargets() async -> InstagramAccountMetadata? {
+        guard let account = metadataStore.instagramAccount else { return nil }
+        guard account.avatarURL == nil else { return account }
+        guard let profile = try? await client.currentUserProfile() else { return account }
+
+        let updated = InstagramAccountMetadata(
+            accountId: String(profile.pk),
+            username: profile.username,
+            avatarURL: profile.profilePicURL,
+            status: .valid,
+            enabledCategories: account.enabledCategories,
+            storiesEnabled: account.storiesEnabled,
+            directMediaSharesEnabled: account.directMediaSharesEnabled,
+        )
+        metadataStore.instagramAccount = updated
+        return updated
     }
 
     public func fetchStoryReels() async throws -> [InstagramStoryReel] {

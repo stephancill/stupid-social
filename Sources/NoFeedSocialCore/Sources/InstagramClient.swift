@@ -103,6 +103,7 @@ public final class InstagramClient {
     func notifications(
         enabledCategories: Set<InstagramNotificationCategory>,
         accountUsername: String? = nil,
+        accountAvatarURL: URL? = nil,
         includeDirectMediaShares: Bool = true,
     ) async throws -> [NotificationItem] {
         guard let credentials = try credentialStore.loadInstagramCredentials() else {
@@ -123,6 +124,7 @@ public final class InstagramClient {
             stories: allStories,
             accountId: credentials.dsUserId,
             accountUsername: accountUsername,
+            accountAvatarURL: accountAvatarURL,
             enabledCategories: enabledCategories,
         )
 

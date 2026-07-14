@@ -30,10 +30,10 @@ struct InstagramNewsStory: Decodable {
 
 struct InstagramNewsStoryArgs: Decodable {
     let richText: String?
-    let profileId: UInt64?
+    let profileId: String?
     let profileName: String?
     let profileImage: String?
-    let secondProfileId: UInt64?
+    let secondProfileId: String?
     let secondProfileImage: String?
     let timestamp: Double?
     let media: [InstagramMediaThumbnail]?
@@ -51,6 +51,20 @@ struct InstagramNewsStoryArgs: Decodable {
         case media
         case images
         case destination
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        richText = try container.decodeIfPresent(String.self, forKey: .richText)
+        profileId = try container.decodeFlexibleStringIfPresent(forKey: .profileId)
+        profileName = try container.decodeIfPresent(String.self, forKey: .profileName)
+        profileImage = try container.decodeIfPresent(String.self, forKey: .profileImage)
+        secondProfileId = try container.decodeFlexibleStringIfPresent(forKey: .secondProfileId)
+        secondProfileImage = try container.decodeIfPresent(String.self, forKey: .secondProfileImage)
+        timestamp = try container.decodeIfPresent(Double.self, forKey: .timestamp)
+        media = try container.decodeIfPresent([InstagramMediaThumbnail].self, forKey: .media)
+        images = try container.decodeIfPresent([InstagramMediaThumbnail].self, forKey: .images)
+        destination = try container.decodeIfPresent(String.self, forKey: .destination)
     }
 }
 

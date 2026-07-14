@@ -13,7 +13,9 @@ struct NotificationDetailView: View {
     @Environment(\.openURL) private var openURL
     @AppStorage("devModeEnabled") private var devModeEnabled = false
     @State private var targetDetails: NotificationTargetDetails?
+    @State private var parentTargetDetails: NotificationTargetDetails?
     @State private var isLoadingTargetDetails = false
+    @State private var isLoadingParentTargetDetails = false
 
     var body: some View {
         Form {
@@ -34,7 +36,9 @@ struct NotificationDetailView: View {
                         replyTarget: target,
                         network: displayItem.item.network,
                         actors: displayItem.item.actors,
+                        parentDetails: parentTargetDetails,
                         replyDetails: targetDetails,
+                        isLoadingParentDetails: isLoadingParentTargetDetails,
                         isLoadingReplyDetails: displayItem.item.type == .message ? false : isLoadingTargetDetails,
                         parentURL: postURL(for: parentTarget),
                         replyURL: targetURL,
@@ -63,6 +67,8 @@ struct NotificationDetailView: View {
                                 isLoadingDetails: false,
                                 targetURL: postURL(for: relatedTarget),
                                 hidesMediaFallbackText: false,
+                                showsFallbackWhileLoading: false,
+                                showsInlineLoadingRow: true,
                             ) { url in
                                 openURL(url)
                             }
@@ -76,6 +82,8 @@ struct NotificationDetailView: View {
                             isLoadingDetails: isLoadingTargetDetails,
                             targetURL: targetURL,
                             hidesMediaFallbackText: displayItem.item.type == .message,
+                            showsFallbackWhileLoading: false,
+                            showsInlineLoadingRow: true,
                         ) { url in
                             openURL(url)
                         }
@@ -160,9 +168,31 @@ struct NotificationDetailView: View {
         guard displayItem.item.target != nil else { return }
         guard displayItem.item.type != .message else { return }
         targetDetails = nil
+        parentTargetDetails = nil
+
+        if let parentTarget = displayItem.item.parentTarget {
+            isLoadingParentTargetDetails = true
+            parentTargetDetails = try? await feedService.fetchTargetDetails(for: detailItem(target: parentTarget))
+            isLoadingParentTargetDetails = false
+        }
+
         isLoadingTargetDetails = true
         defer { isLoadingTargetDetails = false }
         targetDetails = try? await feedService.fetchTargetDetails(for: displayItem.item)
+    }
+
+    private func detailItem(target: NotificationTarget) -> NotificationItem {
+        NotificationItem(
+            id: "detail:\(displayItem.item.id):\(target.id)",
+            network: displayItem.item.network,
+            accountId: displayItem.item.accountId,
+            sourceId: target.id,
+            type: displayItem.item.type,
+            timestamp: target.postedAt ?? displayItem.item.timestamp,
+            text: target.text ?? displayItem.item.text,
+            actors: displayItem.item.actors,
+            target: target,
+        )
     }
 }
 
@@ -298,7 +328,9 @@ private struct ReplyThreadView: View {
     let replyTarget: NotificationTarget
     let network: SocialNetwork
     let actors: [NotificationActor]
+    let parentDetails: NotificationTargetDetails?
     let replyDetails: NotificationTargetDetails?
+    let isLoadingParentDetails: Bool
     let isLoadingReplyDetails: Bool
     let parentURL: URL?
     let replyURL: URL?
@@ -310,10 +342,12 @@ private struct ReplyThreadView: View {
                 target: parentTarget,
                 fallbackNetwork: network,
                 fallbackActors: actors,
-                details: nil,
-                isLoadingDetails: false,
+                details: parentDetails,
+                isLoadingDetails: isLoadingParentDetails,
                 targetURL: parentURL,
                 hidesMediaFallbackText: false,
+                showsFallbackWhileLoading: true,
+                showsInlineLoadingRow: false,
                 openURL: openURL,
             )
 
@@ -327,6 +361,8 @@ private struct ReplyThreadView: View {
                 isLoadingDetails: isLoadingReplyDetails,
                 targetURL: replyURL,
                 hidesMediaFallbackText: false,
+                showsFallbackWhileLoading: true,
+                showsInlineLoadingRow: false,
                 openURL: openURL,
             )
         }
@@ -355,13 +391,15 @@ private struct TargetPostView: View {
     let isLoadingDetails: Bool
     let targetURL: URL?
     let hidesMediaFallbackText: Bool
+    let showsFallbackWhileLoading: Bool
+    let showsInlineLoadingRow: Bool
     let openURL: (URL) -> Void
 
     @AppStorage("devModeEnabled") private var devModeEnabled = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if isLoadingDetails, details == nil {
+            if isLoadingDetails, details == nil, !showsFallbackWhileLoading {
                 ProgressView()
                     .frame(maxWidth: .infinity, minHeight: 72)
             } else {
@@ -387,24 +425,32 @@ private struct TargetPostView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(authorName)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.primary)
-
-                    HStack(spacing: 6) {
-                        if let username = displayAuthor?.username {
-                            Text("@\(DebugRedaction.username(username, enabled: devModeEnabled))")
-                        } else {
-                            Text(fallbackNetwork.displayName)
-                        }
-
-                        if let postedAt = details?.postedAt ?? target.postedAt {
-                            Text("•")
-                            Text(postedAt.compactRelativeTime)
-                        }
+                    if hidesAuthorWhileLoading {
+                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                            .fill(Color.secondary.opacity(0.18))
+                            .frame(width: 120, height: 14)
+                    } else {
+                        Text(authorName)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
                     }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+
+                    if !hidesAuthorWhileLoading {
+                        HStack(spacing: 6) {
+                            if let username = displayAuthor?.username {
+                                Text("@\(DebugRedaction.username(username, enabled: devModeEnabled))")
+                            } else {
+                                Text(fallbackNetwork.displayName)
+                            }
+
+                            if let postedAt = details?.postedAt ?? target.postedAt {
+                                Text("•")
+                                Text(postedAt.compactRelativeTime)
+                            }
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
                 }
 
                 Spacer(minLength: 0)
@@ -422,13 +468,23 @@ private struct TargetPostView: View {
                     .foregroundStyle(.primary)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
+            } else if isLoadingDetails {
+                VStack(alignment: .leading, spacing: 6) {
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(Color.secondary.opacity(0.18))
+                        .frame(height: 12)
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(Color.secondary.opacity(0.14))
+                        .frame(width: 180, height: 12)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             if !displayImageURLs.isEmpty {
                 ImageCarousel(imageURLs: displayImageURLs)
             }
 
-            if isLoadingDetails {
+            if isLoadingDetails, showsInlineLoadingRow {
                 loadingRow
             }
 
@@ -457,6 +513,10 @@ private struct TargetPostView: View {
 
     private var displayAuthor: NotificationActor? {
         details?.author ?? target.author
+    }
+
+    private var hidesAuthorWhileLoading: Bool {
+        isLoadingDetails && details == nil && displayText == nil
     }
 
     private var displayText: String? {
