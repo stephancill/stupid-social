@@ -10,11 +10,10 @@ import SwiftUI
 struct FeedView: View {
     @ObservedObject var viewModel: FeedViewModel
     @ObservedObject var storyViewModel: StoryBarViewModel
-    let settingsViewModel: SettingsViewModel
     let spotifyClient: SpotifyClient
+    let onOpenSettings: () -> Void
     @State private var storyViewerSelection: StoryViewerSelection?
     @State private var showingStoryComposer = false
-    @State private var showingEmptyStateSettings = false
 
     var body: some View {
         NavigationStack {
@@ -68,7 +67,7 @@ struct FeedView: View {
                             .fixedSize(horizontal: false, vertical: true)
 
                             Button("Open Settings") {
-                                showingEmptyStateSettings = true
+                                onOpenSettings()
                             }
                             .buttonStyle(.bordered)
                         }
@@ -113,14 +112,6 @@ struct FeedView: View {
                 await refreshFeedAndStories()
             }
             .navigationTitle("Social")
-            .navigationDestination(isPresented: $showingEmptyStateSettings) {
-                SettingsView(viewModel: settingsViewModel)
-                    .onDisappear {
-                        Task {
-                            await foregroundRefreshFeedAndStories()
-                        }
-                    }
-            }
             .toolbar {
                 if viewModel.isForegroundRefreshing || viewModel.pendingNewCount > 0 {
                     ToolbarItem(placement: .navigation) {
@@ -143,19 +134,6 @@ struct FeedView: View {
                                 }
                             }
                         }
-                    }
-                }
-
-                ToolbarItem(placement: .primaryAction) {
-                    NavigationLink {
-                        SettingsView(viewModel: settingsViewModel)
-                            .onDisappear {
-                                Task {
-                                    await foregroundRefreshFeedAndStories()
-                                }
-                            }
-                    } label: {
-                        Image(systemName: "gear")
                     }
                 }
             }
@@ -287,7 +265,7 @@ private struct StoriesBarSkeleton: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             RoundedRectangle(cornerRadius: 3, style: .continuous)
-                .fill(Color.secondary.opacity(0.18))
+                .fill(Color.storySkeletonFill)
                 .frame(width: 72, height: 10)
                 .padding(.horizontal, 16)
 
@@ -317,15 +295,15 @@ private struct StoryBubbleSkeleton: View {
     var body: some View {
         VStack(spacing: 6) {
             Circle()
-                .fill(Color.secondary.opacity(0.18))
+                .fill(Color.storySkeletonFill)
                 .frame(width: 70, height: 70)
                 .overlay {
                     Circle()
-                        .stroke(Color.secondary.opacity(0.08), lineWidth: 1)
+                        .stroke(Color.storySkeletonStroke, lineWidth: 1)
                 }
 
             RoundedRectangle(cornerRadius: 3, style: .continuous)
-                .fill(Color.secondary.opacity(0.18))
+                .fill(Color.storySkeletonFill)
                 .frame(width: 52, height: 8)
         }
         .frame(width: 70)
@@ -1070,6 +1048,26 @@ private struct NotificationRow: View {
 private extension Color {
     static var spotifyActivityBorder: Color {
         Color(red: 0.12, green: 0.73, blue: 0.26)
+    }
+
+    static var storySkeletonFill: Color {
+        #if os(iOS)
+            Color(.tertiaryLabel)
+        #elseif os(macOS)
+            Color(nsColor: .tertiaryLabelColor)
+        #else
+            Color.secondary.opacity(0.35)
+        #endif
+    }
+
+    static var storySkeletonStroke: Color {
+        #if os(iOS)
+            Color(.separator)
+        #elseif os(macOS)
+            Color(nsColor: .separatorColor)
+        #else
+            Color.secondary.opacity(0.25)
+        #endif
     }
 }
 

@@ -3,9 +3,8 @@ import SwiftUI
 
 struct SearchView: View {
     @ObservedObject var viewModel: ProfileSearchViewModel
-    let settingsViewModel: SettingsViewModel
-    let onSettingsDisappear: () -> Void
     @AppStorage("devModeEnabled") private var devModeEnabled = false
+    @FocusState private var isSearchFocused: Bool
 
     var body: some View {
         NavigationStack {
@@ -35,21 +34,15 @@ struct SearchView: View {
             #endif
             .navigationTitle("Search")
             .searchable(text: $viewModel.query, prompt: "Search profiles")
+            .searchFocused($isSearchFocused)
             .onChange(of: viewModel.query) { _, _ in
                 viewModel.scheduleSearch()
             }
             .onSubmit(of: .search) {
                 Task { await viewModel.search() }
             }
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    NavigationLink {
-                        SettingsView(viewModel: settingsViewModel)
-                            .onDisappear(perform: onSettingsDisappear)
-                    } label: {
-                        Image(systemName: "gear")
-                    }
-                }
+            .onAppear {
+                isSearchFocused = true
             }
         }
     }

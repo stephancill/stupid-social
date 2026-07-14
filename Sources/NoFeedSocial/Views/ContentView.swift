@@ -6,6 +6,7 @@ public struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.scenePhase) private var scenePhase
     @State private var container: AppContainer?
+    @State private var selectedTab = MainTab.home
 
     public init() {}
 
@@ -34,28 +35,39 @@ public struct ContentView: View {
 
     @ViewBuilder
     private func tabs(container: AppContainer) -> some View {
-        let tabView = TabView {
+        let tabView = TabView(selection: tabSelection(container: container)) {
             FeedView(
                 viewModel: container.feedViewModel,
                 storyViewModel: container.storyBarViewModel,
-                settingsViewModel: container.settingsViewModel,
                 spotifyClient: container.spotifyClient,
+                onOpenSettings: {
+                    selectedTab = .settings
+                },
             )
             .tabItem {
                 Label("Home", systemImage: "house")
             }
+            .tag(MainTab.home)
 
             SearchView(
                 viewModel: container.profileSearchViewModel,
-                settingsViewModel: container.settingsViewModel,
-                onSettingsDisappear: {
-                    Task {
-                        await foregroundRefreshFeedAndStories(container: container)
-                    }
-                },
             )
             .tabItem {
                 Label("Search", systemImage: "magnifyingglass")
+            }
+            .tag(MainTab.search)
+
+            NavigationStack {
+                SettingsView(viewModel: container.settingsViewModel)
+            }
+            .tabItem {
+                Label("Settings", systemImage: "gear")
+            }
+            .tag(MainTab.settings)
+            .onDisappear {
+                Task {
+                    await foregroundRefreshFeedAndStories(container: container)
+                }
             }
         }
 
@@ -84,4 +96,31 @@ public struct ContentView: View {
         async let storyRefresh: Void = container.storyBarViewModel.fetchStoryBarContent()
         _ = await (feedRefresh, storyRefresh)
     }
+
+    private func refreshFeedAndStories(container: AppContainer) async {
+        async let feedRefresh = container.feedViewModel.refresh()
+        async let storyRefresh: Void = container.storyBarViewModel.fetchStoryBarContent()
+        _ = await (feedRefresh, storyRefresh)
+    }
+
+    private func tabSelection(container: AppContainer) -> Binding<MainTab> {
+        Binding(
+            get: { selectedTab },
+            set: { newTab in
+                if selectedTab == .home, newTab == .home {
+                    Task {
+                        await refreshFeedAndStories(container: container)
+                    }
+                }
+
+                selectedTab = newTab
+            },
+        )
+    }
+}
+
+private enum MainTab: Hashable {
+    case home
+    case search
+    case settings
 }

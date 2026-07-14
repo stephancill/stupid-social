@@ -2,6 +2,8 @@
 
 ## 2026-07-14
 
+- Moved Settings into the root tab bar as a first-class tab beside Home and Search. Removed the feed/search toolbar gear links; the feed empty-state `Open Settings` action now switches to the Settings tab, leaving the Settings tab refreshes feed and stories as before, opening the Search tab now focuses the search field, and tapping the already-selected Home tab triggers the same feed/story refresh as pull-to-refresh.
+- Increased dark-mode contrast for the initial stories loading skeleton by replacing low-opacity secondary gray fills with adaptive tertiary-label/separator colors.
 - Fixed the pending `N New` toolbar button after SwiftUI rendered the prior `Label` in icon-only style in the navigation toolbar. The button now uses an explicit horizontal stack so the red dot and count text are both visible.
 - Changed profile search to use search endpoints only. X uses `users/search.json`, Farcaster uses Hypersnap `GET /v2/farcaster/user/search?q=...&limit=10`, Instagram uses `/web/search/topsearch/`, and Spotify uses Pathfinder `findTopResults` (`sha256Hash=755858df4daab8d212980b02a81dcf8c9a58447de318b59d07c4651a1d0450b9`) while keeping only `usersV2` results. Python probes verified Spotify returns zero user results for `example user` even though album/artist sections are populated, preventing fabricated invalid fallback profiles.
 - Fixed app search for capitalized Farcaster queries. Hypersnap `/v2/farcaster/user/search` is case-sensitive (`q=Stephan` returned no users while `q=stephan` returned results), so the Farcaster client lowercases search terms before sending them. Profile search also no longer suppresses repeated searches for the same typed query, allowing a manual retry after an empty or failed result.
