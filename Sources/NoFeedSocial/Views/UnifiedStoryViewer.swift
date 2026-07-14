@@ -1224,41 +1224,21 @@ struct UnifiedStoryViewer: View {
         .lineLimit(1)
     }
 
-    private func storyPillText(_ text: String, systemImage: String) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: systemImage)
-            Text(text)
-        }
-        .font(.caption.weight(.medium))
-        .foregroundStyle(.white)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(.black.opacity(0.45), in: Capsule())
-        .overlay {
-            Capsule()
-                .stroke(.white.opacity(0.14), lineWidth: 1)
-        }
-    }
-
     private func musicMetadataView(_ music: InstagramStoryMusic) -> some View {
         HStack(spacing: 10) {
-            CachedAsyncImage(url: music.artworkURL) {
-                ZStack {
-                    Color.white.opacity(0.12)
-                    Image(systemName: "music.note")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.white.opacity(0.7))
+            if let artworkURL = music.artworkURL {
+                CachedAsyncImage(url: artworkURL) {
+                    musicArtworkPlaceholder
+                } failure: {
+                    musicArtworkPlaceholder
                 }
-            } failure: {
-                ZStack {
-                    Color.white.opacity(0.12)
-                    Image(systemName: "music.note")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.white.opacity(0.7))
-                }
+                .frame(width: 36, height: 36)
+                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
             }
-            .frame(width: 36, height: 36)
-            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+
+            Image(systemName: "music.note")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.82))
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(music.title)
@@ -1281,6 +1261,31 @@ struct UnifiedStoryViewer: View {
         .background(.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(.white.opacity(0.14), lineWidth: 1)
+        }
+    }
+
+    private var musicArtworkPlaceholder: some View {
+        ZStack {
+            Color.white.opacity(0.12)
+            Image(systemName: "music.note")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.7))
+        }
+    }
+
+    private func storyPillText(_ text: String, systemImage: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: systemImage)
+            Text(text)
+        }
+        .font(.caption.weight(.medium))
+        .foregroundStyle(.white)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.black.opacity(0.45), in: Capsule())
+        .overlay {
+            Capsule()
                 .stroke(.white.opacity(0.14), lineWidth: 1)
         }
     }

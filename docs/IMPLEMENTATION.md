@@ -1,5 +1,9 @@
 # Implementation Notes
 
+## 2026-07-14
+
+- Investigated Instagram story music sticker album art with live simulator credentials against `kirstendp_77`. The current web story-page payload included `story_music_stickers[].music_asset_info.title` and `display_artist` but no artwork URL field, so the app now treats missing artwork as an expected payload variant and renders the bottom music pill without a broken album-art square. The music pill includes a music-note icon plus title and artist. The decoder also accepts `cover_artwork_thumbnail_url` and `cover_artwork_url` variants in addition to the existing `_uri` keys when Instagram does provide artwork.
+
 ## 2026-07-13
 
 - Changed the stories bar create-story affordance so tapping `+` in the combined All Stories feed opens a native destination menu with Instagram as the only current target. In the Instagram-specific stories feed, Instagram remains implied and the same `+` opens the story composer directly.

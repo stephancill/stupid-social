@@ -252,7 +252,7 @@ struct InstagramStoryMusicSticker: Decodable {
         guard let title, !title.isEmpty else { return nil }
 
         let artist = musicAssetInfo.displayArtist?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let artwork = musicAssetInfo.coverArtworkThumbnailURI ?? musicAssetInfo.coverArtworkURI
+        let artwork = musicAssetInfo.artworkURLString
         return InstagramStoryMusic(
             title: title,
             artist: artist?.isEmpty == true ? nil : artist,
@@ -272,6 +272,8 @@ struct InstagramStoryMusicAssetInfo: Decodable {
     let displayArtist: String?
     let coverArtworkThumbnailURI: String?
     let coverArtworkURI: String?
+    let coverArtworkThumbnailURL: String?
+    let coverArtworkURL: String?
     let durationInMs: Double?
     let durationMs: Double?
     let audioAssetDurationMs: Double?
@@ -281,9 +283,15 @@ struct InstagramStoryMusicAssetInfo: Decodable {
         case displayArtist = "display_artist"
         case coverArtworkThumbnailURI = "cover_artwork_thumbnail_uri"
         case coverArtworkURI = "cover_artwork_uri"
+        case coverArtworkThumbnailURL = "cover_artwork_thumbnail_url"
+        case coverArtworkURL = "cover_artwork_url"
         case durationInMs = "duration_in_ms"
         case durationMs = "duration_ms"
         case audioAssetDurationMs = "audio_asset_duration_ms"
+    }
+
+    var artworkURLString: String? {
+        coverArtworkThumbnailURI ?? coverArtworkThumbnailURL ?? coverArtworkURI ?? coverArtworkURL
     }
 
     var duration: Double? {
