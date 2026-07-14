@@ -120,6 +120,59 @@ public struct XClient {
         )
     }
 
+    public func searchUsers(query: String) async throws -> [XProfileResponse] {
+        guard let credentials = try credentialStore.loadXCredentials() else {
+            throw SourceError.notConfigured
+        }
+
+        let normalized = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return [] }
+
+        var components = URLComponents(string: "https://x.com/i/api/1.1/users/search.json")!
+        components.queryItems = [
+            URLQueryItem(name: "q", value: normalized),
+            URLQueryItem(name: "count", value: "20"),
+            URLQueryItem(name: "include_entities", value: "false"),
+        ]
+
+        var request = URLRequest(url: components.url!)
+        request.httpMethod = "GET"
+        request.allHTTPHeaderFields = headers(credentials: credentials)
+
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw SourceError.invalidResponse
+        }
+
+        if http.statusCode == 401 || http.statusCode == 403 {
+            throw SourceError.notConfigured
+        }
+
+        guard (200 ..< 300).contains(http.statusCode) else {
+            throw SourceError.invalidResponse
+        }
+
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return try decoder.decode([XSearchUserResponse].self, from: data).map { user in
+            XProfileResponse(
+                idStr: user.idStr,
+                screenName: user.screenName,
+                name: user.name,
+                description: user.description,
+                followersCount: user.followersCount,
+                friendsCount: user.friendsCount,
+                statusesCount: user.statusesCount,
+                createdAt: user.createdAt.flatMap(Self.twitterDate(from:)),
+                verified: user.verified,
+                profileImageUrlHttps: user.profileImageUrlHttps,
+                profileBannerUrl: nil,
+                isFollowing: user.following,
+                isFollowedBy: nil,
+            )
+        }
+    }
+
     public func verifiedUser() async throws -> XVerifiedUser {
         guard let credentials = try credentialStore.loadXCredentials() else {
             throw SourceError.notConfigured
@@ -390,6 +443,20 @@ private struct XAccountListUser: Decodable {
         case name
         case userId = "user_id"
     }
+}
+
+private struct XSearchUserResponse: Decodable {
+    let idStr: String
+    let screenName: String
+    let name: String
+    let description: String?
+    let followersCount: Int?
+    let friendsCount: Int?
+    let statusesCount: Int?
+    let createdAt: String?
+    let verified: Bool?
+    let following: Bool?
+    let profileImageUrlHttps: String?
 }
 
 private struct XUnreadCountResponse: Decodable {

@@ -47,6 +47,10 @@ PATHFINDER_OPERATIONS = {
         "operationName": "profileAttributes",
         "sha256Hash": "53bcb064f6cd18c23f752bc324a791194d20df612d8e1239c735144ab0399ced",
     },
+    "find-top-results": {
+        "operationName": "findTopResults",
+        "sha256Hash": "755858df4daab8d212980b02a81dcf8c9a58447de318b59d07c4651a1d0450b9",
+    },
     "is-track-saved": {
         "operationName": "areEntitiesInLibrary",
         "sha256Hash": "134337999233cc6fdd6b1e6dbf94841409f04a946c5c7b744b09ba0dfe5a85ed",
@@ -152,6 +156,22 @@ class SpotifyWebClient:
     def user_profile(self, username: str) -> dict[str, Any]:
         username = username.strip().removeprefix("spotify:user:")
         return self.spclient_get(f"user-profile-view/v3/profile/{urllib.parse.quote(username)}")
+
+    def search_users(self, query: str) -> dict[str, Any]:
+        query = query.strip()
+        if not query:
+            return {"status": "ok", "query": query, "users": []}
+        response = self.pathfinder_query(
+            "find-top-results",
+            variables={"query": query, "numberOfTopResults": 20},
+            use_initial_token=False,
+        )
+        return {
+            "status": "ok",
+            "query": query,
+            "users": summarize_spotify_pathfinder_users(response),
+            "raw": response,
+        }
 
     def user_following(self, username: str) -> dict[str, Any]:
         username = username.strip().removeprefix("spotify:user:")
@@ -489,6 +509,13 @@ def extract_preview_url(html: str) -> str | None:
 
 
 def summarize(value: Any, max_depth: int = 3) -> Any:
+    if isinstance(value, dict) and "users" in value and "query" in value:
+        return {
+            "status": value.get("status"),
+            "query": value.get("query"),
+            "user_count": len(value.get("users") or []),
+            "users": value.get("users"),
+        }
     if max_depth <= 0:
         if isinstance(value, dict):
             return {"...": f"{len(value)} keys"}
@@ -542,6 +569,56 @@ def write_output(path: str | None, value: Any) -> None:
         handle.write("\n")
 
 
+def summarize_spotify_pathfinder_users(response: dict[str, Any]) -> list[dict[str, Any]]:
+    direct_items = (
+        response.get("data", {})
+        .get("searchV2", {})
+        .get("usersV2", {})
+        .get("items", [])
+    )
+    top_items = (
+        response.get("data", {})
+        .get("searchV2", {})
+        .get("topResultsV2", {})
+        .get("itemsV2", [])
+    )
+    users: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def append_user(data: dict[str, Any]) -> None:
+        uri = data.get("uri")
+        username = uri.removeprefix("spotify:user:") if isinstance(uri, str) and uri.startswith("spotify:user:") else data.get("id")
+        if not username or username in seen:
+            return
+        seen.add(username)
+        image_sources = (
+            data.get("visuals", {})
+            .get("avatarImage", {})
+            .get("sources", [])
+        ) or (data.get("avatar") or {}).get("sources", [])
+        image_url = image_sources[0].get("url") if image_sources and isinstance(image_sources[0], dict) else None
+        users.append(
+            {
+                "id": data.get("id") or username,
+                "username": username,
+                "display_name": data.get("displayName") or data.get("name"),
+                "image_url": image_url,
+                "uri": uri,
+            }
+        )
+
+    for item in direct_items:
+        data = item.get("data", {}) if isinstance(item, dict) else {}
+        append_user(data)
+    for item in top_items:
+        wrapper = item.get("item", {}) if isinstance(item, dict) else {}
+        data = wrapper.get("data", {}) if isinstance(wrapper, dict) else {}
+        uri = data.get("uri")
+        if isinstance(uri, str) and uri.startswith("spotify:user:"):
+            append_user(data)
+    return users
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Validate Spotify WebPlayer API calls using captured app credentials.")
     parser.add_argument("--simulator", action="store_true", help="Read Spotify credentials from the booted simulator fallback store.")
@@ -563,6 +640,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     profile = subparsers.add_parser("user-profile", help="Fetch a Spotify user profile by username.")
     profile.add_argument("username", help="Spotify username or spotify:user URI.")
+    search_users = subparsers.add_parser("search-users", help="Search Spotify users through the WebPlayer search endpoint.")
+    search_users.add_argument("query", help="Search query.")
     following = subparsers.add_parser("following", help="Fetch users followed by a Spotify username.")
     following.add_argument("username", help="Spotify username or spotify:user URI.")
     followers = subparsers.add_parser("followers", help="Fetch followers for a Spotify username.")
@@ -608,6 +687,8 @@ def main() -> None:
         result = client.profile_attributes()
     elif args.command == "user-profile":
         result = client.user_profile(args.username)
+    elif args.command == "search-users":
+        result = client.search_users(args.query)
     elif args.command == "following":
         result = client.user_following(args.username)
     elif args.command == "followers":

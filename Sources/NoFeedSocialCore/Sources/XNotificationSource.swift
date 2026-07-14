@@ -39,24 +39,14 @@ public struct XNotificationSource: NotificationFetching, AccountValidating, Prof
         // id is either a screen_name (from actor.username) or numeric user_id
         // Try as screen name first via GraphQL UserByScreenName
         if let profile = try? await client.userProfile(screenName: id) {
-            return NetworkProfile(
-                id: profile.idStr,
-                network: .x,
-                username: profile.screenName,
-                displayName: profile.name,
-                bio: profile.description,
-                avatarURL: profile.profileImageUrlHttps.flatMap { urlString in
-                    URL(string: urlString.replacingOccurrences(of: "_normal", with: ""))
-                },
-                followerCount: profile.followersCount,
-                followingCount: profile.friendsCount,
-                postsCount: profile.statusesCount,
-                joinedAt: profile.createdAt,
-                isVerified: profile.verified,
-                isMutualFollow: (profile.isFollowing == true && profile.isFollowedBy == true) ? true : nil,
-            )
+            return networkProfile(from: profile)
         }
         throw SourceError.serviceError("X profile lookup failed for @\(id).")
+    }
+
+    public func searchProfiles(query: String) async throws -> [NetworkProfile] {
+        let users = try await client.searchUsers(query: query)
+        return users.map(networkProfile(from:))
     }
 
     public func fetchTargetDetails(for item: NotificationItem) async throws -> NotificationTargetDetails {
@@ -72,5 +62,24 @@ public struct XNotificationSource: NotificationFetching, AccountValidating, Prof
         }
 
         return try await client.tweetDetails(tweetId: tweetId)
+    }
+
+    private func networkProfile(from profile: XProfileResponse) -> NetworkProfile {
+        NetworkProfile(
+            id: profile.idStr,
+            network: .x,
+            username: profile.screenName,
+            displayName: profile.name,
+            bio: profile.description,
+            avatarURL: profile.profileImageUrlHttps.flatMap { urlString in
+                URL(string: urlString.replacingOccurrences(of: "_normal", with: ""))
+            },
+            followerCount: profile.followersCount,
+            followingCount: profile.friendsCount,
+            postsCount: profile.statusesCount,
+            joinedAt: profile.createdAt,
+            isVerified: profile.verified,
+            isMutualFollow: (profile.isFollowing == true && profile.isFollowedBy == true) ? true : nil,
+        )
     }
 }

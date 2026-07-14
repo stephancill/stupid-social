@@ -12,12 +12,7 @@ public struct ContentView: View {
     public var body: some View {
         Group {
             if let container {
-                FeedView(
-                    viewModel: container.feedViewModel,
-                    storyViewModel: container.storyBarViewModel,
-                    settingsViewModel: container.settingsViewModel,
-                    spotifyClient: container.spotifyClient,
-                )
+                tabs(container: container)
             } else {
                 ProgressView()
             }
@@ -37,14 +32,56 @@ public struct ContentView: View {
         }
     }
 
+    @ViewBuilder
+    private func tabs(container: AppContainer) -> some View {
+        let tabView = TabView {
+            FeedView(
+                viewModel: container.feedViewModel,
+                storyViewModel: container.storyBarViewModel,
+                settingsViewModel: container.settingsViewModel,
+                spotifyClient: container.spotifyClient,
+            )
+            .tabItem {
+                Label("Home", systemImage: "house")
+            }
+
+            SearchView(
+                viewModel: container.profileSearchViewModel,
+                settingsViewModel: container.settingsViewModel,
+                onSettingsDisappear: {
+                    Task {
+                        await foregroundRefreshFeedAndStories(container: container)
+                    }
+                },
+            )
+            .tabItem {
+                Label("Search", systemImage: "magnifyingglass")
+            }
+        }
+
+        #if os(iOS)
+            if #available(iOS 26.0, *) {
+                tabView.tabBarMinimizeBehavior(.onScrollDown)
+            } else {
+                tabView
+            }
+        #else
+            tabView
+        #endif
+    }
+
     private func configureDependencies() {
         let appContainer = AppContainer(modelContext: modelContext)
         container = appContainer
 
         Task {
-            async let feedRefresh = appContainer.feedViewModel.refreshOnForegroundActivation()
-            async let storyRefresh: Void = appContainer.storyBarViewModel.fetchStoryBarContent()
-            _ = await (feedRefresh, storyRefresh)
+            await foregroundRefreshFeedAndStories(container: appContainer)
         }
+    }
+
+    private func foregroundRefreshFeedAndStories(container: AppContainer) async {
+        async let feedRefresh = container.feedViewModel.refreshOnForegroundActivation()
+        async let storyRefresh: Void = container.storyBarViewModel.fetchStoryBarContent()
+        _ = await (feedRefresh, storyRefresh)
     }
 }

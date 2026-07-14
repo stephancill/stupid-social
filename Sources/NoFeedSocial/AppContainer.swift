@@ -5,6 +5,7 @@ import SwiftData
 final class AppContainer {
     let feedViewModel: FeedViewModel
     let storyBarViewModel: StoryBarViewModel
+    let profileSearchViewModel: ProfileSearchViewModel
     let settingsViewModel: SettingsViewModel
     let spotifyClient: SpotifyClient
 
@@ -94,6 +95,8 @@ final class AppContainer {
             instagramSource: instagramSource,
             spotifyActivitySource: spotifyActivitySource,
         )
+
+        profileSearchViewModel = ProfileSearchViewModel(feedService: feedService)
 
         settingsViewModel = SettingsViewModel(
             keychainStore: keychainStore,

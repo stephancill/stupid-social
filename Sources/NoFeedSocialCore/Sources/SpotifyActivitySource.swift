@@ -108,6 +108,45 @@ public final class SpotifyActivitySource: ActivityFetching, AccountValidating, P
         }
     }
 
+    public func searchProfiles(query: String) async throws -> [NetworkProfile] {
+        guard (try? client.hasCredentials()) == true else {
+            throw SourceError.notConfigured
+        }
+        let normalized = String(query
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingPrefix("@"))
+        guard !normalized.isEmpty else { return [] }
+
+        let profiles = try await client.searchUsers(query: normalized)
+        var results: [NetworkProfile] = []
+        for profile in profiles {
+            await results.append(networkProfile(from: profile))
+        }
+        return results
+    }
+
+    private func networkProfile(from profile: SpotifyUserProfile) async -> NetworkProfile {
+        let username = profile.id
+        let followingCount = try? await client.userFollowingCount(username: username)
+        let followerCount = try? await client.userFollowerCount(username: username)
+        let avatar: Foundation.URL? = if let urlStr = profile.images?.first?.url {
+            Foundation.URL(string: urlStr)
+        } else { nil }
+        let website: Foundation.URL? = if let urlStr = profile.external_urls?.spotify {
+            Foundation.URL(string: urlStr)
+        } else { nil }
+        return NetworkProfile(
+            id: username,
+            network: .spotify,
+            username: username,
+            displayName: profile.display_name,
+            avatarURL: avatar,
+            followerCount: followerCount,
+            followingCount: followingCount,
+            websiteURL: website,
+        )
+    }
+
     private func trackId(from uri: String) -> String {
         uri.replacingOccurrences(of: "spotify:track:", with: "")
             .replacingOccurrences(of: "spotify:album:", with: "")

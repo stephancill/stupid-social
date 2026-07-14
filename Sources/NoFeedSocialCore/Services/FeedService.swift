@@ -150,6 +150,35 @@ public final class FeedService {
         return try await source.fetchProfile(id: lookupId)
     }
 
+    public func fetchProfilePosts(for profile: NetworkProfile, cursor: String?, count: Int = 12) async throws -> NetworkProfilePostsPage {
+        guard let source = profileFetchersByNetwork[profile.network] else {
+            throw SourceError.serviceError("No source for network \(profile.network)")
+        }
+        let lookupId = profile.network == .instagram ? (profile.username ?? profile.id) : profile.id
+        return try await source.fetchProfilePosts(id: lookupId, cursor: cursor, count: count)
+    }
+
+    public func searchProfiles(query: String) async -> [NetworkProfile] {
+        let normalized = String(query
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingPrefix("@"))
+        guard !normalized.isEmpty else { return [] }
+
+        var profiles: [NetworkProfile] = []
+        for source in profileFetchersByNetwork.values {
+            do {
+                try await profiles.append(contentsOf: source.searchProfiles(query: normalized))
+            } catch SourceError.notConfigured {
+                continue
+            } catch {
+                logger.info("Profile search failed: \(source.network.rawValue, privacy: .public) \(String(describing: error), privacy: .public)")
+            }
+        }
+        return profiles.sorted { lhs, rhs in
+            lhs.network.displayName < rhs.network.displayName
+        }
+    }
+
     public func fetchTargetDetails(for item: NotificationItem) async throws -> NotificationTargetDetails {
         guard let source = targetDetailFetchersByNetwork[item.network] else {
             throw SourceError.serviceError("No source for network \(item.network)")

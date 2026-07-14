@@ -235,6 +235,17 @@ public struct SpotifyClient {
         )
     }
 
+    func searchUsers(query: String) async throws -> [SpotifyUserProfile] {
+        let normalized = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return [] }
+
+        let encodedQuery = normalized.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? normalized
+        let path = "searchview/km/v4/search/\(encodedQuery)?entityVersion=2&limit=10&market=from_token&platform=web"
+        let (data, _) = try await makeRequest(path)
+        let response = try JSONDecoder().decode(SpotifySearchResponse.self, from: data)
+        return response.users
+    }
+
     func userFollowingCount(username: String) async throws -> Int {
         let (data, _) = try await makeRequest("user-profile-view/v3/profile/\(username)/following?market=from_token")
         let profiles = try JSONDecoder().decode(SpotifyProfileList.self, from: data)
@@ -509,6 +520,84 @@ struct SpotifyUserProfileJSON: Decodable {
     let image_url: String?
     let followers_count: Int?
     let following_count: Int?
+}
+
+private struct SpotifySearchResponse: Decodable {
+    struct Payload: Decodable {
+        let searchV2: SearchV2
+    }
+
+    struct SearchV2: Decodable {
+        let usersV2: UserResults?
+        let topResultsV2: TopResults?
+    }
+
+    struct UserResults: Decodable {
+        let items: [UserItem]
+    }
+
+    struct TopResults: Decodable {
+        let itemsV2: [TopResultItem]
+    }
+
+    struct UserItem: Decodable {
+        let data: UserData
+    }
+
+    struct TopResultItem: Decodable {
+        let item: TopResultWrapper
+        let matchedFields: [String]?
+    }
+
+    struct TopResultWrapper: Decodable {
+        let data: UserData?
+    }
+
+    struct UserData: Decodable {
+        let id: String?
+        let displayName: String?
+        let name: String?
+        let uri: String?
+        let visuals: Visuals?
+        let avatar: ImageSources?
+    }
+
+    struct Visuals: Decodable {
+        let avatarImage: ImageSources?
+    }
+
+    struct ImageSources: Decodable {
+        let sources: [ImageSource]
+    }
+
+    struct ImageSource: Decodable {
+        let url: String
+    }
+
+    let data: Payload
+
+    var users: [SpotifyUserProfile] {
+        var seen = Set<String>()
+        let directUsers = (data.searchV2.usersV2?.items ?? []).compactMap { profile(from: $0.data, seen: &seen) }
+        let topUsers: [SpotifyUserProfile] = (data.searchV2.topResultsV2?.itemsV2 ?? []).compactMap { item in
+            guard item.item.data?.uri?.hasPrefix("spotify:user:") == true, let data = item.item.data else { return nil }
+            return profile(from: data, seen: &seen)
+        }
+        return directUsers + topUsers
+    }
+
+    private func profile(from data: UserData, seen: inout Set<String>) -> SpotifyUserProfile? {
+        let uriUsername = data.uri?.replacingOccurrences(of: "spotify:user:", with: "")
+        let username = data.id ?? uriUsername
+        guard let username, !username.isEmpty, seen.insert(username).inserted else { return nil }
+        return SpotifyUserProfile(
+            id: username,
+            display_name: data.displayName ?? data.name,
+            images: data.visuals?.avatarImage?.sources.first.map { [SpotifyImage(url: $0.url)] } ?? data.avatar?.sources.first.map { [SpotifyImage(url: $0.url)] },
+            followers: nil,
+            external_urls: SpotifyExternalURLs(spotify: "https://open.spotify.com/user/\(username)"),
+        )
+    }
 }
 
 struct SpotifyUserProfile: Decodable {

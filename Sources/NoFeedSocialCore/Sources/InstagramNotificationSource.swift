@@ -240,25 +240,26 @@ public final class InstagramNotificationSource: NotificationFetching, AccountVal
     }
 
     public func fetchProfile(id: String) async throws -> NetworkProfile {
-        do {
-            let response = try await client.userInfo(uid: id)
-            return NetworkProfile(
-                id: String(response.user.pk ?? 0),
-                network: .instagram,
-                username: response.user.username,
-                displayName: response.user.fullName,
-                bio: response.user.biography,
-                avatarURL: response.user.profilePicUrl.flatMap(URL.init),
-                followerCount: response.user.followerCount,
-                followingCount: response.user.followingCount,
-                postsCount: response.user.mediaCount,
-                websiteURL: response.user.externalUrl.flatMap(URL.init),
-                isVerified: response.user.isVerified,
-                isMutualFollow: (response.user.friendshipStatus?.following == true && response.user.friendshipStatus?.followedBy == true) ? true : nil,
-            )
-        } catch {
-            throw SourceError.serviceError("Could not fetch profile.")
+        let response = try await client.userInfo(uid: id)
+        let postLookupId = response.user.username ?? response.user.pk.map(String.init) ?? id
+        let postsPage: NetworkProfilePostsPage? = if !postLookupId.isEmpty {
+            try await client.userPostsPage(uid: postLookupId, cursor: nil)
+        } else {
+            nil
         }
+
+        if (response.user.mediaCount ?? 0) > 0, postsPage?.posts.isEmpty != false {
+            throw SourceError.serviceError("Instagram profile has posts, but no posts were decoded.")
+        }
+        return networkProfile(from: response.user, postsPage: postsPage)
+    }
+
+    public func fetchProfilePosts(id: String, cursor: String?, count: Int) async throws -> NetworkProfilePostsPage {
+        try await client.userPostsPage(uid: id, cursor: cursor, count: count)
+    }
+
+    public func searchProfiles(query: String) async throws -> [NetworkProfile] {
+        try await client.searchUsers(query: query).map { networkProfile(from: $0) }
     }
 
     public func fetchTargetDetails(for item: NotificationItem) async throws -> NotificationTargetDetails {
@@ -287,6 +288,26 @@ public final class InstagramNotificationSource: NotificationFetching, AccountVal
             imageURLs: media.bestImageURLs,
             postedAt: media.takenAt.map { Date(timeIntervalSince1970: $0) },
             likeCount: media.likeCount,
+        )
+    }
+
+    private func networkProfile(from user: InstagramUserInfoResponse.InfoUser, postsPage: NetworkProfilePostsPage? = nil) -> NetworkProfile {
+        NetworkProfile(
+            id: String(user.pk ?? 0),
+            network: .instagram,
+            username: user.username,
+            displayName: user.fullName,
+            bio: user.biography,
+            avatarURL: user.profilePicUrl.flatMap(URL.init),
+            followerCount: user.followerCount,
+            followingCount: user.followingCount,
+            postsCount: user.mediaCount,
+            websiteURL: user.externalUrl.flatMap(URL.init),
+            isVerified: user.isVerified,
+            isMutualFollow: (user.friendshipStatus?.following == true && user.friendshipStatus?.followedBy == true) ? true : nil,
+            posts: postsPage?.posts ?? [],
+            postsNextCursor: postsPage?.nextCursor,
+            hasMorePosts: postsPage?.hasMore ?? false,
         )
     }
 }

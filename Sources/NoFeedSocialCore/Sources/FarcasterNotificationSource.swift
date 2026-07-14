@@ -42,7 +42,15 @@ public struct FarcasterNotificationSource: NotificationFetching, AccountValidati
             throw SourceError.serviceError("Invalid FID")
         }
         let user = try await client.user(byFid: fid)
-        return NetworkProfile(
+        return profile(from: user)
+    }
+
+    public func searchProfiles(query: String) async throws -> [NetworkProfile] {
+        try await client.searchUsers(query: query).map(profile(from:))
+    }
+
+    private func profile(from user: FarcasterUserResponse) -> NetworkProfile {
+        NetworkProfile(
             id: String(user.fid),
             network: .farcaster,
             username: user.username,

@@ -15,6 +15,18 @@ public protocol NotificationFetching: SocialSource {
 
 public protocol ProfileFetching: SocialSource {
     func fetchProfile(id: String) async throws -> NetworkProfile
+    func fetchProfilePosts(id: String, cursor: String?, count: Int) async throws -> NetworkProfilePostsPage
+    func searchProfiles(query: String) async throws -> [NetworkProfile]
+}
+
+public extension ProfileFetching {
+    func fetchProfilePosts(id _: String, cursor _: String?, count _: Int) async throws -> NetworkProfilePostsPage {
+        throw SourceError.unsupported
+    }
+
+    func searchProfiles(query _: String) async throws -> [NetworkProfile] {
+        []
+    }
 }
 
 public protocol NotificationTargetDetailFetching: SocialSource {

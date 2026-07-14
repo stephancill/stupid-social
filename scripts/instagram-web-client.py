@@ -319,6 +319,31 @@ class InstagramWebClient:
             headers=self.web_headers(),
         )
 
+    def rest_search_users(self, query: str) -> dict[str, Any]:
+        self._ensure_bootstrapped()
+        query = query.strip()
+        if not query:
+            return {"status": "ok", "query": query, "users": []}
+        params = urllib.parse.urlencode(
+            {
+                "context": "blended",
+                "query": query,
+                "rank_token": "0.0",
+                "include_reel": "false",
+            }
+        )
+        response = self.request_json_with_refresh(
+            "GET",
+            BASE_URL + "/web/search/topsearch/?" + params,
+            headers=self.web_headers(),
+        )
+        return {
+            "status": response.get("status"),
+            "query": query,
+            "users": [summarize_instagram_user(item.get("user", {})) for item in response.get("users", [])],
+            "raw": response,
+        }
+
     def story_seen(
         self,
         reel_id: str,
@@ -802,6 +827,16 @@ def print_json(value: Any, raw: bool) -> None:
     print(json.dumps(output, indent=2, sort_keys=True))
 
 
+def summarize_instagram_user(user: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": user.get("pk") or user.get("id"),
+        "username": user.get("username"),
+        "full_name": user.get("full_name"),
+        "is_verified": user.get("is_verified"),
+        "profile_pic_url": user.get("profile_pic_url"),
+    }
+
+
 def write_output(path: str | None, value: Any) -> None:
     if not path:
         return
@@ -842,6 +877,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     username_profile = subparsers.add_parser("profile-username", help="Call web-visible /api/v1/users/web_profile_info/.")
     username_profile.add_argument("username", help="Instagram username.")
+
+    search_users = subparsers.add_parser("search-users", help="Call web-visible /web/search/topsearch/ for users.")
+    search_users.add_argument("query", help="Search query.")
 
     story_seen = subparsers.add_parser("story-seen", help="Mark one story media item seen with PolarisStoriesV3SeenMutation.")
     story_seen.add_argument("--reel-id", required=True, help="Story reel/user ID.")
@@ -959,6 +997,8 @@ def main() -> None:
         result = client.rest_direct_inbox()
     elif args.command == "profile-username":
         result = client.rest_profile_by_username(args.username)
+    elif args.command == "search-users":
+        result = client.rest_search_users(args.query)
     elif args.command == "story-seen":
         result = client.story_seen(args.reel_id, args.media_id, args.owner_id, args.taken_at, args.seen_at, args.story_username)
     elif args.command == "force-story-seen":

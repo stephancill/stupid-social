@@ -400,7 +400,9 @@ extension InstagramClient {
             wwwClaim = claim
         }
         if http.statusCode == 401 || http.statusCode == 403 { throw SourceError.notConfigured }
-        guard (200 ..< 300).contains(http.statusCode) else { throw SourceError.invalidResponse }
+        guard (200 ..< 300).contains(http.statusCode) else {
+            throw SourceError.serviceError(instagramRequestError(statusCode: http.statusCode, data: data))
+        }
         return data
     }
 
@@ -416,7 +418,9 @@ extension InstagramClient {
             wwwClaim = claim
         }
         if http.statusCode == 401 || http.statusCode == 403 { throw SourceError.notConfigured }
-        guard (200 ..< 300).contains(http.statusCode) else { throw SourceError.invalidResponse }
+        guard (200 ..< 300).contains(http.statusCode) else {
+            throw SourceError.serviceError(instagramRequestError(statusCode: http.statusCode, data: data))
+        }
         return String(data: data, encoding: .utf8) ?? ""
     }
 
@@ -430,6 +434,14 @@ extension InstagramClient {
         if let rur = credentials.rur { cookieParts.append("rur=\(rur)") }
         if let igDid = credentials.igDid { cookieParts.append("ig_did=\(igDid)") }
         return cookieParts.joined(separator: "; ")
+    }
+
+    func instagramRequestError(statusCode: Int, data: Data) -> String {
+        let decoded = try? JSONDecoder().decode(InstagramErrorResponse.self, from: data)
+        let rawBody = String(data: data, encoding: .utf8) ?? ""
+        let message = decoded?.message?.isEmpty == false ? decoded?.message : nil
+        let body = rawBody.isEmpty ? nil : String(rawBody.prefix(240))
+        return "Instagram request failed (HTTP \(statusCode)): \(message ?? body ?? "invalid response")"
     }
 
     func jazoest(csrfToken: String) -> String {

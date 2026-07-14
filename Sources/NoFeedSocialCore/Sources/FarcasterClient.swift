@@ -73,6 +73,26 @@ public struct FarcasterClient {
         return response.user
     }
 
+    func searchUsers(query: String, limit: Int = 10) async throws -> [FarcasterUserResponse] {
+        let normalized = String(query
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingPrefix("@"))
+            .lowercased()
+        guard !normalized.isEmpty else { return [] }
+
+        var components = URLComponents(
+            url: baseURL.appending(path: "/v2/farcaster/user/search"),
+            resolvingAgainstBaseURL: false,
+        )!
+        components.queryItems = [
+            URLQueryItem(name: "q", value: normalized),
+            URLQueryItem(name: "limit", value: String(limit)),
+        ]
+
+        let response: FarcasterUserSearchResponse = try await get(components.url!)
+        return response.users
+    }
+
     func interactions(fid: UInt64, targetFid: UInt64) async throws -> FarcasterInteractions {
         var components = URLComponents(
             url: baseURL.appending(path: "/v2/farcaster/user/interactions"),
@@ -197,6 +217,10 @@ public struct FarcasterBio: Decodable {
 
 private struct FarcasterUserWrapperResponse: Decodable {
     let user: FarcasterUserResponse
+}
+
+private struct FarcasterUserSearchResponse: Decodable {
+    let users: [FarcasterUserResponse]
 }
 
 struct FarcasterInteractionsResponse: Decodable {

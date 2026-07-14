@@ -221,6 +221,28 @@ public struct NetworkProfile: Identifiable, Hashable, Codable, Sendable {
     public let websiteURL: URL?
     public let isVerified: Bool?
     public let isMutualFollow: Bool?
+    public let posts: [NetworkProfilePost]
+    public let postsNextCursor: String?
+    public let hasMorePosts: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case network
+        case username
+        case displayName
+        case bio
+        case avatarURL
+        case followerCount
+        case followingCount
+        case postsCount
+        case joinedAt
+        case websiteURL
+        case isVerified
+        case isMutualFollow
+        case posts
+        case postsNextCursor
+        case hasMorePosts
+    }
 
     public init(
         id: String,
@@ -236,6 +258,9 @@ public struct NetworkProfile: Identifiable, Hashable, Codable, Sendable {
         websiteURL: URL? = nil,
         isVerified: Bool? = nil,
         isMutualFollow: Bool? = nil,
+        posts: [NetworkProfilePost] = [],
+        postsNextCursor: String? = nil,
+        hasMorePosts: Bool = false,
     ) {
         self.id = id
         self.network = network
@@ -250,6 +275,107 @@ public struct NetworkProfile: Identifiable, Hashable, Codable, Sendable {
         self.websiteURL = websiteURL
         self.isVerified = isVerified
         self.isMutualFollow = isMutualFollow
+        self.posts = posts
+        self.postsNextCursor = postsNextCursor
+        self.hasMorePosts = hasMorePosts
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        network = try container.decode(SocialNetwork.self, forKey: .network)
+        username = try container.decodeIfPresent(String.self, forKey: .username)
+        displayName = try container.decodeIfPresent(String.self, forKey: .displayName)
+        bio = try container.decodeIfPresent(String.self, forKey: .bio)
+        avatarURL = try container.decodeIfPresent(URL.self, forKey: .avatarURL)
+        followerCount = try container.decodeIfPresent(Int.self, forKey: .followerCount)
+        followingCount = try container.decodeIfPresent(Int.self, forKey: .followingCount)
+        postsCount = try container.decodeIfPresent(Int.self, forKey: .postsCount)
+        joinedAt = try container.decodeIfPresent(Date.self, forKey: .joinedAt)
+        websiteURL = try container.decodeIfPresent(URL.self, forKey: .websiteURL)
+        isVerified = try container.decodeIfPresent(Bool.self, forKey: .isVerified)
+        isMutualFollow = try container.decodeIfPresent(Bool.self, forKey: .isMutualFollow)
+        posts = try container.decodeIfPresent([NetworkProfilePost].self, forKey: .posts) ?? []
+        postsNextCursor = try container.decodeIfPresent(String.self, forKey: .postsNextCursor)
+        hasMorePosts = try container.decodeIfPresent(Bool.self, forKey: .hasMorePosts) ?? false
+    }
+}
+
+public struct NetworkProfilePostsPage: Hashable, Codable, Sendable {
+    public let posts: [NetworkProfilePost]
+    public let nextCursor: String?
+    public let hasMore: Bool
+
+    public init(posts: [NetworkProfilePost], nextCursor: String?, hasMore: Bool) {
+        self.posts = posts
+        self.nextCursor = nextCursor
+        self.hasMore = hasMore
+    }
+}
+
+public struct NetworkProfilePost: Identifiable, Hashable, Codable, Sendable {
+    public let id: String
+    public let imageURL: URL?
+    public let thumbnailURL: URL?
+    public let media: [NetworkProfilePostMedia]
+    public let url: URL?
+    public let caption: String?
+    public let isVideo: Bool
+    public let isCarousel: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case imageURL
+        case thumbnailURL
+        case media
+        case url
+        case caption
+        case isVideo
+        case isCarousel
+    }
+
+    public init(id: String, imageURL: URL?, thumbnailURL: URL? = nil, media: [NetworkProfilePostMedia] = [], url: URL?, caption: String? = nil, isVideo: Bool = false, isCarousel: Bool = false) {
+        self.id = id
+        self.imageURL = imageURL
+        self.thumbnailURL = thumbnailURL
+        self.media = media.isEmpty ? imageURL.map { [NetworkProfilePostMedia(id: id, imageURL: $0, thumbnailURL: thumbnailURL, videoURL: nil, isVideo: isVideo)] } ?? [] : media
+        self.url = url
+        self.caption = caption
+        self.isVideo = isVideo
+        self.isCarousel = isCarousel
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        imageURL = try container.decodeIfPresent(URL.self, forKey: .imageURL)
+        thumbnailURL = try container.decodeIfPresent(URL.self, forKey: .thumbnailURL)
+        let decodedMedia = try container.decodeIfPresent([NetworkProfilePostMedia].self, forKey: .media) ?? []
+        url = try container.decodeIfPresent(URL.self, forKey: .url)
+        caption = try container.decodeIfPresent(String.self, forKey: .caption)
+        isVideo = try container.decodeIfPresent(Bool.self, forKey: .isVideo) ?? false
+        isCarousel = try container.decodeIfPresent(Bool.self, forKey: .isCarousel) ?? false
+        if decodedMedia.isEmpty, let imageURL {
+            media = [NetworkProfilePostMedia(id: id, imageURL: imageURL, thumbnailURL: thumbnailURL, videoURL: nil, isVideo: isVideo)]
+        } else {
+            media = decodedMedia
+        }
+    }
+}
+
+public struct NetworkProfilePostMedia: Identifiable, Hashable, Codable, Sendable {
+    public let id: String
+    public let imageURL: URL
+    public let thumbnailURL: URL?
+    public let videoURL: URL?
+    public let isVideo: Bool
+
+    public init(id: String, imageURL: URL, thumbnailURL: URL? = nil, videoURL: URL? = nil, isVideo: Bool = false) {
+        self.id = id
+        self.imageURL = imageURL
+        self.thumbnailURL = thumbnailURL
+        self.videoURL = videoURL
+        self.isVideo = isVideo
     }
 }
 

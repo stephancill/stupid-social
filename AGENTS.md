@@ -10,9 +10,11 @@ Sources/
     Views/
       ContentView.swift             # Root view, container wiring
       FeedView.swift                # Main list + StoriesBar + story viewer triggers
+      SearchView.swift              # Cross-network profile search
       StoryComposerView.swift       # Full-screen story composer scaffold
       NotificationDetailView.swift  # Standard form-based notification detail
       ProfileDetailView.swift       # Actor profile detail
+      NetworkBadgeIcon.swift        # Shared social network icon badge
       UnifiedStoryViewer.swift      # Full-screen unified story viewer (Instagram + Spotify)
       SpotifyPulseRing.swift        # Shared phase-driven pulse ring
       InstagramConnectionView.swift # Instagram credential setup
@@ -46,6 +48,7 @@ Sources/
       SpotifyActivitySeenStore.swift
     ViewModels/
       FeedViewModel.swift
+      ProfileSearchViewModel.swift
       StoryBarViewModel.swift
       SettingsViewModel.swift
   NoFeedSocialMac/                  # macOS app entry point
