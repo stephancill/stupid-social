@@ -260,19 +260,29 @@ private struct StoryViewerSelection: Identifiable {
 
 private struct StoriesBarSkeleton: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var isAnimating = false
 
     var body: some View {
+        TimelineView(.animation(minimumInterval: 1 / 30)) { timeline in
+            skeletonContent(fillOpacity: fillOpacity(at: timeline.date))
+        }
+        .frame(height: 112, alignment: .top)
+        .padding(.vertical, 8)
+        .listRowInsets(EdgeInsets())
+        .listRowSeparator(.hidden)
+        .accessibilityLabel("Loading stories")
+    }
+
+    private func skeletonContent(fillOpacity: Double) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             RoundedRectangle(cornerRadius: 3, style: .continuous)
-                .fill(Color.storySkeletonFill)
+                .fill(Color.storySkeletonPulseFill.opacity(fillOpacity))
                 .frame(width: 72, height: 10)
                 .padding(.horizontal, 16)
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(alignment: .top, spacing: 12) {
                     ForEach(0 ..< 6, id: \.self) { _ in
-                        StoryBubbleSkeleton()
+                        StoryBubbleSkeleton(fillOpacity: fillOpacity)
                     }
                 }
                 .padding(.horizontal, 16)
@@ -280,22 +290,23 @@ private struct StoriesBarSkeleton: View {
                 .padding(.bottom, 4)
             }
         }
-        .frame(height: 112, alignment: .top)
-        .padding(.vertical, 8)
-        .opacity(isAnimating ? 0.45 : 1)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: isAnimating)
-        .onAppear { isAnimating = true }
-        .listRowInsets(EdgeInsets())
-        .listRowSeparator(.hidden)
-        .accessibilityLabel("Loading stories")
+    }
+
+    private func fillOpacity(at date: Date) -> Double {
+        guard !reduceMotion else { return 0.28 }
+        let cycle = date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 2.4) / 2.4
+        let wave = (sin((cycle * 2 * .pi) - (.pi / 2)) + 1) / 2
+        return 0.22 + (0.10 * wave)
     }
 }
 
 private struct StoryBubbleSkeleton: View {
+    let fillOpacity: Double
+
     var body: some View {
         VStack(spacing: 6) {
             Circle()
-                .fill(Color.storySkeletonFill)
+                .fill(Color.storySkeletonPulseFill.opacity(fillOpacity))
                 .frame(width: 70, height: 70)
                 .overlay {
                     Circle()
@@ -303,7 +314,7 @@ private struct StoryBubbleSkeleton: View {
                 }
 
             RoundedRectangle(cornerRadius: 3, style: .continuous)
-                .fill(Color.storySkeletonFill)
+                .fill(Color.storySkeletonPulseFill.opacity(fillOpacity))
                 .frame(width: 52, height: 8)
         }
         .frame(width: 70)
@@ -1057,6 +1068,16 @@ private extension Color {
             Color(nsColor: .tertiaryLabelColor)
         #else
             Color.secondary.opacity(0.35)
+        #endif
+    }
+
+    static var storySkeletonPulseFill: Color {
+        #if os(iOS)
+            Color(.label)
+        #elseif os(macOS)
+            Color(nsColor: .labelColor)
+        #else
+            Color.primary
         #endif
     }
 
