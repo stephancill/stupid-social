@@ -19,6 +19,7 @@ struct BlueskyConnectionView: View {
             if viewModel.blueskyHandle == nil {
                 Section {
                     TextField("Handle or email", text: $viewModel.blueskyLoginHint)
+                        .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .focused($isFocused)
                     Button {

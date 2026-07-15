@@ -48,11 +48,17 @@ struct XLoginWebView: View {
 
         func makeUIView(context: Context) -> WKWebView {
             let config = WKWebViewConfiguration()
-            config.websiteDataStore = .nonPersistent()
+            config.websiteDataStore = .default()
 
             let webView = WKWebView(frame: .zero, configuration: config)
             webView.navigationDelegate = context.coordinator
-            webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
+            context.coordinator.webView = webView
+            webView.configuration.websiteDataStore.httpCookieStore.add(context.coordinator)
+            #if DEBUG
+                if #available(iOS 16.4, *) {
+                    webView.isInspectable = true
+                }
+            #endif
             webView.load(URLRequest(url: url))
             return webView
         }
@@ -63,8 +69,9 @@ struct XLoginWebView: View {
             Coordinator(onCookiesFound: onCookiesFound)
         }
 
-        class Coordinator: NSObject, WKNavigationDelegate {
+        class Coordinator: NSObject, WKNavigationDelegate, WKHTTPCookieStoreObserver {
             let onCookiesFound: ([HTTPCookie]) -> Void
+            weak var webView: WKWebView?
             private var hasNotified = false
 
             init(onCookiesFound: @escaping ([HTTPCookie]) -> Void) {
@@ -76,10 +83,15 @@ struct XLoginWebView: View {
                 checkForAuthCookies(webView: webView)
             }
 
+            func cookiesDidChange(in _: WKHTTPCookieStore) {
+                guard let webView, !hasNotified else { return }
+                checkForAuthCookies(webView: webView)
+            }
+
             private func checkForAuthCookies(webView: WKWebView) {
                 webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
-                    let hasAuth = cookies.contains { $0.name == "auth_token" }
-                    guard hasAuth else { return }
+                    let cookieNames = Set(cookies.map(\.name))
+                    guard cookieNames.contains("auth_token"), cookieNames.contains("ct0") else { return }
                     self.hasNotified = true
                     DispatchQueue.main.async {
                         self.onCookiesFound(cookies)
@@ -95,11 +107,17 @@ struct XLoginWebView: View {
 
         func makeNSView(context: Context) -> WKWebView {
             let config = WKWebViewConfiguration()
-            config.websiteDataStore = .nonPersistent()
+            config.websiteDataStore = .default()
 
             let webView = WKWebView(frame: .zero, configuration: config)
             webView.navigationDelegate = context.coordinator
-            webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
+            context.coordinator.webView = webView
+            webView.configuration.websiteDataStore.httpCookieStore.add(context.coordinator)
+            #if DEBUG
+                if #available(macOS 13.3, *) {
+                    webView.isInspectable = true
+                }
+            #endif
             webView.load(URLRequest(url: url))
             return webView
         }
@@ -110,8 +128,9 @@ struct XLoginWebView: View {
             Coordinator(onCookiesFound: onCookiesFound)
         }
 
-        class Coordinator: NSObject, WKNavigationDelegate {
+        class Coordinator: NSObject, WKNavigationDelegate, WKHTTPCookieStoreObserver {
             let onCookiesFound: ([HTTPCookie]) -> Void
+            weak var webView: WKWebView?
             private var hasNotified = false
 
             init(onCookiesFound: @escaping ([HTTPCookie]) -> Void) {
@@ -123,10 +142,15 @@ struct XLoginWebView: View {
                 checkForAuthCookies(webView: webView)
             }
 
+            func cookiesDidChange(in _: WKHTTPCookieStore) {
+                guard let webView, !hasNotified else { return }
+                checkForAuthCookies(webView: webView)
+            }
+
             private func checkForAuthCookies(webView: WKWebView) {
                 webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
-                    let hasAuth = cookies.contains { $0.name == "auth_token" }
-                    guard hasAuth else { return }
+                    let cookieNames = Set(cookies.map(\.name))
+                    guard cookieNames.contains("auth_token"), cookieNames.contains("ct0") else { return }
                     self.hasNotified = true
                     DispatchQueue.main.async {
                         self.onCookiesFound(cookies)

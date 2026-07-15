@@ -2,6 +2,12 @@
 
 ## 2026-07-15
 
+- Changed the X login `WKWebView` from a non-persistent to the default persistent website data store after live inspection showed X returning `We’ve temporarily limited your login` from `begin_login` even after cooldown while desktop browser login worked. The app still extracts and stores only `auth_token` and `ct0` after login; the persistent WebView store is used to avoid presenting X with a fresh browser identity on every embedded login attempt.
+- Removed the restored desktop Chrome user agent from the X login `WKWebView` after live testing showed the platform-default Safari/WKWebView identity progresses through 2FA while the Chrome identity hits X login limiting. The X login WebView now combines the platform-default user agent with the persistent default website data store for further diagnosis.
+- Added `WKHTTPCookieStoreObserver` handling to the X login WebView and now completes only after both `auth_token` and `ct0` exist. This is defensive for the post-2FA spinner path: if X does issue the cookies before rendering/redirecting the feed, the app can capture them immediately from cookie changes instead of waiting for another page-finish event.
+- Enabled Safari Web Inspector for the X login `WKWebView` in debug builds only so embedded-login hangs can be inspected without changing release behavior.
+- Disabled automatic capitalization on the Bluesky login hint field so handles and emails are entered exactly as typed.
+- Removed X's hardcoded desktop Chrome user agent from native X API request headers so API calls no longer force a custom `User-Agent`.
 - Made the Bluesky login button explicitly render in secondary gray while disabled so an empty login hint looks visibly inactive in the form.
 - Removed the hosted-client-metadata setup note from the Bluesky connection screen now that OAuth metadata is deployed and the message is no longer useful in the user-facing setup flow.
 - Made the initial stories-bar skeleton pulse visibly with a timeline-driven opacity wave on the placeholder shape fills instead of relying on implicit state animation inside the feed list row. After simulator review, tuned the pulse to a slower 2.4-second cycle with a very subtle opacity range so it is visible but not distracting. Reduce Motion keeps a static low-contrast fill.
