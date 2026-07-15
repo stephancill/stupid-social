@@ -21,6 +21,7 @@ Sources/
       InstagramLoginWebView.swift   # Instagram WebView login
       SpotifyConnectionView.swift   # Spotify credential setup
       SpotifyLoginWebView.swift     # Spotify WebView login
+      BlueskyConnectionView.swift   # Bluesky OAuth setup
       XConnectionView.swift         # X credential setup
       XLoginWebView.swift           # X WebView login
       FarcasterConnectionView.swift # Farcaster credential setup
@@ -38,6 +39,7 @@ Sources/
       SpotifyClient.swift / SpotifyActivitySource.swift
       XClient.swift / XNotificationSource.swift
       FarcasterClient.swift / FarcasterNotificationSource.swift
+      BlueskyClient.swift / BlueskyNotificationSource.swift
       DebugNotificationsClient.swift / DebugNotificationSource.swift
     Storage/
       AccountMetadataStore.swift

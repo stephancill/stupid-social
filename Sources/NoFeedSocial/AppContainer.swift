@@ -53,11 +53,16 @@ final class AppContainer {
             client: DebugNotificationsClient(),
             metadataStore: metadataStore,
         )
+        let blueskySource = BlueskyNotificationSource(
+            client: BlueskyClient(credentialStore: keychainStore),
+            metadataStore: metadataStore,
+        )
 
         notificationSources = [
             xSource,
             farcasterSource,
             instagramSource,
+            blueskySource,
             debugSource,
         ]
         accountValidators = [
@@ -65,6 +70,7 @@ final class AppContainer {
             farcasterSource,
             instagramSource,
             spotifyActivitySource,
+            blueskySource,
             debugSource,
         ]
         profileFetchersByNetwork = [
@@ -72,11 +78,13 @@ final class AppContainer {
             .farcaster: farcasterSource,
             .instagram: instagramSource,
             .spotify: spotifyActivitySource,
+            .bluesky: blueskySource,
         ]
         targetDetailFetchersByNetwork = [
             .x: xSource,
             .farcaster: farcasterSource,
             .instagram: instagramSource,
+            .bluesky: blueskySource,
         ]
 
         feedService = FeedService(

@@ -83,6 +83,20 @@ public final class KeychainCredentialStore {
         try deleteForAccount("spotify")
     }
 
+    public func saveBlueskyCredentials(_ credentials: BlueskyOAuthCredentials) throws -> CredentialSaveResult {
+        let data = try encoder.encode(credentials)
+        return try save(data: data, account: "bluesky")
+    }
+
+    public func loadBlueskyCredentials() throws -> BlueskyOAuthCredentials? {
+        guard let data = try load(account: "bluesky") else { return nil }
+        return try decoder.decode(BlueskyOAuthCredentials.self, from: data)
+    }
+
+    public func deleteBlueskyCredentials() throws {
+        try deleteForAccount("bluesky")
+    }
+
     private func deleteForAccount(_ account: String) throws {
         for synchronizable in synchronizableCandidates {
             let query = baseQuery(account: account, synchronizable: synchronizable)

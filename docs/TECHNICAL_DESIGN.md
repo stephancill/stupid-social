@@ -8,12 +8,12 @@ Implementation work should follow this document unless `docs/PLAN.md` changes or
 
 ## Current Scope
 
-The MVP is a universal macOS and iOS SwiftUI app built with xtool. It supports a combined notifications feed for one X account and one Farcaster account.
+The MVP is a universal macOS and iOS SwiftUI app built with xtool. It supports a combined notifications feed for one account per supported network.
 
 Out of scope for this technical design:
 
 - Cross-posting and non-Instagram posting.
-- Bluesky and Instagram.
+- Bluesky posting.
 - Multiple accounts per network.
 - Backend services.
 - Full notification item sync across devices.
@@ -76,6 +76,7 @@ Suggested supporting models:
 enum SocialNetwork: String, Codable {
     case x
     case farcaster
+    case bluesky
 }
 
 struct NotificationActor: Hashable, Codable {
@@ -138,6 +139,13 @@ Farcaster credential handling:
 
 - No Farcaster secret is required for MVP notification reads.
 - Store only non-secret username/FID metadata outside Keychain.
+
+Bluesky credential handling:
+
+- Use AT Protocol OAuth with PKCE, PAR, and DPoP.
+- Store access token, refresh token, DID, handle, DPoP private key, token expiry, and DPoP nonces in Keychain.
+- Store non-secret DID/handle/status metadata in UserDefaults.
+- The app-side OAuth client uses `https://stupid-social-oauth-metadata.stephan-cloudflare.workers.dev/stupid-social/oauth/client-metadata.json` as its public `client_id`; deployment must publish matching client metadata for authorization to complete.
 
 Never log credentials, cookie headers, tokens, or derived auth values.
 
@@ -204,6 +212,8 @@ Keep source-specific clients concrete behind adapters:
 - `XNotificationSource`
 - `FarcasterClient`
 - `FarcasterNotificationSource`
+- `BlueskyClient`
+- `BlueskyNotificationSource`
 
 ## X Integration
 
@@ -257,6 +267,27 @@ Known notification types:
 - `follow`
 
 Hypersnap notification reads do not mark app read state. Hypersnap seen/write endpoints are not part of the MVP because they return `501 Not Implemented`.
+
+## Bluesky Integration
+
+Use AT Protocol OAuth through the Bluesky entryway authorization server at `https://bsky.social`.
+
+OAuth requirements:
+
+- Public native client metadata hosted at the exact `client_id` URL.
+- Native redirect URI `dev.workers.stephan-cloudflare.stupid-social-oauth-metadata:/oauth/bluesky/callback` registered in `Info.plist` and in the client metadata document. The scheme follows atproto's private-use URI rule for discoverable native clients: the `client_id` host reversed.
+- PKCE S256 for the authorization code flow.
+- Pushed Authorization Requests via `/oauth/par`.
+- DPoP proofs for PAR, token, refresh, and authorized PDS requests.
+
+API endpoints:
+
+- Fetch notifications: `GET /xrpc/app.bsky.notification.listNotifications`
+- Validate/profile: `GET /xrpc/app.bsky.actor.getProfile`
+- Search profiles: `GET /xrpc/app.bsky.actor.searchActors`
+- Hydrate post details: `GET /xrpc/app.bsky.feed.getPostThread`
+
+Bluesky read state is app-local and uses the same cache/new-item behavior as other sources.
 
 ## Decoding Strategy
 

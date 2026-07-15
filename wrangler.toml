@@ -1,0 +1,5 @@
+name = "stupid-social-oauth-metadata"
+main = "workers/oauth-metadata/src/index.ts"
+compatibility_date = "2026-07-14"
+workers_dev = true
+preview_urls = false

@@ -935,7 +935,7 @@ private struct NotificationRow: View {
                 .lineLimit(2)
         } else if let imageUrl = displayItem.item.target?.imageURL {
             messageImagePreview(url: imageUrl)
-        } else if let actor = displayItem.item.actors.first {
+        } else if displayItem.item.network != .bluesky, let actor = displayItem.item.actors.first {
             Text(DebugRedaction.actorName(actor, enabled: devModeEnabled))
                 .font(.subheadline)
                 .foregroundStyle(.secondary)

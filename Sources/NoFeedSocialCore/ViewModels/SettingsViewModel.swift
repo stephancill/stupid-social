@@ -10,6 +10,7 @@ public final class SettingsViewModel: ObservableObject {
     @Published public var spotifyClientToken = ""
     @Published public var spotifySpDC = ""
     @Published public var debugServerURL = ""
+    @Published public var blueskyLoginHint = ""
     @Published public private(set) var xStatus: AccountStatus = .notConfigured
     @Published public var xEnabledCategories: Set<XNotificationCategory> = []
     @Published public private(set) var farcasterStatus: AccountStatus = .notConfigured
@@ -19,6 +20,7 @@ public final class SettingsViewModel: ObservableObject {
     @Published public var instagramStoriesEnabled = true
     @Published public var instagramDirectMediaSharesEnabled = true
     @Published public private(set) var spotifyStatus: AccountStatus = .notConfigured
+    @Published public private(set) var blueskyStatus: AccountStatus = .notConfigured
     @Published public private(set) var debugStatus: AccountStatus = .notConfigured
     @Published public var message: String?
 
@@ -86,6 +88,35 @@ public final class SettingsViewModel: ObservableObject {
             return "@\(username)"
         }
         return spotifyStatus.label
+    }
+
+    public var blueskyHandle: String? {
+        metadataStore.blueskyAccount?.handle
+    }
+
+    public var blueskyConnectionLabel: String {
+        if let handle = blueskyHandle {
+            return "@\(handle)"
+        }
+        return blueskyStatus.label
+    }
+
+    public func beginBlueskyOAuth() async throws -> BlueskyOAuthSession {
+        let hint = blueskyLoginHint.trimmingCharacters(in: .whitespacesAndNewlines)
+        return try await BlueskyClient(credentialStore: keychainStore).startOAuth(loginHint: hint.isEmpty ? nil : hint)
+    }
+
+    public func finishBlueskyOAuth(callbackURL: URL, session: BlueskyOAuthSession) async {
+        do {
+            let credentials = try await BlueskyClient(credentialStore: keychainStore).finishOAuth(callbackURL: callbackURL, session: session)
+            metadataStore.blueskyAccount = BlueskyAccountMetadata(did: credentials.did, handle: credentials.handle, status: .valid)
+            blueskyStatus = .valid
+            blueskyLoginHint = ""
+            message = "Bluesky account connected."
+        } catch {
+            blueskyStatus = .serviceError("OAuth failed")
+            message = "Bluesky login failed: \(error.localizedDescription)"
+        }
     }
 
     public func saveXCookies(_ credentials: XCredentials) async {
@@ -476,6 +507,14 @@ public final class SettingsViewModel: ObservableObject {
         message = "Spotify account disconnected."
     }
 
+    public func disconnectBluesky() {
+        try? keychainStore.deleteBlueskyCredentials()
+        metadataStore.blueskyAccount = nil
+        try? cacheStore.deleteNetwork(.bluesky)
+        blueskyStatus = .notConfigured
+        message = "Bluesky account disconnected."
+    }
+
     public func disconnectDebug() {
         metadataStore.debugAccount = nil
         try? cacheStore.deleteNetwork(.debug)
@@ -516,6 +555,13 @@ public final class SettingsViewModel: ObservableObject {
             spotifyStatus = accountStatus(from: spotify.status)
         } else {
             spotifyStatus = .notConfigured
+        }
+
+        if let bluesky = metadataStore.blueskyAccount {
+            blueskyLoginHint = bluesky.handle ?? ""
+            blueskyStatus = accountStatus(from: bluesky.status)
+        } else {
+            blueskyStatus = .notConfigured
         }
 
         if let debug = metadataStore.debugAccount {

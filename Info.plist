@@ -35,6 +35,17 @@
 	</dict>
 	<key>CFBundleShortVersionString</key>
 	<string>1.0.0</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>tech.stupid.StupidSocial.oauth</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>dev.workers.stephan-cloudflare.stupid-social-oauth-metadata</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleVersion</key>
 	<string>89</string>
 	<key>ITSAppUsesNonExemptEncryption</key>

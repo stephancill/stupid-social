@@ -45,6 +45,15 @@ struct SettingsView: View {
                     )
                 }
 
+                NavigationLink {
+                    BlueskyConnectionView(viewModel: viewModel)
+                } label: {
+                    connectionRow(
+                        name: "Bluesky",
+                        subtitle: viewModel.blueskyConnectionLabel,
+                    )
+                }
+
                 if devModeEnabled {
                     NavigationLink {
                         DebugConnectionView(viewModel: viewModel)

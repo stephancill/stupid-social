@@ -42,6 +42,8 @@ extension SocialNetwork {
             "InstagramBadge"
         case .spotify:
             "SpotifyBadge"
+        case .bluesky:
+            "BlueskyBadge"
         case .debug:
             "DebugBadge"
         }
@@ -57,6 +59,8 @@ extension SocialNetwork {
             "I"
         case .spotify:
             "S"
+        case .bluesky:
+            "B"
         case .debug:
             "D"
         }
@@ -72,6 +76,8 @@ extension SocialNetwork {
             .white
         case .spotify:
             .black
+        case .bluesky:
+            .white
         case .debug:
             .white
         }
@@ -87,6 +93,8 @@ extension SocialNetwork {
             Color(red: 0.88, green: 0.21, blue: 0.44)
         case .spotify:
             Color(red: 0.12, green: 0.73, blue: 0.26)
+        case .bluesky:
+            Color(red: 0.06, green: 0.49, blue: 0.98)
         case .debug:
             .orange
         }

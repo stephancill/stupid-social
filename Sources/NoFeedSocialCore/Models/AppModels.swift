@@ -5,6 +5,7 @@ public enum SocialNetwork: String, Codable, CaseIterable, Identifiable, Sendable
     case farcaster
     case instagram
     case spotify
+    case bluesky
     case debug
 
     public var id: String {
@@ -17,6 +18,7 @@ public enum SocialNetwork: String, Codable, CaseIterable, Identifiable, Sendable
         case .farcaster: "Farcaster"
         case .instagram: "Instagram"
         case .spotify: "Spotify"
+        case .bluesky: "Bluesky"
         case .debug: "Debug"
         }
     }

@@ -148,6 +148,18 @@ public struct SpotifyAccountMetadata: Codable, Equatable {
     }
 }
 
+public struct BlueskyAccountMetadata: Codable, Equatable {
+    public var did: String
+    public var handle: String?
+    public var status: AccountStatusSnapshot
+
+    public init(did: String, handle: String?, status: AccountStatusSnapshot) {
+        self.did = did
+        self.handle = handle
+        self.status = status
+    }
+}
+
 public enum AccountStatusSnapshot: String, Codable, Equatable {
     case notConfigured
     case valid
@@ -163,6 +175,7 @@ public final class AccountMetadataStore {
         static let farcasterAccount = "account.farcaster"
         static let instagramAccount = "account.instagram"
         static let spotifyAccount = "account.spotify"
+        static let blueskyAccount = "account.bluesky"
         static let debugAccount = "account.debug"
     }
 
@@ -192,6 +205,11 @@ public final class AccountMetadataStore {
     public var spotifyAccount: SpotifyAccountMetadata? {
         get { load(SpotifyAccountMetadata.self, key: Key.spotifyAccount) }
         set { save(newValue, key: Key.spotifyAccount) }
+    }
+
+    public var blueskyAccount: BlueskyAccountMetadata? {
+        get { load(BlueskyAccountMetadata.self, key: Key.blueskyAccount) }
+        set { save(newValue, key: Key.blueskyAccount) }
     }
 
     public var debugAccount: DebugAccountMetadata? {

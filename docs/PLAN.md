@@ -2,7 +2,7 @@
 
 ## Product Goal
 
-Build a universal macOS and iOS app with xtool that shows a combined social notifications feed without requiring users to open algorithmic feeds. The app started with X and Farcaster notifications and now includes Instagram stories, Spotify listening stories, and Instagram story posting.
+Build a universal macOS and iOS app with xtool that shows a combined social notifications feed without requiring users to open algorithmic feeds. The app started with X and Farcaster notifications and now includes Instagram stories, Spotify listening stories, Instagram story posting, and Bluesky notifications.
 
 ## MVP Scope
 
@@ -18,11 +18,11 @@ Build a universal macOS and iOS app with xtool that shows a combined social noti
 - Instagram story posting is supported from the in-app story composer.
 - Unread Instagram direct message threads are shown in the main notification feed when Instagram is connected.
 - Instagram messaging settings allow users to suppress DM notifications whose latest item is a shared post or reel.
+- Bluesky notifications are supported through the AT Protocol OAuth flow.
 
 ## Out Of Scope For MVP
 
 - Cross-posting.
-- Bluesky support.
 - Multiple accounts per network.
 - Syncing full notification items across devices.
 - Backend service for polling, normalization, or push notifications.
@@ -53,6 +53,13 @@ Build a universal macOS and iOS app with xtool that shows a combined social noti
 - App resolves the username to an FID using Hypersnap `GET /v2/farcaster/user/by-username`.
 - App fetches notifications using Hypersnap's read API at `https://haatz.quilibrium.com`.
 - No Farcaster token is required for the MVP notification flow.
+
+### Bluesky
+
+- User signs in through AT Protocol OAuth using a native app redirect URI.
+- The app uses PKCE, PAR, and DPoP as required by the atproto OAuth profile.
+- Access and refresh tokens are stored in Keychain with the same local-only fallback behavior as other credentials.
+- The OAuth `client_id` is `https://stupid-social-oauth-metadata.stephan-cloudflare.workers.dev/stupid-social/oauth/client-metadata.json`; login requires that exact public client metadata document to be hosted before authorization can complete.
 
 ## Credential Storage
 
@@ -92,6 +99,12 @@ Reference behavior from `docs/CLI_DOCS.md`:
 - Hypersnap returns aggregated notification entries.
 - Hypersnap seen/write endpoints are not available for this use case because `POST /v2/farcaster/notifications/seen` and `POST /v2/farcaster/notifications/mark_seen` return `501 Not Implemented`.
 - Farcaster read state is therefore entirely app-local, synced through iCloud read watermarks.
+
+### Bluesky
+
+- Fetch notifications with `GET /xrpc/app.bsky.notification.listNotifications` using DPoP-bound OAuth access tokens.
+- Supported notification reasons include mentions, replies, likes, reposts, quotes, and follows.
+- Bluesky read state remains app-local for this app and follows the existing cache/new-item behavior.
 
 ## Combined Feed
 
@@ -135,7 +148,7 @@ The app syncs read state across devices using per-account read timestamp waterma
 
 Suggested watermark fields:
 
-- `network`: `x` or `farcaster`
+- `network`: supported social network, such as `x`, `farcaster`, or `bluesky`
 - `accountId`: stable network account identifier, such as X user id/handle or Farcaster FID
 - `lastReadAt`: timestamp watermark
 - `updatedAt`: timestamp for conflict resolution and diagnostics
@@ -210,7 +223,7 @@ For notification-related profile preview, the app should support viewing actor a
 Use a minimal display model first. Suggested fields:
 
 - `id`: stable app-level notification id
-- `network`: `x` or `farcaster`
+- `network`: supported social network, such as `x`, `farcaster`, or `bluesky`
 - `accountId`: stable account identifier for the viewer account
 - `sourceId`: source notification or event id when available
 - `type`: normalized notification type

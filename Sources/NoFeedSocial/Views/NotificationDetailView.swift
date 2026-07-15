@@ -159,6 +159,8 @@ struct NotificationDetailView: View {
             return target.url
         case .spotify:
             return target.url
+        case .bluesky:
+            return target.url
         case .debug:
             return nil
         }

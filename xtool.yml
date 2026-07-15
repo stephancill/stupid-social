@@ -31,3 +31,6 @@ resources:
   - Resources/SpotifyBadge.png
   - Resources/SpotifyBadge@2x.png
   - Resources/SpotifyBadge@3x.png
+  - Resources/BlueskyBadge.png
+  - Resources/BlueskyBadge@2x.png
+  - Resources/BlueskyBadge@3x.png
