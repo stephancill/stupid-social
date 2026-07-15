@@ -67,6 +67,9 @@ public final class InstagramNotificationSource: NotificationFetching, AccountVal
                 directMediaSharesEnabled: existing?.directMediaSharesEnabled ?? true,
             )
             return .valid
+        } catch SourceError.notConfigured {
+            invalidateAccount()
+            return .notConfigured
         } catch {
             invalidateAccount()
             return .notConfigured
@@ -77,12 +80,17 @@ public final class InstagramNotificationSource: NotificationFetching, AccountVal
         let account = await currentAccountForNotificationTargets()
         let categories = account?.enabledCategories ?? Set(InstagramNotificationCategory.allCases)
         let includeDirectMediaShares = account?.directMediaSharesEnabled ?? true
-        return try await client.notifications(
-            enabledCategories: categories,
-            accountUsername: account?.username,
-            accountAvatarURL: account?.avatarURL,
-            includeDirectMediaShares: includeDirectMediaShares,
-        )
+        do {
+            return try await client.notifications(
+                enabledCategories: categories,
+                accountUsername: account?.username,
+                accountAvatarURL: account?.avatarURL,
+                includeDirectMediaShares: includeDirectMediaShares,
+            )
+        } catch SourceError.notConfigured {
+            invalidateAccount()
+            throw SourceError.notConfigured
+        }
     }
 
     private func currentAccountForNotificationTargets() async -> InstagramAccountMetadata? {

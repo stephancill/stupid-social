@@ -9,14 +9,14 @@ struct InstagramConnectionView: View {
 
     var body: some View {
         Form {
-            if viewModel.instagramStatus == .notConfigured {
+            if needsLogin {
                 Section {
                     Button {
                         showingLoginSheet = true
                     } label: {
                         HStack {
                             Spacer()
-                            Label("Log in to Instagram", systemImage: "safari")
+                            Label(loginButtonTitle, systemImage: "safari")
                             Spacer()
                         }
                     }
@@ -32,7 +32,7 @@ struct InstagramConnectionView: View {
                 }
             }
 
-            if devModeEnabled, viewModel.instagramStatus == .notConfigured {
+            if devModeEnabled, needsLogin {
                 Section("Manual (Dev)") {
                     TextField("Cookie header", text: $viewModel.instagramCookieHeader, axis: .vertical)
                         .lineLimit(2 ... 4)
@@ -46,7 +46,7 @@ struct InstagramConnectionView: View {
                 }
             }
 
-            if viewModel.instagramStatus != .notConfigured {
+            if viewModel.instagramStatus == .valid {
                 Section("Content") {
                     Toggle("Stories", isOn: $viewModel.instagramStoriesEnabled)
                         .onChange(of: viewModel.instagramStoriesEnabled) { _, enabled in
@@ -73,7 +73,9 @@ struct InstagramConnectionView: View {
                         }
                     }
                 }
+            }
 
+            if viewModel.instagramStatus != .notConfigured {
                 Section {
                     Button("Disconnect", role: .destructive) {
                         viewModel.disconnectInstagram()
@@ -91,13 +93,24 @@ struct InstagramConnectionView: View {
         .onAppear { viewModel.message = nil }
         .navigationTitle("Instagram")
         .sheet(isPresented: $showingLoginSheet) {
-            InstagramLoginWebView { credentials in
-                Task { await viewModel.saveInstagramCookies(credentials) }
-            }
+            InstagramLoginWebView(
+                initialCredentials: viewModel.existingInstagramCredentials(),
+                onLoginSuccess: { credentials in
+                    Task { await viewModel.saveInstagramCookies(credentials) }
+                },
+            )
         }
         .task {
             await viewModel.revalidateInstagram()
         }
+    }
+
+    private var needsLogin: Bool {
+        viewModel.instagramStatus == .notConfigured || viewModel.instagramStatus == .invalidCredentials
+    }
+
+    private var loginButtonTitle: String {
+        viewModel.instagramStatus == .invalidCredentials ? "Reconnect Instagram" : "Log in to Instagram"
     }
 
     private func binding(for category: InstagramNotificationCategory) -> Binding<Bool> {

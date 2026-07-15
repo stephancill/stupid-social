@@ -63,6 +63,7 @@ public struct ContentView: View {
             .tabItem {
                 Label("Settings", systemImage: "gear")
             }
+            .badge(container.settingsViewModel.hasInvalidCredentials ? "" : nil)
             .tag(MainTab.settings)
             .onDisappear {
                 Task {

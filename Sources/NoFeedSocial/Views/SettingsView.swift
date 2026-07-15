@@ -15,6 +15,7 @@ struct SettingsView: View {
                     connectionRow(
                         name: "X",
                         subtitle: viewModel.xConnectionLabel,
+                        isInvalid: viewModel.xStatus == .invalidCredentials,
                     )
                 }
 
@@ -24,6 +25,7 @@ struct SettingsView: View {
                     connectionRow(
                         name: "Farcaster",
                         subtitle: viewModel.farcasterConnectionLabel,
+                        isInvalid: viewModel.farcasterStatus == .invalidCredentials,
                     )
                 }
 
@@ -33,6 +35,7 @@ struct SettingsView: View {
                     connectionRow(
                         name: "Instagram",
                         subtitle: viewModel.instagramConnectionLabel,
+                        isInvalid: viewModel.instagramStatus == .invalidCredentials,
                     )
                 }
 
@@ -42,6 +45,7 @@ struct SettingsView: View {
                     connectionRow(
                         name: "Spotify",
                         subtitle: viewModel.spotifyConnectionLabel,
+                        isInvalid: viewModel.spotifyStatus == .invalidCredentials,
                     )
                 }
 
@@ -51,6 +55,7 @@ struct SettingsView: View {
                     connectionRow(
                         name: "Bluesky",
                         subtitle: viewModel.blueskyConnectionLabel,
+                        isInvalid: viewModel.blueskyStatus == .invalidCredentials,
                     )
                 }
 
@@ -61,6 +66,7 @@ struct SettingsView: View {
                         connectionRow(
                             name: "Debug",
                             subtitle: viewModel.debugConnectionLabel,
+                            isInvalid: viewModel.debugStatus == .invalidCredentials,
                         )
                     }
                 }
@@ -103,8 +109,14 @@ struct SettingsView: View {
         }
     }
 
-    private func connectionRow(name: String, subtitle: String) -> some View {
+    private func connectionRow(name: String, subtitle: String, isInvalid: Bool = false) -> some View {
         HStack {
+            if isInvalid {
+                Circle()
+                    .fill(.red)
+                    .frame(width: 8, height: 8)
+                    .accessibilityLabel("Invalid credentials")
+            }
             Text(name)
                 .font(.body)
             Spacer()

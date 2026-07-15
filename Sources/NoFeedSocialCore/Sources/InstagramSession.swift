@@ -403,6 +403,9 @@ extension InstagramClient {
         guard (200 ..< 300).contains(http.statusCode) else {
             throw SourceError.serviceError(instagramRequestError(statusCode: http.statusCode, data: data))
         }
+        if isInstagramLoginOrChallengeHTML(data: data, response: http) {
+            throw SourceError.notConfigured
+        }
         return data
     }
 
@@ -442,6 +445,14 @@ extension InstagramClient {
         let message = decoded?.message?.isEmpty == false ? decoded?.message : nil
         let body = rawBody.isEmpty ? nil : String(rawBody.prefix(240))
         return "Instagram request failed (HTTP \(statusCode)): \(message ?? body ?? "invalid response")"
+    }
+
+    private func isInstagramLoginOrChallengeHTML(data: Data, response: HTTPURLResponse) -> Bool {
+        let contentType = response.value(forHTTPHeaderField: "content-type")?.lowercased() ?? ""
+        let htmlPrefix = data.starts(with: Data("<!DOCTYPE html".utf8)) || data.starts(with: Data("<html".utf8))
+        guard contentType.contains("text/html") || htmlPrefix else { return false }
+        guard let body = String(data: data.prefix(16384), encoding: .utf8)?.lowercased() else { return false }
+        return body.contains("login") || body.contains("challenge")
     }
 
     func jazoest(csrfToken: String) -> String {

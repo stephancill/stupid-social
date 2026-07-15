@@ -69,10 +69,17 @@ public final class SettingsViewModel: ObservableObject {
     }
 
     public var instagramConnectionLabel: String {
+        if instagramStatus == .invalidCredentials {
+            return instagramStatus.label
+        }
         if let username = instagramHandle {
             return "@\(username)"
         }
         return instagramStatus.label
+    }
+
+    public func existingInstagramCredentials() -> InstagramCredentials? {
+        try? keychainStore.loadInstagramCredentials()
     }
 
     public var debugConnectionLabel: String {
@@ -99,6 +106,13 @@ public final class SettingsViewModel: ObservableObject {
             return "@\(handle)"
         }
         return blueskyStatus.label
+    }
+
+    public var hasInvalidCredentials: Bool {
+        xStatus == .invalidCredentials
+            || instagramStatus == .invalidCredentials
+            || spotifyStatus == .invalidCredentials
+            || blueskyStatus == .invalidCredentials
     }
 
     public func beginBlueskyOAuth() async throws -> BlueskyOAuthSession {
@@ -221,6 +235,9 @@ public final class SettingsViewModel: ObservableObject {
             instagramEnabledCategories = categories
             instagramStatus = .valid
             message = "Instagram credentials saved."
+        } catch SourceError.notConfigured {
+            deleteInstagramCredentialsForFailedReconnect()
+            message = "Instagram login expired. Log in again to reconnect."
         } catch {
             let categories = Set(InstagramNotificationCategory.allCases)
             metadataStore.instagramAccount = InstagramAccountMetadata(
@@ -259,6 +276,9 @@ public final class SettingsViewModel: ObservableObject {
             instagramEnabledCategories = categories
             instagramStatus = .valid
             message = "Instagram credentials saved."
+        } catch SourceError.notConfigured {
+            deleteInstagramCredentialsForFailedReconnect()
+            message = "Instagram login expired. Log in again to reconnect."
         } catch {
             let categories = Set(InstagramNotificationCategory.allCases)
             metadataStore.instagramAccount = InstagramAccountMetadata(
@@ -609,6 +629,8 @@ public final class SettingsViewModel: ObservableObject {
                 account.status = .valid
                 metadataStore.instagramAccount = account
             }
+        } catch SourceError.notConfigured {
+            markInstagramCredentialsInvalid()
         } catch {
             instagramStatus = .invalidCredentials
             if var account = metadataStore.instagramAccount {
@@ -616,5 +638,25 @@ public final class SettingsViewModel: ObservableObject {
                 metadataStore.instagramAccount = account
             }
         }
+    }
+
+    private func markInstagramCredentialsInvalid() {
+        instagramStatus = .invalidCredentials
+        if var account = metadataStore.instagramAccount {
+            account.status = .invalidCredentials
+            metadataStore.instagramAccount = account
+        } else {
+            metadataStore.instagramAccount = InstagramAccountMetadata(
+                accountId: "instagram",
+                username: nil,
+                status: .invalidCredentials,
+                enabledCategories: Set(InstagramNotificationCategory.allCases),
+            )
+        }
+    }
+
+    private func deleteInstagramCredentialsForFailedReconnect() {
+        try? keychainStore.deleteInstagramCredentials()
+        markInstagramCredentialsInvalid()
     }
 }
