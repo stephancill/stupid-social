@@ -38,8 +38,6 @@ struct BlueskyConnectionView: View {
                     .disabled(isLoggingIn || viewModel.blueskyLoginHint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 } header: {
                     Text("Login")
-                } footer: {
-                    Text("Bluesky OAuth requires the app's public client metadata to be hosted before login can complete.")
                 }
             }
 
