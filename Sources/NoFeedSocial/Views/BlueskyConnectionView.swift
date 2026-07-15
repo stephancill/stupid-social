@@ -35,7 +35,8 @@ struct BlueskyConnectionView: View {
                             Spacer()
                         }
                     }
-                    .disabled(isLoggingIn || viewModel.blueskyLoginHint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .foregroundStyle(isLoginDisabled ? Color.secondary : Color.accentColor)
+                    .disabled(isLoginDisabled)
                 } header: {
                     Text("Login")
                 }
@@ -67,6 +68,10 @@ struct BlueskyConnectionView: View {
         }
         .onAppear { viewModel.message = nil }
         .navigationTitle("Bluesky")
+    }
+
+    private var isLoginDisabled: Bool {
+        isLoggingIn || viewModel.blueskyLoginHint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func startLogin() async {
