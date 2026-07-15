@@ -59,7 +59,7 @@ Build a universal macOS and iOS app with xtool that shows a combined social noti
 - User signs in through AT Protocol OAuth using a native app redirect URI.
 - The app uses PKCE, PAR, and DPoP as required by the atproto OAuth profile.
 - Access and refresh tokens are stored in Keychain with the same local-only fallback behavior as other credentials.
-- The OAuth `client_id` is `https://stupid-social-oauth-metadata.stephan-cloudflare.workers.dev/stupid-social/oauth/client-metadata.json`; login requires that exact public client metadata document to be hosted before authorization can complete.
+- The OAuth `client_id` is `https://stupidtech.net/stupid-social/oauth/client-metadata.json`; login requires that exact public client metadata document to be hosted before authorization can complete.
 
 ## Credential Storage
 

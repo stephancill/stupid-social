@@ -1,21 +1,23 @@
-const metadata = {
-  client_id:
-    "https://stupid-social-oauth-metadata.stephan-cloudflare.workers.dev/stupid-social/oauth/client-metadata.json",
+const metadataPath = "/stupid-social/oauth/client-metadata.json";
+
+function reversedHost(host: string): string {
+  return host.split(".").reverse().join(".");
+}
+
+function metadataFor(url: URL) {
+  return {
+  client_id: `${url.origin}${metadataPath}`,
   application_type: "native",
   client_name: "stupid social",
-  client_uri: "https://stupid-social-oauth-metadata.stephan-cloudflare.workers.dev",
+  client_uri: "https://stupidtech.net",
   dpop_bound_access_tokens: true,
   grant_types: ["authorization_code", "refresh_token"],
-  redirect_uris: [
-    "dev.workers.stephan-cloudflare.stupid-social-oauth-metadata:/oauth/bluesky/callback",
-  ],
+  redirect_uris: [`${reversedHost(url.hostname)}:/oauth/bluesky/callback`],
   response_types: ["code"],
   scope: "atproto transition:generic",
   token_endpoint_auth_method: "none",
-} as const;
-
-const metadataPath = "/stupid-social/oauth/client-metadata.json";
-const metadataBody = JSON.stringify(metadata, null, 2) + "\n";
+  } as const;
+}
 
 export default {
   async fetch(request: Request): Promise<Response> {
@@ -41,6 +43,7 @@ export default {
       });
     }
 
+    const metadataBody = JSON.stringify(metadataFor(url), null, 2) + "\n";
     return new Response(request.method === "HEAD" ? null : metadataBody, {
       status: 200,
       headers: {

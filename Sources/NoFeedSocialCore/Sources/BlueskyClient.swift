@@ -43,8 +43,8 @@ public struct BlueskyOAuthSession: Sendable {
 }
 
 public final class BlueskyClient: @unchecked Sendable {
-    public static let clientID = "https://stupid-social-oauth-metadata.stephan-cloudflare.workers.dev/stupid-social/oauth/client-metadata.json"
-    public static let redirectURI = "dev.workers.stephan-cloudflare.stupid-social-oauth-metadata:/oauth/bluesky/callback"
+    public static let clientID = "https://stupidtech.net/stupid-social/oauth/client-metadata.json"
+    public static let redirectURI = "net.stupidtech:/oauth/bluesky/callback"
     public static let authServerURL = URL(string: "https://bsky.social")!
     public static let pdsURL = URL(string: "https://bsky.social")!
 

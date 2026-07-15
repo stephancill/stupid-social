@@ -3,3 +3,6 @@ main = "workers/oauth-metadata/src/index.ts"
 compatibility_date = "2026-07-14"
 workers_dev = true
 preview_urls = false
+routes = [
+  { pattern = "stupidtech.net/stupid-social/oauth/*", zone_name = "stupidtech.net" },
+]

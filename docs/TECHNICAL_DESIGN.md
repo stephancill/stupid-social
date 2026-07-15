@@ -145,7 +145,7 @@ Bluesky credential handling:
 - Use AT Protocol OAuth with PKCE, PAR, and DPoP.
 - Store access token, refresh token, DID, handle, DPoP private key, token expiry, and DPoP nonces in Keychain.
 - Store non-secret DID/handle/status metadata in UserDefaults.
-- The app-side OAuth client uses `https://stupid-social-oauth-metadata.stephan-cloudflare.workers.dev/stupid-social/oauth/client-metadata.json` as its public `client_id`; deployment must publish matching client metadata for authorization to complete.
+- The app-side OAuth client uses `https://stupidtech.net/stupid-social/oauth/client-metadata.json` as its public `client_id`; deployment must publish matching client metadata for authorization to complete.
 
 Never log credentials, cookie headers, tokens, or derived auth values.
 
@@ -275,7 +275,7 @@ Use AT Protocol OAuth through the Bluesky entryway authorization server at `http
 OAuth requirements:
 
 - Public native client metadata hosted at the exact `client_id` URL.
-- Native redirect URI `dev.workers.stephan-cloudflare.stupid-social-oauth-metadata:/oauth/bluesky/callback` registered in `Info.plist` and in the client metadata document. The scheme follows atproto's private-use URI rule for discoverable native clients: the `client_id` host reversed.
+- Native redirect URI `net.stupidtech:/oauth/bluesky/callback` registered in `Info.plist` and in the client metadata document. The scheme follows atproto's private-use URI rule for discoverable native clients: the `client_id` host reversed.
 - PKCE S256 for the authorization code flow.
 - Pushed Authorization Requests via `/oauth/par`.
 - DPoP proofs for PAR, token, refresh, and authorized PDS requests.

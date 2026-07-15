@@ -42,7 +42,7 @@
 			<string>tech.stupid.StupidSocial.oauth</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>dev.workers.stephan-cloudflare.stupid-social-oauth-metadata</string>
+				<string>net.stupidtech</string>
 			</array>
 		</dict>
 	</array>

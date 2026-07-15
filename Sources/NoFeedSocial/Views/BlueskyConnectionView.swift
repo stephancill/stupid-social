@@ -76,7 +76,7 @@ struct BlueskyConnectionView: View {
         defer { isLoggingIn = false }
         do {
             let oauthSession = try await viewModel.beginBlueskyOAuth()
-            let webSession = WebAuthenticationSession(url: oauthSession.authorizationURL, callbackURLScheme: "dev.workers.stephan-cloudflare.stupid-social-oauth-metadata") { callbackURL in
+            let webSession = WebAuthenticationSession(url: oauthSession.authorizationURL, callbackURLScheme: "net.stupidtech") { callbackURL in
                 guard let callbackURL else {
                     viewModel.message = "Bluesky login was cancelled."
                     return
