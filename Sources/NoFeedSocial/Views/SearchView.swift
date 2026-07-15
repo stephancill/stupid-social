@@ -34,6 +34,8 @@ struct SearchView: View {
             #endif
             .navigationTitle("Search")
             .searchable(text: $viewModel.query, prompt: "Search profiles")
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
             .searchFocused($isSearchFocused)
             .onChange(of: viewModel.query) { _, _ in
                 viewModel.scheduleSearch()

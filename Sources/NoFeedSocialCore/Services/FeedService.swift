@@ -13,6 +13,7 @@ public final class FeedService {
 
     private var pendingIds = Set<String>()
     private var revealedIds = Set<String>()
+    private var targetDetailsCache: [String: NotificationTargetDetails] = [:]
 
     public init(
         notificationSources: [any NotificationFetching],
@@ -180,15 +181,31 @@ public final class FeedService {
     }
 
     public func fetchTargetDetails(for item: NotificationItem) async throws -> NotificationTargetDetails {
+        let cacheKey = targetDetailsCacheKey(for: item)
+        if let cached = targetDetailsCache[cacheKey] {
+            return cached
+        }
+
         guard let source = targetDetailFetchersByNetwork[item.network] else {
             throw SourceError.serviceError("No source for network \(item.network)")
         }
-        return try await source.fetchTargetDetails(for: item)
+        let details = try await source.fetchTargetDetails(for: item)
+        targetDetailsCache[cacheKey] = details
+        return details
+    }
+
+    public func cachedTargetDetails(for item: NotificationItem) -> NotificationTargetDetails? {
+        targetDetailsCache[targetDetailsCacheKey(for: item)]
     }
 
     public func markAllRead(items: [DisplayNotificationItem]) -> [DisplayNotificationItem] {
         watermarkStore.markAllRead(items: items.map(\.item), network: nil, accountId: nil)
         revealedIds.removeAll()
         return items.map { DisplayNotificationItem(item: $0.item, isNew: false) }
+    }
+
+    private func targetDetailsCacheKey(for item: NotificationItem) -> String {
+        let targetId = item.target?.id ?? item.sourceId ?? item.id
+        return [item.network.rawValue, item.accountId, targetId].joined(separator: "|")
     }
 }

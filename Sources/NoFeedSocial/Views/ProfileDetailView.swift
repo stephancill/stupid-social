@@ -106,11 +106,17 @@ struct ProfileDetailView: View {
                 }
             }
 
-            Section {
-                LabeledContent("Followers", value: profile.followerCount.map { formatCount($0) } ?? "—")
-                LabeledContent("Following", value: profile.followingCount.map { formatCount($0) } ?? "—")
-                if let posts = profile.postsCount {
-                    LabeledContent("Posts", value: formatCount(posts))
+            if !isHydrating, hasStats(profile) {
+                Section {
+                    if let followerCount = profile.followerCount {
+                        LabeledContent("Followers", value: formatCount(followerCount))
+                    }
+                    if let followingCount = profile.followingCount {
+                        LabeledContent("Following", value: formatCount(followingCount))
+                    }
+                    if let posts = profile.postsCount {
+                        LabeledContent("Posts", value: formatCount(posts))
+                    }
                 }
             }
 
@@ -286,6 +292,10 @@ struct ProfileDetailView: View {
         if profile.joinedAt == nil, profile.network == .x { return true }
         if profile.isMutualFollow == nil, profile.network == .instagram { return true }
         return false
+    }
+
+    private func hasStats(_ profile: NetworkProfile) -> Bool {
+        profile.followerCount != nil || profile.followingCount != nil || profile.postsCount != nil
     }
 
     private func loadMorePosts(autoTriggered: Bool) async {

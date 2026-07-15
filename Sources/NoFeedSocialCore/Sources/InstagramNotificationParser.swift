@@ -42,7 +42,7 @@ enum InstagramNotificationParser {
         let linkURL = storyURL ?? imageURL
 
         let target: NotificationTarget?
-        let targetId = story.args.media?.first?.id ?? story.pk
+        let targetId = story.args.media?.first?.id ?? parseStoryFeedItemID(from: story.args.destination) ?? story.pk
         let targetAuthor = accountOwnerActor(accountId: accountId, accountUsername: accountUsername, accountAvatarURL: accountAvatarURL)
         if let content = contentAfterColon, !content.isEmpty {
             target = NotificationTarget(
@@ -249,5 +249,14 @@ enum InstagramNotificationParser {
 
         // Highlight stories or other reel types
         return URL(string: "https://www.instagram.com/stories/archive/\(reelId)/?initial_media_id=\(mediaId)")
+    }
+
+    private static func parseStoryFeedItemID(from destination: String?) -> String? {
+        guard let destination else { return nil }
+        guard let questionIndex = destination.firstIndex(of: "?") else { return nil }
+        let query = String(destination[destination.index(after: questionIndex)...])
+        var components = URLComponents()
+        components.query = query
+        return components.queryItems?.first(where: { $0.name == "feeditem_id" })?.value
     }
 }

@@ -178,10 +178,7 @@ public final class InstagramNotificationSource: NotificationFetching, AccountVal
             var slides: [InstagramStorySlide] = []
             if let username = item.user.username, let reel = try await client.storyReel(username: username) {
                 for media in reel.items ?? [] {
-                    if let candidates = media.imageVersions2?.candidates,
-                       let best = candidates.sorted(by: { (a: InstagramMediaCandidate, b: InstagramMediaCandidate) in (a.width ?? 0) > (b.width ?? 0) }).first,
-                       let imageURL = URL(string: best.url)
-                    {
+                    if let imageURL = media.bestImageURL {
                         let videoVersion = media.videoVersions?.first
                         let videoURL: URL? = videoVersion.flatMap { URL(string: $0.url) }
                         let embed = media.storyFeedMedia?.first { $0.url != nil }
@@ -275,6 +272,10 @@ public final class InstagramNotificationSource: NotificationFetching, AccountVal
             throw SourceError.unsupported
         }
 
+        if let storyDetails = try await fetchStoryTargetDetails(item: item, mediaId: storyTargetMediaID(item: item, fallback: mediaId)) {
+            return storyDetails
+        }
+
         let response = try await client.mediaInfo(mediaId: mediaId)
         guard let media = response.items.first else {
             throw SourceError.invalidResponse
@@ -297,6 +298,82 @@ public final class InstagramNotificationSource: NotificationFetching, AccountVal
             postedAt: media.takenAt.map { Date(timeIntervalSince1970: $0) },
             likeCount: media.likeCount,
         )
+    }
+
+    private func fetchStoryTargetDetails(item: NotificationItem, mediaId: String) async throws -> NotificationTargetDetails? {
+        guard item.target?.url?.pathComponents.contains("stories") == true || item.text.localizedCaseInsensitiveContains("liked your story") else {
+            return nil
+        }
+        guard let reel = try await storyReel(for: item), let media = bestStoryMedia(from: reel, mediaId: mediaId) else {
+            return nil
+        }
+        guard let imageURL = media.bestImageURL else {
+            return nil
+        }
+
+        let author = reel.user.map { user in
+            NotificationActor(
+                id: String(user.pk),
+                network: .instagram,
+                username: user.username,
+                displayName: user.fullName,
+                avatarURL: user.profilePicUrl.flatMap(URL.init),
+            )
+        } ?? item.target?.author
+
+        return NotificationTargetDetails(
+            author: author,
+            text: item.target?.text,
+            imageURLs: [imageURL],
+            postedAt: media.takenAt.map { Date(timeIntervalSince1970: $0) } ?? item.target?.postedAt,
+            likeCount: item.target?.likeCount,
+        )
+    }
+
+    private func storyReel(for item: NotificationItem) async throws -> InstagramReel? {
+        if let archiveReelId = archiveReelID(from: item.target?.url) {
+            return try await client.archivedStoryReel(archiveReelId: archiveReelId)
+        }
+        guard let username = item.target?.author?.username ?? metadataStore.instagramAccount?.username else {
+            return nil
+        }
+        return try await client.storyReel(username: username)
+    }
+
+    private func bestStoryMedia(from reel: InstagramReel, mediaId: String) -> InstagramStoryMedia? {
+        let items = reel.items ?? []
+        return items.first(where: { storyMediaId($0) == strippedMediaId(mediaId) })
+    }
+
+    private func storyMediaId(_ media: InstagramStoryMedia) -> String {
+        media.pk ?? strippedMediaId(media.id)
+    }
+
+    private func strippedMediaId(_ mediaId: String) -> String {
+        mediaId.split(separator: "_").first.map(String.init) ?? mediaId
+    }
+
+    private func storyTargetMediaID(item: NotificationItem, fallback: String) -> String {
+        guard let url = item.target?.url else { return fallback }
+        if let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+           let initialMediaId = components.queryItems?.first(where: { $0.name == "initial_media_id" })?.value,
+           !initialMediaId.isEmpty
+        {
+            return initialMediaId
+        }
+        let numericPathComponent = url.pathComponents.reversed().first { component in
+            !component.isEmpty && component.allSatisfy(\.isNumber)
+        }
+        return numericPathComponent ?? fallback
+    }
+
+    private func archiveReelID(from url: URL?) -> String? {
+        guard let url else { return nil }
+        let components = url.pathComponents
+        guard let archiveIndex = components.firstIndex(of: "archive") else { return nil }
+        let idIndex = components.index(after: archiveIndex)
+        guard components.indices.contains(idIndex) else { return nil }
+        return components[idIndex].trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     }
 
     private func networkProfile(from user: InstagramUserInfoResponse.InfoUser, postsPage: NetworkProfilePostsPage? = nil) -> NetworkProfile {

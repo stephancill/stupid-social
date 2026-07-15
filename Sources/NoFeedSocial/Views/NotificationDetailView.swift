@@ -169,18 +169,29 @@ struct NotificationDetailView: View {
     private func loadTargetDetails() async {
         guard displayItem.item.target != nil else { return }
         guard displayItem.item.type != .message else { return }
-        targetDetails = nil
-        parentTargetDetails = nil
 
         if let parentTarget = displayItem.item.parentTarget {
-            isLoadingParentTargetDetails = true
-            parentTargetDetails = try? await feedService.fetchTargetDetails(for: detailItem(target: parentTarget))
-            isLoadingParentTargetDetails = false
+            let parentItem = detailItem(target: parentTarget)
+            if let cached = feedService.cachedTargetDetails(for: parentItem) {
+                parentTargetDetails = cached
+                isLoadingParentTargetDetails = false
+            } else {
+                parentTargetDetails = nil
+                isLoadingParentTargetDetails = true
+                defer { isLoadingParentTargetDetails = false }
+                parentTargetDetails = try? await feedService.fetchTargetDetails(for: parentItem)
+            }
         }
 
-        isLoadingTargetDetails = true
-        defer { isLoadingTargetDetails = false }
-        targetDetails = try? await feedService.fetchTargetDetails(for: displayItem.item)
+        if let cached = feedService.cachedTargetDetails(for: displayItem.item) {
+            targetDetails = cached
+            isLoadingTargetDetails = false
+        } else {
+            targetDetails = nil
+            isLoadingTargetDetails = true
+            defer { isLoadingTargetDetails = false }
+            targetDetails = try? await feedService.fetchTargetDetails(for: displayItem.item)
+        }
     }
 
     private func detailItem(target: NotificationTarget) -> NotificationItem {

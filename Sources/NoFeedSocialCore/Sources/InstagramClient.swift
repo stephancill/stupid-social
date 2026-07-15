@@ -173,6 +173,25 @@ public final class InstagramClient {
         return payload.xdtAPIReelsMedia.reelsMedia.first
     }
 
+    func archivedStoryReel(archiveReelId: String) async throws -> InstagramReel? {
+        guard let credentials = try credentialStore.loadInstagramCredentials() else {
+            throw SourceError.notConfigured
+        }
+        let reelId = archiveReelId.hasPrefix("archiveDay:") ? archiveReelId : "archiveDay:\(archiveReelId)"
+        let body = formURLEncoded([
+            "reel_ids": jsonString([reelId]),
+        ]).data(using: .utf8)
+        let data = try await webJSONRequest(
+            credentials: credentials,
+            method: "POST",
+            path: "/api/v1/feed/reels_media/",
+            headers: ["Content-Type": "application/x-www-form-urlencoded"],
+            body: body,
+        )
+        let decoded = try JSONDecoder().decode(InstagramReelsMediaResponse.self, from: data)
+        return decoded.reels[reelId] ?? decoded.reelsMedia.first
+    }
+
     func reelsMedia(reelIds _: [String]) async throws -> [String: InstagramReel] {
         [:]
     }

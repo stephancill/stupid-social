@@ -123,11 +123,18 @@ struct InstagramUserStoryResponse: Decodable {
 
 struct InstagramReelsMediaResponse: Decodable {
     let reels: [String: InstagramReel]
+    let reelsMedia: [InstagramReel]
     let status: String?
+
+    enum CodingKeys: String, CodingKey {
+        case reels
+        case reelsMedia = "reels_media"
+        case status
+    }
 }
 
 struct InstagramReel: Decodable {
-    let id: UInt64
+    let id: String
     let latestReelMedia: Double?
     let expiringAt: Double?
     let mediaCount: Int?
@@ -145,12 +152,12 @@ struct InstagramReel: Decodable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        if let uint = try? container.decode(UInt64.self, forKey: .id) {
-            id = uint
-        } else if let string = try? container.decode(String.self, forKey: .id), let uint = UInt64(string) {
-            id = uint
+        if let string = try? container.decode(String.self, forKey: .id) {
+            id = string
+        } else if let uint = try? container.decode(UInt64.self, forKey: .id) {
+            id = String(uint)
         } else {
-            throw DecodingError.typeMismatch(UInt64.self, DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Expected Instagram reel id"))
+            throw DecodingError.typeMismatch(String.self, DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Expected Instagram reel id"))
         }
         latestReelMedia = try container.decodeIfPresent(Double.self, forKey: .latestReelMedia)
         expiringAt = try container.decodeIfPresent(Double.self, forKey: .expiringAt)
@@ -187,6 +194,14 @@ struct InstagramStoryMedia: Decodable {
         case reelMentions = "reel_mentions"
         case storyLinkStickers = "story_link_stickers"
         case hasLiked = "has_liked"
+    }
+
+    var bestImageURL: URL? {
+        let urlString = imageVersions2?.candidates?
+            .sorted { ($0.width ?? 0) > ($1.width ?? 0) }
+            .first?
+            .url
+        return urlString.flatMap(URL.init)
     }
 }
 
