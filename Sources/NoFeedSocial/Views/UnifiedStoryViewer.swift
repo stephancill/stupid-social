@@ -20,13 +20,13 @@ struct UnifiedStoryViewer: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage("devModeEnabled") private var devModeEnabled = false
+    @AppStorage("storyViewerMuted") private var isMuted: Bool = false
 
     @State private var viewerItems: [StoryBarItem]
     @State private var currentItemIndex: Int
     @State private var currentSlideIndex: Int = 0
     @State private var elapsedTime: Double = 0
     @State private var isPaused: Bool = false
-    @State private var isMuted: Bool = false
     @State private var seenItems: Set<Int>
     @State private var touchStartedAt: Date?
 
@@ -144,12 +144,17 @@ struct UnifiedStoryViewer: View {
         }
         .onAppear {
             #if os(iOS)
-                try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
-                try? AVAudioSession.sharedInstance().setActive(true)
+                configureAudioSessionForCurrentMuteState()
             #endif
             loadingArtworkPulse = true
             scheduleCurrentItemSeenMark()
             prepareForCurrentItem()
+        }
+        .onChange(of: isMuted) { _, _ in
+            player?.isMuted = isMuted
+            #if os(iOS)
+                configureAudioSessionForCurrentMuteState()
+            #endif
         }
         .onChange(of: currentItemIndex) { _, _ in
             elapsedTime = 0
@@ -207,6 +212,9 @@ struct UnifiedStoryViewer: View {
         }
         .onDisappear {
             stopPlayback()
+            #if os(iOS)
+                deactivateStoryAudioSession()
+            #endif
         }
         .confirmationDialog("Delete Story?", isPresented: deleteConfirmationBinding, titleVisibility: .visible) {
             Button("Delete Story", role: .destructive) {
@@ -422,7 +430,6 @@ struct UnifiedStoryViewer: View {
                 transaction.disablesAnimations = true
                 withTransaction(transaction) {
                     isMuted.toggle()
-                    player?.isMuted = isMuted
                 }
             } label: {
                 Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
@@ -850,6 +857,9 @@ struct UnifiedStoryViewer: View {
 
     private func startPlayback(url: URL, trackId: String) {
         playerStatus = .loading
+        #if os(iOS)
+            configureAudioSessionForCurrentMuteState()
+        #endif
 
         let playerItem: AVPlayerItem
         if let preloaded = preloadedPreviews[trackId] {
@@ -888,6 +898,9 @@ struct UnifiedStoryViewer: View {
 
     private func startVideoPlayback(url: URL, duration: Double?) {
         playerStatus = .loading
+        #if os(iOS)
+            configureAudioSessionForCurrentMuteState()
+        #endif
 
         let playerItem = AVPlayerItem(url: url)
         let newPlayer = AVPlayer(playerItem: playerItem)
@@ -992,6 +1005,22 @@ struct UnifiedStoryViewer: View {
             .replacingOccurrences(of: "spotify:user:", with: "")
             .replacingOccurrences(of: "spotify:socialsession:", with: "")
     }
+
+    #if os(iOS)
+        private func configureAudioSessionForCurrentMuteState() {
+            let session = AVAudioSession.sharedInstance()
+            if isMuted {
+                try? session.setCategory(.ambient, mode: .default, options: [.mixWithOthers])
+            } else {
+                try? session.setCategory(.playback, mode: .default)
+                try? session.setActive(true)
+            }
+        }
+
+        private func deactivateStoryAudioSession() {
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
+    #endif
 
     // MARK: - Animation Parameters
 

@@ -2,6 +2,7 @@
 
 ## 2026-07-16
 
+- Persisted the unified story viewer mute toggle in `AppStorage` and changed iOS story playback audio-session handling so muted stories use an ambient/mix-with-others category instead of activating `.playback`. Unmuting still opts into normal story audio playback, while closing the viewer deactivates the story audio session with notify-others semantics.
 - Fixed stories bar label clipping at larger Dynamic Type sizes. The stories pager and loading skeleton heights now scale relative to the caption label size, and story bubble labels keep their natural vertical height while remaining single-line/truncated horizontally.
 
 ## 2026-07-15
