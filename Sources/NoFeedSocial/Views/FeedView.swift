@@ -260,12 +260,13 @@ private struct StoryViewerSelection: Identifiable {
 
 private struct StoriesBarSkeleton: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @ScaledMetric(relativeTo: .caption2) private var rowHeight: CGFloat = 112
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1 / 30)) { timeline in
             skeletonContent(fillOpacity: fillOpacity(at: timeline.date))
         }
-        .frame(height: 112, alignment: .top)
+        .frame(height: rowHeight, alignment: .top)
         .padding(.vertical, 8)
         .listRowInsets(EdgeInsets())
         .listRowSeparator(.hidden)
@@ -332,8 +333,7 @@ private struct StoriesBar: View {
     let onItemAppear: (StoryBarItem) -> Void
     @State private var visibleModeID: String?
     @State private var pagerOffset: CGFloat = 0
-
-    private let rowHeight: CGFloat = 112
+    @ScaledMetric(relativeTo: .caption2) private var rowHeight: CGFloat = 112
 
     var body: some View {
         let modes = availableFeedModes
@@ -655,6 +655,7 @@ private struct StoryComposerBubble: View {
                 .font(.caption2)
                 .foregroundStyle(.primary)
                 .lineLimit(1)
+                .fixedSize(horizontal: false, vertical: true)
                 .frame(width: 70)
         }
         .accessibilityLabel(reel == nil ? "Create story" : "Your Instagram story")
@@ -754,6 +755,7 @@ private struct InstagramStoryBubble: View {
                 .font(.caption2)
                 .foregroundStyle(.primary)
                 .lineLimit(1)
+                .fixedSize(horizontal: false, vertical: true)
                 .frame(width: 70)
         }
         .accessibilityLabel("Instagram stories from \(label)")
@@ -802,6 +804,7 @@ private struct SpotifyStoryBubble: View {
                 .font(.caption2)
                 .foregroundStyle(.primary)
                 .lineLimit(1)
+                .fixedSize(horizontal: false, vertical: true)
                 .frame(width: 70)
         }
         .accessibilityLabel("Listening activity from \(displayUserName)")

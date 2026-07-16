@@ -1,5 +1,9 @@
 # Implementation Notes
 
+## 2026-07-16
+
+- Fixed stories bar label clipping at larger Dynamic Type sizes. The stories pager and loading skeleton heights now scale relative to the caption label size, and story bubble labels keep their natural vertical height while remaining single-line/truncated horizontally.
+
 ## 2026-07-15
 
 - Verified X profile search with simulator credentials using the new dependency-free `scripts/x-web-client.py` probe. The old app endpoint `GET /i/api/1.1/users/search.json` now returns X code 34 / HTTP 404 with valid cookies. The working web path is GraphQL `POST /i/api/graphql/hz_94eVAtrtQo_vO3my7Rw/SearchTimeline` with `product: "People"`; `scripts/x-web-client.py --simulator --summary search-users stephancill` returned 20 user results with `@stephancill` first. Header reduction showed POST needs only auth headers plus a non-empty `User-Agent`; browser/client-hint headers, `X-Client-Transaction-Id`, `Origin`, `Referer`, `Accept`, `Content-Type`, and `X-Twitter-*` headers are not required. The app and probe use a neutral `NoFeedSocial/1` user agent for this request because omitting `User-Agent` returns HTTP 404.
