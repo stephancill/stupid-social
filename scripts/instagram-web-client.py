@@ -411,7 +411,23 @@ class InstagramWebClient:
             endpoint="/graphql/query",
         )
 
-    def upload_story_image(self, image_path: str, width: int, height: int, caption: str) -> dict[str, Any]:
+    def rest_story_mention_search(self, query: str) -> dict[str, Any]:
+        result = self.rest_search_users(query)
+        return {
+            "status": result.get("status"),
+            "query": result.get("query"),
+            "users": result.get("users", []),
+            "raw": result.get("raw"),
+        }
+
+    def upload_story_image(
+        self,
+        image_path: str,
+        width: int,
+        height: int,
+        caption: str,
+        reel_mentions: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         self._ensure_bootstrapped()
         with open(image_path, "rb") as handle:
             image_bytes = handle.read()
@@ -444,6 +460,9 @@ class InstagramWebClient:
             "share_to_fb_destination_type": "USER",
             "upload_id": upload_id,
         }
+        if reel_mentions:
+            configure_fields["include_e2ee_mentioned_user_list"] = "1"
+            configure_fields["reel_mentions"] = json.dumps(reel_mentions, separators=(",", ":"))
         state = self._state()
         if state.csrf_token:
             configure_fields["jazoest"] = jazoest(state.csrf_token)
@@ -837,6 +856,62 @@ def summarize_instagram_user(user: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def build_reel_mentions(
+    client: InstagramWebClient,
+    usernames: list[str],
+    user_ids: list[str],
+    raw_value: str | None,
+    x: float,
+    y: float,
+    width: float,
+    height: float,
+    rotation: float,
+) -> list[dict[str, Any]]:
+    if raw_value:
+        value = load_variables(raw_value)
+        if not isinstance(value, list):
+            raise SystemExit("--reel-mentions-json must decode to a JSON array")
+        return [dict(item) for item in value]
+
+    mentions: list[dict[str, Any]] = []
+    for username in usernames:
+        profile = client.rest_profile_by_username(username)
+        user = profile.get("data", {}).get("user", {})
+        user_id = user.get("id") or user.get("pk")
+        resolved_username = user.get("username") or username.strip().lstrip("@")
+        if not user_id:
+            raise SystemExit(f"Could not resolve Instagram user id for {username}")
+        mentions.append(reel_mention_payload(str(user_id), resolved_username, x, y, width, height, rotation))
+
+    for user_id in user_ids:
+        mentions.append(reel_mention_payload(user_id, None, x, y, width, height, rotation))
+
+    return mentions
+
+
+def reel_mention_payload(
+    user_id: str,
+    username: str | None,
+    x: float,
+    y: float,
+    width: float,
+    height: float,
+    rotation: float,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "user_id": str(user_id),
+        "x": x,
+        "y": y,
+        "z": 0,
+        "width": width,
+        "height": height,
+        "rotation": rotation,
+    }
+    if username:
+        payload["username"] = username
+    return payload
+
+
 def write_output(path: str | None, value: Any) -> None:
     if not path:
         return
@@ -881,6 +956,9 @@ def build_parser() -> argparse.ArgumentParser:
     search_users = subparsers.add_parser("search-users", help="Call web-visible /web/search/topsearch/ for users.")
     search_users.add_argument("query", help="Search query.")
 
+    mention_search = subparsers.add_parser("mention-search", help="Search Instagram users for story @mention autocomplete.")
+    mention_search.add_argument("query", help="Search text after @.")
+
     story_seen = subparsers.add_parser("story-seen", help="Mark one story media item seen with PolarisStoriesV3SeenMutation.")
     story_seen.add_argument("--reel-id", required=True, help="Story reel/user ID.")
     story_seen.add_argument("--media-id", required=True, help="Story media ID.")
@@ -915,6 +993,14 @@ def build_parser() -> argparse.ArgumentParser:
     upload.add_argument("--width", type=int, required=True, help="Image width in pixels.")
     upload.add_argument("--height", type=int, required=True, help="Image height in pixels.")
     upload.add_argument("--caption", default="", help="Story caption text.")
+    upload.add_argument("--mention", action="append", default=[], help="Username to add as a reel_mentions story sticker. Can be repeated.")
+    upload.add_argument("--mention-user-id", action="append", default=[], help="Numeric Instagram user id to add as a mention sticker. Can be repeated.")
+    upload.add_argument("--mention-x", type=float, default=0.5, help="Mention sticker normalized x position. Defaults to center.")
+    upload.add_argument("--mention-y", type=float, default=0.5, help="Mention sticker normalized y position. Defaults to center.")
+    upload.add_argument("--mention-width", type=float, default=0.5, help="Mention sticker normalized width.")
+    upload.add_argument("--mention-height", type=float, default=0.12, help="Mention sticker normalized height.")
+    upload.add_argument("--mention-rotation", type=float, default=0.0, help="Mention sticker rotation in degrees.")
+    upload.add_argument("--reel-mentions-json", help="Raw reel_mentions JSON array or @path for endpoint-shape experiments.")
 
     delete = subparsers.add_parser("delete-story", help="Delete an Instagram story by numeric media ID.")
     delete.add_argument("media_id", help="Numeric story media ID without the owner suffix.")
@@ -999,6 +1085,8 @@ def main() -> None:
         result = client.rest_profile_by_username(args.username)
     elif args.command == "search-users":
         result = client.rest_search_users(args.query)
+    elif args.command == "mention-search":
+        result = client.rest_story_mention_search(args.query)
     elif args.command == "story-seen":
         result = client.story_seen(args.reel_id, args.media_id, args.owner_id, args.taken_at, args.seen_at, args.story_username)
     elif args.command == "force-story-seen":
@@ -1012,7 +1100,20 @@ def main() -> None:
     elif args.command == "unlike-story":
         result = client.set_story_liked(args.media_id, False, args.story_username)
     elif args.command == "upload-story-image":
-        result = client.upload_story_image(args.image, args.width, args.height, args.caption)
+        reel_mentions = build_reel_mentions(
+            client,
+            args.mention,
+            args.mention_user_id,
+            args.reel_mentions_json,
+            args.mention_x,
+            args.mention_y,
+            args.mention_width,
+            args.mention_height,
+            args.mention_rotation,
+        )
+        result = client.upload_story_image(args.image, args.width, args.height, args.caption, reel_mentions)
+        if reel_mentions:
+            result["reel_mentions"] = reel_mentions
     elif args.command == "delete-story":
         result = client.delete_story(args.media_id, args.story_username)
     elif args.command == "graphql":

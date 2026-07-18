@@ -169,8 +169,10 @@ struct FeedView: View {
             )
         }
         .fullScreenCover(isPresented: $showingStoryComposer) {
-            StoryComposerView { imageData, width, height, mimeType in
-                try await storyViewModel.postInstagramStory(imageData: imageData, width: width, height: height, mimeType: mimeType)
+            StoryComposerView(onMentionSearch: { query in
+                await viewModel.service.searchProfiles(query: query).filter { $0.network == .instagram }
+            }) { imageData, width, height, mimeType, mentions in
+                try await storyViewModel.postInstagramStory(imageData: imageData, width: width, height: height, mimeType: mimeType, mentions: mentions)
             }
         }
         #else
@@ -196,8 +198,10 @@ struct FeedView: View {
                     )
                 }
                 .sheet(isPresented: $showingStoryComposer) {
-                    StoryComposerView { imageData, width, height, mimeType in
-                        try await storyViewModel.postInstagramStory(imageData: imageData, width: width, height: height, mimeType: mimeType)
+                    StoryComposerView(onMentionSearch: { query in
+                        await viewModel.service.searchProfiles(query: query).filter { $0.network == .instagram }
+                    }) { imageData, width, height, mimeType, mentions in
+                        try await storyViewModel.postInstagramStory(imageData: imageData, width: width, height: height, mimeType: mimeType, mentions: mentions)
                     }
                 }
         #endif

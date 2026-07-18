@@ -329,7 +329,7 @@ public final class InstagramClient {
         )
     }
 
-    public func publishPhotoStory(imageData: Data, width: Int, height: Int, mimeType: String) async throws {
+    public func publishPhotoStory(imageData: Data, width: Int, height: Int, mimeType: String, mentions: [InstagramStoryMentionPlacement] = []) async throws {
         guard let credentials = try credentialStore.loadInstagramCredentials() else {
             throw SourceError.notConfigured
         }
@@ -371,7 +371,7 @@ public final class InstagramClient {
             throw SourceError.serviceError(instagramPublishError(step: "upload", statusCode: uploadHTTP.statusCode, data: uploadData))
         }
 
-        let body = formURLEncoded([
+        var configureFields: [String: String] = [
             "caption": "",
             "configure_mode": "1",
             "share_to_facebook": "",
@@ -379,7 +379,12 @@ public final class InstagramClient {
             "share_to_fb_destination_type": "USER",
             "upload_id": uploadId,
             "jazoest": jazoest(csrfToken: credentials.csrfToken),
-        ])
+        ]
+        if !mentions.isEmpty {
+            configureFields["include_e2ee_mentioned_user_list"] = "1"
+            configureFields["reel_mentions"] = reelMentionsJSONString(mentions)
+        }
+        let body = formURLEncoded(configureFields)
 
         var storyConfigureRequest = URLRequest(url: URL(string: "\(Self.baseURL)/api/v1/media/configure_to_story/")!)
         storyConfigureRequest.httpMethod = "POST"
@@ -426,5 +431,26 @@ public final class InstagramClient {
             return "Instagram story \(step) failed (HTTP \(statusCode)): \(responseStatus)"
         }
         return "Instagram story \(step) failed (HTTP \(statusCode))."
+    }
+
+    private func reelMentionPayload(from mention: InstagramStoryMentionPlacement) -> [String: Any] {
+        [
+            "user_id": mention.userId,
+            "username": mention.username,
+            "x": mention.x,
+            "y": mention.y,
+            "z": 0,
+            "width": mention.width,
+            "height": mention.height,
+            "rotation": mention.rotation,
+        ]
+    }
+
+    private func reelMentionsJSONString(_ mentions: [InstagramStoryMentionPlacement]) -> String {
+        let payload = mentions.map(reelMentionPayload(from:))
+        guard let data = try? JSONSerialization.data(withJSONObject: payload), let string = String(data: data, encoding: .utf8) else {
+            return "[]"
+        }
+        return string
     }
 }

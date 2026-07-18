@@ -463,9 +463,9 @@ public struct InstagramStoryMention: Hashable, Sendable {
     public let url: URL?
 
     public var actor: NotificationActor? {
-        guard let userId else { return nil }
+        let id = userId ?? username
         return NotificationActor(
-            id: userId,
+            id: id,
             network: .instagram,
             username: username,
             displayName: nil,
@@ -477,6 +477,26 @@ public struct InstagramStoryMention: Hashable, Sendable {
         self.username = username
         self.userId = userId
         self.url = url
+    }
+}
+
+public struct InstagramStoryMentionPlacement: Hashable, Sendable {
+    public let userId: String
+    public let username: String
+    public let x: Double
+    public let y: Double
+    public let width: Double
+    public let height: Double
+    public let rotation: Double
+
+    public init(userId: String, username: String, x: Double, y: Double, width: Double, height: Double, rotation: Double = 0) {
+        self.userId = userId
+        self.username = username
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+        self.rotation = rotation
     }
 }
 

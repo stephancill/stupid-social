@@ -45,8 +45,8 @@ public final class InstagramNotificationSource: NotificationFetching, AccountVal
         }
     }
 
-    public func postPhotoStory(imageData: Data, width: Int, height: Int, mimeType: String) async throws {
-        try await client.publishPhotoStory(imageData: imageData, width: width, height: height, mimeType: mimeType)
+    public func postPhotoStory(imageData: Data, width: Int, height: Int, mimeType: String, mentions: [InstagramStoryMentionPlacement]) async throws {
+        try await client.publishPhotoStory(imageData: imageData, width: width, height: height, mimeType: mimeType, mentions: mentions)
     }
 
     public func deleteStory(mediaId: String, isVideo: Bool) async throws {
@@ -183,7 +183,7 @@ public final class InstagramNotificationSource: NotificationFetching, AccountVal
                         let videoURL: URL? = videoVersion.flatMap { URL(string: $0.url) }
                         let embed = media.storyFeedMedia?.first { $0.url != nil }
                         let music = media.storyMusicStickers?.compactMap(\.music).first
-                        let mentions = media.reelMentions?.compactMap(\.mention) ?? []
+                        let mentions = storyMentions(from: media)
                         let links = media.storyLinkStickers?.compactMap(\.link) ?? []
                         let mediaId = media.pk ?? media.id.split(separator: "_").first.map(String.init) ?? media.id
                         slides.append(InstagramStorySlide(
@@ -225,6 +225,20 @@ public final class InstagramNotificationSource: NotificationFetching, AccountVal
     private struct StoryTrayEntry {
         let item: InstagramTrayItem
         let reelId: String
+    }
+
+    private func storyMentions(from media: InstagramStoryMedia) -> [InstagramStoryMention] {
+        var mentions = (media.reelMentions?.compactMap(\.mention) ?? []) + (media.storyBloksStickers?.compactMap(\.mention) ?? [])
+        var seenUsernames: Set<String> = []
+        mentions.removeAll { mention in
+            let key = mention.username.lowercased()
+            if seenUsernames.contains(key) {
+                return true
+            }
+            seenUsernames.insert(key)
+            return false
+        }
+        return mentions
     }
 
     private func invalidateAccount() {

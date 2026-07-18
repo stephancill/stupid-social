@@ -104,7 +104,7 @@ public final class StoryBarViewModel: ObservableObject {
         }
     }
 
-    public func postInstagramStory(imageData: Data, width: Int, height: Int, mimeType: String) async throws {
+    public func postInstagramStory(imageData: Data, width: Int, height: Int, mimeType: String, mentions: [InstagramStoryMentionPlacement] = []) async throws {
         guard let instagramSource else { throw SourceError.notConfigured }
         let actor: NotificationActor? = if let ownInstagramStoryActor {
             ownInstagramStoryActor
@@ -121,7 +121,7 @@ public final class StoryBarViewModel: ObservableObject {
 
         Task {
             do {
-                try await instagramSource.postPhotoStory(imageData: imageData, width: width, height: height, mimeType: mimeType)
+                try await instagramSource.postPhotoStory(imageData: imageData, width: width, height: height, mimeType: mimeType, mentions: mentions)
                 await fetchStoryBarContent()
             } catch {
                 removeOptimisticInstagramStory(slideID: slideID)

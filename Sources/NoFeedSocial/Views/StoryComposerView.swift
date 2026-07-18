@@ -1,3 +1,4 @@
+import NoFeedSocialCore
 import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
@@ -12,7 +13,8 @@ import UniformTypeIdentifiers
 
 struct StoryComposerView: View {
     @Environment(\.dismiss) private var dismiss
-    let onPost: (Data, Int, Int, String) async throws -> Void
+    let onPost: (Data, Int, Int, String, [InstagramStoryMentionPlacement]) async throws -> Void
+    let onMentionSearch: (String) async -> [NetworkProfile]
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var selectedImageData: Data?
     @State private var canvasSize = CGSize(width: 390, height: 844)
@@ -25,10 +27,19 @@ struct StoryComposerView: View {
     @State private var isPosting = false
     @State private var composerMessage: String?
     @State private var captionTrashVisible = false
+    @State private var mentionQuery: MentionQuery?
+    @State private var mentionResults: [NetworkProfile] = []
+    @State private var isSearchingMentions = false
+    @State private var mentionSearchTask: Task<Void, Never>?
+    @State private var keyboardHeight: CGFloat = 0
     @GestureState private var captionDrag: CaptionDrag?
     @FocusState private var swiftUIFocusedCaptionID: UUID?
 
-    init(onPost: @escaping (Data, Int, Int, String) async throws -> Void = { _, _, _, _ in }) {
+    init(
+        onMentionSearch: @escaping (String) async -> [NetworkProfile] = { _ in [] },
+        onPost: @escaping (Data, Int, Int, String, [InstagramStoryMentionPlacement]) async throws -> Void = { _, _, _, _, _ in },
+    ) {
+        self.onMentionSearch = onMentionSearch
         self.onPost = onPost
     }
 
@@ -83,6 +94,7 @@ struct StoryComposerView: View {
                                 textBackground: $caption.textBackground,
                                 fontStyle: $caption.fontStyle,
                                 textColor: $caption.textColor,
+                                selectAllOnFocus: $caption.selectAllOnFocus,
                                 maxTextWidth: min(proxy.size.width - 88, 420),
                                 onDragEnded: { id, shouldDelete in
                                     if shouldDelete {
@@ -91,6 +103,16 @@ struct StoryComposerView: View {
                                 },
                                 onTrashVisibilityChange: { visible in
                                     captionTrashVisible = visible
+                                },
+                                onTextChange: { id, text in
+                                    guard let index = captions.firstIndex(where: { $0.id == id }) else { return }
+                                    captions[index].text = text
+                                    updateMentionQuery(for: captions[index])
+                                },
+                                onSelectionChange: { id, cursorOffset in
+                                    guard let index = captions.firstIndex(where: { $0.id == id }) else { return }
+                                    captions[index].cursorOffset = cursorOffset
+                                    updateMentionQuery(for: captions[index])
                                 },
                             )
                             .frame(width: proxy.size.width, height: proxy.size.height)
@@ -112,6 +134,18 @@ struct StoryComposerView: View {
                 .onChange(of: proxy.size) { _, newSize in
                     canvasSize = newSize
                 }
+            }
+
+            if let mentionQuery, focusedCaptionID == mentionQuery.captionID {
+                VStack {
+                    Spacer()
+                    mentionSuggestions(query: mentionQuery.text)
+                        .frame(height: mentionResults.isEmpty ? 44 : 112)
+                        .padding(.horizontal, 18)
+                        .padding(.bottom, keyboardHeight + 10)
+                }
+                .allowsHitTesting(true)
+                .zIndex(5)
             }
 
             VStack {
@@ -217,6 +251,14 @@ struct StoryComposerView: View {
             Text(composerMessage ?? "")
         }
         .ignoresSafeArea(.keyboard)
+        #if os(iOS)
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { notification in
+                updateKeyboardHeight(from: notification)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+                keyboardHeight = 0
+            }
+        #endif
     }
 
     private var emptyCanvas: some View {
@@ -281,6 +323,7 @@ struct StoryComposerView: View {
             set: { newValue in
                 guard let index = captions.firstIndex(where: { $0.id == id }) else { return }
                 captions[index].text = newValue
+                updateMentionQuery(for: captions[index])
             },
         )
     }
@@ -368,6 +411,9 @@ struct StoryComposerView: View {
     private func removeCaption(_ id: UUID) {
         captions.removeAll { $0.id == id }
         captionTrashVisible = false
+        if mentionQuery?.captionID == id {
+            clearMentionSearch()
+        }
         if focusedCaptionID == id {
             focusedCaptionID = nil
         }
@@ -380,6 +426,7 @@ struct StoryComposerView: View {
         focusedCaptionID = nil
         swiftUIFocusedCaptionID = nil
         captionTrashVisible = false
+        clearMentionSearch()
     }
 
     private func saveComposedStoryImage() {
@@ -429,7 +476,7 @@ struct StoryComposerView: View {
             isPosting = true
             Task {
                 do {
-                    try await onPost(encodedStory.data, Int(image.size.width), Int(image.size.height), encodedStory.mimeType)
+                    try await onPost(encodedStory.data, Int(image.size.width), Int(image.size.height), encodedStory.mimeType, mentionPlacements())
                     await MainActor.run {
                         isPosting = false
                         showTemporaryPostSuccess()
@@ -445,6 +492,153 @@ struct StoryComposerView: View {
         #else
             composerMessage = "Posting stories is only available on iOS."
         #endif
+    }
+
+    private func updateMentionQuery(for caption: StoryCaption) {
+        guard focusedCaptionID == caption.id, let token = activeMentionToken(in: caption.text, cursorOffset: caption.cursorOffset) else {
+            if mentionQuery?.captionID == caption.id {
+                clearMentionSearch()
+            }
+            return
+        }
+
+        mentionQuery = MentionQuery(captionID: caption.id, text: token.text, startOffset: token.startOffset, endOffset: token.endOffset)
+        mentionSearchTask?.cancel()
+        guard token.text.count >= 1 else {
+            mentionResults = []
+            isSearchingMentions = false
+            return
+        }
+
+        mentionSearchTask = Task { [tokenText = token.text] in
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
+            let results = await onMentionSearch(tokenText)
+            await MainActor.run {
+                guard mentionQuery?.text == tokenText else { return }
+                mentionResults = results
+                isSearchingMentions = false
+            }
+        }
+        isSearchingMentions = true
+    }
+
+    private func clearMentionSearch() {
+        mentionSearchTask?.cancel()
+        mentionQuery = nil
+        mentionResults = []
+        isSearchingMentions = false
+    }
+
+    private func activeMentionToken(in text: String, cursorOffset: Int? = nil) -> (text: String, startOffset: Int, endOffset: Int)? {
+        let boundedOffset = min(max(cursorOffset ?? text.count, 0), text.count)
+        guard let cursorIndex = text.index(text.startIndex, offsetBy: boundedOffset, limitedBy: text.endIndex) else { return nil }
+        let prefix = text[..<cursorIndex]
+        guard let atIndex = prefix.lastIndex(of: "@") else { return nil }
+        if atIndex > text.startIndex {
+            let previousIndex = text.index(before: atIndex)
+            guard text[previousIndex].isWhitespace else { return nil }
+        }
+        let tokenStart = text.index(after: atIndex)
+        let suffix = text[cursorIndex...]
+        let tokenEnd = suffix.firstIndex(where: { $0.isWhitespace }) ?? cursorIndex
+        let token = String(text[tokenStart ..< tokenEnd])
+        guard token.rangeOfCharacter(from: .whitespacesAndNewlines) == nil else { return nil }
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._"))
+        guard token.unicodeScalars.allSatisfy({ allowed.contains($0) }) else { return nil }
+        return (
+            text: token,
+            startOffset: text.distance(from: text.startIndex, to: atIndex),
+            endOffset: text.distance(from: text.startIndex, to: tokenEnd),
+        )
+    }
+
+    private func selectMention(_ profile: NetworkProfile) {
+        guard let query = mentionQuery,
+              let index = captions.firstIndex(where: { $0.id == query.captionID }),
+              let username = profile.username, !username.isEmpty
+        else { return }
+
+        var caption = captions[index]
+        guard let startIndex = caption.text.index(caption.text.startIndex, offsetBy: query.startOffset, limitedBy: caption.text.endIndex),
+              let endIndex = caption.text.index(caption.text.startIndex, offsetBy: query.endOffset, limitedBy: caption.text.endIndex)
+        else { return }
+        let replacement = query.endOffset >= caption.text.count ? "@\(username) " : "@\(username)"
+        caption.text.replaceSubrange(startIndex ..< endIndex, with: replacement)
+        caption.cursorOffset = query.startOffset + replacement.count
+        caption.mentions.removeAll { $0.userId == profile.id || $0.username == username }
+        caption.mentions.append(StoryCaptionMention(userId: profile.id, username: username))
+        captions[index] = caption
+        clearMentionSearch()
+    }
+
+    private func mentionSuggestions(query: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if query.isEmpty {
+                Text("Type a username")
+                    .font(.footnote)
+                    .foregroundStyle(.white.opacity(0.72))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+            } else if isSearchingMentions, mentionResults.isEmpty {
+                HStack(spacing: 10) {
+                    ProgressView()
+                        .tint(.white)
+                    Text("Searching")
+                        .font(.footnote)
+                        .foregroundStyle(.white.opacity(0.72))
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+            } else if mentionResults.isEmpty {
+                Text("No matching Instagram users")
+                    .font(.footnote)
+                    .foregroundStyle(.white.opacity(0.72))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(spacing: 10) {
+                        ForEach(mentionResults.prefix(8), id: \.self) { profile in
+                            Button {
+                                selectMention(profile)
+                            } label: {
+                                MentionSuggestionRow(profile: profile)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 10)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .background(.black.opacity(0.78), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(.white.opacity(0.14), lineWidth: 1)
+        }
+    }
+
+    private func mentionPlacements() -> [InstagramStoryMentionPlacement] {
+        captions.flatMap { caption in
+            caption.mentions.compactMap { mention in
+                guard caption.text.localizedCaseInsensitiveContains("@\(mention.username)") else { return nil }
+                let x = Double((canvasSize.width / 2 + caption.offset.width) / max(canvasSize.width, 1))
+                let y = Double((canvasSize.height / 2 + caption.offset.height) / max(canvasSize.height, 1))
+                let width = min(max(Double(caption.text.count) * 0.028 * Double(caption.scale), 0.18), 0.82)
+                let height = min(max(0.08 * Double(caption.scale), 0.06), 0.18)
+                return InstagramStoryMentionPlacement(
+                    userId: mention.userId,
+                    username: mention.username,
+                    x: min(max(x, 0), 1),
+                    y: min(max(y, 0), 1),
+                    width: width,
+                    height: height,
+                )
+            }
+        }
     }
 
     private func showTemporarySaveSuccess() {
@@ -464,6 +658,11 @@ struct StoryComposerView: View {
 
 #if os(iOS)
     private extension StoryComposerView {
+        func updateKeyboardHeight(from notification: Notification) {
+            guard let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
+            keyboardHeight = max(0, UIScreen.main.bounds.height - frame.minY)
+        }
+
         func renderedStoryImage() -> UIImage? {
             guard hasComposerElements else { return nil }
             let image = selectedImageData.flatMap(UIImage.init(data:))
@@ -570,6 +769,72 @@ private struct StoryCaption: Identifiable, Equatable {
     var textBackground = StoryTextBackground.translucentBlack
     var fontStyle = StoryTextFont.bold
     var textColor = StoryTextColor.white
+    var mentions: [StoryCaptionMention] = []
+    var selectAllOnFocus = true
+    var cursorOffset: Int?
+}
+
+private struct StoryCaptionMention: Equatable {
+    let userId: String
+    let username: String
+}
+
+private struct MentionQuery: Equatable {
+    let captionID: UUID
+    let text: String
+    let startOffset: Int
+    let endOffset: Int
+}
+
+private struct MentionSuggestionRow: View {
+    let profile: NetworkProfile
+
+    var body: some View {
+        VStack(spacing: 6) {
+            avatar
+                .frame(width: 48, height: 48)
+
+            VStack(spacing: 1) {
+                Text("@\(profile.username ?? profile.id)")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                if let displayName = profile.displayName, !displayName.isEmpty {
+                    Text(displayName)
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.68))
+                        .lineLimit(1)
+                }
+            }
+        }
+        .frame(width: 92)
+        .padding(.vertical, 8)
+        .contentShape(Rectangle())
+    }
+
+    @ViewBuilder
+    private var avatar: some View {
+        if let avatarURL = profile.avatarURL {
+            CachedAsyncImage(url: avatarURL) {
+                avatarFallback
+            } failure: {
+                avatarFallback
+            }
+            .clipShape(Circle())
+        } else {
+            avatarFallback
+        }
+    }
+
+    private var avatarFallback: some View {
+        ZStack {
+            Circle()
+                .fill(.white.opacity(0.16))
+            Image(systemName: "person.fill")
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.7))
+        }
+    }
 }
 
 private enum StoryTextBackground: CaseIterable, Equatable {
@@ -826,9 +1091,12 @@ private struct BackgroundToolbarIcon: View {
         @Binding var textBackground: StoryTextBackground
         @Binding var fontStyle: StoryTextFont
         @Binding var textColor: StoryTextColor
+        @Binding var selectAllOnFocus: Bool
         let maxTextWidth: CGFloat
         let onDragEnded: (UUID, Bool) -> Void
         let onTrashVisibilityChange: (Bool) -> Void
+        let onTextChange: (UUID, String) -> Void
+        let onSelectionChange: (UUID, Int) -> Void
 
         func makeUIView(context: Context) -> DraggableTextCanvasView {
             let view = DraggableTextCanvasView()
@@ -860,7 +1128,7 @@ private struct BackgroundToolbarIcon: View {
             return view
         }
 
-        func updateUIView(_ view: DraggableTextCanvasView, context _: Context) {
+        func updateUIView(_ view: DraggableTextCanvasView, context: Context) {
             view.maxTextWidth = maxTextWidth
             if !view.isInteracting {
                 view.committedOffset = offset
@@ -900,14 +1168,24 @@ private struct BackgroundToolbarIcon: View {
             view.onTrashVisibilityChange = { visible in
                 onTrashVisibilityChange(visible)
             }
+            context.coordinator.onTextChange = { newText in
+                onTextChange(id, newText)
+            }
+            context.coordinator.onSelectionChange = { cursorOffset in
+                onSelectionChange(id, cursorOffset)
+            }
 
             let displayText = text.isEmpty ? "Text" : text
-            if view.textView.text != displayText, !view.textView.isFirstResponder {
+            if view.textView.text != displayText {
                 view.textView.text = displayText
             }
 
             if isFocused, !view.textView.isFirstResponder {
                 view.textView.becomeFirstResponder()
+                if selectAllOnFocus {
+                    view.textView.selectAll(nil)
+                    selectAllOnFocus = false
+                }
             } else if !isFocused, view.textView.isFirstResponder {
                 view.textView.resignFirstResponder()
             }
@@ -918,20 +1196,33 @@ private struct BackgroundToolbarIcon: View {
         }
 
         func makeCoordinator() -> Coordinator {
-            Coordinator(text: $text, isFocused: $isFocused)
+            Coordinator(text: $text, isFocused: $isFocused, onTextChange: { newText in
+                onTextChange(id, newText)
+            }, onSelectionChange: { cursorOffset in
+                onSelectionChange(id, cursorOffset)
+            })
         }
 
         final class Coordinator: NSObject, UITextViewDelegate {
             @Binding var text: String
             @Binding var isFocused: Bool
+            var onTextChange: (String) -> Void
+            var onSelectionChange: (Int) -> Void
 
-            init(text: Binding<String>, isFocused: Binding<Bool>) {
+            init(text: Binding<String>, isFocused: Binding<Bool>, onTextChange: @escaping (String) -> Void, onSelectionChange: @escaping (Int) -> Void) {
                 _text = text
                 _isFocused = isFocused
+                self.onTextChange = onTextChange
+                self.onSelectionChange = onSelectionChange
             }
 
             func textViewDidChange(_ textView: UITextView) {
                 text = textView.text
+                onTextChange(textView.text)
+            }
+
+            func textViewDidChangeSelection(_ textView: UITextView) {
+                onSelectionChange(textView.selectedRange.location)
             }
 
             func textViewDidBeginEditing(_: UITextView) {

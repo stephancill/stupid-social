@@ -178,6 +178,7 @@ struct InstagramStoryMedia: Decodable {
     let storyFeedMedia: [InstagramStoryFeedMedia]?
     let storyMusicStickers: [InstagramStoryMusicSticker]?
     let reelMentions: [InstagramStoryMentionSticker]?
+    let storyBloksStickers: [InstagramStoryBloksSticker]?
     let storyLinkStickers: [InstagramStoryLinkSticker]?
     let hasLiked: Bool?
 
@@ -192,6 +193,7 @@ struct InstagramStoryMedia: Decodable {
         case storyFeedMedia = "story_feed_media"
         case storyMusicStickers = "story_music_stickers"
         case reelMentions = "reel_mentions"
+        case storyBloksStickers = "story_bloks_stickers"
         case storyLinkStickers = "story_link_stickers"
         case hasLiked = "has_liked"
     }
@@ -334,6 +336,49 @@ struct InstagramStoryMentionSticker: Decodable {
 struct InstagramStoryMentionUser: Decodable {
     let pk: UInt64?
     let username: String?
+}
+
+struct InstagramStoryBloksSticker: Decodable {
+    let bloksSticker: InstagramStoryBloksStickerPayload?
+
+    enum CodingKeys: String, CodingKey {
+        case bloksSticker = "bloks_sticker"
+    }
+
+    var mention: InstagramStoryMention? {
+        bloksSticker?.stickerData?.igMention?.mention
+    }
+}
+
+struct InstagramStoryBloksStickerPayload: Decodable {
+    let stickerData: InstagramStoryBloksStickerData?
+
+    enum CodingKeys: String, CodingKey {
+        case stickerData = "sticker_data"
+    }
+}
+
+struct InstagramStoryBloksStickerData: Decodable {
+    let igMention: InstagramStoryBloksMention?
+
+    enum CodingKeys: String, CodingKey {
+        case igMention = "ig_mention"
+    }
+}
+
+struct InstagramStoryBloksMention: Decodable {
+    let username: String?
+
+    var mention: InstagramStoryMention? {
+        guard let username = username?.trimmingCharacters(in: .whitespacesAndNewlines), !username.isEmpty else {
+            return nil
+        }
+        return InstagramStoryMention(
+            username: username,
+            userId: nil,
+            url: URL(string: "https://www.instagram.com/\(username)/"),
+        )
+    }
 }
 
 struct InstagramStoryLinkSticker: Decodable {
