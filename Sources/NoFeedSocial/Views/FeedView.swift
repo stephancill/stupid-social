@@ -35,6 +35,7 @@ struct FeedView: View {
                                 storyViewerSelection = StoryViewerSelection(
                                     items: [.instagram(ownInstagramStoryReel)],
                                     startIndex: 0,
+                                    startSlideIndex: 0,
                                 )
                             } else {
                                 showingStoryComposer = true
@@ -45,6 +46,7 @@ struct FeedView: View {
                             storyViewerSelection = StoryViewerSelection(
                                 items: items,
                                 startIndex: storyViewModel.storyViewerStartIndex(for: selectedItem, in: items),
+                                startSlideIndex: storyViewModel.storyViewerStartSlideIndex(for: selectedItem, in: items),
                             )
                         },
                         onItemAppear: { item in
@@ -118,6 +120,7 @@ struct FeedView: View {
             UnifiedStoryViewer(
                 items: selection.items,
                 startIndex: selection.startIndex,
+                startSlideIndex: selection.startSlideIndex,
                 spotifyClient: spotifyClient,
                 feedService: viewModel.service,
                 ownInstagramAccountId: storyViewModel.ownInstagramStoryActor?.id,
@@ -147,6 +150,7 @@ struct FeedView: View {
                     UnifiedStoryViewer(
                         items: selection.items,
                         startIndex: selection.startIndex,
+                        startSlideIndex: selection.startSlideIndex,
                         spotifyClient: spotifyClient,
                         feedService: viewModel.service,
                         ownInstagramAccountId: storyViewModel.ownInstagramStoryActor?.id,
@@ -219,6 +223,7 @@ private struct StoryViewerSelection: Identifiable {
     let id = UUID()
     let items: [StoryBarItem]
     let startIndex: Int
+    let startSlideIndex: Int
 }
 
 private struct StoriesBarSkeleton: View {

@@ -9,6 +9,7 @@ import SwiftUI
 struct UnifiedStoryViewer: View {
     let items: [StoryBarItem]
     let startIndex: Int
+    let startSlideIndex: Int
     let spotifyClient: SpotifyClient
     let feedService: FeedService
     let ownInstagramAccountId: String?
@@ -67,6 +68,7 @@ struct UnifiedStoryViewer: View {
     init(
         items: [StoryBarItem],
         startIndex: Int,
+        startSlideIndex: Int,
         spotifyClient: SpotifyClient,
         feedService: FeedService,
         ownInstagramAccountId: String?,
@@ -77,6 +79,7 @@ struct UnifiedStoryViewer: View {
     ) {
         self.items = items
         self.startIndex = startIndex
+        self.startSlideIndex = startSlideIndex
         self.spotifyClient = spotifyClient
         self.feedService = feedService
         self.ownInstagramAccountId = ownInstagramAccountId
@@ -86,6 +89,7 @@ struct UnifiedStoryViewer: View {
         self.onInstagramStoryLike = onInstagramStoryLike
         _viewerItems = State(initialValue: items)
         _currentItemIndex = State(initialValue: startIndex)
+        _currentSlideIndex = State(initialValue: startSlideIndex)
         _seenItems = State(initialValue: [])
         _likedInstagramSlideIds = State(initialValue: Set(items.flatMap { item in
             if case let .instagram(reel) = item {
@@ -625,6 +629,7 @@ struct UnifiedStoryViewer: View {
                 user: reel.user,
                 slides: slides,
                 isSeen: reel.isSeen,
+                seenTimestamp: reel.seenTimestamp,
                 hasCloseFriendsMedia: reel.hasCloseFriendsMedia,
             ),
         )
@@ -675,6 +680,7 @@ struct UnifiedStoryViewer: View {
                     user: reel.user,
                     slides: remainingSlides,
                     isSeen: reel.isSeen,
+                    seenTimestamp: reel.seenTimestamp,
                     hasCloseFriendsMedia: reel.hasCloseFriendsMedia,
                 ),
             )

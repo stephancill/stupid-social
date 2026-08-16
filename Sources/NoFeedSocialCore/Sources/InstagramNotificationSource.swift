@@ -227,6 +227,7 @@ public final class InstagramNotificationSource: NotificationFetching, AccountVal
                     user: actor,
                     slides: slides,
                     isSeen: isSeen,
+                    seenTimestamp: Double(item.seen),
                     hasCloseFriendsMedia: item.hasBestiesMedia,
                 ))
             }

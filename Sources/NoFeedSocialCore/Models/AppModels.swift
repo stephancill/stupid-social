@@ -384,13 +384,15 @@ public struct InstagramStoryReel: Identifiable, Hashable, Sendable {
     public let user: NotificationActor
     public let slides: [InstagramStorySlide]
     public let isSeen: Bool
+    public let seenTimestamp: Double
     public let hasCloseFriendsMedia: Bool
 
-    public init(id: String, user: NotificationActor, slides: [InstagramStorySlide], isSeen: Bool = false, hasCloseFriendsMedia: Bool = false) {
+    public init(id: String, user: NotificationActor, slides: [InstagramStorySlide], isSeen: Bool = false, seenTimestamp: Double = 0, hasCloseFriendsMedia: Bool = false) {
         self.id = id
         self.user = user
         self.slides = slides
         self.isSeen = isSeen
+        self.seenTimestamp = seenTimestamp
         self.hasCloseFriendsMedia = hasCloseFriendsMedia
     }
 }

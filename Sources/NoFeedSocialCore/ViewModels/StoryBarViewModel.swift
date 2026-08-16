@@ -199,7 +199,7 @@ public final class StoryBarViewModel: ObservableObject {
                 await instagramSource?.markReelAsSeen(slides: reel.slides)
             }
 
-            ownInstagramStoryReel = InstagramStoryReel(id: reel.id, user: reel.user, slides: reel.slides, isSeen: true, hasCloseFriendsMedia: reel.hasCloseFriendsMedia)
+            ownInstagramStoryReel = InstagramStoryReel(id: reel.id, user: reel.user, slides: reel.slides, isSeen: true, seenTimestamp: reel.slides.map(\.takenAt).max() ?? reel.seenTimestamp, hasCloseFriendsMedia: reel.hasCloseFriendsMedia)
             return
         }
 
@@ -215,7 +215,7 @@ public final class StoryBarViewModel: ObservableObject {
             await instagramSource?.markReelAsSeen(slides: reel.slides)
         }
 
-        let updated = InstagramStoryReel(id: reel.id, user: reel.user, slides: reel.slides, isSeen: true, hasCloseFriendsMedia: reel.hasCloseFriendsMedia)
+        let updated = InstagramStoryReel(id: reel.id, user: reel.user, slides: reel.slides, isSeen: true, seenTimestamp: reel.slides.map(\.takenAt).max() ?? reel.seenTimestamp, hasCloseFriendsMedia: reel.hasCloseFriendsMedia)
         if let orderedIndex = orderedInstagramStoryReels.firstIndex(where: { $0.id == reel.id }) {
             orderedInstagramStoryReels[orderedIndex] = updated
         }
@@ -224,13 +224,16 @@ public final class StoryBarViewModel: ObservableObject {
 
     public func storyViewerItems(for selectedItem: StoryBarItem, in visibleItems: [StoryBarItem]) -> [StoryBarItem] {
         let items = visibleItems.filter { $0.isSeen == selectedItem.isSeen }
-        guard !selectedItem.isSeen else { return items }
-
         return items.map(storyItemWithOldestFirstSlides)
     }
 
     public func storyViewerStartIndex(for selectedItem: StoryBarItem, in items: [StoryBarItem]) -> Int {
         items.firstIndex(where: { $0.id == selectedItem.id }) ?? 0
+    }
+
+    public func storyViewerStartSlideIndex(for selectedItem: StoryBarItem, in items: [StoryBarItem]) -> Int {
+        guard case let .instagram(reel) = items.first(where: { $0.id == selectedItem.id }) else { return 0 }
+        return reel.slides.firstIndex(where: { $0.takenAt > reel.seenTimestamp }) ?? 0
     }
 
     var instagramStoryReels: [InstagramStoryReel] {
@@ -311,7 +314,7 @@ public final class StoryBarViewModel: ObservableObject {
             }
             return lhs.takenAt < rhs.takenAt
         }
-        return .instagram(InstagramStoryReel(id: reel.id, user: reel.user, slides: slides, isSeen: reel.isSeen, hasCloseFriendsMedia: reel.hasCloseFriendsMedia))
+        return .instagram(InstagramStoryReel(id: reel.id, user: reel.user, slides: slides, isSeen: reel.isSeen, seenTimestamp: reel.seenTimestamp, hasCloseFriendsMedia: reel.hasCloseFriendsMedia))
     }
 
     private func mergedStoryBarItems(instagramReels: [InstagramStoryReel], spotifyItems: [SpotifyActivityItem]) -> [StoryBarItem] {
@@ -348,6 +351,7 @@ public final class StoryBarViewModel: ObservableObject {
             user: actor,
             slides: [optimisticSlide] + existingSlides,
             isSeen: false,
+            seenTimestamp: ownInstagramStoryReel?.seenTimestamp ?? 0,
             hasCloseFriendsMedia: ownInstagramStoryReel?.hasCloseFriendsMedia ?? false,
         )
         storyBarContentLoaded = true
@@ -369,6 +373,7 @@ public final class StoryBarViewModel: ObservableObject {
                 user: fetchedReel.user,
                 slides: [optimisticSlide] + fetchedReel.slides,
                 isSeen: false,
+                seenTimestamp: fetchedReel.seenTimestamp,
                 hasCloseFriendsMedia: fetchedReel.hasCloseFriendsMedia,
             )
         }
@@ -388,6 +393,7 @@ public final class StoryBarViewModel: ObservableObject {
                 user: reel.user,
                 slides: slides,
                 isSeen: reel.isSeen,
+                seenTimestamp: reel.seenTimestamp,
                 hasCloseFriendsMedia: reel.hasCloseFriendsMedia,
             )
     }
@@ -397,7 +403,7 @@ public final class StoryBarViewModel: ObservableObject {
             let slides = reel.slides.map { slide in
                 slide.id == mediaId ? transform(slide) : slide
             }
-            return InstagramStoryReel(id: reel.id, user: reel.user, slides: slides, isSeen: reel.isSeen, hasCloseFriendsMedia: reel.hasCloseFriendsMedia)
+            return InstagramStoryReel(id: reel.id, user: reel.user, slides: slides, isSeen: reel.isSeen, seenTimestamp: reel.seenTimestamp, hasCloseFriendsMedia: reel.hasCloseFriendsMedia)
         }
 
         if let ownReel = ownInstagramStoryReel, ownReel.slides.contains(where: { $0.id == mediaId }) {
