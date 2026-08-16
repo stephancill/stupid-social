@@ -77,29 +77,13 @@ struct FeedView: View {
                     .listRowSeparator(.hidden)
                     .listRowBackground(Color.clear)
                 } else {
-                    if !newItems.isEmpty {
-                        Section {
-                            ForEach(Array(newItems.enumerated()), id: \.element.id) { index, displayItem in
-                                NotificationLink(displayItem: displayItem, feedService: viewModel.service)
-                                    .listRowSeparator(index == 0 ? .hidden : .visible, edges: .top)
-                            }
+                    Section {
+                        ForEach(Array(notificationItems.enumerated()), id: \.element.id) { index, displayItem in
+                            NotificationLink(displayItem: displayItem, feedService: viewModel.service)
+                                .listRowSeparator(index == 0 ? .hidden : .visible, edges: .top)
                         }
-                        .listSectionSeparator(.hidden)
                     }
-
-                    if !newItems.isEmpty, !knownItems.isEmpty {
-                        NewSeparatorRow()
-                    }
-
-                    if !knownItems.isEmpty {
-                        Section {
-                            ForEach(Array(knownItems.enumerated()), id: \.element.id) { index, displayItem in
-                                NotificationLink(displayItem: displayItem, feedService: viewModel.service)
-                                    .listRowSeparator(index == 0 ? .hidden : .visible, edges: .top)
-                            }
-                        }
-                        .listSectionSeparator(.hidden)
-                    }
+                    .listSectionSeparator(.hidden)
                 }
             }
             #if os(iOS)
@@ -113,27 +97,10 @@ struct FeedView: View {
             }
             .navigationTitle("Social")
             .toolbar {
-                if viewModel.isForegroundRefreshing || viewModel.pendingNewCount > 0 {
+                if viewModel.isForegroundRefreshing {
                     ToolbarItem(placement: .navigation) {
-                        HStack(spacing: 8) {
-                            if viewModel.isForegroundRefreshing {
-                                ProgressView()
-                                    .controlSize(.small)
-                            }
-                            if viewModel.pendingNewCount > 0 {
-                                Button {
-                                    viewModel.revealPendingNotifications()
-                                } label: {
-                                    HStack(spacing: 5) {
-                                        Circle()
-                                            .fill(Color.red)
-                                            .frame(width: 7, height: 7)
-
-                                        Text("\(viewModel.pendingNewCount) New")
-                                    }
-                                }
-                            }
-                        }
+                        ProgressView()
+                            .controlSize(.small)
                     }
                 }
             }
@@ -217,14 +184,6 @@ struct FeedView: View {
 
     private var showsStoryBarSkeleton: Bool {
         storyViewModel.storyBarLoading && !storyViewModel.storyBarContentLoaded
-    }
-
-    private var newItems: [DisplayNotificationItem] {
-        notificationItems.filter(\.isNew)
-    }
-
-    private var knownItems: [DisplayNotificationItem] {
-        notificationItems.filter { !$0.isNew }
     }
 
     private var errorBinding: Binding<Bool> {
@@ -880,26 +839,6 @@ private struct NotificationLink: View {
         } label: {
             NotificationRow(displayItem: displayItem)
         }
-    }
-}
-
-private struct NewSeparatorRow: View {
-    var body: some View {
-        HStack {
-            Rectangle()
-                .fill(Color.secondary.opacity(0.35))
-                .frame(height: 1)
-            Text("New")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Rectangle()
-                .fill(Color.secondary.opacity(0.35))
-                .frame(height: 1)
-        }
-        .listRowBackground(Color.clear)
-        .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
-        .listRowSeparator(.hidden)
-        .environment(\.defaultMinListRowHeight, 24)
     }
 }
 

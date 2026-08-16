@@ -14,9 +14,6 @@ public final class CachedNotification {
     public var targetData: Data?
     public var parentTargetData: Data?
     public var cachedAt: Date
-    public var isNew: Bool = false
-    public var isPending: Bool = false
-
     init(item: NotificationItem, cachedAt: Date = Date()) throws {
         id = item.id
         networkRawValue = item.network.rawValue

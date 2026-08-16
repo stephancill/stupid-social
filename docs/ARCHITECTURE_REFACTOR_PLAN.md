@@ -1,5 +1,7 @@
 # Architecture Refactor Plan
 
+> Superseded on 2026-08-16 for notification presentation state: the app no longer tracks read watermarks, pending/revealed IDs, or cache-diff new/known state. Refreshes now update the visible chronological feed immediately. The references below describe the historical refactor only.
+
 ## Purpose
 
 This plan captures the agreed architecture cleanup sequence for making the app easier to extend as the product grows beyond the original X/Farcaster notification MVP into Instagram stories/posting/DMs and Spotify activity.

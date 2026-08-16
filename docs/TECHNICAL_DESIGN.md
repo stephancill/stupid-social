@@ -25,7 +25,7 @@ Use a simple MVVM architecture.
 - SwiftUI views own presentation and platform-native UI structure.
 - View models expose observable state and user actions.
 - Network integrations live behind source-specific clients and adapters.
-- Shared feed assembly and read-state logic should stay outside views.
+- Shared feed assembly should stay outside views.
 - Prefer small, direct types over broad generic abstractions.
 
 Suggested high-level modules:
@@ -42,10 +42,10 @@ Suggested high-level modules:
 
 Use built-in SwiftUI and platform primitives wherever possible.
 
-- Feed: a single chronological `List` with network badges and a cache-diff `New` presentation boundary.
+- Feed: a single chronological `List` with network badges.
 - Settings: minimal `Form` for account setup/status.
 - Account detail: simple detail screen with avatar, name, follower count, and following count.
-- Actions: standard toolbar/menu buttons for refresh and `Mark all as read`.
+- Actions: standard pull-to-refresh behavior.
 - Avoid custom controls, bespoke styling, and non-native interaction patterns unless the plan changes.
 
 ## Data Model
@@ -67,8 +67,6 @@ struct NotificationItem: Identifiable, Hashable {
     let target: NotificationTarget?
 }
 ```
-
-Cache-diff feed presentation state should stay outside `NotificationItem`. Explicit app-unread state should be derived from read watermarks when needed, not persisted as source truth.
 
 Suggested supporting models:
 
@@ -149,44 +147,6 @@ Bluesky credential handling:
 
 Never log credentials, cookie headers, tokens, or derived auth values.
 
-## Read State
-
-Read state is explicit only.
-
-- Opening the app does not mark notifications read.
-- Opening the feed does not mark notifications read.
-- Refreshing does not mark notifications read.
-- Opening notification detail does not mark notifications read.
-- `Mark all as read` advances read state.
-
-Use `NSUbiquitousKeyValueStore` for read watermark sync.
-
-If iCloud KVS is unavailable, fall back to local-only `UserDefaults` storage for the same watermark keys.
-
-Suggested key format:
-
-```text
-readWatermark.<network>.<accountId>
-```
-
-Suggested value shape:
-
-```json
-{
-  "network": "x",
-  "accountId": "...",
-  "lastReadAt": "2026-04-27T00:00:00Z",
-  "updatedAt": "2026-04-27T00:00:00Z"
-}
-```
-
-Unread evaluation:
-
-- App-read when `notification.timestamp <= lastReadAt`.
-- App-unread when `notification.timestamp > lastReadAt`.
-
-`Mark all as read` should set the relevant watermark to the newest currently loaded notification timestamp for that account/network scope.
-
 ## Network Source Protocol
 
 Model each notification source behind a common protocol.
@@ -266,7 +226,7 @@ Known notification types:
 - `reaction`
 - `follow`
 
-Hypersnap notification reads do not mark app read state. Hypersnap seen/write endpoints are not part of the MVP because they return `501 Not Implemented`.
+Hypersnap seen/write endpoints are not part of the MVP because they return `501 Not Implemented`.
 
 ## Bluesky Integration
 
@@ -287,7 +247,7 @@ API endpoints:
 - Search profiles: `GET /xrpc/app.bsky.actor.searchActors`
 - Hydrate post details: `GET /xrpc/app.bsky.feed.getPostThread`
 
-Bluesky read state is app-local and uses the same cache/new-item behavior as other sources.
+Bluesky notifications use the same cache and immediate-refresh behavior as other sources.
 
 ## Decoding Strategy
 
@@ -311,21 +271,19 @@ Feed service responsibilities:
 - Normalize and merge source results.
 - Apply 24-hour retention cleanup.
 - Sort by timestamp descending.
-- Derive feed `New` presentation from cache identity differences: items inserted into the local cache by refresh are new; previously cached items are known.
+- Return the full recent chronological cache after refresh.
 
 Manual refresh behavior:
 
 - Fetch Farcaster notifications.
 - Fetch X full notifications.
 - Merge results into local SwiftData cache.
-- Compare incoming notification IDs against the local cache; mark only newly inserted items as new.
+- Return merged notifications immediately after updating the cache.
 
 Open/feed-load behavior:
 
 - Load cached notifications.
 - Trigger foreground activation refresh when the scene becomes active.
-- Do not advance read watermarks.
-- Do not advance read watermarks.
 
 ## Foreground Automatic Refresh
 
@@ -336,8 +294,7 @@ Design expectations:
 - Trigger an automatic refresh on `scenePhase == .active`.
 - X foreground automatic refresh performs a full notification fetch.
 - Farcaster foreground automatic refresh may fetch notifications because it does not alter server-side read state.
-- Foreground automatic refresh updates local cache/count state and marks newly inserted notification IDs as pending.
-- Pending notification items remain hidden from the visible feed until the user explicitly loads them from the feed's new-items badge/button.
+- Foreground automatic refresh updates the local cache and visible feed immediately.
 
 ## Account Status And Errors
 
@@ -376,8 +333,6 @@ Unit test targets:
 - Hypersnap response decoding.
 - X response decoding for `notifications/all.json` globalObjects + timeline entries.
 - Source-specific normalization into `NotificationItem`.
-- Read watermark evaluation.
-- `Mark all as read` watermark updates.
 - 24-hour cache retention behavior.
 - Feed merge and sort behavior.
 

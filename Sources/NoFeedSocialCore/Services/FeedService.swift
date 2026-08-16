@@ -8,11 +8,8 @@ public final class FeedService {
     private let profileFetchersByNetwork: [SocialNetwork: any ProfileFetching]
     private let targetDetailFetchersByNetwork: [SocialNetwork: any NotificationTargetDetailFetching]
     private let cacheStore: NotificationCacheStore
-    private let watermarkStore: ReadWatermarkProviding
     private let logger = Logger(subsystem: "tech.stupid.StupidSocial", category: "FeedService")
 
-    private var pendingIds = Set<String>()
-    private var revealedIds = Set<String>()
     private var targetDetailsCache: [String: NotificationTargetDetails] = [:]
 
     public init(
@@ -21,25 +18,16 @@ public final class FeedService {
         profileFetchersByNetwork: [SocialNetwork: any ProfileFetching],
         targetDetailFetchersByNetwork: [SocialNetwork: any NotificationTargetDetailFetching],
         cacheStore: NotificationCacheStore,
-        watermarkStore: ReadWatermarkProviding,
     ) {
         self.notificationSources = notificationSources
         self.accountValidators = accountValidators
         self.profileFetchersByNetwork = profileFetchersByNetwork
         self.targetDetailFetchersByNetwork = targetDetailFetchersByNetwork
         self.cacheStore = cacheStore
-        self.watermarkStore = watermarkStore
     }
 
     public func loadCachedFeed() throws -> [DisplayNotificationItem] {
-        let items = try cacheStore.loadRecent()
-        return items
-            .filter { !pendingIds.contains($0.id) }
-            .map { DisplayNotificationItem(item: $0, isNew: revealedIds.contains($0.id)) }
-    }
-
-    public func pendingNewCount() -> Int {
-        pendingIds.count
+        try cacheStore.loadRecent().map(DisplayNotificationItem.init)
     }
 
     public func manualRefresh() async throws -> [DisplayNotificationItem] {
@@ -65,23 +53,6 @@ public final class FeedService {
                 errors.append("\(source.network.displayName) refresh failed")
             }
         }
-
-        let oldItems = (try? cacheStore.loadRecent()) ?? []
-        let oldItemsById = Dictionary(uniqueKeysWithValues: oldItems.map { ($0.id, $0) })
-        let oldIds = Set(oldItemsById.keys)
-        let incomingIds = Set(incoming.map(\.id))
-        let changedGroupedIds = incoming.compactMap { item -> String? in
-            guard item.network != .x else { return nil }
-            guard let old = oldItemsById[item.id] else { return nil }
-            let oldActorIds = Set(old.actors.map(\.id))
-            let incomingActorIds = Set(item.actors.map(\.id))
-            guard !incomingActorIds.subtracting(oldActorIds).isEmpty else { return nil }
-            return item.id
-        }
-        let freshIds = incomingIds.subtracting(oldIds).union(changedGroupedIds)
-
-        pendingIds.removeAll()
-        revealedIds = freshIds
 
         if !refreshedNetworks.isEmpty {
             try cacheStore.replaceNetworks(incoming, networks: refreshedNetworks)
@@ -119,21 +90,10 @@ public final class FeedService {
         }
 
         if !refreshedNetworks.isEmpty {
-            let oldIds = Set((try? cacheStore.loadRecent())?.map(\.id) ?? [])
-            let incomingIds = Set(incoming.map(\.id))
-            let freshIds = incomingIds.subtracting(oldIds)
-            pendingIds.formUnion(freshIds)
-
             try cacheStore.replaceNetworks(incoming, networks: refreshedNetworks)
             try cacheStore.deleteExpired()
         }
         logger.info("Foreground activation refresh finished")
-    }
-
-    public func revealPendingNotifications() throws -> [DisplayNotificationItem] {
-        revealedIds = pendingIds
-        pendingIds.removeAll()
-        return try loadCachedFeed()
     }
 
     public func healthCheckAllSources() async {
@@ -196,12 +156,6 @@ public final class FeedService {
 
     public func cachedTargetDetails(for item: NotificationItem) -> NotificationTargetDetails? {
         targetDetailsCache[targetDetailsCacheKey(for: item)]
-    }
-
-    public func markAllRead(items: [DisplayNotificationItem]) -> [DisplayNotificationItem] {
-        watermarkStore.markAllRead(items: items.map(\.item), network: nil, accountId: nil)
-        revealedIds.removeAll()
-        return items.map { DisplayNotificationItem(item: $0.item, isNew: false) }
     }
 
     private func targetDetailsCacheKey(for item: NotificationItem) -> String {

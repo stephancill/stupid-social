@@ -46,7 +46,6 @@ Sources/
       CookieHeaderParser.swift
       KeychainCredentialStore.swift
       NotificationCacheStore.swift
-      ReadWatermarkStore.swift
       SpotifyActivitySeenStore.swift
     ViewModels/
       FeedViewModel.swift
@@ -90,7 +89,6 @@ Sources/
 - Store credentials in iCloud Keychain.
 - Never persist raw X cookie headers after extracting the required selected cookie values.
 - Never log credentials, cookie headers, tokens, or derived auth values.
-- Sync read watermarks with `NSUbiquitousKeyValueStore`.
 - Keep notification item cache local-only for the MVP.
 - Keep the normalized notification schema minimal unless `docs/PLAN.md` is updated.
 
@@ -103,13 +101,6 @@ Sources/
 - Use Hypersnap at `https://haatz.quilibrium.com` for Farcaster reads.
 - Resolve Farcaster usernames with `GET /v2/farcaster/user/by-username`.
 - Fetch Farcaster notifications with `GET /v2/farcaster/notifications`.
-
-## Read State
-
-- Read state is explicit only.
-- Opening the app, refreshing the feed, or opening notification detail must not mark notifications read.
-- Only explicit user actions such as `Mark all as read` can advance a read watermark.
-- Derive unread state from per-network/account timestamp watermarks.
 
 ## Build And Install
 

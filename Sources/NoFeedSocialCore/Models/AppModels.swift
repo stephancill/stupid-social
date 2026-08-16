@@ -197,15 +197,13 @@ public struct MusicAnimationMetadata: Hashable, Codable, Sendable {
 
 public struct DisplayNotificationItem: Identifiable, Hashable {
     public let item: NotificationItem
-    public let isNew: Bool
 
     public var id: String {
         item.id
     }
 
-    public init(item: NotificationItem, isNew: Bool) {
+    public init(item: NotificationItem) {
         self.item = item
-        self.isNew = isNew
     }
 }
 
@@ -555,20 +553,6 @@ public enum StoryBarItem: Identifiable, Hashable, Sendable {
         case .instagram: .instagram
         case .spotify: .spotify
         }
-    }
-}
-
-public struct ReadWatermark: Codable, Equatable, Sendable {
-    public let network: SocialNetwork
-    public let accountId: String
-    public let lastReadAt: Date
-    public let updatedAt: Date
-
-    public init(network: SocialNetwork, accountId: String, lastReadAt: Date, updatedAt: Date) {
-        self.network = network
-        self.accountId = accountId
-        self.lastReadAt = lastReadAt
-        self.updatedAt = updatedAt
     }
 }
 

@@ -3,22 +3,8 @@ import SwiftData
 import XCTest
 
 final class FeedServiceTests: XCTestCase {
-    func testDisplayItemsSortDescendingAndExposeNewState() {
-        let older = item(id: "older", timestamp: Date(timeIntervalSince1970: 100))
-        let newer = item(id: "newer", timestamp: Date(timeIntervalSince1970: 200))
-        let newIds: Set<String> = [newer.id]
-
-        let displayed = [older, newer]
-            .sorted { $0.timestamp > $1.timestamp }
-            .map { DisplayNotificationItem(item: $0, isNew: newIds.contains($0.id)) }
-
-        XCTAssertEqual(displayed.map(\.id), ["newer", "older"])
-        XCTAssertTrue(displayed[0].isNew)
-        XCTAssertFalse(displayed[1].isNew)
-    }
-
     @MainActor
-    func testManualRefreshMarksOnlyFreshItemsNew() async throws {
+    func testManualRefreshShowsMergedItemsChronologically() async throws {
         let container = try ModelContainer(
             for: CachedNotification.self,
             configurations: ModelConfiguration(isStoredInMemoryOnly: true),
@@ -37,18 +23,15 @@ final class FeedServiceTests: XCTestCase {
             profileFetchersByNetwork: [:],
             targetDetailFetchersByNetwork: [:],
             cacheStore: cacheStore,
-            watermarkStore: InMemoryReadWatermarkStoreForFeed(),
         )
 
         let displayed = try await service.manualRefresh()
 
         XCTAssertEqual(displayed.map(\.id), ["known", "new"])
-        XCTAssertFalse(displayed[0].isNew)
-        XCTAssertTrue(displayed[1].isNew)
     }
 
     @MainActor
-    func testForegroundActivationRefreshKeepsNewItemsPendingUntilRevealed() async throws {
+    func testForegroundActivationRefreshShowsNewItemsImmediately() async throws {
         let container = try ModelContainer(
             for: CachedNotification.self,
             configurations: ModelConfiguration(isStoredInMemoryOnly: true),
@@ -63,61 +46,12 @@ final class FeedServiceTests: XCTestCase {
             profileFetchersByNetwork: [:],
             targetDetailFetchersByNetwork: [:],
             cacheStore: cacheStore,
-            watermarkStore: InMemoryReadWatermarkStoreForFeed(),
         )
 
         try await service.foregroundActivationRefresh()
 
-        XCTAssertEqual(service.pendingNewCount(), 1)
-        XCTAssertTrue(try service.loadCachedFeed().isEmpty)
-
-        let displayed = try service.revealPendingNotifications()
-
-        XCTAssertEqual(service.pendingNewCount(), 0)
+        let displayed = try service.loadCachedFeed()
         XCTAssertEqual(displayed.map(\.id), ["background-new"])
-        XCTAssertTrue(displayed[0].isNew)
-    }
-
-    @MainActor
-    func testManualRefreshClearsPendingNewCount() async throws {
-        let container = try ModelContainer(
-            for: CachedNotification.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true),
-        )
-        let cacheStore = NotificationCacheStore(context: container.mainContext)
-        let backgroundSource = StubNotificationFetcher(items: [
-            item(id: "background-new", timestamp: Date(timeIntervalSince1970: 100)),
-        ])
-        let backgroundService = FeedService(
-            notificationSources: [backgroundSource],
-            accountValidators: [],
-            profileFetchersByNetwork: [:],
-            targetDetailFetchersByNetwork: [:],
-            cacheStore: cacheStore,
-            watermarkStore: InMemoryReadWatermarkStoreForFeed(),
-        )
-        try await backgroundService.foregroundActivationRefresh()
-        XCTAssertEqual(backgroundService.pendingNewCount(), 1)
-
-        let manualSource = StubNotificationFetcher(items: [
-            item(id: "manual-new", timestamp: Date(timeIntervalSince1970: 200)),
-            item(id: "background-new", timestamp: Date(timeIntervalSince1970: 100)),
-        ])
-        let manualService = FeedService(
-            notificationSources: [manualSource],
-            accountValidators: [],
-            profileFetchersByNetwork: [:],
-            targetDetailFetchersByNetwork: [:],
-            cacheStore: cacheStore,
-            watermarkStore: InMemoryReadWatermarkStoreForFeed(),
-        )
-
-        let displayed = try await manualService.manualRefresh()
-
-        XCTAssertEqual(manualService.pendingNewCount(), 0)
-        XCTAssertEqual(displayed.map(\.id), ["manual-new", "background-new"])
-        XCTAssertTrue(displayed[0].isNew)
-        XCTAssertFalse(displayed[1].isNew)
     }
 
     @MainActor
@@ -136,7 +70,6 @@ final class FeedServiceTests: XCTestCase {
             profileFetchersByNetwork: [:],
             targetDetailFetchersByNetwork: [:],
             cacheStore: cacheStore,
-            watermarkStore: InMemoryReadWatermarkStoreForFeed(),
         )
 
         let displayed = try await service.manualRefresh()
@@ -157,7 +90,6 @@ final class FeedServiceTests: XCTestCase {
             profileFetchersByNetwork: [:],
             targetDetailFetchersByNetwork: [:],
             cacheStore: cacheStore,
-            watermarkStore: InMemoryReadWatermarkStoreForFeed(),
         )
 
         do {
@@ -188,7 +120,6 @@ final class FeedServiceTests: XCTestCase {
             profileFetchersByNetwork: [:],
             targetDetailFetchersByNetwork: [:],
             cacheStore: cacheStore,
-            watermarkStore: InMemoryReadWatermarkStoreForFeed(),
         )
 
         let displayed = try await service.manualRefresh()
@@ -212,7 +143,6 @@ final class FeedServiceTests: XCTestCase {
             profileFetchersByNetwork: [:],
             targetDetailFetchersByNetwork: [:],
             cacheStore: cacheStore,
-            watermarkStore: InMemoryReadWatermarkStoreForFeed(),
         )
 
         let displayed = try await service.manualRefresh()
@@ -258,28 +188,5 @@ private final class StubNotificationFetcher: NotificationFetching {
 
     func fetchNotifications(reason _: RefreshReason) async throws -> [NotificationItem] {
         items
-    }
-}
-
-private final class InMemoryReadWatermarkStoreForFeed: ReadWatermarkProviding {
-    private var watermark: ReadWatermark?
-
-    func watermark(for _: SocialNetwork, accountId _: String) -> ReadWatermark? {
-        watermark
-    }
-
-    func markAllRead(items: [NotificationItem], network _: SocialNetwork?, accountId _: String?) {
-        guard let newest = items.map(\.timestamp).max(), let first = items.first else { return }
-        watermark = ReadWatermark(
-            network: first.network,
-            accountId: first.accountId,
-            lastReadAt: newest,
-            updatedAt: Date(),
-        )
-    }
-
-    func isUnread(_ item: NotificationItem) -> Bool {
-        guard let watermark else { return true }
-        return item.timestamp > watermark.lastReadAt
     }
 }

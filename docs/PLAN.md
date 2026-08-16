@@ -12,7 +12,6 @@ Build a universal macOS and iOS app with xtool that shows a combined social noti
 - Manual account setup through a minimal settings form.
 - Credentials sync across Apple devices through iCloud Keychain.
 - Notification item cache is local-only in the MVP.
-- Read state syncs across devices through iCloud read timestamp watermarks.
 - Background polling targets roughly 15 minutes where Apple permits it.
 - Manual refresh is supported.
 - Instagram story posting is supported from the in-app story composer.
@@ -64,7 +63,7 @@ Build a universal macOS and iOS app with xtool that shows a combined social noti
 ## Credential Storage
 
 - Store credentials in iCloud Keychain so they sync across the user's Apple devices.
-- If iCloud sync is unavailable, fall back to local-only credential/read-state storage and show an actionable sync status.
+- If iCloud sync is unavailable, fall back to local-only credential storage and show an actionable sync status.
 - Do not log raw credentials, cookie headers, tokens, or derived auth values.
 - Show inline reconnect/update controls when credentials are invalid or expired.
 - Security posture for MVP is pragmatic: correct Keychain usage, no secret logging, and clear account status.
@@ -77,7 +76,6 @@ Build a universal macOS and iOS app with xtool that shows a combined social noti
 - Foreground activation and manual refresh should full-fetch X notifications so the feed stays current when the app is opened.
 - Each foreground/manual refresh should make only one X full-notifications request.
 - Opening the feed first shows cached X items, then foreground activation refresh updates the cache when credentials are available.
-- Full fetch does not advance app-local read state unless the user explicitly marks notifications as read.
 
 Reference behavior from `docs/CLI_DOCS.md`:
 
@@ -98,13 +96,13 @@ Reference behavior from `docs/CLI_DOCS.md`:
   - `follow`
 - Hypersnap returns aggregated notification entries.
 - Hypersnap seen/write endpoints are not available for this use case because `POST /v2/farcaster/notifications/seen` and `POST /v2/farcaster/notifications/mark_seen` return `501 Not Implemented`.
-- Farcaster read state is therefore entirely app-local, synced through iCloud read watermarks.
+- The app does not track separate Farcaster read state.
 
 ### Bluesky
 
 - Fetch notifications with `GET /xrpc/app.bsky.notification.listNotifications` using DPoP-bound OAuth access tokens.
 - Supported notification reasons include mentions, replies, likes, reposts, quotes, and follows.
-- Bluesky read state remains app-local for this app and follows the existing cache/new-item behavior.
+- The app does not track separate Bluesky read state.
 
 ## Combined Feed
 
@@ -118,63 +116,12 @@ Reference behavior from `docs/CLI_DOCS.md`:
 - Tapping a Spotify listening story opens the Listening detail screen.
 - Each item shows a network badge.
 - The feed shows newly discovered notification items plus known recent cached items.
+- Successful refreshes insert fetched notifications directly into the visible chronological feed.
 - Recent notification cache retention is 24 hours.
 - Notification items are normalized into one app model for display.
 - The normalized notification schema should be a minimal display model.
 - Notification item cache remains local per device in the MVP.
 - No cross-network identity merging in the MVP.
-
-## Read State
-
-Read state is explicit only.
-
-- Opening the app does not mark notifications as read.
-- Refreshing the feed compares incoming notification IDs against the local cache and marks only newly discovered cached items as new locally.
-- Opening a notification detail does not mark notifications as read.
-- Manual refresh and explicit user actions update app-local read state.
-
-MVP read action:
-
-- Manual refresh marks newly discovered notification IDs as new after a successful refresh; previously cached items are treated as known.
-
-Future explicit read actions:
-
-- Per-notification `Mark read`.
-- Per-network or per-account `Mark all as read`.
-
-## iCloud Read Watermarks
-
-The app syncs read state across devices using per-account read timestamp watermarks stored in iCloud when available. If iCloud is unavailable, the app falls back to local-only read watermarks.
-
-Suggested watermark fields:
-
-- `network`: supported social network, such as `x`, `farcaster`, or `bluesky`
-- `accountId`: stable network account identifier, such as X user id/handle or Farcaster FID
-- `lastReadAt`: timestamp watermark
-- `updatedAt`: timestamp for conflict resolution and diagnostics
-
-iCloud sync mechanism:
-
-- Use `NSUbiquitousKeyValueStore` for read watermark sync.
-- Keep watermark records small and keyed by network/account.
-- Fall back to local `UserDefaults` watermark storage if iCloud KVS is unavailable.
-
-Read evaluation:
-
-- A notification is app-read when `notification.timestamp <= lastReadAt`.
-- A notification is app-unread when `notification.timestamp > lastReadAt`.
-
-`Mark all as read` behavior:
-
-- Determine the newest currently loaded notification timestamp for the relevant account/network scope.
-- Set that account/network watermark to that timestamp.
-- Sync the updated watermark through iCloud.
-
-Notes:
-
-- The watermark syncs even though notification items do not sync in the MVP.
-- Farcaster uses this instead of write endpoints.
-- X can also use this for app-local cross-device read consistency, independently of X's server-side read state.
 
 ## Profile Details
 
@@ -194,8 +141,8 @@ The MVP should not attempt to merge or link X and Farcaster actors.
 - Manual refresh is always available.
 - The app refreshes automatically when entering the foreground.
 - X foreground automatic refresh should full-fetch X notifications, accepting the server-side read side effect in exchange for current feed content.
-- Farcaster foreground automatic refresh may fetch notifications because Hypersnap read state is app-local and the API does not mark items read.
-- Foreground automatic refresh should cache newly discovered items as pending and surface them through a user-controlled new-items badge before inserting them into the visible feed.
+- Farcaster foreground automatic refresh may fetch notifications because Hypersnap does not alter server-side notification state.
+- Foreground automatic refresh should update the visible feed immediately after caching fetched items.
 
 ## Future Posting Scope
 
@@ -227,10 +174,9 @@ Use a minimal display model first. Suggested fields:
 - `accountId`: stable account identifier for the viewer account
 - `sourceId`: source notification or event id when available
 - `type`: normalized notification type
-- `timestamp`: source event timestamp used for sorting and read watermark evaluation
+- `timestamp`: source event timestamp used for sorting
 - `text`: display text or summary
 - `actors`: people/accounts responsible for the notification
 - `target`: referenced post, cast, profile, or other object needed for display/navigation
-- Presentation state such as cache-diff `new` is modeled outside the source notification item. App-unread state is derived from the synced read watermark only when explicit read-state UI needs it, not persisted as source truth.
 
 Do not persist raw source payloads for the MVP unless needed during development diagnostics, and never log or store secrets with notification data.

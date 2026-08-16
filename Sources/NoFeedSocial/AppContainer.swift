@@ -13,7 +13,6 @@ final class AppContainer {
     private let keychainStore: KeychainCredentialStore
     private let farcasterClient: FarcasterClient
     private let cacheStore: NotificationCacheStore
-    private let watermarkStore: ICloudReadWatermarkStore
     private let instagramSource: InstagramNotificationSource
     private let spotifyActivitySource: SpotifyActivitySource
     private let notificationSources: [any NotificationFetching]
@@ -27,7 +26,6 @@ final class AppContainer {
         keychainStore = KeychainCredentialStore()
         farcasterClient = FarcasterClient()
         cacheStore = NotificationCacheStore(context: modelContext)
-        watermarkStore = ICloudReadWatermarkStore()
 
         instagramSource = InstagramNotificationSource(
             client: InstagramClient(credentialStore: keychainStore),
@@ -93,7 +91,6 @@ final class AppContainer {
             profileFetchersByNetwork: profileFetchersByNetwork,
             targetDetailFetchersByNetwork: targetDetailFetchersByNetwork,
             cacheStore: cacheStore,
-            watermarkStore: watermarkStore,
         )
 
         feedViewModel = FeedViewModel(feedService: feedService)

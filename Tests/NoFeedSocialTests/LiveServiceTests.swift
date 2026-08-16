@@ -87,7 +87,6 @@ final class LiveServiceTests: XCTestCase {
             profileFetchersByNetwork: [:],
             targetDetailFetchersByNetwork: [:],
             cacheStore: cacheStore,
-            watermarkStore: InMemoryReadWatermarkStore(),
         )
 
         // Refresh 1
@@ -95,11 +94,8 @@ final class LiveServiceTests: XCTestCase {
         XCTAssertFalse(first.isEmpty, "First refresh returned no items")
 
         let firstIds = Set(first.map(\.item.id))
-        let firstById = Dictionary(uniqueKeysWithValues: first.map { ($0.item.id, $0.item) })
         XCTAssertEqual(firstIds.count, first.count, "First refresh contains duplicate IDs")
-
-        let firstNewCount = first.filter(\.isNew).count
-        Swift.print("Refresh 1: \(first.count) total, \(firstNewCount) new, \(first.count - firstNewCount) known")
+        Swift.print("Refresh 1: \(first.count) total")
 
         // Refresh 2
         let second = try await service.manualRefresh()
@@ -108,27 +104,13 @@ final class LiveServiceTests: XCTestCase {
         let secondIds = Set(second.map(\.item.id))
         XCTAssertEqual(secondIds.count, second.count, "Second refresh contains duplicate IDs")
 
-        let secondNewIds = Set(second.filter(\.isNew).map(\.item.id))
-        let secondKnownIds = Set(second.filter { !$0.isNew }.map(\.item.id))
-
-        let freshIds = secondNewIds.subtracting(firstIds)
-        let staleNewIds = Set(second.filter { displayItem in
-            guard displayItem.isNew, let oldItem = firstById[displayItem.item.id] else { return false }
-            let oldActorIds = Set(oldItem.actors.map(\.id))
-            let currentActorIds = Set(displayItem.item.actors.map(\.id))
-            return currentActorIds.subtracting(oldActorIds).isEmpty
-        }.map(\.item.id))
-        XCTAssertTrue(staleNewIds.isEmpty, "Items from first refresh should not be new in second: \(staleNewIds)")
-
         let missingIds = firstIds.subtracting(secondIds)
 
         let bySource = Dictionary(grouping: second, by: { $0.item.network })
         for (network, items) in bySource.sorted(by: { $0.key.rawValue < $1.key.rawValue }) {
-            let new = items.filter(\.isNew).count
-            Swift.print("  \(network.displayName): \(items.count) total, \(new) new")
+            Swift.print("  \(network.displayName): \(items.count) total")
         }
-        Swift.print("Refresh 2: \(second.count) total, \(secondNewIds.count) new, \(secondKnownIds.count) known")
-        Swift.print("New items since refresh 1: \(freshIds.count)")
+        Swift.print("Refresh 2: \(second.count) total")
         if !missingIds.isEmpty {
             Swift.print("Missing from refresh 2: \(missingIds.count)")
         }
@@ -179,28 +161,5 @@ final class LiveServiceTests: XCTestCase {
 
     private func accountStore() -> AccountMetadataStore {
         AccountMetadataStore()
-    }
-}
-
-private final class InMemoryReadWatermarkStore: ReadWatermarkProviding {
-    private var watermark: ReadWatermark?
-
-    func watermark(for _: SocialNetwork, accountId _: String) -> ReadWatermark? {
-        watermark
-    }
-
-    func markAllRead(items: [NotificationItem], network _: SocialNetwork?, accountId _: String?) {
-        guard let newest = items.map(\.timestamp).max(), let first = items.first else { return }
-        watermark = ReadWatermark(
-            network: first.network,
-            accountId: first.accountId,
-            lastReadAt: newest,
-            updatedAt: Date(),
-        )
-    }
-
-    func isUnread(_ item: NotificationItem) -> Bool {
-        guard let watermark else { return true }
-        return item.timestamp > watermark.lastReadAt
     }
 }
