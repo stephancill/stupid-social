@@ -5,6 +5,7 @@
 - Diagnosed missing Spotify friend activity from a paired physical iPhone. The app container reported account `stephan2882` as valid and stored Spotify credentials only in Keychain, but the equivalent current WebPlayer session reproduced HTTP 401 from `GET https://spclient.wg.spotify.com/presence-view/v1/buddylist`. Refreshing the bearer token did not help while the login-captured `client-token` header was present; the same refreshed bearer token returned HTTP 200 when `client-token` was omitted. Removed the stale `client-token` header from app and probe `spclient` requests. Pathfinder requests retain it because they use a separate API path.
 - Verified the other currently used `spclient` endpoints with a refreshed bearer token and no `client-token`: user profile, following, followers, and audio analysis all returned HTTP 200 alongside buddy list. Pathfinder `profileAttributes` returned HTTP 401 with the stale captured client token and HTTP 403 without a client token, confirming that profile search/library Pathfinder calls still require a current client token and are not covered by the `spclient` header change.
 - Bumped `CFBundleVersion` from 94 to 95 for the TestFlight build containing the Spotify friend-activity fix.
+- Added `/.release` to `.gitignore` so local App Store archives, provisioning profiles, upload logs, and release manifests cannot be committed.
 
 ## 2026-07-16
 

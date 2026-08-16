@@ -9,6 +9,7 @@ DerivedData/
 .netrc
 
 /xtool
+/.release
 /third-party
 /.sourcekit-lsp
 /.xcode-derived
