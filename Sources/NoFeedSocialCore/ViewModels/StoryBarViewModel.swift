@@ -17,6 +17,7 @@ public final class StoryBarViewModel: ObservableObject {
     private var orderedInstagramStoryReels: [InstagramStoryReel] = []
     private var hasMoreInstagramStoryReels = false
     private var optimisticInstagramStorySlideID: String?
+    private var inFlightStoryBarContentFetch: Task<Void, Never>?
 
     public init(
         instagramSource: InstagramNotificationSource?,
@@ -37,6 +38,17 @@ public final class StoryBarViewModel: ObservableObject {
     }
 
     public func fetchStoryBarContent() async {
+        if let inFlightStoryBarContentFetch {
+            await inFlightStoryBarContentFetch.value
+            return
+        }
+        let task = Task { await performStoryBarContentFetch() }
+        inFlightStoryBarContentFetch = task
+        await task.value
+        inFlightStoryBarContentFetch = nil
+    }
+
+    private func performStoryBarContentFetch() async {
         storyBarLoading = true
         async let reels = instagramReels()
         async let spots = spotifyItems()
@@ -238,7 +250,9 @@ public final class StoryBarViewModel: ObservableObject {
     private func instagramReels() async -> [InstagramStoryReel]? {
         guard let instagramSource, instagramSource.storiesEnabled else { return [] }
         do {
-            return try await instagramSource.fetchStoryReels()
+            return try await RefreshTiming.measure("story-instagram-reels") {
+                try await instagramSource.fetchStoryReels()
+            }
         } catch SourceError.notConfigured {
             return []
         } catch {
@@ -249,8 +263,11 @@ public final class StoryBarViewModel: ObservableObject {
     private func spotifyItems() async -> [SpotifyActivityItem] {
         guard let spotifyActivitySource else { return [] }
         do {
+            let activity = try await RefreshTiming.measure("story-spotify-activity") {
+                try await spotifyActivitySource.fetchActivity(reason: .manual)
+            }
             var seenUserURIs = Set<String>()
-            return try await spotifyActivitySource.fetchActivity(reason: .manual)
+            return activity
                 .sorted { $0.timestamp > $1.timestamp }
                 .filter { item in
                     seenUserURIs.insert(item.userURI).inserted

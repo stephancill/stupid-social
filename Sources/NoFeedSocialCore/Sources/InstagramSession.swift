@@ -230,7 +230,14 @@ extension InstagramClient {
 
     func ensureBootstrapped(credentials: InstagramCredentials) async throws {
         if webState == nil {
-            _ = try await refreshState(credentials: credentials)
+            if let inFlightBootstrap {
+                _ = try await inFlightBootstrap.value
+            } else {
+                let task = Task { try await refreshState(credentials: credentials) }
+                inFlightBootstrap = task
+                defer { inFlightBootstrap = nil }
+                _ = try await task.value
+            }
         }
     }
 
@@ -296,6 +303,8 @@ extension InstagramClient {
         if let docID = docIds[operation] { return docID }
         try await discoverDocIds(credentials: credentials)
         if let docID = docIds[operation] { return docID }
+        try await discoverStoryPageDocIds(credentials: credentials)
+        if let docID = docIds[operation] { return docID }
         throw SourceError.serviceError("Could not discover Instagram operation.")
     }
 
@@ -313,9 +322,15 @@ extension InstagramClient {
         docIds.merge(discovered) { _, new in new }
     }
 
-    func mergeStoryPageDocIds(html: String, credentials: InstagramCredentials) async throws {
-        var discovered = parseDocIds(source: html)
-        for scriptURL in scriptURLs(html: html) {
+    func recordStoryPageDocIds(html: String, credentials _: InstagramCredentials) {
+        docIds.merge(parseDocIds(source: html)) { _, new in new }
+        storyPageScriptURLs.formUnion(scriptURLs(html: html))
+    }
+
+    func discoverStoryPageDocIds(credentials: InstagramCredentials) async throws {
+        guard !storyPageScriptURLs.isEmpty else { return }
+        var discovered: [String: String] = [:]
+        for scriptURL in storyPageScriptURLs {
             do {
                 let source = try await webTextRequest(credentials: credentials, method: "GET", url: scriptURL, headers: baseAssetHeaders(credentials: credentials))
                 discovered.merge(parseDocIds(source: source)) { _, new in new }

@@ -6,11 +6,13 @@ public final class SpotifyActivitySource: ActivityFetching, AccountValidating, P
 
     private let client: SpotifyClient
     private let metadataStore: AccountMetadataStore
+    private let audioAnalysisStore: SpotifyAudioAnalysisStore
     private var audioAnimationCache: [String: MusicAnimationMetadata] = [:]
 
-    public init(client: SpotifyClient, metadataStore: AccountMetadataStore) {
+    public init(client: SpotifyClient, metadataStore: AccountMetadataStore, audioAnalysisStore: SpotifyAudioAnalysisStore = SpotifyAudioAnalysisStore()) {
         self.client = client
         self.metadataStore = metadataStore
+        self.audioAnalysisStore = audioAnalysisStore
     }
 
     public func validateAccount() async throws -> AccountStatus {
@@ -40,17 +42,19 @@ public final class SpotifyActivitySource: ActivityFetching, AccountValidating, P
     public func fetchActivity(reason _: RefreshReason) async throws -> [SpotifyActivityItem] {
         let friends: [SpotifyFriend]
         do {
-            friends = try await client.friendActivity()
+            friends = try await RefreshTiming.measure("spotify-buddylist") {
+                try await client.friendActivity()
+            }
         } catch SourceError.notConfigured {
             return []
         }
 
+        let animations = await fetchMusicAnimations(for: friends)
         var items: [SpotifyActivityItem] = []
 
         for friend in friends {
             let timestamp = Date(timeIntervalSince1970: Double(friend.timestamp) / 1000.0)
             let trackId = trackId(from: friend.track.uri)
-            let animation = await musicAnimation(for: trackId)
 
             items.append(SpotifyActivityItem(
                 id: "spotify-friend-\(friend.user.uri)-\(friend.timestamp)",
@@ -65,11 +69,73 @@ public final class SpotifyActivitySource: ActivityFetching, AccountValidating, P
                 trackURI: friend.track.uri,
                 trackURL: URL(string: "https://open.spotify.com/track/\(trackId)"),
                 imageURL: friend.track.imageUrl.flatMap { URL(string: $0) },
-                musicAnimation: animation,
+                musicAnimation: animations[trackId] ?? nil,
             ))
         }
 
         return items
+    }
+
+    private func fetchMusicAnimations(for friends: [SpotifyFriend]) async -> [String: MusicAnimationMetadata] {
+        var trackIds: [String] = []
+        var seen: Set<String> = []
+        for friend in friends {
+            let trackId = trackId(from: friend.track.uri)
+            guard !trackId.isEmpty, seen.insert(trackId).inserted else { continue }
+            trackIds.append(trackId)
+        }
+
+        let fetchers: [(trackId: String, fetch: @MainActor () async -> MusicAnimationMetadata?)] = trackIds.map { trackId in
+            let fetch: @MainActor () async -> MusicAnimationMetadata? = {
+                if let cached = self.audioAnimationCache[trackId] { return cached }
+                if let persisted = self.audioAnalysisStore.cachedAnalysis(for: trackId) {
+                    self.audioAnimationCache[trackId] = persisted
+                    return persisted
+                }
+                let analysis = try? await RefreshTiming.measure("spotify-audio-analysis-\(trackId)") {
+                    try await self.client.audioAnalysis(trackId: trackId)
+                }
+                guard let analysis else { return nil }
+                let metadata = MusicAnimationMetadata(
+                    tempo: analysis.track.tempo,
+                    tempoConfidence: analysis.track.tempoConfidence,
+                    loudness: analysis.track.loudness,
+                    mode: analysis.track.mode,
+                )
+                self.audioAnimationCache[trackId] = metadata
+                self.audioAnalysisStore.cacheAnalysis(metadata, for: trackId)
+                return metadata
+            }
+            return (trackId, fetch)
+        }
+
+        var results: [String: MusicAnimationMetadata] = [:]
+        var iterator = fetchers.makeIterator()
+
+        await withTaskGroup(of: (String, MusicAnimationMetadata?).self) { group in
+            var inFlight = 0
+            while let fetcher = iterator.next(), inFlight < Self.spotifyConcurrencyLimit {
+                group.addTask {
+                    await (fetcher.trackId, fetcher.fetch())
+                }
+                inFlight += 1
+            }
+
+            while let result = await group.next() {
+                if let animation = result.1 {
+                    results[result.0] = animation
+                }
+                inFlight -= 1
+                if let fetcher = iterator.next() {
+                    group.addTask {
+                        await (fetcher.trackId, fetcher.fetch())
+                    }
+                    inFlight += 1
+                }
+            }
+        }
+
+        return results
     }
 
     public func fetchProfile(id: String) async throws -> NetworkProfile {
@@ -147,6 +213,8 @@ public final class SpotifyActivitySource: ActivityFetching, AccountValidating, P
         )
     }
 
+    private static let spotifyConcurrencyLimit = 4
+
     private func trackId(from uri: String) -> String {
         uri.replacingOccurrences(of: "spotify:track:", with: "")
             .replacingOccurrences(of: "spotify:album:", with: "")
@@ -154,20 +222,5 @@ public final class SpotifyActivitySource: ActivityFetching, AccountValidating, P
             .replacingOccurrences(of: "spotify:artist:", with: "")
             .replacingOccurrences(of: "spotify:user:", with: "")
             .replacingOccurrences(of: "spotify:socialsession:", with: "")
-    }
-
-    private func musicAnimation(for trackId: String) async -> MusicAnimationMetadata? {
-        guard !trackId.isEmpty else { return nil }
-        if let cached = audioAnimationCache[trackId] { return cached }
-
-        guard let analysis = try? await client.audioAnalysis(trackId: trackId) else { return nil }
-        let metadata = MusicAnimationMetadata(
-            tempo: analysis.track.tempo,
-            tempoConfidence: analysis.track.tempoConfidence,
-            loudness: analysis.track.loudness,
-            mode: analysis.track.mode,
-        )
-        audioAnimationCache[trackId] = metadata
-        return metadata
     }
 }

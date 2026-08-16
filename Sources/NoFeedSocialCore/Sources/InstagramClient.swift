@@ -45,9 +45,11 @@ public final class InstagramClient {
     static let asbdID = "359341"
     var webState: InstagramWebState?
     var docIds: [String: String] = [:]
+    var storyPageScriptURLs: Set<URL> = []
     var requestCount = 0
     let webSessionID = InstagramClient.randomBase36(length: 6)
     var wwwClaim: String?
+    var inFlightBootstrap: Task<InstagramWebState, Error>?
 
     public init(credentialStore: KeychainCredentialStore, session: URLSession = defaultSession) {
         self.credentialStore = credentialStore
@@ -111,14 +113,20 @@ public final class InstagramClient {
         }
 
         let fields = ["selected_filters": "", "max_id": "", "jazoest": jazoest(csrfToken: credentials.csrfToken)]
-        let data = try await webJSONRequest(
+        async let newsData = webJSONRequest(
             credentials: credentials,
             method: "POST",
             path: "/api/v1/news/inbox/",
             headers: ["Content-Type": "application/x-www-form-urlencoded"],
             body: formURLEncoded(fields).data(using: .utf8),
         )
-        let decoded = try JSONDecoder().decode(InstagramNewsInboxResponse.self, from: data)
+        async let directItems: [NotificationItem] = if enabledCategories.contains(.directMessages) {
+            await (try? directMessages(credentials: credentials, includeMediaShares: includeDirectMediaShares)) ?? []
+        } else {
+            []
+        }
+
+        let decoded = try await JSONDecoder().decode(InstagramNewsInboxResponse.self, from: newsData)
         let allStories = (decoded.priorityStories ?? []) + (decoded.newStories ?? []) + (decoded.oldStories ?? [])
         var items = InstagramNotificationParser.parse(
             stories: allStories,
@@ -128,13 +136,7 @@ public final class InstagramClient {
             enabledCategories: enabledCategories,
         )
 
-        if enabledCategories.contains(.directMessages) {
-            do {
-                try await items.append(contentsOf: directMessages(credentials: credentials, includeMediaShares: includeDirectMediaShares))
-            } catch {
-                // Direct has separate server-side gating; keep regular Instagram notifications available.
-            }
-        }
+        await items.append(contentsOf: directItems)
 
         return items
     }
@@ -167,7 +169,7 @@ public final class InstagramClient {
         }
         let pageURL = Self.baseURL + "/stories/\(username.urlPathEncoded)/"
         let html = try await webTextRequest(credentials: credentials, method: "GET", url: URL(string: pageURL)!, headers: basePageHeaders(credentials: credentials))
-        try await mergeStoryPageDocIds(html: html, credentials: credentials)
+        recordStoryPageDocIds(html: html, credentials: credentials)
         guard let payloadData = extractStoryPayloadData(from: html) else { return nil }
         let payload = try JSONDecoder().decode(InstagramStoryPagePayload.self, from: payloadData)
         return payload.xdtAPIReelsMedia.reelsMedia.first

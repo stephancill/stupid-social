@@ -1,5 +1,6 @@
 import Foundation
 
+@MainActor
 public final class DebugNotificationSource: NotificationFetching, AccountValidating {
     public let network: SocialNetwork = .debug
 

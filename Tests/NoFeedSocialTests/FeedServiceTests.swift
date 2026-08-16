@@ -150,6 +150,60 @@ final class FeedServiceTests: XCTestCase {
         XCTAssertEqual(displayed.map(\.id), ["cached-x"])
     }
 
+    @MainActor
+    func testManualRefreshRunsSourcesConcurrently() async throws {
+        let container = try ModelContainer(
+            for: CachedNotification.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true),
+        )
+        let cacheStore = NotificationCacheStore(context: container.mainContext)
+        let service = FeedService(
+            notificationSources: [
+                DelayedNotificationFetcher(network: .x, delay: 0.5, items: [item(id: "x", network: .x, timestamp: Date(timeIntervalSince1970: 300))]),
+                DelayedNotificationFetcher(network: .farcaster, delay: 0.1, items: [item(id: "fc", network: .farcaster, timestamp: Date(timeIntervalSince1970: 200))]),
+            ],
+            accountValidators: [],
+            profileFetchersByNetwork: [:],
+            targetDetailFetchersByNetwork: [:],
+            cacheStore: cacheStore,
+        )
+
+        let clock = ContinuousClock()
+        let elapsed = try await clock.measure {
+            _ = try await service.manualRefresh()
+        }
+
+        let seconds = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18
+        XCTAssertLessThan(seconds, 0.55, "Serial execution of a 0.1s and 0.5s source should take roughly 0.6s; concurrent should take roughly 0.5s")
+    }
+
+    @MainActor
+    func testForegroundActivationRefreshRunsSourcesConcurrently() async throws {
+        let container = try ModelContainer(
+            for: CachedNotification.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true),
+        )
+        let cacheStore = NotificationCacheStore(context: container.mainContext)
+        let service = FeedService(
+            notificationSources: [
+                DelayedNotificationFetcher(network: .x, delay: 0.5, items: [item(id: "x", network: .x, timestamp: Date(timeIntervalSince1970: 300))]),
+                DelayedNotificationFetcher(network: .farcaster, delay: 0.1, items: [item(id: "fc", network: .farcaster, timestamp: Date(timeIntervalSince1970: 200))]),
+            ],
+            accountValidators: [],
+            profileFetchersByNetwork: [:],
+            targetDetailFetchersByNetwork: [:],
+            cacheStore: cacheStore,
+        )
+
+        let clock = ContinuousClock()
+        let elapsed = try await clock.measure {
+            try await service.foregroundActivationRefresh()
+        }
+
+        let seconds = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18
+        XCTAssertLessThan(seconds, 0.55, "Foreground refresh should fetch sources concurrently")
+    }
+
     private func item(id: String, network: SocialNetwork = .farcaster, timestamp: Date) -> NotificationItem {
         NotificationItem(
             id: id,
@@ -188,5 +242,22 @@ private final class StubNotificationFetcher: NotificationFetching {
 
     func fetchNotifications(reason _: RefreshReason) async throws -> [NotificationItem] {
         items
+    }
+}
+
+private final class DelayedNotificationFetcher: NotificationFetching {
+    let network: SocialNetwork
+    private let delay: TimeInterval
+    private let items: [NotificationItem]
+
+    init(network: SocialNetwork, delay: TimeInterval, items: [NotificationItem]) {
+        self.network = network
+        self.delay = delay
+        self.items = items
+    }
+
+    func fetchNotifications(reason _: RefreshReason) async throws -> [NotificationItem] {
+        try await Task.sleep(for: .seconds(delay))
+        return items
     }
 }

@@ -1,7 +1,7 @@
 import Foundation
 
 @MainActor
-public protocol SocialSource {
+public protocol SocialSource: Sendable {
     var network: SocialNetwork { get }
 }
 

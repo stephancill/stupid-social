@@ -36,28 +36,37 @@ public final class FeedService {
         var errors: [String] = []
         var refreshedNetworks = Set<SocialNetwork>()
 
-        for source in notificationSources {
-            do {
-                let items = try await source.fetchNotifications(reason: .manual)
-                logger.info("Source refresh finished: \(source.network.rawValue, privacy: .public) \(items.count, privacy: .public) items")
+        let refreshResult = await fetchSourcesConcurrently(reason: .manual, timingPrefix: "manual")
+
+        for result in refreshResult {
+            if let error = result.error {
+                switch error {
+                case SourceError.notConfigured:
+                    errors.append("\(result.network.displayName) is not configured")
+                case SourceError.endpointSpikeRequired:
+                    logger.info("Skipping source pending endpoint spike: \(result.network.rawValue, privacy: .public)")
+                default:
+                    logger.error("Source refresh failed: \(result.network.rawValue, privacy: .public) \(String(describing: error), privacy: .public)")
+                    errors.append("\(result.network.displayName) refresh failed")
+                }
+            } else {
+                let items = result.items
+                logger.info("Source refresh finished: \(result.network.rawValue, privacy: .public) \(items.count, privacy: .public) items")
                 incoming.append(contentsOf: items)
                 if !items.isEmpty {
-                    refreshedNetworks.insert(source.network)
+                    refreshedNetworks.insert(result.network)
                 }
-            } catch SourceError.notConfigured {
-                errors.append("\(source.network.displayName) is not configured")
-            } catch SourceError.endpointSpikeRequired {
-                logger.info("Skipping source pending endpoint spike: \(source.network.rawValue, privacy: .public)")
-            } catch {
-                logger.error("Source refresh failed: \(source.network.rawValue, privacy: .public) \(String(describing: error), privacy: .public)")
-                errors.append("\(source.network.displayName) refresh failed")
             }
         }
 
         if !refreshedNetworks.isEmpty {
-            try cacheStore.replaceNetworks(incoming, networks: refreshedNetworks)
+            try await RefreshTiming.measure("manual-cache-replace") {
+                try cacheStore.replaceNetworks(incoming, networks: refreshedNetworks)
+            }
         }
-        try cacheStore.deleteExpired()
+        try await RefreshTiming.measure("manual-cache-delete-expired") {
+            try cacheStore.deleteExpired()
+        }
         logger.info("Manual refresh finished")
         if !errors.isEmpty, incoming.isEmpty {
             let cachedItems = try loadCachedFeed()
@@ -74,26 +83,65 @@ public final class FeedService {
         var incoming: [NotificationItem] = []
         var refreshedNetworks = Set<SocialNetwork>()
 
-        for source in notificationSources {
-            do {
-                let items = try await source.fetchNotifications(reason: .background)
-                logger.info("Foreground activation source refresh finished: \(source.network.rawValue, privacy: .public) \(items.count, privacy: .public) items")
+        let refreshResult = await fetchSourcesConcurrently(reason: .background, timingPrefix: "foreground")
+
+        for result in refreshResult {
+            if let error = result.error {
+                switch error {
+                case SourceError.notConfigured, SourceError.endpointSpikeRequired:
+                    continue
+                default:
+                    logger.error("Foreground activation source refresh failed: \(result.network.rawValue, privacy: .public) \(String(describing: error), privacy: .public)")
+                }
+            } else {
+                let items = result.items
+                logger.info("Foreground activation source refresh finished: \(result.network.rawValue, privacy: .public) \(items.count, privacy: .public) items")
                 incoming.append(contentsOf: items)
                 if !items.isEmpty {
-                    refreshedNetworks.insert(source.network)
+                    refreshedNetworks.insert(result.network)
                 }
-            } catch SourceError.notConfigured, SourceError.endpointSpikeRequired {
-                continue
-            } catch {
-                logger.error("Foreground activation source refresh failed: \(source.network.rawValue, privacy: .public) \(String(describing: error), privacy: .public)")
             }
         }
 
         if !refreshedNetworks.isEmpty {
-            try cacheStore.replaceNetworks(incoming, networks: refreshedNetworks)
-            try cacheStore.deleteExpired()
+            try await RefreshTiming.measure("foreground-cache-replace") {
+                try cacheStore.replaceNetworks(incoming, networks: refreshedNetworks)
+            }
+            try await RefreshTiming.measure("foreground-cache-delete-expired") {
+                try cacheStore.deleteExpired()
+            }
         }
         logger.info("Foreground activation refresh finished")
+    }
+
+    private func fetchSourcesConcurrently(
+        reason: RefreshReason,
+        timingPrefix: String,
+    ) async -> [(network: SocialNetwork, items: [NotificationItem], error: Error?)] {
+        let fetchers: [(network: SocialNetwork, fetch: @MainActor () async throws -> [NotificationItem])] = notificationSources.map { source in
+            (source.network, { try await source.fetchNotifications(reason: reason) })
+        }
+
+        return await withTaskGroup(of: (SocialNetwork, [NotificationItem], Error?).self) { group in
+            for fetcher in fetchers {
+                group.addTask {
+                    do {
+                        let items = try await RefreshTiming.measure("\(timingPrefix)-source-\(fetcher.network.rawValue)") {
+                            try await fetcher.fetch()
+                        }
+                        return (fetcher.network, items, nil)
+                    } catch {
+                        return (fetcher.network, [], error)
+                    }
+                }
+            }
+
+            var results: [(network: SocialNetwork, items: [NotificationItem], error: Error?)] = []
+            for await result in group {
+                results.append(result)
+            }
+            return results
+        }
     }
 
     public func healthCheckAllSources() async {

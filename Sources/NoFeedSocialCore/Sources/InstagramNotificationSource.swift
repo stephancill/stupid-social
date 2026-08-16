@@ -25,6 +25,15 @@ public final class InstagramNotificationSource: NotificationFetching, AccountVal
 
     public func ownStoryActor() async -> NotificationActor? {
         guard let account = metadataStore.instagramAccount else { return nil }
+        if account.avatarURL != nil, let username = account.username, !username.isEmpty {
+            return NotificationActor(
+                id: account.accountId,
+                network: .instagram,
+                username: account.username,
+                displayName: nil,
+                avatarURL: account.avatarURL,
+            )
+        }
         do {
             let profile = try await client.currentUserProfile()
             return NotificationActor(
@@ -129,7 +138,9 @@ public final class InstagramNotificationSource: NotificationFetching, AccountVal
     private func refreshStoryTray() async throws {
         let tray: [InstagramTrayItem]
         do {
-            tray = try await client.reelsTray()
+            tray = try await RefreshTiming.measure("instagram-story-tray") {
+                try await client.reelsTray()
+            }
         } catch SourceError.notConfigured {
             invalidateAccount()
             throw SourceError.notConfigured
@@ -162,6 +173,7 @@ public final class InstagramNotificationSource: NotificationFetching, AccountVal
     }
 
     private func storyReels(from trayEntries: [StoryTrayEntry]) async throws -> [InstagramStoryReel] {
+        let fetched = try await fetchStoryReelsConcurrently(trayEntries)
         var reels: [InstagramStoryReel] = []
         for entry in trayEntries {
             let item = entry.item
@@ -176,7 +188,8 @@ public final class InstagramNotificationSource: NotificationFetching, AccountVal
             )
 
             var slides: [InstagramStorySlide] = []
-            if let username = item.user.username, let reel = try await client.storyReel(username: username) {
+            let reel = fetched[entry.reelId]
+            if let reel {
                 for media in reel.items ?? [] {
                     if let imageURL = media.bestImageURL {
                         let videoVersion = media.videoVersions?.first
@@ -225,6 +238,47 @@ public final class InstagramNotificationSource: NotificationFetching, AccountVal
     private struct StoryTrayEntry {
         let item: InstagramTrayItem
         let reelId: String
+    }
+
+    private static let storyFetchConcurrencyLimit = 3
+
+    private func fetchStoryReelsConcurrently(_ trayEntries: [StoryTrayEntry]) async throws -> [String: InstagramReel] {
+        let fetchers: [(reelId: String, username: String?, fetch: @MainActor () async throws -> InstagramReel?)] = trayEntries.map { entry in
+            (entry.reelId, entry.item.user.username, {
+                guard let username = entry.item.user.username else { return nil }
+                return try await RefreshTiming.measure("instagram-story-reel-\(username)") {
+                    try await self.client.storyReel(username: username)
+                }
+            })
+        }
+
+        var results: [String: InstagramReel] = [:]
+        var iterator = fetchers.makeIterator()
+
+        try await withThrowingTaskGroup(of: (String, InstagramReel?).self) { group in
+            var inFlight = 0
+            while let fetcher = iterator.next(), inFlight < Self.storyFetchConcurrencyLimit {
+                group.addTask {
+                    try await (fetcher.reelId, fetcher.fetch())
+                }
+                inFlight += 1
+            }
+
+            while let result = try await group.next() {
+                if let reel = result.1 {
+                    results[result.0] = reel
+                }
+                inFlight -= 1
+                if let fetcher = iterator.next() {
+                    group.addTask {
+                        try await (fetcher.reelId, fetcher.fetch())
+                    }
+                    inFlight += 1
+                }
+            }
+        }
+
+        return results
     }
 
     private func storyMentions(from media: InstagramStoryMedia) -> [InstagramStoryMention] {
