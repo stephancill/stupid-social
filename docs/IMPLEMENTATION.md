@@ -1,5 +1,10 @@
 # Implementation Notes
 
+## 2026-08-16
+
+- Diagnosed missing Spotify friend activity from a paired physical iPhone. The app container reported account `stephan2882` as valid and stored Spotify credentials only in Keychain, but the equivalent current WebPlayer session reproduced HTTP 401 from `GET https://spclient.wg.spotify.com/presence-view/v1/buddylist`. Refreshing the bearer token did not help while the login-captured `client-token` header was present; the same refreshed bearer token returned HTTP 200 when `client-token` was omitted. Removed the stale `client-token` header from app and probe `spclient` requests. Pathfinder requests retain it because they use a separate API path.
+- Verified the other currently used `spclient` endpoints with a refreshed bearer token and no `client-token`: user profile, following, followers, and audio analysis all returned HTTP 200 alongside buddy list. Pathfinder `profileAttributes` returned HTTP 401 with the stale captured client token and HTTP 403 without a client token, confirming that profile search/library Pathfinder calls still require a current client token and are not covered by the `spclient` header change.
+
 ## 2026-07-16
 
 - Extended `scripts/instagram-web-client.py` with Instagram story mention probes. `mention-search` uses the existing web `GET /web/search/topsearch/?context=blended&query=...` path and returned autocomplete-ready user rows with `id`, `username`, `full_name`, verification state, and avatar URL using simulator credentials. Story configure accepts a `reel_mentions` JSON array; live posting with `[{"user_id":"70150151668","username":"stephancill","x":0.5,"y":0.5,"z":0,"width":0.5,"height":0.12,"rotation":0}]` plus `include_e2ee_mentioned_user_list=1` succeeded through the web `configure_to_story` flow. Fetching the own story page showed Instagram materialized this as `story_bloks_stickers[].bloks_sticker.sticker_data.ig_mention` with the same normalized geometry, not as a `reel_mentions` field in the web story payload. The test story media `3944187546111604463` was deleted successfully after verification.

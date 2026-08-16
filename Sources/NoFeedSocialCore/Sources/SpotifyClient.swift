@@ -69,7 +69,6 @@ public struct SpotifyClient {
     ) async throws -> (Data, HTTPURLResponse) {
         var request = URLRequest(url: URL(string: "\(Self.spclientBase)/\(path)")!)
         request.setValue("Bearer \(creds.bearerToken)", forHTTPHeaderField: "authorization")
-        request.setValue(creds.clientToken, forHTTPHeaderField: "client-token")
         request.setValue(Self.appVersion, forHTTPHeaderField: "spotify-app-version")
         request.setValue("WebPlayer", forHTTPHeaderField: "app-platform")
         request.setValue("application/json", forHTTPHeaderField: "accept")

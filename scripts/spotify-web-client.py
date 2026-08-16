@@ -306,7 +306,6 @@ class SpotifyWebClient:
     def spclient_headers(self, accept_language: str | None = None) -> dict[str, str]:
         return {
             "Authorization": f"Bearer {self.bearer_token()}",
-            "Client-Token": self.client_token(),
             "Spotify-App-Version": APP_VERSION,
             "App-Platform": "WebPlayer",
             "Accept": "application/json",
