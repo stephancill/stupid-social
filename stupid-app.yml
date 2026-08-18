@@ -1,0 +1,22 @@
+version: 1
+product: NoFeedSocial
+bundleID: tech.stupid.StupidSocial
+deploymentTarget: "18.0"
+infoPath: Info.plist
+iconPath: Resources/AppIcon.appiconset/Icon-1024.png
+resources:
+  - Resources/XBadge.png
+  - Resources/XBadge@2x.png
+  - Resources/XBadge@3x.png
+  - Resources/FarcasterBadge.png
+  - Resources/FarcasterBadge@2x.png
+  - Resources/FarcasterBadge@3x.png
+  - Resources/InstagramBadge.png
+  - Resources/InstagramBadge@2x.png
+  - Resources/InstagramBadge@3x.png
+  - Resources/SpotifyBadge.png
+  - Resources/SpotifyBadge@2x.png
+  - Resources/SpotifyBadge@3x.png
+  - Resources/BlueskyBadge.png
+  - Resources/BlueskyBadge@2x.png
+  - Resources/BlueskyBadge@3x.png
