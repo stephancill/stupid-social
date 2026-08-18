@@ -137,6 +137,52 @@ class XWebClient:
             "User-Agent": APP_USER_AGENT,
         }
 
+    def set_following(self, user_id: str, follow: bool) -> dict[str, Any]:
+        return self.friendships_mutation("create" if follow else "destroy", {"user_id": user_id})
+
+    def set_notifications(self, user_id: str, enabled: bool) -> dict[str, Any]:
+        return self.friendships_mutation(
+            "update",
+            {"id": user_id, "cursor": "-1", "device": "true" if enabled else "false"},
+        )
+
+    def friendships_mutation(self, path: str, extra: dict[str, str]) -> dict[str, Any]:
+        fields = {
+            "include_profile_interstitial_type": "1",
+            "include_blocking": "1",
+            "include_blocked_by": "1",
+            "include_followed_by": "1",
+            "include_want_retweets": "1",
+            "include_mute_edge": "1",
+            "include_can_dm": "1",
+            "include_can_media_tag": "1",
+            "include_ext_is_blue_verified": "1",
+            "include_ext_verified_type": "1",
+            "include_ext_profile_image_shape": "1",
+            "skip_status": "1",
+        }
+        fields.update(extra)
+        body = urllib.parse.urlencode(fields).encode()
+        headers = self.headers()
+        headers["Content-Type"] = "application/x-www-form-urlencoded"
+        request = urllib.request.Request(
+            BASE_URL + f"/i/api/1.1/friendships/{path}.json",
+            data=body,
+            headers=headers,
+            method="POST",
+        )
+        try:
+            with self.opener.open(request, timeout=30) as response:
+                charset = response.headers.get_content_charset() or "utf-8"
+                text = response.read().decode(charset, errors="replace")
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            raise SystemExit(f"HTTP {exc.code} POST friendships/{path}\n{truncate(body, 1200)}") from exc
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise SystemExit(f"Expected JSON for friendships/{path}, got {len(text)} bytes: {exc}") from exc
+
     def auth_token(self) -> str:
         token = str(self.credentials.get("authToken") or self.credentials.get("auth_token") or "")
         if not token:
@@ -274,6 +320,13 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("bootstrap", help="Print credential presence without making an X API request.")
     search_users = subparsers.add_parser("search-users", help="Search X users through the web API endpoint used by the app.")
     search_users.add_argument("query", help="Search query.")
+    follow = subparsers.add_parser("follow", help="Follow an X user by numeric user id.")
+    follow.add_argument("user_id", help="Numeric X user id.")
+    unfollow = subparsers.add_parser("unfollow", help="Unfollow an X user by numeric user id.")
+    unfollow.add_argument("user_id", help="Numeric X user id.")
+    notify = subparsers.add_parser("notify", help="Set post notifications for an X user.")
+    notify.add_argument("user_id", help="Numeric X user id.")
+    notify.add_argument("enabled", choices=["on", "off"], help="Turn notifications on or off.")
     return parser
 
 
@@ -287,6 +340,12 @@ def main() -> None:
         result = client.bootstrap()
     elif args.command == "search-users":
         result = client.search_users(args.query)
+    elif args.command == "follow":
+        result = client.set_following(args.user_id, True)
+    elif args.command == "unfollow":
+        result = client.set_following(args.user_id, False)
+    elif args.command == "notify":
+        result = client.set_notifications(args.user_id, args.enabled == "on")
     else:
         raise SystemExit(f"Unknown command: {args.command}")
 

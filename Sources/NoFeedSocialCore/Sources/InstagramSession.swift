@@ -21,6 +21,8 @@ let operationNames = [
     "story-seen": "PolarisAPIReelSeenMutation",
     "like-story": "usePolarisLikeMediaXIGLikeMutation",
     "unlike-story": "usePolarisLikeMediaXIGUnlikeMutation",
+    "follow": "usePolarisFollowUserFollowMutation",
+    "unfollow": "usePolarisFollowUserUnfollowMutation",
 ]
 
 @MainActor

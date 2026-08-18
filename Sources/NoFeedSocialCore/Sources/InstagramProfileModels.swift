@@ -143,6 +143,7 @@ public struct InstagramUserInfoResponse: Decodable {
         public let isPrivate: Bool?
         public let externalUrl: String?
         public let friendshipStatus: InstagramFriendshipStatus?
+        public let followedByViewer: Bool?
 
         enum CodingKeys: String, CodingKey {
             case pk
@@ -158,6 +159,7 @@ public struct InstagramUserInfoResponse: Decodable {
             case isPrivate = "is_private"
             case externalUrl = "external_url"
             case friendshipStatus = "friendship_status"
+            case followedByViewer = "followed_by_viewer"
         }
 
         init(
@@ -173,6 +175,7 @@ public struct InstagramUserInfoResponse: Decodable {
             isPrivate: Bool?,
             externalUrl: String?,
             friendshipStatus: InstagramFriendshipStatus?,
+            followedByViewer: Bool? = nil,
         ) {
             self.pk = pk
             self.username = username
@@ -186,6 +189,7 @@ public struct InstagramUserInfoResponse: Decodable {
             self.isPrivate = isPrivate
             self.externalUrl = externalUrl
             self.friendshipStatus = friendshipStatus
+            self.followedByViewer = followedByViewer
         }
 
         public init(from decoder: Decoder) throws {
@@ -206,6 +210,7 @@ public struct InstagramUserInfoResponse: Decodable {
             isPrivate = try container.decodeIfPresent(Bool.self, forKey: .isPrivate)
             externalUrl = try container.decodeIfPresent(String.self, forKey: .externalUrl)
             friendshipStatus = try container.decodeIfPresent(InstagramFriendshipStatus.self, forKey: .friendshipStatus)
+            followedByViewer = try container.decodeIfPresent(Bool.self, forKey: .followedByViewer)
         }
     }
 

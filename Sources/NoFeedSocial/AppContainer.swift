@@ -19,6 +19,7 @@ final class AppContainer {
     private let accountValidators: [any AccountValidating]
     private let profileFetchersByNetwork: [SocialNetwork: any ProfileFetching]
     private let targetDetailFetchersByNetwork: [SocialNetwork: any NotificationTargetDetailFetching]
+    private let relationshipMutatorsByNetwork: [SocialNetwork: any RelationshipMutating]
     private let feedService: FeedService
 
     init(modelContext: ModelContext) {
@@ -84,12 +85,17 @@ final class AppContainer {
             .instagram: instagramSource,
             .bluesky: blueskySource,
         ]
+        relationshipMutatorsByNetwork = [
+            .x: xSource,
+            .instagram: instagramSource,
+        ]
 
         feedService = FeedService(
             notificationSources: notificationSources,
             accountValidators: accountValidators,
             profileFetchersByNetwork: profileFetchersByNetwork,
             targetDetailFetchersByNetwork: targetDetailFetchersByNetwork,
+            relationshipMutatorsByNetwork: relationshipMutatorsByNetwork,
             cacheStore: cacheStore,
         )
 

@@ -353,11 +353,19 @@ Expected verification once the app is scaffolded:
 - xtool build succeeds.
 - xtool run behavior is checked when feasible.
 
+## Profile Relationships
+
+Profile detail (reached from Search) exposes Follow/Unfollow for X and Instagram, plus an X post-notifications toggle.
+
+- `NetworkProfile` carries `isFollowing` (one-sided "current account follows this target") and `isNotifiedForPosts`. These are separate from the existing `isMutualFollow` badge.
+- A `RelationshipMutating` capability protocol (`setFollowing`, `setPostNotifications`) is registered per network and invoked through `FeedService.setFollowing` / `setPostNotifications`. `ProfileDetailView` updates optimistically and reverts on failure.
+- X uses the legacy REST endpoints: `POST /i/api/1.1/friendships/create.json` (follow), `.../destroy.json` (unfollow), and `.../update.json` (bell/bell-off via `device=true|false`). These require no GraphQL query ID.
+- Instagram uses the mobile-web Relay mutations with runtime doc-ID discovery: `usePolarisFollowUserFollowMutation`/`usePolarisFollowUserUnfollowMutation` with root fields `xdt_create_friendship`/`xdt_destroy_friendship`.
+- The X bell is independent of follow state and its initial state is best-effort (the profile GraphQL does not expose the notify flag today).
+
 ## Posting
 
-Instagram story posting is current scope and uses the mobile web API path validated by `scripts/instagram-web-client.py`.
-
-Implementation expectations:
+Instagram story posting is current scope and uses the mobile web API path validated by `scripts/instagram-web-client.py`.Implementation expectations:
 
 - Keep the story composer UI local and simple.
 - Render the composer output to a 1080x1920 WebP before upload when native WebP encoding is available; fall back to JPEG while the app does not bundle a WebP encoder.

@@ -119,6 +119,7 @@ public struct XClient {
             profileBannerUrl: legacy.profileBannerUrl,
             isFollowing: result?.relationshipPerspectives?.following,
             isFollowedBy: result?.relationshipPerspectives?.followedBy,
+            isNotifiedForPosts: result?.notificationsSettings?.notificationsEnabled,
         )
     }
 
@@ -188,6 +189,7 @@ public struct XClient {
                 profileBannerUrl: nil,
                 isFollowing: user.legacy.following,
                 isFollowedBy: nil,
+                isNotifiedForPosts: nil,
             )
         }
     }
@@ -223,6 +225,73 @@ public struct XClient {
 
     func hasCredentials() throws -> Bool {
         try credentialStore.loadXCredentials() != nil
+    }
+
+    public func setFollowing(userId: String, follow: Bool) async throws {
+        var fields = friendshipFields()
+        fields["user_id"] = userId
+        _ = try await friendshipMutation(path: follow ? "create" : "destroy", fields: fields)
+    }
+
+    public func setPostNotifications(userId: String, enabled: Bool) async throws {
+        var fields = friendshipFields()
+        fields["id"] = userId
+        fields["cursor"] = "-1"
+        fields["device"] = enabled ? "true" : "false"
+        _ = try await friendshipMutation(path: "update", fields: fields)
+    }
+
+    private func friendshipFields() -> [String: String] {
+        [
+            "include_profile_interstitial_type": "1",
+            "include_blocking": "1",
+            "include_blocked_by": "1",
+            "include_followed_by": "1",
+            "include_want_retweets": "1",
+            "include_mute_edge": "1",
+            "include_can_dm": "1",
+            "include_can_media_tag": "1",
+            "include_ext_is_blue_verified": "1",
+            "include_ext_verified_type": "1",
+            "include_ext_profile_image_shape": "1",
+            "skip_status": "1",
+        ]
+    }
+
+    private func friendshipMutation(path: String, fields: [String: String]) async throws -> XFriendshipMutationResponse? {
+        guard let credentials = try credentialStore.loadXCredentials() else {
+            throw SourceError.notConfigured
+        }
+
+        var components = URLComponents(string: "https://x.com/i/api/1.1/friendships/\(path).json")!
+        components.queryItems = fields.map { URLQueryItem(name: $0.key, value: $0.value) }
+        let body = components.query?.data(using: .utf8)
+
+        var request = URLRequest(url: components.url!)
+        request.httpMethod = "POST"
+        request.httpBody = body
+        request.allHTTPHeaderFields = mutationHeaders(credentials: credentials)
+
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw SourceError.invalidResponse
+        }
+
+        if http.statusCode == 401 || http.statusCode == 403 {
+            throw SourceError.notConfigured
+        }
+
+        guard (200 ..< 300).contains(http.statusCode) else {
+            throw SourceError.invalidResponse
+        }
+
+        return try? JSONDecoder().decode(XFriendshipMutationResponse.self, from: data)
+    }
+
+    private func mutationHeaders(credentials: XCredentials) -> [String: String] {
+        var headers = headers(credentials: credentials)
+        headers["Content-Type"] = "application/x-www-form-urlencoded"
+        return headers
     }
 
     func unreadCount() async throws -> Int? {
@@ -436,6 +505,16 @@ public struct XVerifiedUser {
     public let idStr: String
 }
 
+private struct XFriendshipMutationResponse: Decodable {
+    let following: Bool?
+    let followedBy: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case following
+        case followedBy = "followed_by"
+    }
+}
+
 public struct XProfileResponse {
     public let idStr: String
     public let screenName: String
@@ -450,6 +529,7 @@ public struct XProfileResponse {
     public let profileBannerUrl: String?
     public let isFollowing: Bool?
     public let isFollowedBy: Bool?
+    public let isNotifiedForPosts: Bool?
 }
 
 private struct XGraphQLUserResponse: Decodable {
@@ -469,11 +549,16 @@ private struct XGraphQLUserResponse: Decodable {
         let legacy: XGraphQLLegacy?
         let isBlueVerified: Bool?
         let relationshipPerspectives: XGraphQLRelationship?
+        let notificationsSettings: XGraphQLNotificationsSettings?
         let avatar: XGraphQLAvatar?
     }
 
     struct XGraphQLAvatar: Decodable {
         let imageUrl: String?
+    }
+
+    struct XGraphQLNotificationsSettings: Decodable {
+        let notificationsEnabled: Bool?
     }
 
     struct XGraphQLCore: Decodable {

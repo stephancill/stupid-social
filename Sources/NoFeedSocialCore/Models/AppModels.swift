@@ -221,6 +221,8 @@ public struct NetworkProfile: Identifiable, Hashable, Codable, Sendable {
     public let websiteURL: URL?
     public let isVerified: Bool?
     public let isMutualFollow: Bool?
+    public let isFollowing: Bool?
+    public let isNotifiedForPosts: Bool?
     public let posts: [NetworkProfilePost]
     public let postsNextCursor: String?
     public let hasMorePosts: Bool
@@ -239,6 +241,8 @@ public struct NetworkProfile: Identifiable, Hashable, Codable, Sendable {
         case websiteURL
         case isVerified
         case isMutualFollow
+        case isFollowing
+        case isNotifiedForPosts
         case posts
         case postsNextCursor
         case hasMorePosts
@@ -258,6 +262,8 @@ public struct NetworkProfile: Identifiable, Hashable, Codable, Sendable {
         websiteURL: URL? = nil,
         isVerified: Bool? = nil,
         isMutualFollow: Bool? = nil,
+        isFollowing: Bool? = nil,
+        isNotifiedForPosts: Bool? = nil,
         posts: [NetworkProfilePost] = [],
         postsNextCursor: String? = nil,
         hasMorePosts: Bool = false,
@@ -275,6 +281,8 @@ public struct NetworkProfile: Identifiable, Hashable, Codable, Sendable {
         self.websiteURL = websiteURL
         self.isVerified = isVerified
         self.isMutualFollow = isMutualFollow
+        self.isFollowing = isFollowing
+        self.isNotifiedForPosts = isNotifiedForPosts
         self.posts = posts
         self.postsNextCursor = postsNextCursor
         self.hasMorePosts = hasMorePosts
@@ -295,6 +303,8 @@ public struct NetworkProfile: Identifiable, Hashable, Codable, Sendable {
         websiteURL = try container.decodeIfPresent(URL.self, forKey: .websiteURL)
         isVerified = try container.decodeIfPresent(Bool.self, forKey: .isVerified)
         isMutualFollow = try container.decodeIfPresent(Bool.self, forKey: .isMutualFollow)
+        isFollowing = try container.decodeIfPresent(Bool.self, forKey: .isFollowing)
+        isNotifiedForPosts = try container.decodeIfPresent(Bool.self, forKey: .isNotifiedForPosts)
         posts = try container.decodeIfPresent([NetworkProfilePost].self, forKey: .posts) ?? []
         postsNextCursor = try container.decodeIfPresent(String.self, forKey: .postsNextCursor)
         hasMorePosts = try container.decodeIfPresent(Bool.self, forKey: .hasMorePosts) ?? false

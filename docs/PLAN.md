@@ -125,7 +125,7 @@ Reference behavior from `docs/CLI_DOCS.md`:
 
 ## Profile Details
 
-From a notification, the user should be able to view an account detail screen.
+From a notification or search result, the user should be able to view an account detail screen.
 
 The account detail should show:
 
@@ -133,6 +133,8 @@ The account detail should show:
 - Profile picture
 - Follower count
 - Following count
+- Follow/Unfollow button for networks that support it (X and Instagram in current scope).
+- For X, a post-notifications (bell) toggle. Turning it on/off is independent of follow state.
 
 The MVP should not attempt to merge or link X and Farcaster actors.
 

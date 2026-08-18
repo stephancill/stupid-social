@@ -51,6 +51,8 @@ OPERATION_NAMES = {
     "force-story-seen": "PolarisAPIForceStorySeenMutation",
     "like-story": "usePolarisStoriesV4LikeMutationLikeMutation",
     "unlike-story": "usePolarisStoriesV4LikeMutationUnlikeMutation",
+    "follow": "usePolarisFollowUserFollowMutation",
+    "unfollow": "usePolarisFollowUserUnfollowMutation",
 }
 
 OPERATION_RE = re.compile(
@@ -408,6 +410,19 @@ class InstagramWebClient:
             {"input": {"media_id": media_id}},
             friendly_name=OPERATION_NAMES[command_name],
             root_field_name="xig_send_story_like" if liked else "xig_unsend_story_like",
+            endpoint="/graphql/query",
+        )
+
+    def set_user_followed(self, user_id: str, follow: bool) -> dict[str, Any]:
+        command_name = "follow" if follow else "unfollow"
+        variables = {"target_user_id": user_id}
+        if follow:
+            variables["data"] = {"include_follow_friction_check": True}
+        return self.graphql_post(
+            self.doc_id(command_name),
+            variables,
+            friendly_name=OPERATION_NAMES[command_name],
+            root_field_name="xdt_create_friendship" if follow else "xdt_destroy_friendship",
             endpoint="/graphql/query",
         )
 
@@ -988,6 +1003,11 @@ def build_parser() -> argparse.ArgumentParser:
     unlike_story.add_argument("media_id", help="Story media PK to unlike.")
     unlike_story.add_argument("--story-username", help="Username whose story page should be loaded to discover story-only doc IDs.")
 
+    follow = subparsers.add_parser("follow", help="Follow an Instagram user with the web Relay mutation.")
+    follow.add_argument("user_id", help="Numeric user PK to follow.")
+    unfollow = subparsers.add_parser("unfollow", help="Unfollow an Instagram user with the web Relay mutation.")
+    unfollow.add_argument("user_id", help="Numeric user PK to unfollow.")
+
     upload = subparsers.add_parser("upload-story-image", help="Upload a JPEG as an Instagram story.")
     upload.add_argument("--image", required=True, help="Path to JPEG image bytes.")
     upload.add_argument("--width", type=int, required=True, help="Image width in pixels.")
@@ -1099,6 +1119,8 @@ def main() -> None:
         result = client.set_story_liked(args.media_id, True, args.story_username)
     elif args.command == "unlike-story":
         result = client.set_story_liked(args.media_id, False, args.story_username)
+    elif args.command in ("follow", "unfollow"):
+        result = client.set_user_followed(args.user_id, args.command == "follow")
     elif args.command == "upload-story-image":
         reel_mentions = build_reel_mentions(
             client,

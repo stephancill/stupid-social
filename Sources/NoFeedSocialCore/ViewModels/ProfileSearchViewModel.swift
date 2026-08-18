@@ -6,10 +6,17 @@ public final class ProfileSearchViewModel: ObservableObject {
     @Published public private(set) var results: [NetworkProfile] = []
     @Published public private(set) var isSearching = false
     @Published public var errorMessage: String?
+    @Published public var enabledNetworks: Set<SocialNetwork> = [
+        .x, .instagram, .farcaster, .spotify, .bluesky,
+    ]
 
     private let feedService: FeedService
     private var debounceTask: Task<Void, Never>?
     private var latestSearchQuery = ""
+
+    public var filteredResults: [NetworkProfile] {
+        results.filter { enabledNetworks.contains($0.network) }
+    }
 
     public var service: FeedService {
         feedService

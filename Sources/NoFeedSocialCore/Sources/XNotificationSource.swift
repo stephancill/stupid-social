@@ -1,6 +1,6 @@
 import Foundation
 
-public struct XNotificationSource: NotificationFetching, AccountValidating, ProfileFetching, NotificationTargetDetailFetching {
+public struct XNotificationSource: NotificationFetching, AccountValidating, ProfileFetching, NotificationTargetDetailFetching, RelationshipMutating {
     public let network: SocialNetwork = .x
 
     private let client: XClient
@@ -64,6 +64,14 @@ public struct XNotificationSource: NotificationFetching, AccountValidating, Prof
         return try await client.tweetDetails(tweetId: tweetId)
     }
 
+    public func setFollowing(profile: NetworkProfile, follow: Bool) async throws {
+        try await client.setFollowing(userId: profile.id, follow: follow)
+    }
+
+    public func setPostNotifications(profile: NetworkProfile, enabled: Bool) async throws {
+        try await client.setPostNotifications(userId: profile.id, enabled: enabled)
+    }
+
     private func networkProfile(from profile: XProfileResponse) -> NetworkProfile {
         NetworkProfile(
             id: profile.idStr,
@@ -80,6 +88,8 @@ public struct XNotificationSource: NotificationFetching, AccountValidating, Prof
             joinedAt: profile.createdAt,
             isVerified: profile.verified,
             isMutualFollow: (profile.isFollowing == true && profile.isFollowedBy == true) ? true : nil,
+            isFollowing: profile.isFollowing,
+            isNotifiedForPosts: profile.isNotifiedForPosts,
         )
     }
 }

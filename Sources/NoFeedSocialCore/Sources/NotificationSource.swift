@@ -33,6 +33,21 @@ public protocol NotificationTargetDetailFetching: SocialSource {
     func fetchTargetDetails(for item: NotificationItem) async throws -> NotificationTargetDetails
 }
 
+public protocol RelationshipMutating: SocialSource {
+    func setFollowing(profile: NetworkProfile, follow: Bool) async throws
+    func setPostNotifications(profile: NetworkProfile, enabled: Bool) async throws
+}
+
+public extension RelationshipMutating {
+    func setFollowing(profile _: NetworkProfile, follow _: Bool) async throws {
+        throw SourceError.unsupported
+    }
+
+    func setPostNotifications(profile _: NetworkProfile, enabled _: Bool) async throws {
+        throw SourceError.unsupported
+    }
+}
+
 public protocol StoryFetching: SocialSource {
     var hasMoreStoryReels: Bool { get }
     func fetchStoryReels() async throws -> [InstagramStoryReel]

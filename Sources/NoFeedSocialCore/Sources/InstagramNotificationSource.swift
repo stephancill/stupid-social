@@ -1,7 +1,7 @@
 import Foundation
 
 @MainActor
-public final class InstagramNotificationSource: NotificationFetching, AccountValidating, ProfileFetching, NotificationTargetDetailFetching, StoryFetching, StoryPosting {
+public final class InstagramNotificationSource: NotificationFetching, AccountValidating, ProfileFetching, NotificationTargetDetailFetching, StoryFetching, StoryPosting, RelationshipMutating {
     public let network: SocialNetwork = .instagram
 
     private let client: InstagramClient
@@ -445,6 +445,10 @@ public final class InstagramNotificationSource: NotificationFetching, AccountVal
         return components[idIndex].trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     }
 
+    public func setFollowing(profile: NetworkProfile, follow: Bool) async throws {
+        try await client.setUserFollowed(userId: profile.id, follow: follow)
+    }
+
     private func networkProfile(from user: InstagramUserInfoResponse.InfoUser, postsPage: NetworkProfilePostsPage? = nil) -> NetworkProfile {
         NetworkProfile(
             id: String(user.pk ?? 0),
@@ -459,6 +463,7 @@ public final class InstagramNotificationSource: NotificationFetching, AccountVal
             websiteURL: user.externalUrl.flatMap(URL.init),
             isVerified: user.isVerified,
             isMutualFollow: (user.friendshipStatus?.following == true && user.friendshipStatus?.followedBy == true) ? true : nil,
+            isFollowing: user.friendshipStatus?.following ?? user.followedByViewer,
             posts: postsPage?.posts ?? [],
             postsNextCursor: postsPage?.nextCursor,
             hasMorePosts: postsPage?.hasMore ?? false,

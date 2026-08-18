@@ -7,6 +7,7 @@ public final class FeedService {
     private let accountValidators: [any AccountValidating]
     private let profileFetchersByNetwork: [SocialNetwork: any ProfileFetching]
     private let targetDetailFetchersByNetwork: [SocialNetwork: any NotificationTargetDetailFetching]
+    private let relationshipMutatorsByNetwork: [SocialNetwork: any RelationshipMutating]
     private let cacheStore: NotificationCacheStore
     private let logger = Logger(subsystem: "tech.stupid.StupidSocial", category: "FeedService")
 
@@ -17,12 +18,14 @@ public final class FeedService {
         accountValidators: [any AccountValidating],
         profileFetchersByNetwork: [SocialNetwork: any ProfileFetching],
         targetDetailFetchersByNetwork: [SocialNetwork: any NotificationTargetDetailFetching],
+        relationshipMutatorsByNetwork: [SocialNetwork: any RelationshipMutating] = [:],
         cacheStore: NotificationCacheStore,
     ) {
         self.notificationSources = notificationSources
         self.accountValidators = accountValidators
         self.profileFetchersByNetwork = profileFetchersByNetwork
         self.targetDetailFetchersByNetwork = targetDetailFetchersByNetwork
+        self.relationshipMutatorsByNetwork = relationshipMutatorsByNetwork
         self.cacheStore = cacheStore
     }
 
@@ -204,6 +207,20 @@ public final class FeedService {
 
     public func cachedTargetDetails(for item: NotificationItem) -> NotificationTargetDetails? {
         targetDetailsCache[targetDetailsCacheKey(for: item)]
+    }
+
+    public func setFollowing(_ profile: NetworkProfile, follow: Bool) async throws {
+        guard let source = relationshipMutatorsByNetwork[profile.network] else {
+            throw SourceError.unsupported
+        }
+        try await source.setFollowing(profile: profile, follow: follow)
+    }
+
+    public func setPostNotifications(_ profile: NetworkProfile, enabled: Bool) async throws {
+        guard let source = relationshipMutatorsByNetwork[profile.network] else {
+            throw SourceError.unsupported
+        }
+        try await source.setPostNotifications(profile: profile, enabled: enabled)
     }
 
     private func targetDetailsCacheKey(for item: NotificationItem) -> String {

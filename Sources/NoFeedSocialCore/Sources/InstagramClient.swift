@@ -331,6 +331,27 @@ public final class InstagramClient {
         )
     }
 
+    public func setUserFollowed(userId: String, follow: Bool) async throws {
+        guard let credentials = try credentialStore.loadInstagramCredentials() else {
+            throw SourceError.notConfigured
+        }
+
+        let command = follow ? "follow" : "unfollow"
+        let docID = try await docId(credentials: credentials, command: command)
+        var variables: [String: Any] = ["target_user_id": userId]
+        if follow {
+            variables["data"] = ["include_follow_friction_check": true]
+        }
+        _ = try await graphqlPost(
+            credentials: credentials,
+            docID: docID,
+            variables: variables,
+            friendlyName: operationNames[command],
+            rootFieldName: follow ? "xdt_create_friendship" : "xdt_destroy_friendship",
+            endpoint: "/graphql/query",
+        )
+    }
+
     public func publishPhotoStory(imageData: Data, width: Int, height: Int, mimeType: String, mentions: [InstagramStoryMentionPlacement] = []) async throws {
         guard let credentials = try credentialStore.loadInstagramCredentials() else {
             throw SourceError.notConfigured

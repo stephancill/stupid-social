@@ -23,6 +23,7 @@ struct ProfileDetailView: View {
     @State private var postsErrorMessage: String?
     @State private var selectedPost: NetworkProfilePost?
     @State private var autoLoadedPostCursors: Set<String> = []
+    @State private var isMutatingRelationship = false
 
     init(actor: NotificationActor, feedService: FeedService, initialProfile: NetworkProfile? = nil) {
         self.actor = actor
@@ -92,6 +93,19 @@ struct ProfileDetailView: View {
                                 .padding(.vertical, 2)
                                 .background(.secondary.opacity(0.1), in: Capsule())
                         }
+                    }
+
+                    if profile.network == .x, profile.isFollowing != nil || profile.isNotifiedForPosts != nil {
+                        HStack(spacing: 8) {
+                            followButton(profile)
+                            notificationsButton(profile)
+                        }
+                        .padding(.top, 4)
+                    } else if profile.network == .instagram, profile.isFollowing != nil {
+                        HStack(spacing: 8) {
+                            followButton(profile)
+                        }
+                        .padding(.top, 4)
                     }
                 }
                 .frame(maxWidth: .infinity)
@@ -284,6 +298,8 @@ struct ProfileDetailView: View {
 
     private var shouldHydrateProfile: Bool {
         guard let profile else { return true }
+        if profile.network == .x || profile.network == .instagram, profile.isFollowing == nil { return true }
+        if profile.network == .x, profile.isNotifiedForPosts == nil { return true }
         if profile.network == .instagram, profile.posts.isEmpty, profile.postsCount != 0 { return true }
         if profile.bio == nil { return true }
         if profile.followerCount == nil { return true }
@@ -319,6 +335,66 @@ struct ProfileDetailView: View {
         } catch {
             postsErrorMessage = error.localizedDescription
         }
+    }
+
+    @ViewBuilder
+    private func followButton(_ profile: NetworkProfile) -> some View {
+        let isFollowing = profile.isFollowing == true
+        Button {
+            Task { await toggleFollow(profile) }
+        } label: {
+            Text(isFollowing ? "Following" : "Follow")
+                .font(.subheadline.weight(.semibold))
+                .frame(minWidth: 96)
+                .padding(.vertical, 6)
+                .foregroundStyle(isFollowing ? Color.primary : Color.white)
+                .background(isFollowing ? Color.secondary.opacity(0.22) : Color.blue, in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .disabled(isMutatingRelationship)
+    }
+
+    @ViewBuilder
+    private func notificationsButton(_ profile: NetworkProfile) -> some View {
+        let enabled = profile.isNotifiedForPosts == true
+        Button {
+            Task { await togglePostNotifications(profile) }
+        } label: {
+            Image(systemName: enabled ? "bell.fill" : "bell")
+                .font(.subheadline.weight(.semibold))
+                .frame(width: 40, height: 32)
+                .foregroundStyle(.primary)
+                .background(.secondary.opacity(0.2), in: Capsule())
+                .accessibilityLabel(enabled ? "Turn off post notifications" : "Turn on post notifications")
+        }
+        .buttonStyle(.plain)
+        .disabled(isMutatingRelationship)
+    }
+
+    private func toggleFollow(_ current: NetworkProfile) async {
+        guard !isMutatingRelationship, let existing = profile else { return }
+        isMutatingRelationship = true
+        let target = current.isFollowing != true
+        profile = current.withFollowing(target)
+        do {
+            try await feedService.setFollowing(current, follow: target)
+        } catch {
+            profile = existing
+        }
+        isMutatingRelationship = false
+    }
+
+    private func togglePostNotifications(_ current: NetworkProfile) async {
+        guard !isMutatingRelationship, let existing = profile else { return }
+        isMutatingRelationship = true
+        let target = current.isNotifiedForPosts != true
+        profile = current.withPostNotifications(target)
+        do {
+            try await feedService.setPostNotifications(current, enabled: target)
+        } catch {
+            profile = existing
+        }
+        isMutatingRelationship = false
     }
 
     private var postGridColumns: [GridItem] {
@@ -357,6 +433,52 @@ struct ProfileDetailView: View {
 }
 
 private extension NetworkProfile {
+    func withFollowing(_ following: Bool) -> NetworkProfile {
+        NetworkProfile(
+            id: id,
+            network: network,
+            username: username,
+            displayName: displayName,
+            bio: bio,
+            avatarURL: avatarURL,
+            followerCount: followerCount,
+            followingCount: followingCount,
+            postsCount: postsCount,
+            joinedAt: joinedAt,
+            websiteURL: websiteURL,
+            isVerified: isVerified,
+            isMutualFollow: isMutualFollow,
+            isFollowing: following,
+            isNotifiedForPosts: isNotifiedForPosts,
+            posts: posts,
+            postsNextCursor: postsNextCursor,
+            hasMorePosts: hasMorePosts,
+        )
+    }
+
+    func withPostNotifications(_ enabled: Bool) -> NetworkProfile {
+        NetworkProfile(
+            id: id,
+            network: network,
+            username: username,
+            displayName: displayName,
+            bio: bio,
+            avatarURL: avatarURL,
+            followerCount: followerCount,
+            followingCount: followingCount,
+            postsCount: postsCount,
+            joinedAt: joinedAt,
+            websiteURL: websiteURL,
+            isVerified: isVerified,
+            isMutualFollow: isMutualFollow,
+            isFollowing: isFollowing,
+            isNotifiedForPosts: enabled,
+            posts: posts,
+            postsNextCursor: postsNextCursor,
+            hasMorePosts: hasMorePosts,
+        )
+    }
+
     func appendingPosts(_ page: NetworkProfilePostsPage) -> NetworkProfile {
         var seenIds = Set(posts.map(\.id))
         let newPosts = page.posts.filter { post in
@@ -376,6 +498,8 @@ private extension NetworkProfile {
             websiteURL: websiteURL,
             isVerified: isVerified,
             isMutualFollow: isMutualFollow,
+            isFollowing: isFollowing,
+            isNotifiedForPosts: isNotifiedForPosts,
             posts: posts + newPosts,
             postsNextCursor: page.nextCursor,
             hasMorePosts: page.hasMore,

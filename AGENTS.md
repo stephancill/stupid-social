@@ -101,6 +101,7 @@ Sources/
 - Use Hypersnap at `https://haatz.quilibrium.com` for Farcaster reads.
 - Resolve Farcaster usernames with `GET /v2/farcaster/user/by-username`.
 - Fetch Farcaster notifications with `GET /v2/farcaster/notifications`.
+- For Instagram AND X mutations (follow/unfollow, notify toggles, likes, seen, posting), first validate the new web endpoint in the dependency-free probe scripts (`scripts/instagram-web-client.py` / `scripts/x-web-client.py`) against live simulator credentials BEFORE implementing the mutation in the native Swift client. Add the probe command, verify it against a real account (restoring any changed state), then port the validated request shape (endpoint, headers, root field name, variables) into the client. This mirrors the existing like-story/seen/posting flow: the Python probe is the source of truth for endpoint behavior.
 
 ## Build And Install
 
