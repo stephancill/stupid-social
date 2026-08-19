@@ -1,5 +1,11 @@
 # Implementation Notes
 
+## 2026-08-19
+
+- Finalized the migration to the `stupid-app` CLI (config was adopted 2026-08-19 in commit `3e54eb0`): removed `xtool.yml` and updated AGENTS.md's build/install/bump conventions to `stupid-app build`, `stupid-app run --simulator`, and `CFBundleVersion` increments. The Apple App Conventions and Product Direction sections now reference `stupid-app` instead of xtool.
+- Bumped `CFBundleVersion` 99 → 100 (marketing `1.0.0`) and released with the CLI: `stupid-app signing setup --kind distribution` (reused the existing stored distribution identity and technology profile), `release archive`, `release upload --wait`. Build `a129638d-42d7-4eda-b9e5-de0f02440933` is `VALID`, internal `IN_BETA_TESTING`, external `READY_FOR_BETA_SUBMISSION`.
+- Rebuilt both iOS app binaries with `-platform_version` using deployment target `18.0` and active SDK `26.1` (the Liquid Glass `minos`/`sdk` fix previously patched into xtool now comes from the `stupid-app` packer automatically).
+
 ## 2026-08-18
 
 - Added Follow/Unfollow to profile detail from Search for X and Instagram, plus an X post-notifications (bell) toggle. `NetworkProfile` now carries `isFollowing` and `isNotifiedForPosts`; a new `RelationshipMutating` capability protocol backs `FeedService.setFollowing` / `setPostNotifications`, wired for `.x` and `.instagram` in `AppContainer`. `ProfileDetailView` shows a follow button once `isFollowing` is known (search supplies it for X; hydration supplies it for Instagram) and, only for X, an independent bell toggle (per user decision, bell does not imply following).

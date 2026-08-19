@@ -69,7 +69,7 @@ Sources/
 
 ## Product Direction
 
-- This is a universal macOS and iOS app built with xtool.
+- This is a universal macOS and iOS app built and released with the `stupid-app` CLI.
 - The MVP is notifications-only for X and Farcaster.
 - The app should help users avoid algorithmic feeds while still seeing direct social notifications.
 - Posting, Bluesky, multiple accounts, and backend services are future scope unless `docs/PLAN.md` changes.
@@ -81,8 +81,8 @@ Sources/
 - Prefer built-in SwiftUI and platform UI primitives over custom controls, custom styling, or bespoke interaction patterns.
 - Keep platform-specific code isolated behind small adapters or conditional compilation.
 - Prefer native Apple APIs over extra dependencies unless the dependency clearly reduces risk or complexity.
-- Preserve a universal app structure that can run on both macOS and iOS through xtool.
-- Verify xtool build/run behavior after meaningful project changes when feasible.
+- Preserve a universal app structure that can run on both macOS and iOS.
+- Verify `stupid-app` build/run behavior after meaningful project changes when feasible.
 
 ## State And Storage
 
@@ -105,11 +105,11 @@ Sources/
 
 ## Build And Install
 
-- When the user says "install" without specifying a target, default to `xtool dev run --simulator --no-attach --no-logs --launch-timeout 420`.
+- When the user says "install" without specifying a target, default to `stupid-app run --simulator`.
 - Only target a physical device over USB when the user explicitly says "install to iphone" or similar.
-- After making source or resource changes, run `xtool dev build` for them to take effect in the Xcode workspace. `xtool dev run` also performs a build, but a standalone build is faster for verification.
-- After making changes, install to the simulator with `xtool dev run --simulator --no-attach --no-logs --launch-timeout 420` unless the user explicitly asks not to install or asks for a different target.
-- When asked to bump the build number, increment `CFBundleVersion` in `Info.plist` by 1, then run `xtool dev build` to regenerate the Xcode workspace.
+- After making source or resource changes, run `stupid-app build` for them to take effect.
+- After making changes, install to the simulator with `stupid-app run --simulator` unless the user explicitly asks not to install or asks for a different target.
+- When asked to bump the build number, increment `CFBundleVersion` in `Info.plist` by 1.
 
 ## Engineering Style
 
@@ -123,7 +123,7 @@ Sources/
 ## Formatting
 
 - Run `swiftformat Sources/ Tests/` to auto-correct formatting violations.
-- Run `xtool dev build` after formatting to verify the build still passes.
+- Run `stupid-app build` after formatting to verify the build still passes.
 
 ## Debug Servers And State
 
