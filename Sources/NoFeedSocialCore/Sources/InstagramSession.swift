@@ -264,19 +264,23 @@ extension InstagramClient {
     }
 
     func storiesTrayResponse(credentials: InstagramCredentials) async throws -> InstagramReelsTrayResponse {
-        let state = try await ensureBootstrappedState(credentials: credentials)
-        let fields = [
-            "_csrftoken": state.csrfToken ?? credentials.csrfToken,
-            "jazoest": jazoest(csrfToken: state.csrfToken ?? credentials.csrfToken),
+        let docID = try await docId(credentials: credentials, command: "stories-tray")
+        let variables: [String: Any] = [
+            "data": [
+                "is_following_feed": false,
+                "reason": "web_home",
+            ],
+            "suggestedUsersData": [
+                "max_id": "",
+                "max_number_to_display": 0,
+                "module": "discover_people",
+                "paginate": false,
+            ],
         ]
-        let data = try await webJSONRequest(
-            credentials: credentials,
-            method: "POST",
-            path: "/api/v1/feed/reels_tray/",
-            headers: ["Content-Type": "application/x-www-form-urlencoded"],
-            body: formURLEncoded(fields).data(using: .utf8),
-        )
-        return try JSONDecoder().decode(InstagramReelsTrayResponse.self, from: data)
+        let data = try await graphqlGet(credentials: credentials, docID: docID, variables: variables)
+        let decoded = try JSONDecoder().decode(InstagramWebStoriesTrayResponse.self, from: data)
+        guard let tray = decoded.data.reelsTray else { throw SourceError.invalidResponse }
+        return tray
     }
 
     func directInboxViewer(credentials: InstagramCredentials) async throws -> InstagramDirectViewer {

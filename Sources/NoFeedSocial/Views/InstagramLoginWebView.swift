@@ -123,26 +123,26 @@ private func cookies(from credentials: InstagramCredentials?) -> [HTTPCookie] {
         func updateUIView(_: WKWebView, context _: Context) {}
 
         func makeCoordinator() -> Coordinator {
-            Coordinator(skipInitialCookieCheck: initialCredentials != nil, onCookiesFound: onCookiesFound)
+            Coordinator(onCookiesFound: onCookiesFound)
         }
 
         class Coordinator: NSObject, WKNavigationDelegate {
             let onCookiesFound: ([HTTPCookie]) -> Void
             private var hasNotified = false
-            private var skipInitialCookieCheck: Bool
 
-            init(skipInitialCookieCheck: Bool, onCookiesFound: @escaping ([HTTPCookie]) -> Void) {
-                self.skipInitialCookieCheck = skipInitialCookieCheck
+            init(onCookiesFound: @escaping ([HTTPCookie]) -> Void) {
                 self.onCookiesFound = onCookiesFound
             }
 
             func webView(_ webView: WKWebView, didFinish _: WKNavigation!) {
                 guard !hasNotified else { return }
-                if skipInitialCookieCheck {
-                    skipInitialCookieCheck = false
-                    return
-                }
+                if isLoginOrChallengePage(url: webView.url) { return }
                 checkForAuthCookies(webView: webView)
+            }
+
+            private func isLoginOrChallengePage(url: URL?) -> Bool {
+                guard let path = url?.path else { return false }
+                return path.contains("login") || path.contains("challenge") || path.contains("emailsignup")
             }
 
             private func checkForAuthCookies(webView: WKWebView) {
@@ -175,26 +175,26 @@ private func cookies(from credentials: InstagramCredentials?) -> [HTTPCookie] {
         func updateNSView(_: WKWebView, context _: Context) {}
 
         func makeCoordinator() -> Coordinator {
-            Coordinator(skipInitialCookieCheck: initialCredentials != nil, onCookiesFound: onCookiesFound)
+            Coordinator(onCookiesFound: onCookiesFound)
         }
 
         class Coordinator: NSObject, WKNavigationDelegate {
             let onCookiesFound: ([HTTPCookie]) -> Void
             private var hasNotified = false
-            private var skipInitialCookieCheck: Bool
 
-            init(skipInitialCookieCheck: Bool, onCookiesFound: @escaping ([HTTPCookie]) -> Void) {
-                self.skipInitialCookieCheck = skipInitialCookieCheck
+            init(onCookiesFound: @escaping ([HTTPCookie]) -> Void) {
                 self.onCookiesFound = onCookiesFound
             }
 
             func webView(_ webView: WKWebView, didFinish _: WKNavigation!) {
                 guard !hasNotified else { return }
-                if skipInitialCookieCheck {
-                    skipInitialCookieCheck = false
-                    return
-                }
+                if isLoginOrChallengePage(url: webView.url) { return }
                 checkForAuthCookies(webView: webView)
+            }
+
+            private func isLoginOrChallengePage(url: URL?) -> Bool {
+                guard let path = url?.path else { return false }
+                return path.contains("login") || path.contains("challenge") || path.contains("emailsignup")
             }
 
             private func checkForAuthCookies(webView: WKWebView) {
