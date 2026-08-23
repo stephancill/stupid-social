@@ -1,5 +1,9 @@
 # Implementation Notes
 
+## 2026-08-23
+
+- Right-aligned home-feed notification timestamps to the list row's true trailing margin. Feed rows now use state-driven navigation instead of `NavigationLink`, avoiding its reserved disclosure-chevron column while preserving full-row tap navigation and a custom disclosure chevron. The chevron remains vertically centered for rows with preview content and moves to the bottom trailing edge for summary-only rows so it stays separated from the timestamp.
+
 ## 2026-08-19
 
 - Fixed Instagram stories not rendering. The story tray was fetched via the web REST `POST /api/v1/feed/reels_tray/`, which began returning the Instagram mobile SPA-shell HTML page (~600KB `text/html`) instead of JSON for otherwise-valid credentials (direct inbox, news inbox, and current-user still returned JSON). `refreshStoryTray` then failed to decode, invalidated the account, and the stories bar rendered no Instagram content. Live probing confirmed the GraphQL `PolarisStoriesV3TrayContainerQuery` (the path abandoned in the prior note for returning `400 {"spam":true}`) now returns the tray correctly (6 entries, status ok). `Instagram.Session.storiesTrayResponse` now resolves the `PolarisStoriesV3TrayContainerQuery` doc ID and issues a GraphQL GET via `graphqlGet`, decoding through the existing `InstagramWebStoriesTrayResponse` wrapper (`data.xdt_api__v1__feed__reels_tray`). All 32 tests pass; build verified.

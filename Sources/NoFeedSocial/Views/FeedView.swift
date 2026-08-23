@@ -12,6 +12,7 @@ struct FeedView: View {
     @ObservedObject var storyViewModel: StoryBarViewModel
     let spotifyClient: SpotifyClient
     let onOpenSettings: () -> Void
+    @State private var notificationDetailSelection: DisplayNotificationItem?
     @State private var storyViewerSelection: StoryViewerSelection?
     @State private var showingStoryComposer = false
 
@@ -81,8 +82,13 @@ struct FeedView: View {
                 } else {
                     Section {
                         ForEach(Array(notificationItems.enumerated()), id: \.element.id) { index, displayItem in
-                            NotificationLink(displayItem: displayItem, feedService: viewModel.service)
-                                .listRowSeparator(index == 0 ? .hidden : .visible, edges: .top)
+                            Button {
+                                notificationDetailSelection = displayItem
+                            } label: {
+                                NotificationRow(displayItem: displayItem)
+                            }
+                            .buttonStyle(.plain)
+                            .listRowSeparator(index == 0 ? .hidden : .visible, edges: .top)
                         }
                     }
                     .listSectionSeparator(.hidden)
@@ -96,6 +102,9 @@ struct FeedView: View {
             #endif
             .refreshable {
                 await refreshFeedAndStories()
+            }
+            .navigationDestination(item: $notificationDetailSelection) { displayItem in
+                NotificationDetailView(displayItem: displayItem, feedService: viewModel.service)
             }
             .navigationTitle("Social")
             .toolbar {
@@ -834,19 +843,6 @@ private struct SpotifyAnimatedStoryThumbnail: View {
     }
 }
 
-private struct NotificationLink: View {
-    let displayItem: DisplayNotificationItem
-    let feedService: FeedService
-
-    var body: some View {
-        NavigationLink {
-            NotificationDetailView(displayItem: displayItem, feedService: feedService)
-        } label: {
-            NotificationRow(displayItem: displayItem)
-        }
-    }
-}
-
 private struct NotificationRow: View {
     let displayItem: DisplayNotificationItem
     @AppStorage("devModeEnabled") private var devModeEnabled = false
@@ -870,11 +866,17 @@ private struct NotificationRow: View {
                 }
 
                 summaryView
+                    .padding(.trailing, 24)
 
                 previewContent
+                    .padding(.trailing, 24)
             }
-
-            Spacer(minLength: 0)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .overlay(alignment: hasPreviewContent ? .trailing : .bottomTrailing) {
+            Image(systemName: "chevron.forward")
+                .font(.body.weight(.semibold))
+                .foregroundStyle(.tertiary)
         }
         .padding(.vertical, 4)
     }
@@ -909,6 +911,24 @@ private struct NotificationRow: View {
         guard let target = displayItem.item.target, target.imageURL != nil else { return false }
         let text = target.text?.lowercased() ?? ""
         return text.hasPrefix("sent a reel") || text.hasPrefix("sent a post") || text.hasPrefix("sent media")
+    }
+
+    private var hasPreviewContent: Bool {
+        if displayItem.item.type == .follow {
+            return false
+        }
+        if displayItem.item.type == .message, shouldShowMessageImagePreview {
+            return true
+        }
+        if let targetText = displayItem.item.target?.text, !targetText.isEmpty,
+           displayItem.item.type == .reaction || displayItem.item.type == .reply || displayItem.item.type == .mention || displayItem.item.type == .message || displayItem.item.type == .music
+        {
+            return true
+        }
+        if displayItem.item.target?.imageURL != nil {
+            return true
+        }
+        return displayItem.item.network != .bluesky && displayItem.item.actors.first != nil
     }
 
     private func messageImagePreview(url: URL) -> some View {
