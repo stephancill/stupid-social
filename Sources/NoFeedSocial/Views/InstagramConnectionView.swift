@@ -30,6 +30,14 @@ struct InstagramConnectionView: View {
                     Text(viewModel.instagramConnectionLabel)
                         .foregroundStyle(.secondary)
                 }
+                if let storage = viewModel.instagramCredentialStorage {
+                    HStack {
+                        Text("Credentials")
+                        Spacer()
+                        Text(storage.label)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
 
             if devModeEnabled, needsLogin {

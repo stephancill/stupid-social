@@ -22,6 +22,10 @@ public final class SettingsViewModel: ObservableObject {
     @Published public private(set) var spotifyStatus: AccountStatus = .notConfigured
     @Published public private(set) var blueskyStatus: AccountStatus = .notConfigured
     @Published public private(set) var debugStatus: AccountStatus = .notConfigured
+    @Published public private(set) var xCredentialStorage: CredentialSaveResult?
+    @Published public private(set) var instagramCredentialStorage: CredentialSaveResult?
+    @Published public private(set) var spotifyCredentialStorage: CredentialSaveResult?
+    @Published public private(set) var blueskyCredentialStorage: CredentialSaveResult?
     @Published public var message: String?
 
     private let keychainStore: KeychainCredentialStore
@@ -115,6 +119,13 @@ public final class SettingsViewModel: ObservableObject {
             || blueskyStatus == .invalidCredentials
     }
 
+    public var hasLocalOnlyCredentials: Bool {
+        xCredentialStorage == .localOnly
+            || instagramCredentialStorage == .localOnly
+            || spotifyCredentialStorage == .localOnly
+            || blueskyCredentialStorage == .localOnly
+    }
+
     public func beginBlueskyOAuth() async throws -> BlueskyOAuthSession {
         let hint = blueskyLoginHint.trimmingCharacters(in: .whitespacesAndNewlines)
         return try await BlueskyClient(credentialStore: keychainStore).startOAuth(loginHint: hint.isEmpty ? nil : hint)
@@ -124,6 +135,7 @@ public final class SettingsViewModel: ObservableObject {
         do {
             let credentials = try await BlueskyClient(credentialStore: keychainStore).finishOAuth(callbackURL: callbackURL, session: session)
             metadataStore.blueskyAccount = BlueskyAccountMetadata(did: credentials.did, handle: credentials.handle, status: .valid)
+            refreshCredentialStorageStatuses()
             blueskyStatus = .valid
             blueskyLoginHint = ""
             message = "Bluesky account connected."
@@ -135,7 +147,7 @@ public final class SettingsViewModel: ObservableObject {
 
     public func saveXCookies(_ credentials: XCredentials) async {
         do {
-            _ = try keychainStore.saveXCredentials(credentials)
+            xCredentialStorage = try keychainStore.saveXCredentials(credentials)
             xStatus = .valid
             message = "X credentials saved."
         } catch {
@@ -167,7 +179,7 @@ public final class SettingsViewModel: ObservableObject {
         }
 
         do {
-            _ = try keychainStore.saveXCredentials(credentials)
+            xCredentialStorage = try keychainStore.saveXCredentials(credentials)
             xCookieHeader = ""
             xStatus = .valid
             message = "X credentials saved."
@@ -219,7 +231,7 @@ public final class SettingsViewModel: ObservableObject {
 
     public func saveInstagramCookies(_ credentials: InstagramCredentials) async {
         do {
-            _ = try keychainStore.saveInstagramCredentials(credentials)
+            instagramCredentialStorage = try keychainStore.saveInstagramCredentials(credentials)
             instagramStatus = .valid
             message = "Instagram credentials saved."
         } catch {
@@ -259,7 +271,7 @@ public final class SettingsViewModel: ObservableObject {
         }
 
         do {
-            _ = try keychainStore.saveInstagramCredentials(credentials)
+            instagramCredentialStorage = try keychainStore.saveInstagramCredentials(credentials)
             instagramCookieHeader = ""
             instagramStatus = .valid
             message = "Instagram credentials saved."
@@ -307,6 +319,7 @@ public final class SettingsViewModel: ObservableObject {
 
     public func disconnectX() {
         try? keychainStore.deleteXCredentials()
+        xCredentialStorage = nil
         metadataStore.xAccount = nil
         xEnabledCategories = []
         try? cacheStore.deleteNetwork(.x)
@@ -350,6 +363,7 @@ public final class SettingsViewModel: ObservableObject {
 
     public func disconnectInstagram() {
         try? keychainStore.deleteInstagramCredentials()
+        instagramCredentialStorage = nil
         metadataStore.instagramAccount = nil
         instagramEnabledCategories = []
         instagramStoriesEnabled = true
@@ -392,7 +406,7 @@ public final class SettingsViewModel: ObservableObject {
 
     public func saveSpotifyCredentials(_ credentials: SpotifyCredentials) async {
         do {
-            _ = try keychainStore.saveSpotifyCredentials(credentials)
+            spotifyCredentialStorage = try keychainStore.saveSpotifyCredentials(credentials)
         } catch {
             spotifyStatus = .serviceError("Could not save credentials")
             message = "Could not save Spotify credentials."
@@ -456,7 +470,7 @@ public final class SettingsViewModel: ObservableObject {
                 initialBearerTokenExpiresAt: decoded.accessTokenExpirationTimestampMs.map { Date(timeIntervalSince1970: TimeInterval($0) / 1000) },
                 username: existing.username,
             )
-            _ = try keychainStore.saveSpotifyCredentials(enriched)
+            spotifyCredentialStorage = try keychainStore.saveSpotifyCredentials(enriched)
         } catch {
             // init token is best-effort; transport token already saved and validated
         }
@@ -492,7 +506,7 @@ public final class SettingsViewModel: ObservableObject {
         )
 
         do {
-            _ = try keychainStore.saveSpotifyCredentials(credentials)
+            spotifyCredentialStorage = try keychainStore.saveSpotifyCredentials(credentials)
             spotifyBearerToken = ""
             spotifyClientToken = ""
             spotifySpDC = ""
@@ -521,6 +535,7 @@ public final class SettingsViewModel: ObservableObject {
 
     public func disconnectSpotify() {
         try? keychainStore.deleteSpotifyCredentials()
+        spotifyCredentialStorage = nil
         metadataStore.spotifyAccount = nil
         try? cacheStore.deleteNetwork(.spotify)
         spotifyStatus = .notConfigured
@@ -529,6 +544,7 @@ public final class SettingsViewModel: ObservableObject {
 
     public func disconnectBluesky() {
         try? keychainStore.deleteBlueskyCredentials()
+        blueskyCredentialStorage = nil
         metadataStore.blueskyAccount = nil
         try? cacheStore.deleteNetwork(.bluesky)
         blueskyStatus = .notConfigured
@@ -543,6 +559,7 @@ public final class SettingsViewModel: ObservableObject {
     }
 
     public func loadStatuses() {
+        refreshCredentialStorageStatuses()
         if let x = metadataStore.xAccount {
             xEnabledCategories = x.enabledCategories
             xStatus = accountStatus(from: x.status)
@@ -599,7 +616,123 @@ public final class SettingsViewModel: ObservableObject {
         case .iCloudUnavailable: .iCloudUnavailable
         case .notConfigured: .notConfigured
         case .networkUnavailable: .networkUnavailable
-        case .serviceError: .serviceError("Invalid credentials")
+        case .serviceError: .serviceError("Validation failed")
+        }
+    }
+
+    public func refreshSyncedConnections() async {
+        let discoveredX = metadataStore.xAccount == nil && (try? keychainStore.loadXCredentials()) != nil
+        let discoveredInstagram = metadataStore.instagramAccount == nil && (try? keychainStore.loadInstagramCredentials()) != nil
+        let discoveredSpotify = metadataStore.spotifyAccount == nil && (try? keychainStore.loadSpotifyCredentials()) != nil
+        let discoveredBluesky = metadataStore.blueskyAccount == nil && (try? keychainStore.loadBlueskyCredentials()) != nil
+
+        if discoveredX {
+            metadataStore.xAccount = XAccountMetadata(accountId: "x", handle: nil, status: .valid)
+        }
+        if discoveredInstagram, let credentials = try? keychainStore.loadInstagramCredentials() {
+            metadataStore.instagramAccount = InstagramAccountMetadata(
+                accountId: credentials.dsUserId,
+                username: nil,
+                status: .valid,
+            )
+        }
+        if discoveredSpotify, let credentials = try? keychainStore.loadSpotifyCredentials() {
+            metadataStore.spotifyAccount = SpotifyAccountMetadata(
+                accountId: "spotify",
+                username: credentials.username,
+                status: .valid,
+            )
+        }
+        if discoveredBluesky, let credentials = try? keychainStore.loadBlueskyCredentials() {
+            metadataStore.blueskyAccount = BlueskyAccountMetadata(
+                did: credentials.did,
+                handle: credentials.handle,
+                status: .valid,
+            )
+        }
+
+        loadStatuses()
+
+        if discoveredX {
+            await validateDiscoveredXCredentials()
+        }
+        if discoveredInstagram {
+            await validateDiscoveredInstagramCredentials()
+        }
+        if discoveredSpotify {
+            await validateDiscoveredSpotifyCredentials()
+        }
+        if discoveredBluesky {
+            await validateDiscoveredBlueskyCredentials()
+        }
+    }
+
+    private func refreshCredentialStorageStatuses() {
+        xCredentialStorage = try? keychainStore.xCredentialStorage()
+        instagramCredentialStorage = try? keychainStore.instagramCredentialStorage()
+        spotifyCredentialStorage = try? keychainStore.spotifyCredentialStorage()
+        blueskyCredentialStorage = try? keychainStore.blueskyCredentialStorage()
+    }
+
+    private func validateDiscoveredXCredentials() async {
+        do {
+            let user = try await XClient(credentialStore: keychainStore).verifiedUser()
+            metadataStore.xAccount = XAccountMetadata(accountId: "x", handle: user.screenName, status: .valid)
+            xStatus = .valid
+        } catch {
+            metadataStore.xAccount = XAccountMetadata(accountId: "x", handle: nil, status: .serviceError)
+            xStatus = .serviceError("Validation failed")
+        }
+    }
+
+    private func validateDiscoveredInstagramCredentials() async {
+        do {
+            let profile = try await InstagramClient(credentialStore: keychainStore).currentUserProfile()
+            metadataStore.instagramAccount = instagramMetadata(from: profile, categories: Set(InstagramNotificationCategory.allCases))
+            instagramStatus = .valid
+        } catch SourceError.notConfigured {
+            markInstagramCredentialsInvalid()
+        } catch {
+            if var account = metadataStore.instagramAccount {
+                account.status = .serviceError
+                metadataStore.instagramAccount = account
+            }
+            instagramStatus = .serviceError("Validation failed")
+        }
+    }
+
+    private func validateDiscoveredSpotifyCredentials() async {
+        do {
+            let username = try await SpotifyClient(credentialStore: keychainStore).validateAccount()
+            metadataStore.spotifyAccount = SpotifyAccountMetadata(accountId: "spotify", username: username, status: .valid)
+            spotifyStatus = .valid
+        } catch SourceError.notConfigured {
+            metadataStore.spotifyAccount = SpotifyAccountMetadata(accountId: "spotify", username: nil, status: .invalidCredentials)
+            spotifyStatus = .invalidCredentials
+        } catch {
+            metadataStore.spotifyAccount = SpotifyAccountMetadata(accountId: "spotify", username: nil, status: .serviceError)
+            spotifyStatus = .serviceError("Validation failed")
+        }
+    }
+
+    private func validateDiscoveredBlueskyCredentials() async {
+        do {
+            let profile = try await BlueskyClient(credentialStore: keychainStore).validateAccount()
+            guard let credentials = try? keychainStore.loadBlueskyCredentials() else { return }
+            metadataStore.blueskyAccount = BlueskyAccountMetadata(did: credentials.did, handle: profile.handle, status: .valid)
+            blueskyStatus = .valid
+        } catch SourceError.notConfigured {
+            if var account = metadataStore.blueskyAccount {
+                account.status = .invalidCredentials
+                metadataStore.blueskyAccount = account
+            }
+            blueskyStatus = .invalidCredentials
+        } catch {
+            if var account = metadataStore.blueskyAccount {
+                account.status = .serviceError
+                metadataStore.blueskyAccount = account
+            }
+            blueskyStatus = .serviceError("Validation failed")
         }
     }
 

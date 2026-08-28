@@ -1,8 +1,15 @@
 # Implementation Notes
 
+## 2026-08-28
+
+- Released build 104 to **external** TestFlight (first external release; prior releases were internal-only). The `stupid-app` CLI has no external-submission command, so after `release archive` + `release upload --wait` (build `ee81e194-4420-4d79-be70-39313ca798fe`, version 1.0.0 (104), valid + internal IN_BETA_TESTING) the external steps were driven through the App Store Connect API using the stored `~/.stupid-app/credentials/asc.*` p8 key: build was added to the "External" beta group `ac67336d-4435-4ad7-9c6d-17ef19701dd1` via `POST /v1/builds/{id}/relationships/betaGroups` (the dedicated `POST /v1/buildBetaGroups` path no longer exists → 404), then a beta app review submission was created via `POST /v1/betaAppReviewSubmissions` (state WAITING_FOR_REVIEW). Live `release status --live` then reported `external beta: IN_BETA_TESTING`. The helper lives in `scripts/asc_external.py` (actions: groups, get-build, add-to-group, submit) for reuse.
+
 ## 2026-08-23
 
+- Completed cross-device connection credential discovery through iCloud Keychain. Production iOS/macOS builds write synchronizable Keychain items first and fall back only to non-synchronizable Keychain storage; new plaintext `UserDefaults` credential fallback writes are limited to simulator development, where the pseudo-signed app may lack Keychain access. Existing local Keychain and legacy fallback values are promoted opportunistically, with newer coexisting local/cloud items selected by Keychain modification date and stale local copies removed after successful synchronization. Foreground activation now discovers credentials delivered from another Apple device before refreshing, reconstructs device-local account metadata, validates newly discovered sessions, and reports `iCloud` or `This device` storage on each credential-backed connection screen. Notification caches and non-secret connection preferences remain local.
+- Bumped `CFBundleVersion` from 102 to 103 and distributed the iCloud Keychain credential synchronization update to TestFlight with `stupid-app`. App Store Connect build `efbd4a5c-aa93-40e9-bc9e-47c5c8d008c7` completed as `VALID` and `IN_BETA_TESTING` for internal testers.
 - Right-aligned home-feed notification timestamps to the list row's true trailing margin. Feed rows now use state-driven navigation instead of `NavigationLink`, avoiding its reserved disclosure-chevron column while preserving full-row tap navigation and a custom disclosure chevron. The chevron remains vertically centered for rows with preview content and moves to the bottom trailing edge for summary-only rows so it stays separated from the timestamp.
+- Bumped `CFBundleVersion` from 101 to 102 and released the notification timestamp alignment update to TestFlight with `stupid-app`. Build Upload `4b598278-33a8-4c1d-9f8a-21871d906a4f` completed as `VALID` and `IN_BETA_TESTING` for internal testers.
 
 ## 2026-08-19
 

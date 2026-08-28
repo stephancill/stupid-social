@@ -26,9 +26,7 @@ public struct ContentView: View {
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active, let container else { return }
             Task {
-                async let feedRefresh = container.feedViewModel.refreshOnForegroundActivation()
-                async let storyRefresh: Void = container.storyBarViewModel.fetchStoryBarContent()
-                _ = await (feedRefresh, storyRefresh)
+                await foregroundRefreshFeedAndStories(container: container)
             }
         }
     }
@@ -93,6 +91,7 @@ public struct ContentView: View {
     }
 
     private func foregroundRefreshFeedAndStories(container: AppContainer) async {
+        await container.settingsViewModel.refreshSyncedConnections()
         async let feedRefresh = container.feedViewModel.refreshOnForegroundActivation()
         async let storyRefresh: Void = container.storyBarViewModel.fetchStoryBarContent()
         _ = await (feedRefresh, storyRefresh)

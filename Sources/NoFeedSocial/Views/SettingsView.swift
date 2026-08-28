@@ -72,6 +72,16 @@ struct SettingsView: View {
                 }
             }
 
+            if viewModel.hasLocalOnlyCredentials {
+                Section {
+                    #if targetEnvironment(simulator)
+                        Text("Simulator credentials stay on this Mac and do not sync through iCloud Keychain.")
+                    #else
+                        Text("Some credentials are stored only on this device. Enable iCloud Keychain in System Settings; the app will retry when it next becomes active.")
+                    #endif
+                }
+            }
+
             Section {
                 Button {
                     openURL(URL(string: "https://stupidtech.net")!)

@@ -5,7 +5,12 @@ final class KeychainCredentialStoreTests: XCTestCase {
     func testSavesLoadsUpdatesAndDeletesLocalXCredentials() throws {
         let suiteName = "tech.stupid.StupidSocial.tests.\(UUID().uuidString)"
         let fallbackStore = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        let store = KeychainCredentialStore(service: suiteName, fallbackStore: fallbackStore)
+        let store = KeychainCredentialStore(
+            service: suiteName,
+            fallbackStore: fallbackStore,
+            prefersSynchronizable: false,
+            allowsInsecureFallback: true,
+        )
         defer {
             try? store.deleteXCredentials()
             UserDefaults.standard.removePersistentDomain(forName: suiteName)
@@ -15,6 +20,8 @@ final class KeychainCredentialStoreTests: XCTestCase {
         let firstResult = try store.saveXCredentials(first)
 
         XCTAssertEqual(firstResult, .localOnly)
+        XCTAssertEqual(firstResult.label, "This device")
+        XCTAssertEqual(try store.xCredentialStorage(), .localOnly)
         XCTAssertEqual(try store.loadXCredentials(), first)
 
         let second = XCredentials(authToken: "second-token", ct0: "second-ct0")

@@ -25,20 +25,43 @@ public enum KeychainCredentialStoreError: LocalizedError {
 public enum CredentialSaveResult: Equatable {
     case synced
     case localOnly
+
+    public var label: String {
+        switch self {
+        case .synced: "iCloud"
+        case .localOnly: "This device"
+        }
+    }
 }
 
 public final class KeychainCredentialStore {
+    private struct StoredItem {
+        let data: Data
+        let modifiedAt: Date
+    }
+
     private let service: String
     private let fallbackStore: UserDefaults
+    private let prefersSynchronizable: Bool
+    private let allowsInsecureFallback: Bool
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
     public init(
         service: String = "tech.stupid.StupidSocial.credentials",
         fallbackStore: UserDefaults = .standard,
+        prefersSynchronizable: Bool? = nil,
+        allowsInsecureFallback: Bool? = nil,
     ) {
         self.service = service
         self.fallbackStore = fallbackStore
+        #if targetEnvironment(simulator)
+            self.prefersSynchronizable = prefersSynchronizable ?? false
+            self.allowsInsecureFallback = allowsInsecureFallback ?? true
+        #else
+            self.prefersSynchronizable = prefersSynchronizable ?? true
+            self.allowsInsecureFallback = allowsInsecureFallback ?? false
+        #endif
     }
 
     public func saveXCredentials(_ credentials: XCredentials) throws -> CredentialSaveResult {
@@ -97,8 +120,24 @@ public final class KeychainCredentialStore {
         try deleteForAccount("bluesky")
     }
 
+    public func xCredentialStorage() throws -> CredentialSaveResult? {
+        try storage(account: "x")
+    }
+
+    public func instagramCredentialStorage() throws -> CredentialSaveResult? {
+        try storage(account: "instagram")
+    }
+
+    public func spotifyCredentialStorage() throws -> CredentialSaveResult? {
+        try storage(account: "spotify")
+    }
+
+    public func blueskyCredentialStorage() throws -> CredentialSaveResult? {
+        try storage(account: "bluesky")
+    }
+
     private func deleteForAccount(_ account: String) throws {
-        for synchronizable in synchronizableCandidates {
+        for synchronizable in [true, false] {
             let query = baseQuery(account: account, synchronizable: synchronizable)
             let status = SecItemDelete(query as CFDictionary)
             guard status == errSecSuccess || status == errSecItemNotFound else { continue }
@@ -107,9 +146,10 @@ public final class KeychainCredentialStore {
     }
 
     private func save(data: Data, account: String) throws -> CredentialSaveResult {
-        if preferredSynchronizable {
+        if prefersSynchronizable {
             do {
                 try save(data: data, account: account, synchronizable: true)
+                try? delete(account: account, synchronizable: false)
                 fallbackStore.removeObject(forKey: fallbackKey(account: account))
                 return .synced
             } catch _ as KeychainCredentialStoreError {
@@ -121,7 +161,8 @@ public final class KeychainCredentialStore {
             try save(data: data, account: account, synchronizable: false)
             fallbackStore.removeObject(forKey: fallbackKey(account: account))
             return .localOnly
-        } catch _ as KeychainCredentialStoreError {
+        } catch let error as KeychainCredentialStoreError {
+            guard allowsInsecureFallback else { throw error }
             fallbackStore.set(data, forKey: fallbackKey(account: account))
             return .localOnly
         }
@@ -154,22 +195,79 @@ public final class KeychainCredentialStore {
     }
 
     private func load(account: String) throws -> Data? {
-        for synchronizable in synchronizableCandidates {
-            var query = baseQuery(account: account, synchronizable: synchronizable)
-            query[kSecReturnData as String] = kCFBooleanTrue
-            query[kSecMatchLimit as String] = kSecMatchLimitOne
+        let synchronized = try? load(account: account, synchronizable: true)
+        let local = try? load(account: account, synchronizable: false)
 
-            var item: CFTypeRef?
-            let status = SecItemCopyMatching(query as CFDictionary, &item)
-
-            if status == errSecItemNotFound { continue }
-            if status == errSecSuccess {
-                return item as? Data
+        if let local, local.modifiedAt > (synchronized?.modifiedAt ?? .distantPast) {
+            if prefersSynchronizable,
+               (try? save(data: local.data, account: account, synchronizable: true)) != nil
+            {
+                try? delete(account: account, synchronizable: false)
+                fallbackStore.removeObject(forKey: fallbackKey(account: account))
             }
-            // Continue to next candidate on any non-success error
+            return local.data
         }
 
-        return fallbackStore.data(forKey: fallbackKey(account: account))
+        if let synchronized {
+            try? delete(account: account, synchronizable: false)
+            fallbackStore.removeObject(forKey: fallbackKey(account: account))
+            return synchronized.data
+        }
+
+        if let local {
+            if prefersSynchronizable,
+               (try? save(data: local.data, account: account, synchronizable: true)) != nil
+            {
+                try? delete(account: account, synchronizable: false)
+                fallbackStore.removeObject(forKey: fallbackKey(account: account))
+            }
+            return local.data
+        }
+
+        guard let legacy = fallbackStore.data(forKey: fallbackKey(account: account)) else { return nil }
+        if prefersSynchronizable,
+           (try? save(data: legacy, account: account, synchronizable: true)) != nil
+        {
+            fallbackStore.removeObject(forKey: fallbackKey(account: account))
+        } else if (try? save(data: legacy, account: account, synchronizable: false)) != nil {
+            fallbackStore.removeObject(forKey: fallbackKey(account: account))
+        }
+        return legacy
+    }
+
+    private func load(account: String, synchronizable: Bool) throws -> StoredItem? {
+        var query = baseQuery(account: account, synchronizable: synchronizable)
+        query[kSecReturnData as String] = kCFBooleanTrue
+        query[kSecReturnAttributes as String] = kCFBooleanTrue
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess else {
+            throw KeychainCredentialStoreError.unhandledStatus(status)
+        }
+        guard let attributes = item as? [String: Any],
+              let data = attributes[kSecValueData as String] as? Data
+        else {
+            throw KeychainCredentialStoreError.decodeFailed
+        }
+        return StoredItem(
+            data: data,
+            modifiedAt: attributes[kSecAttrModificationDate as String] as? Date ?? .distantPast,
+        )
+    }
+
+    private func storage(account: String) throws -> CredentialSaveResult? {
+        if (try? load(account: account, synchronizable: true)) != nil {
+            return .synced
+        }
+        if (try? load(account: account, synchronizable: false)) != nil
+            || fallbackStore.data(forKey: fallbackKey(account: account)) != nil
+        {
+            return .localOnly
+        }
+        return nil
     }
 
     private func baseQuery(account: String, synchronizable: Bool) -> [String: Any] {
@@ -182,18 +280,6 @@ public final class KeychainCredentialStore {
         query[kSecAttrSynchronizable as String] = synchronizable ? kCFBooleanTrue : kCFBooleanFalse
 
         return query
-    }
-
-    private var preferredSynchronizable: Bool {
-        #if targetEnvironment(simulator)
-            false
-        #else
-            true
-        #endif
-    }
-
-    private var synchronizableCandidates: [Bool] {
-        preferredSynchronizable ? [true, false] : [false, true]
     }
 
     private func fallbackKey(account: String) -> String {

@@ -30,6 +30,14 @@ struct XConnectionView: View {
                     Text(viewModel.xConnectionLabel)
                         .foregroundStyle(.secondary)
                 }
+                if let storage = viewModel.xCredentialStorage {
+                    HStack {
+                        Text("Credentials")
+                        Spacer()
+                        Text(storage.label)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
 
             if viewModel.xStatus != .notConfigured {
