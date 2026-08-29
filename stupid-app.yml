@@ -20,3 +20,6 @@ resources:
   - Resources/BlueskyBadge.png
   - Resources/BlueskyBadge@2x.png
   - Resources/BlueskyBadge@3x.png
+  - Resources/GitHubBadge.png
+  - Resources/GitHubBadge@2x.png
+  - Resources/GitHubBadge@3x.png
