@@ -137,6 +137,27 @@ final class GitHubActivityParserTests: XCTestCase {
         XCTAssertEqual(result.storyGroups.flatMap(\.activities).map(\.targetName), ["stephancill/pfwc"])
     }
 
+    /// GitHub aggregates several distinct people who starred the same owned repo
+    /// into one card with ``NAME</a> starred`` rows; each should surface as its
+    /// own "starred your repository" notification.
+    func testAggregatedYourRepositoryRowsExpandToNotifications() throws {
+        let viewer = "stephancill"
+        let html = """
+        <article>
+          <a href="/\(viewer)/pfwc" class="Link--primary Link text-bold">\(viewer)/pfwc</a>
+          <a href="/s0urledd" class="Link--primary text-bold">s0urledd</a> starred
+          <a href="/muhamedzeema" class="Link--primary text-bold">muhamedzeema</a> starred
+          <a href="/juliustip" class="Link--primary text-bold">juliustip</a> starred
+        </article>
+        """
+
+        let result = try GitHubActivityParser.parse(html, viewerUsername: viewer)
+
+        let actors = result.notificationItems.compactMap(\.actor.username).sorted()
+        XCTAssertEqual(actors, ["juliustip", "muhamedzeema", "s0urledd"])
+        XCTAssertEqual(Set(result.notificationItems.map(\.targetName)), ["\(viewer)/pfwc"])
+    }
+
     // MARK: - Card builders
 
     private func starred(createdAt: String, recordId: String, actorHref: String, actorId: String, repoHref: String, sub: Int?) -> String {

@@ -67,7 +67,7 @@ Build a universal macOS and iOS app with xtool that shows a combined social noti
 - Store only the selected `user_session` and `__Host-user_session_same_site` cookies in Keychain.
 - Fetch the authenticated HTML `GET /conduit/for_you_feed` endpoint and parse its machine-readable Hydro metadata.
 - Show GitHub activity in the stories bar, grouped by actor.
-- "Starred your repository" events (target repo owner equals the viewer username) are routed to the main notifications feed, not the stories bar.
+- "Starred your repository" events (target repo owner equals the viewer username) route to the main notifications feed, not the stories bar. GitHub aggregates several people who starred the same owned repo into one card with `NAME</a> starred` rows; every such actor row surfaces as its own notification.
 - The OAuth `client_id` is `https://stupidtech.net/stupid-social/oauth/client-metadata.json`; login requires that exact public client metadata document to be hosted before authorization can complete.
 
 ## Credential Storage

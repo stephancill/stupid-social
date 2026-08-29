@@ -444,6 +444,39 @@ def truncate(value: str, limit: int) -> str:
     normalized = " ".join(value.split())
     return normalized if len(normalized) <= limit else normalized[:limit] + "..."
 
+def extract_starred_your_repo(html: str, viewer: str) -> list[dict[str, Any]]:
+    """Return every "starred YOUR repository" notification from the For You feed.
+
+    GitHub aggregates several distinct stars of the same owned repo into one visible
+    rollup card (e.g. ``s0urledd starred your repository`` rows), which the
+    record_id-based story parser collapses to a single event. To surface every real
+    notification we walk each <article> and pair every starring-actor row with the
+    owned repo(s) the card names. Returns one entry per (actor, repo)."""
+    viewer_lower = (viewer or "").lower()
+
+    actor_re = re.compile(
+        r'<a[^>]*href="/(?P<u>[A-Za-z0-9_-]+)"[^>]*class="[^"]*Link[^"]*text-bold"[^>]*>\s*(?P=u)\s*</a>\s*starred',
+        re.S,
+    )
+    repo_re = re.compile(r'href="/(' + re.escape(viewer_lower) + r'/[\w.-]+)' + r'[/"]')
+
+    result: dict[tuple[str, str], dict[str, Any]] = {}
+    for article in re.split(r"(?=<article\b)", html or ""):
+        actors = set()
+        for m in actor_re.finditer(article):
+            actors.add(m.group("u"))
+        repos = set()
+        for rm in repo_re.finditer(article):
+            repos.add(rm.group(1).strip("/"))
+        if not actors:
+            continue
+        if not repos and "your repository" not in article:
+            continue
+        for actor in actors:
+            for repo in repos:
+                result.setdefault((actor, repo), {"actor": actor, "target": repo})
+    return sorted(result.values(), key=lambda r: r["actor"])
+
 def repo_metadata_from_html(html: str) -> dict[str, dict[str, str | None]]:
     """Extract per-repository card metadata (description, language, stars) by
     scanning each <article> element, keyed by the repository owner/name."""
@@ -577,6 +610,11 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser(
         "bootstrap", help="Print credential presence without making a request."
     )
+    notifications = subparsers.add_parser(
+        "notifications",
+        help="Fetch the feed and print 'starred YOUR repository' notifications ",
+    )
+    notifications.add_argument("--output", help="Write notification JSON to this path.")
     feed = subparsers.add_parser("feed", help="Fetch the GitHub For You HTML feed.")
     feed.add_argument("--etag", help="Send If-None-Match with this ETag.")
     feed.add_argument("--output", help="Write raw HTML to this path.")
@@ -637,6 +675,13 @@ def main() -> None:
                 sys.stdout.write(html)
             else:
                 print(json.dumps(summary, indent=2, sort_keys=True))
+            return
+        if args.command == "notifications":
+            html, _ = client.for_you_feed()
+            viewer = credentials.get("username")
+            notifications_list = extract_starred_your_repo(html, viewer) if html else []
+            write_json(args.output, notifications_list)
+            print(json.dumps(notifications_list, indent=2, sort_keys=True))
             return
         raise SystemExit(f"Unknown command: {args.command}")
     except GitHubHTTPError as exc:

@@ -208,14 +208,120 @@ public enum GitHubActivityParser {
         }
 
         let storyCandidates = complete.filter { !isStarOfYourRepository($0, viewerUsername: viewerUsername) }
-        let notificationCandidates = complete.filter { isStarOfYourRepository($0, viewerUsername: viewerUsername) }
+        let recordNotifications = complete.filter { isStarOfYourRepository($0, viewerUsername: viewerUsername) }
+        let notificationItems = mergedYourRepositoryNotifications(
+            recordItems: recordNotifications,
+            html: html,
+            viewerUsername: viewerUsername,
+        )
 
         let grouped = Dictionary(grouping: storyCandidates, by: { $0.actor.id })
         let storyGroups: [GitHubActivityGroup] = grouped.values.compactMap { activities in
             guard let actor = activities.first?.actor else { return nil }
             return GitHubActivityGroup(actor: actor, activities: activities.sorted { $0.timestamp < $1.timestamp })
         }.sorted { $0.timestamp > $1.timestamp }
-        return GitHubFeedParseResult(storyGroups: storyGroups, notificationItems: notificationCandidates)
+        return GitHubFeedParseResult(storyGroups: storyGroups, notificationItems: notificationItems)
+    }
+
+    /// Combines the record-level "starred your repository" notifications with the
+    /// aggregated text rows GitHub renders when several people star the same owned
+    /// repo. The hydro/record parser collapses those rows (``s0urledd starred your
+    /// repository``, ``muhamedzeema starred ...``) to the card's single record, so
+    /// the remaining actors must be recovered from the rendered row text and the
+    /// owned repo(s) the card names. Deduplicates by (actor, target).
+    private static func mergedYourRepositoryNotifications(
+        recordItems: [GitHubActivityItem],
+        html: String,
+        viewerUsername: String?,
+    ) -> [GitHubActivityItem] {
+        var items = recordItems
+        if let aggregated = aggregatedYourRepositoryItems(in: html, viewerUsername: viewerUsername) {
+            items.append(contentsOf: aggregated)
+        }
+        var seen = Set<String>()
+        return items.filter { item in
+            guard item.kind == .starredRepository else { return true }
+            let key = "\(item.actor.username ?? item.actor.id)|\(item.targetName)"
+            return seen.insert(key).inserted
+        }.sorted { $0.timestamp > $1.timestamp }
+    }
+
+    /// Recovers aggregated "starred your repository" notifications from rendered
+    /// feed rows. Each card (an <article>) that names at least one of the viewer's
+    /// repos and contains one or more ``NAME</a> starred`` rows yields a
+    /// notification per (actor, owned repo). Mirrors the Python probe.
+    private static func aggregatedYourRepositoryItems(in html: String, viewerUsername: String?) -> [GitHubActivityItem]? {
+        guard let viewerUsername, !viewerUsername.isEmpty else { return nil }
+        let viewerOwner = viewerUsername.split(separator: "/").first.map(String.init) ?? viewerUsername
+        let viewerEsc = NSRegularExpression.escapedPattern(for: viewerOwner)
+        guard let actorRe = try? NSRegularExpression(pattern: #"<a[^>]*href="/([A-Za-z0-9_-]+)"[^>]*class="[^"]*Link[^"]*text-bold[^"]*"[^>]*>.*?</a>\s*starred"#),
+              let repoLinkRe = try? NSRegularExpression(pattern: #"<a[^>]*href="/(\#(viewerEsc)/[A-Za-z0-9_.-]+)"#)
+        else { return nil }
+
+        var items: [GitHubActivityItem] = []
+        for article in html.components(separatedBy: "<article") where article.contains("starred") {
+            var actors = Set<String>()
+            for match in actorRe.matches(in: article, range: NSRange(article.startIndex..., in: article)) {
+                if let name = Range(match.range(at: 1), in: article) {
+                    actors.insert(String(article[name]))
+                }
+            }
+            guard !actors.isEmpty else { continue }
+            var repos = Set<String>()
+            for capture in repoLinkRe.matches(in: article, range: NSRange(article.startIndex..., in: article)) {
+                if let value = Range(capture.range(at: 1), in: article) {
+                    repos.insert(String(article[value]).trimmingCharacters(in: CharacterSet(charactersIn: "/")))
+                }
+            }
+            guard !repos.isEmpty else { continue }
+            let timestamp = createdTimestamp(in: article) ?? Date()
+            for actorName in actors {
+                for repo in repos {
+                    items.append(yourRepositoryStarItem(actor: actorName, repo: repo, timestamp: timestamp))
+                }
+            }
+        }
+        return items.isEmpty ? nil : items
+    }
+
+    private static func createdTimestamp(in article: String) -> Date? {
+        // payload[feed_card][created_at]=2026-08-29 02:14:51 -0700 with
+        // URL-encoded colons (%3A) and spaces (+).
+        let decoded = article
+            .replacingOccurrences(of: "%3A", with: ":")
+            .replacingOccurrences(of: "%2F", with: "/")
+            .replacingOccurrences(of: "+", with: " ")
+        guard let regex = try? NSRegularExpression(pattern: #"created_at=([0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} [+-][0-9]{4})"#),
+              let match = regex.firstMatch(in: decoded, range: NSRange(decoded.startIndex..., in: decoded)),
+              let value = Range(match.range(at: 1), in: decoded)
+        else { return nil }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss Z"
+        return formatter.date(from: String(decoded[value]))
+    }
+
+    private static func yourRepositoryStarItem(actor: String, repo: String, timestamp: Date) -> GitHubActivityItem {
+        let targetOwner = repo.split(separator: "/").first.map(String.init) ?? repo
+        let notificationActor = NotificationActor(
+            id: actor.lowercased(),
+            network: .github,
+            username: actor,
+            displayName: nil,
+            avatarURL: URL(string: "https://github.com/\(actor).png?size=192"),
+            timestamp: timestamp,
+        )
+        return GitHubActivityItem(
+            id: "github-yourstar-\(actor.lowercased())-\(repo.lowercased())",
+            kind: .starredRepository,
+            timestamp: timestamp,
+            actor: notificationActor,
+            targetId: repo.lowercased(),
+            targetName: repo,
+            targetURL: URL(string: "https://github.com/\(repo)")!,
+            targetAvatarURL: URL(string: "https://github.com/\(targetOwner).png?size=192"),
+            summary: "\(actor) starred \(repo)",
+        )
     }
 
     /// A "starred your repository" event is a notification about the viewer's
