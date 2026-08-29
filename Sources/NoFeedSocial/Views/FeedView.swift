@@ -840,7 +840,7 @@ private struct GitHubStoryBubble: View {
 
     private var githubBadgeOverlay: some View {
         Group {
-            if let image = networkBadgeImage(named: SocialNetwork.github.badgeAssetName) {
+            if let image = networkBadgeImage(named: "GitHubMark") {
                 image
                     .resizable()
                     .interpolation(.high)
