@@ -817,9 +817,7 @@ private struct GitHubStoryBubble: View {
                         .stroke(group.isSeen ? Color.gray.opacity(0.4) : Color.primary, lineWidth: 3)
                 }
 
-                Image(systemName: "chevron.left.forwardslash.chevron.right")
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(.white)
+                githubBadgeOverlay
                     .frame(width: 24, height: 24)
                     .background(Color.black, in: Circle())
                     .overlay { Circle().stroke(.background, lineWidth: 2) }
@@ -838,6 +836,20 @@ private struct GitHubStoryBubble: View {
 
     private var displayName: String {
         DebugRedaction.actorName(group.actor, enabled: devModeEnabled)
+    }
+
+    private var githubBadgeOverlay: some View {
+        Group {
+            if let image = networkBadgeImage(named: SocialNetwork.github.badgeAssetName) {
+                image
+                    .resizable()
+                    .interpolation(.high)
+            } else {
+                Image(systemName: "chevron.left.forwardslash.chevron.right")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.white)
+            }
+        }
     }
 
     private var avatarPlaceholder: some View {
