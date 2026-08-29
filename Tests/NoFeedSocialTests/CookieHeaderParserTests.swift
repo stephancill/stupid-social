@@ -26,6 +26,21 @@ final class CookieHeaderParserTests: XCTestCase {
         XCTAssertNil(CookieHeaderParser.extractXCredentials(from: header))
     }
 
+    func testExtractsOnlyRequiredGitHubCredentials() {
+        let header = "_device_id=device; user_session=session; __Host-user_session_same_site=same-site; _gh_sess=ignored"
+
+        let credentials = CookieHeaderParser.extractGitHubCredentials(from: header)
+
+        XCTAssertEqual(credentials, GitHubCredentials(
+            userSession: "session",
+            sameSiteUserSession: "same-site",
+        ))
+    }
+
+    func testReturnsNilWhenGitHubSessionCookieIsMissing() {
+        XCTAssertNil(CookieHeaderParser.extractGitHubCredentials(from: "user_session=session"))
+    }
+
     func testSpotifyWebPlayerTokenMatchesCurrentWebPlayerAlgorithm() {
         let date = Date(timeIntervalSince1970: 1_777_993_436)
 

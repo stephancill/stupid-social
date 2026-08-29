@@ -120,6 +120,20 @@ public final class KeychainCredentialStore {
         try deleteForAccount("bluesky")
     }
 
+    public func saveGitHubCredentials(_ credentials: GitHubCredentials) throws -> CredentialSaveResult {
+        let data = try encoder.encode(credentials)
+        return try save(data: data, account: "github")
+    }
+
+    public func loadGitHubCredentials() throws -> GitHubCredentials? {
+        guard let data = try load(account: "github") else { return nil }
+        return try decoder.decode(GitHubCredentials.self, from: data)
+    }
+
+    public func deleteGitHubCredentials() throws {
+        try deleteForAccount("github")
+    }
+
     public func xCredentialStorage() throws -> CredentialSaveResult? {
         try storage(account: "x")
     }
@@ -134,6 +148,10 @@ public final class KeychainCredentialStore {
 
     public func blueskyCredentialStorage() throws -> CredentialSaveResult? {
         try storage(account: "bluesky")
+    }
+
+    public func githubCredentialStorage() throws -> CredentialSaveResult? {
+        try storage(account: "github")
     }
 
     private func deleteForAccount(_ account: String) throws {

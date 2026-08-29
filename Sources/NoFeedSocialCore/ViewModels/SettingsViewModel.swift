@@ -11,6 +11,7 @@ public final class SettingsViewModel: ObservableObject {
     @Published public var spotifySpDC = ""
     @Published public var debugServerURL = ""
     @Published public var blueskyLoginHint = ""
+    @Published public var githubCookieHeader = ""
     @Published public private(set) var xStatus: AccountStatus = .notConfigured
     @Published public var xEnabledCategories: Set<XNotificationCategory> = []
     @Published public private(set) var farcasterStatus: AccountStatus = .notConfigured
@@ -21,11 +22,13 @@ public final class SettingsViewModel: ObservableObject {
     @Published public var instagramDirectMediaSharesEnabled = true
     @Published public private(set) var spotifyStatus: AccountStatus = .notConfigured
     @Published public private(set) var blueskyStatus: AccountStatus = .notConfigured
+    @Published public private(set) var githubStatus: AccountStatus = .notConfigured
     @Published public private(set) var debugStatus: AccountStatus = .notConfigured
     @Published public private(set) var xCredentialStorage: CredentialSaveResult?
     @Published public private(set) var instagramCredentialStorage: CredentialSaveResult?
     @Published public private(set) var spotifyCredentialStorage: CredentialSaveResult?
     @Published public private(set) var blueskyCredentialStorage: CredentialSaveResult?
+    @Published public private(set) var githubCredentialStorage: CredentialSaveResult?
     @Published public var message: String?
 
     private let keychainStore: KeychainCredentialStore
@@ -112,11 +115,22 @@ public final class SettingsViewModel: ObservableObject {
         return blueskyStatus.label
     }
 
+    public var githubHandle: String? {
+        metadataStore.githubAccount?.username
+    }
+
+    public var githubConnectionLabel: String {
+        if githubStatus == .invalidCredentials { return githubStatus.label }
+        if let githubHandle { return "@\(githubHandle)" }
+        return githubStatus.label
+    }
+
     public var hasInvalidCredentials: Bool {
         xStatus == .invalidCredentials
             || instagramStatus == .invalidCredentials
             || spotifyStatus == .invalidCredentials
             || blueskyStatus == .invalidCredentials
+            || githubStatus == .invalidCredentials
     }
 
     public var hasLocalOnlyCredentials: Bool {
@@ -124,6 +138,7 @@ public final class SettingsViewModel: ObservableObject {
             || instagramCredentialStorage == .localOnly
             || spotifyCredentialStorage == .localOnly
             || blueskyCredentialStorage == .localOnly
+            || githubCredentialStorage == .localOnly
     }
 
     public func beginBlueskyOAuth() async throws -> BlueskyOAuthSession {
@@ -169,6 +184,39 @@ public final class SettingsViewModel: ObservableObject {
             xEnabledCategories = categories
             message = "X credentials saved, but could not resolve username."
         }
+    }
+
+    public func saveGitHubCookies(_ credentials: GitHubCredentials) async {
+        do {
+            githubCredentialStorage = try keychainStore.saveGitHubCredentials(credentials)
+            let result = try await GitHubClient().forYouFeed(credentials: credentials)
+            guard case let .feed(response) = result else { throw SourceError.invalidResponse }
+            _ = try GitHubActivityParser.parse(response.html)
+            let accountId = credentials.username ?? "github"
+            metadataStore.githubAccount = GitHubAccountMetadata(accountId: accountId, username: credentials.username, status: .valid)
+            githubStatus = .valid
+            message = "GitHub account connected."
+        } catch SourceError.notConfigured {
+            try? keychainStore.deleteGitHubCredentials()
+            githubCredentialStorage = nil
+            githubStatus = .invalidCredentials
+            message = "GitHub login expired. Log in again."
+        } catch {
+            try? keychainStore.deleteGitHubCredentials()
+            githubCredentialStorage = nil
+            githubStatus = .serviceError("Validation failed")
+            message = "Could not connect GitHub: \(error.localizedDescription)"
+        }
+    }
+
+    public func saveGitHubCookieHeader() async {
+        guard let credentials = CookieHeaderParser.extractGitHubCredentials(from: githubCookieHeader) else {
+            githubStatus = .invalidCredentials
+            message = "GitHub cookie header must include user_session and __Host-user_session_same_site."
+            return
+        }
+        githubCookieHeader = ""
+        await saveGitHubCookies(credentials)
     }
 
     public func saveXCookieHeader() async {
@@ -551,6 +599,14 @@ public final class SettingsViewModel: ObservableObject {
         message = "Bluesky account disconnected."
     }
 
+    public func disconnectGitHub() {
+        try? keychainStore.deleteGitHubCredentials()
+        githubCredentialStorage = nil
+        metadataStore.githubAccount = nil
+        githubStatus = .notConfigured
+        message = "GitHub account disconnected."
+    }
+
     public func disconnectDebug() {
         metadataStore.debugAccount = nil
         try? cacheStore.deleteNetwork(.debug)
@@ -601,6 +657,12 @@ public final class SettingsViewModel: ObservableObject {
             blueskyStatus = .notConfigured
         }
 
+        if let github = metadataStore.githubAccount {
+            githubStatus = accountStatus(from: github.status)
+        } else {
+            githubStatus = .notConfigured
+        }
+
         if let debug = metadataStore.debugAccount {
             debugServerURL = debug.serverURL.absoluteString
             debugStatus = accountStatus(from: debug.status)
@@ -625,6 +687,7 @@ public final class SettingsViewModel: ObservableObject {
         let discoveredInstagram = metadataStore.instagramAccount == nil && (try? keychainStore.loadInstagramCredentials()) != nil
         let discoveredSpotify = metadataStore.spotifyAccount == nil && (try? keychainStore.loadSpotifyCredentials()) != nil
         let discoveredBluesky = metadataStore.blueskyAccount == nil && (try? keychainStore.loadBlueskyCredentials()) != nil
+        let discoveredGitHub = metadataStore.githubAccount == nil && (try? keychainStore.loadGitHubCredentials()) != nil
 
         if discoveredX {
             metadataStore.xAccount = XAccountMetadata(accountId: "x", handle: nil, status: .valid)
@@ -650,6 +713,13 @@ public final class SettingsViewModel: ObservableObject {
                 status: .valid,
             )
         }
+        if discoveredGitHub, let credentials = try? keychainStore.loadGitHubCredentials() {
+            metadataStore.githubAccount = GitHubAccountMetadata(
+                accountId: credentials.username ?? "github",
+                username: credentials.username,
+                status: .valid,
+            )
+        }
 
         loadStatuses()
 
@@ -665,6 +735,9 @@ public final class SettingsViewModel: ObservableObject {
         if discoveredBluesky {
             await validateDiscoveredBlueskyCredentials()
         }
+        if discoveredGitHub {
+            await validateDiscoveredGitHubCredentials()
+        }
     }
 
     private func refreshCredentialStorageStatuses() {
@@ -672,6 +745,7 @@ public final class SettingsViewModel: ObservableObject {
         instagramCredentialStorage = try? keychainStore.instagramCredentialStorage()
         spotifyCredentialStorage = try? keychainStore.spotifyCredentialStorage()
         blueskyCredentialStorage = try? keychainStore.blueskyCredentialStorage()
+        githubCredentialStorage = try? keychainStore.githubCredentialStorage()
     }
 
     private func validateDiscoveredXCredentials() async {
@@ -733,6 +807,29 @@ public final class SettingsViewModel: ObservableObject {
                 metadataStore.blueskyAccount = account
             }
             blueskyStatus = .serviceError("Validation failed")
+        }
+    }
+
+    private func validateDiscoveredGitHubCredentials() async {
+        guard let credentials = try? keychainStore.loadGitHubCredentials() else { return }
+        do {
+            let result = try await GitHubClient().forYouFeed(credentials: credentials)
+            guard case let .feed(response) = result else { return }
+            _ = try GitHubActivityParser.parse(response.html)
+            metadataStore.githubAccount = GitHubAccountMetadata(accountId: credentials.username ?? "github", username: credentials.username, status: .valid)
+            githubStatus = .valid
+        } catch SourceError.notConfigured {
+            if var account = metadataStore.githubAccount {
+                account.status = .invalidCredentials
+                metadataStore.githubAccount = account
+            }
+            githubStatus = .invalidCredentials
+        } catch {
+            if var account = metadataStore.githubAccount {
+                account.status = .serviceError
+                metadataStore.githubAccount = account
+            }
+            githubStatus = .serviceError("Validation failed")
         }
     }
 

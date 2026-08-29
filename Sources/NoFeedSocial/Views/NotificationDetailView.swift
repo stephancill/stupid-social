@@ -161,6 +161,8 @@ struct NotificationDetailView: View {
             return target.url
         case .bluesky:
             return target.url
+        case .github:
+            return target.url
         case .debug:
             return nil
         }

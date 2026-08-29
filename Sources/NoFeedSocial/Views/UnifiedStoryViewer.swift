@@ -15,6 +15,7 @@ struct UnifiedStoryViewer: View {
     let ownInstagramAccountId: String?
     let onInstagramReelSeen: (String) -> Void
     let onSpotifyItemSeen: (String) -> Void
+    let onGitHubItemSeen: (String) -> Void
     let onInstagramStoryDelete: (String, Bool) async throws -> Void
     let onInstagramStoryLike: (String, Bool) async throws -> Void
 
@@ -74,6 +75,7 @@ struct UnifiedStoryViewer: View {
         ownInstagramAccountId: String?,
         onInstagramReelSeen: @escaping (String) -> Void,
         onSpotifyItemSeen: @escaping (String) -> Void,
+        onGitHubItemSeen: @escaping (String) -> Void,
         onInstagramStoryDelete: @escaping (String, Bool) async throws -> Void,
         onInstagramStoryLike: @escaping (String, Bool) async throws -> Void,
     ) {
@@ -85,6 +87,7 @@ struct UnifiedStoryViewer: View {
         self.ownInstagramAccountId = ownInstagramAccountId
         self.onInstagramReelSeen = onInstagramReelSeen
         self.onSpotifyItemSeen = onSpotifyItemSeen
+        self.onGitHubItemSeen = onGitHubItemSeen
         self.onInstagramStoryDelete = onInstagramStoryDelete
         self.onInstagramStoryLike = onInstagramStoryLike
         _viewerItems = State(initialValue: items)
@@ -261,6 +264,8 @@ struct UnifiedStoryViewer: View {
                 return 5
             }
             return audioDuration
+        case .github:
+            return 5
         case nil:
             return 5
         }
@@ -274,6 +279,8 @@ struct UnifiedStoryViewer: View {
             onInstagramReelSeen(reel.id)
         case let .spotify(spotifyItem):
             onSpotifyItemSeen(spotifyItem.userURI)
+        case let .github(group):
+            onGitHubItemSeen(group.actor.id)
         }
     }
 
@@ -287,6 +294,7 @@ struct UnifiedStoryViewer: View {
     }
 
     private func prepareForCurrentItem() {
+        warmGitHubOriginalsAhead()
         defer {
             preloadAdjacentSpotifyPreviews()
             preloadAdjacentInstagramStories()
@@ -317,6 +325,30 @@ struct UnifiedStoryViewer: View {
             await MainActor.run {
                 spotifySavedStatus[trackId] = saved
             }
+        }
+    }
+
+    // MARK: - GitHub fork pre-warm
+
+    /// Pre-fetchs the OpenGraph data for the fork(s) that come next so the card
+    /// is ready when the user advances, instead of showing a loading state.
+    private func warmGitHubOriginalsAhead() {
+        guard viewerItems.indices.contains(currentItemIndex) else { return }
+
+        if case let .github(group) = viewerItems[currentItemIndex],
+           group.activities.indices.contains(currentSlideIndex + 1),
+           group.activities[currentSlideIndex + 1].kind == .forkedRepository
+        {
+            GitHubOriginalCache.preload(group.activities[currentSlideIndex + 1].targetName)
+        }
+
+        let nextItemIndex = currentItemIndex + 1
+        if viewerItems.indices.contains(nextItemIndex),
+           case let .github(nextGroup) = viewerItems[nextItemIndex],
+           let first = nextGroup.activities.first,
+           first.kind == .forkedRepository
+        {
+            GitHubOriginalCache.preload(first.targetName)
         }
     }
 
@@ -703,6 +735,8 @@ struct UnifiedStoryViewer: View {
             return DebugRedaction.actorName(reel.user, enabled: devModeEnabled)
         case let .spotify(spotifyItem):
             return DebugRedaction.username(spotifyItem.userName, enabled: devModeEnabled)
+        case let .github(group):
+            return DebugRedaction.actorName(group.actor, enabled: devModeEnabled)
         }
     }
 
@@ -716,6 +750,9 @@ struct UnifiedStoryViewer: View {
             return Date(timeIntervalSince1970: reel.slides[currentSlideIndex].takenAt).compactRelativeTime
         case let .spotify(spotifyItem):
             return spotifyItem.timestamp.compactRelativeTime
+        case let .github(group):
+            guard group.activities.indices.contains(currentSlideIndex) else { return "" }
+            return group.activities[currentSlideIndex].timestamp.compactRelativeTime
         }
     }
 
@@ -1124,11 +1161,309 @@ struct UnifiedStoryViewer: View {
 
 // MARK: - StoryBarItem Provider Extensions
 
+@MainActor
+private enum GitHubOriginalCache {
+    static let client = GitHubClient()
+    private static var values: [String: GitHubOriginalRepo] = [:]
+    private static var inFlight: [String: Task<GitHubOriginalRepo?, Never>] = [:]
+
+    static func cached(forFork fork: String) -> GitHubOriginalRepo? {
+        values[fork]
+    }
+
+    static func load(forFork fork: String) async -> GitHubOriginalRepo? {
+        if let value = values[fork] {
+            return value
+        }
+        if let task = inFlight[fork] {
+            return await task.value
+        }
+        guard let repo = try? await client.originalRepo(forFork: fork) else { return nil }
+        values[fork] = repo
+        return repo
+    }
+
+    static func preload(_ fork: String) {
+        guard values[fork] == nil, inFlight[fork] == nil else { return }
+        let task = Task<GitHubOriginalRepo?, Never> { [fork] in
+            defer { inFlight.removeValue(forKey: fork) }
+            guard let repo = try? await client.originalRepo(forFork: fork) else { return nil }
+            values[fork] = repo
+            return repo
+        }
+        inFlight[fork] = task
+    }
+}
+
+private struct GitHubStoryContent: View {
+    let activity: GitHubActivityItem
+
+    @State private var original: GitHubOriginalRepo?
+    @State private var failed = false
+    @State private var loading = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // The group (visual + icon + caption) is centered vertically; the
+            // visual uses a fixed-height slot so only the card/avatar varies.
+            VStack(spacing: 14) {
+                mainVisual
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 195)
+
+                actionIcon
+
+                Text(caption)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.white.opacity(0.82))
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 32)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            // Open button pinned to the bottom.
+            Link(destination: openURL) {
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.up.forward.app")
+                    Text("Open on GitHub")
+                }
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 20)
+                .frame(height: 44)
+                .background(.white.opacity(0.12), in: Capsule())
+            }
+            .padding(.bottom, 44)
+        }
+        .task(id: activity.targetName) {
+            await loadIfNeeded()
+        }
+    }
+
+    private var openURL: URL {
+        if activity.kind == .forkedRepository {
+            return original?.url ?? activity.targetURL
+        }
+        return activity.targetURL
+    }
+
+    private var caption: String {
+        if activity.kind == .forkedRepository {
+            let actor = activity.actor.username ?? activity.actor.displayName ?? "Someone"
+            let subject = original?.name ?? activity.targetName
+            return "\(actor) forked \(subject)"
+        }
+        return activity.summary
+    }
+
+    @ViewBuilder
+    private var mainVisual: some View {
+        if activity.kind == .followed {
+            userCard
+        } else if activity.kind == .forkedRepository {
+            if let original {
+                repoCard(name: original.name, description: original.description, avatarURL: Self.ownerAvatarURL(for: original.name), language: nil, stars: nil)
+            } else if loading {
+                loadingCard
+            } else {
+                repoCard(name: activity.targetName, description: activity.repoDescription, avatarURL: activity.targetAvatarURL, language: activity.repoLanguage, stars: activity.repoStars)
+            }
+        } else {
+            repoCard(name: activity.targetName, description: activity.repoDescription, avatarURL: activity.targetAvatarURL, language: activity.repoLanguage, stars: activity.repoStars)
+        }
+    }
+
+    private var userCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 12) {
+                CachedAsyncImage(url: activity.targetAvatarURL) {
+                    userCardPlaceholder
+                } failure: {
+                    userCardPlaceholder
+                }
+                .frame(width: 48, height: 48)
+                .clipShape(Circle())
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(activity.followUserDisplayName ?? activity.targetName)
+                        .font(.headline)
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                    Text("@\(activity.targetName)")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.6))
+                }
+                Spacer(minLength: 0)
+            }
+
+            if let bio = activity.followUserBio {
+                Text(bio)
+                    .font(.subheadline)
+                    .foregroundStyle(.white.opacity(0.82))
+                    .lineLimit(3)
+            }
+
+            HStack(spacing: 16) {
+                userStat(activity.followUserRepos, label: "Repositories")
+                userStat(activity.followUserFollowers, label: "Followers")
+            }
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(.white.opacity(0.12), lineWidth: 1)
+        }
+        .padding(.horizontal, 24)
+    }
+
+    private var userCardPlaceholder: some View {
+        ZStack {
+            Color.white.opacity(0.08)
+            Image(systemName: "person.fill")
+                .font(.system(size: 18))
+                .foregroundStyle(.white.opacity(0.5))
+        }
+    }
+
+    private func userStat(_ value: String?, label: String) -> some View {
+        HStack(spacing: 6) {
+            Text(value ?? "–")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.white)
+            Text(label)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.6))
+        }
+    }
+
+    private var languageColor: Color? {
+        guard let hex = activity.repoLanguageColor,
+              hex.hasPrefix("#"), hex.count == 7,
+              let value = Int(hex.dropFirst(), radix: 16)
+        else { return nil }
+        return Color(
+            red: Double((value >> 16) & 0xFF) / 255.0,
+            green: Double((value >> 8) & 0xFF) / 255.0,
+            blue: Double(value & 0xFF) / 255.0,
+        )
+    }
+
+    private var actionIcon: some View {
+        Image(systemName: Self.systemImage(for: activity.kind))
+            .font(.system(size: 22, weight: .semibold))
+            .foregroundStyle(.white.opacity(0.9))
+            .frame(maxWidth: .infinity)
+    }
+
+    private var loadingCard: some View {
+        VStack(spacing: 12) {
+            ProgressView().tint(.white)
+            Text("Resolving original repo…")
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.6))
+        }
+        .frame(height: 140)
+        .frame(maxWidth: .infinity)
+        .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .padding(.horizontal, 24)
+    }
+
+    private func repoCard(name: String, description: String?, avatarURL: URL?, language: String?, stars: String?) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 12) {
+                CachedAsyncImage(url: avatarURL) {
+                    Color.white.opacity(0.08)
+                } failure: {
+                    Color.white.opacity(0.08)
+                }
+                .frame(width: 40, height: 40)
+                .clipShape(Circle())
+
+                Text(name)
+                    .font(.headline)
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+
+                if let stars {
+                    HStack(spacing: 4) {
+                        Image(systemName: "star.fill")
+                            .font(.caption)
+                            .foregroundStyle(.yellow)
+                        Text(stars)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.9))
+                    }
+                }
+            }
+
+            if let description {
+                Text(description)
+                    .font(.subheadline)
+                    .foregroundStyle(.white.opacity(0.82))
+                    .lineLimit(4)
+            }
+
+            if let language {
+                HStack(spacing: 6) {
+                    Circle().fill(languageColor ?? .white.opacity(0.7)).frame(width: 8, height: 8)
+                    Text(language)
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.7))
+                }
+            }
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(.white.opacity(0.12), lineWidth: 1)
+        }
+        .padding(.horizontal, 24)
+    }
+
+    private func loadIfNeeded() async {
+        guard activity.kind == .forkedRepository, original == nil, !failed, !loading else { return }
+        loading = true
+        defer { loading = false }
+        if let cached = GitHubOriginalCache.cached(forFork: activity.targetName) {
+            original = cached
+            return
+        }
+        if let repo = await GitHubOriginalCache.load(forFork: activity.targetName) {
+            original = repo
+        } else {
+            failed = true
+        }
+    }
+
+    private static func ownerAvatarURL(for name: String) -> URL? {
+        guard let owner = name.split(separator: "/").first else { return nil }
+        return URL(string: "https://github.com/\(owner).png?size=192")
+    }
+
+    private static func systemImage(for kind: GitHubActivityKind) -> String {
+        switch kind {
+        case .starredRepository: "star.fill"
+        case .followed: "person.badge.plus"
+        case .forkedRepository: "arrow.triangle.branch"
+        case .unknown: "chevron.left.forwardslash.chevron.right"
+        }
+    }
+}
+
+// MARK: - StoryBarItem Provider Extensions
+
 @MainActor private extension StoryBarItem {
     var slideCount: Int {
         switch self {
         case let .instagram(reel): reel.slides.count
         case .spotify: 1
+        case let .github(group): group.activities.count
         }
     }
 
@@ -1141,6 +1476,7 @@ struct UnifiedStoryViewer: View {
         switch self {
         case let .instagram(reel): "instagram-avatar-\(reel.user.id)"
         case let .spotify(item): "spotify-avatar-\(item.userURI)"
+        case let .github(group): "github-avatar-\(group.actor.id)"
         }
     }
 
@@ -1175,6 +1511,19 @@ struct UnifiedStoryViewer: View {
                 spotifySavingTrackIds: spotifySavingTrackIds,
                 spotifyClient: spotifyClient,
             )
+        case let .github(group):
+            githubSlideContent(group: group, slideIndex: slideIndex)
+        }
+    }
+
+    @ViewBuilder
+    private func githubSlideContent(group: GitHubActivityGroup, slideIndex: Int) -> some View {
+        if group.activities.indices.contains(slideIndex) {
+            let activity = group.activities[slideIndex]
+            GitHubStoryContent(activity: activity)
+                .id(activity.id)
+        } else {
+            Color.black
         }
     }
 

@@ -15,12 +15,14 @@ Sources/
       NotificationDetailView.swift  # Standard form-based notification detail
       ProfileDetailView.swift       # Actor profile detail
       NetworkBadgeIcon.swift        # Shared social network icon badge
-      UnifiedStoryViewer.swift      # Full-screen unified story viewer (Instagram + Spotify)
+      UnifiedStoryViewer.swift      # Full-screen unified story viewer
       SpotifyPulseRing.swift        # Shared phase-driven pulse ring
       InstagramConnectionView.swift # Instagram credential setup
       InstagramLoginWebView.swift   # Instagram WebView login
       SpotifyConnectionView.swift   # Spotify credential setup
       SpotifyLoginWebView.swift     # Spotify WebView login
+      GitHubConnectionView.swift    # GitHub credential setup
+      GitHubLoginWebView.swift      # GitHub WebView login
       BlueskyConnectionView.swift   # Bluesky OAuth setup
       XConnectionView.swift         # X credential setup
       XLoginWebView.swift           # X WebView login
@@ -36,6 +38,8 @@ Sources/
     Sources/                        # Network clients + notification sources
       NotificationSource.swift      # Protocol definition
       InstagramClient.swift / InstagramSession.swift / Instagram*Models.swift / Instagram*Parser.swift / InstagramNotificationSource.swift
+      GitHubClient.swift
+      GitHubActivitySource.swift
       SpotifyClient.swift / SpotifyActivitySource.swift
       XClient.swift / XNotificationSource.swift
       FarcasterClient.swift / FarcasterNotificationSource.swift
@@ -47,6 +51,7 @@ Sources/
       KeychainCredentialStore.swift
       NotificationCacheStore.swift
       SpotifyActivitySeenStore.swift
+      GitHubActivitySeenStore.swift
     ViewModels/
       FeedViewModel.swift
       ProfileSearchViewModel.swift

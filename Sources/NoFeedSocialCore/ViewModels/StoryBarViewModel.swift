@@ -12,7 +12,9 @@ public final class StoryBarViewModel: ObservableObject {
 
     private let instagramSource: InstagramNotificationSource?
     private let spotifyActivitySource: (any ActivityFetching)?
+    private let githubActivitySource: (any GitHubActivityFetching)?
     private let spotifySeenStore: SpotifyActivitySeenStore
+    private let githubSeenStore: GitHubActivitySeenStore
     private let chronologicalInstagramPrefixCount = 15
     private var orderedInstagramStoryReels: [InstagramStoryReel] = []
     private var hasMoreInstagramStoryReels = false
@@ -22,11 +24,15 @@ public final class StoryBarViewModel: ObservableObject {
     public init(
         instagramSource: InstagramNotificationSource?,
         spotifyActivitySource: (any ActivityFetching)? = nil,
+        githubActivitySource: (any GitHubActivityFetching)? = nil,
         spotifySeenStore: SpotifyActivitySeenStore = SpotifyActivitySeenStore(),
+        githubSeenStore: GitHubActivitySeenStore = GitHubActivitySeenStore(),
     ) {
         self.instagramSource = instagramSource
         self.spotifyActivitySource = spotifyActivitySource
+        self.githubActivitySource = githubActivitySource
         self.spotifySeenStore = spotifySeenStore
+        self.githubSeenStore = githubSeenStore
     }
 
     public func fetchInstagramStories() async {
@@ -52,10 +58,12 @@ public final class StoryBarViewModel: ObservableObject {
         storyBarLoading = true
         async let reels = instagramReels()
         async let spots = spotifyItems()
+        async let github = githubItems()
         async let ownInstagramActor = instagramSource?.ownStoryActor()
         let fallbackInstagramReels = ([ownInstagramStoryReel].compactMap(\.self) + instagramStoryReels)
         let fetchedReels = await reels ?? fallbackInstagramReels
         let fetchedSpots = await spots
+        let fetchedGitHub = await github
         let fetchedOwnInstagramActor = await ownInstagramActor ?? ownInstagramStoryActor
         ownInstagramStoryActor = fetchedOwnInstagramActor
 
@@ -71,7 +79,7 @@ public final class StoryBarViewModel: ObservableObject {
         ownInstagramStoryReel = preservingOptimisticStorySlide(in: ownReel)
         orderedInstagramStoryReels = instagramReels
         hasMoreInstagramStoryReels = instagramSource?.hasMoreStoryReels ?? false
-        storyBarItems = mergedStoryBarItems(instagramReels: instagramReels, spotifyItems: fetchedSpots)
+        storyBarItems = mergedStoryBarItems(instagramReels: instagramReels, spotifyItems: fetchedSpots, githubItems: fetchedGitHub)
         storyBarContentLoaded = true
         storyBarLoading = false
     }
@@ -80,7 +88,7 @@ public final class StoryBarViewModel: ObservableObject {
         switch item {
         case let .instagram(reel):
             guard reel.id == orderedInstagramStoryReels.last?.id else { return }
-        case .spotify:
+        case .spotify, .github:
             guard item.id == storyBarItems.last?.id else { return }
         }
         await loadNextStoryBarPage()
@@ -110,7 +118,7 @@ public final class StoryBarViewModel: ObservableObject {
             }
 
             orderedInstagramStoryReels.append(contentsOf: appendedReels)
-            storyBarItems = mergedStoryBarItems(instagramReels: orderedInstagramStoryReels, spotifyItems: spotifyActivityItems)
+            storyBarItems = mergedStoryBarItems(instagramReels: orderedInstagramStoryReels, spotifyItems: spotifyActivityItems, githubItems: githubActivityGroups)
         } catch {
             hasMoreInstagramStoryReels = instagramSource.hasMoreStoryReels
         }
@@ -183,7 +191,18 @@ public final class StoryBarViewModel: ObservableObject {
 
         let updated = spotifyItemWithSeenState(item)
         storyBarItems[itemIndex] = .spotify(updated)
-        storyBarItems = mergedStoryBarItems(instagramReels: orderedInstagramStoryReels, spotifyItems: spotifyActivityItems)
+        storyBarItems = mergedStoryBarItems(instagramReels: orderedInstagramStoryReels, spotifyItems: spotifyActivityItems, githubItems: githubActivityGroups)
+    }
+
+    public func markGitHubActivityAsSeen(actorId: String) {
+        guard let index = storyBarItems.firstIndex(where: {
+            if case let .github(group) = $0 { return group.actor.id == actorId }
+            return false
+        }), case let .github(group) = storyBarItems[index]
+        else { return }
+        githubSeenStore.markSeen(actorId: actorId, activityTimestamp: group.timestamp)
+        storyBarItems[index] = .github(GitHubActivityGroup(actor: group.actor, activities: group.activities, isSeen: true))
+        storyBarItems = mergedStoryBarItems(instagramReels: orderedInstagramStoryReels, spotifyItems: spotifyActivityItems, githubItems: githubActivityGroups)
     }
 
     public func markInstagramReelAsSeen(reelIndex: Int) {
@@ -250,6 +269,13 @@ public final class StoryBarViewModel: ObservableObject {
         }
     }
 
+    var githubActivityGroups: [GitHubActivityGroup] {
+        storyBarItems.compactMap {
+            if case let .github(group) = $0 { return group }
+            return nil
+        }
+    }
+
     private func instagramReels() async -> [InstagramStoryReel]? {
         guard let instagramSource, instagramSource.storiesEnabled else { return [] }
         do {
@@ -306,6 +332,26 @@ public final class StoryBarViewModel: ObservableObject {
         )
     }
 
+    private func githubItems() async -> [GitHubActivityGroup] {
+        guard let githubActivitySource else { return [] }
+        do {
+            return try await RefreshTiming.measure("story-github-activity") {
+                try await githubActivitySource.fetchGitHubActivity(reason: .manual)
+            }.map { group in
+                GitHubActivityGroup(
+                    actor: group.actor,
+                    activities: group.activities,
+                    isSeen: githubSeenStore.isSeen(actorId: group.actor.id, activityTimestamp: group.timestamp),
+                )
+            }.sorted { lhs, rhs in
+                if lhs.isSeen != rhs.isSeen { return !lhs.isSeen }
+                return lhs.timestamp > rhs.timestamp
+            }
+        } catch {
+            return []
+        }
+    }
+
     private func storyItemWithOldestFirstSlides(_ item: StoryBarItem) -> StoryBarItem {
         guard case let .instagram(reel) = item else { return item }
         let slides = reel.slides.sorted { lhs, rhs in
@@ -317,10 +363,11 @@ public final class StoryBarViewModel: ObservableObject {
         return .instagram(InstagramStoryReel(id: reel.id, user: reel.user, slides: slides, isSeen: reel.isSeen, seenTimestamp: reel.seenTimestamp, hasCloseFriendsMedia: reel.hasCloseFriendsMedia))
     }
 
-    private func mergedStoryBarItems(instagramReels: [InstagramStoryReel], spotifyItems: [SpotifyActivityItem]) -> [StoryBarItem] {
+    private func mergedStoryBarItems(instagramReels: [InstagramStoryReel], spotifyItems: [SpotifyActivityItem], githubItems: [GitHubActivityGroup]) -> [StoryBarItem] {
         let chronologicalInstagram = instagramReels.prefix(chronologicalInstagramPrefixCount).map(StoryBarItem.instagram)
         let chronologicalSpotify = spotifyItems.map(StoryBarItem.spotify)
-        let chronologicalItems = (chronologicalInstagram + chronologicalSpotify).sorted { $0.timestamp > $1.timestamp }
+        let chronologicalGitHub = githubItems.map(StoryBarItem.github)
+        let chronologicalItems = (chronologicalInstagram + chronologicalSpotify + chronologicalGitHub).sorted { $0.timestamp > $1.timestamp }
         let remainingInstagram = instagramReels.dropFirst(chronologicalInstagramPrefixCount).map(StoryBarItem.instagram)
 
         return chronologicalItems + remainingInstagram

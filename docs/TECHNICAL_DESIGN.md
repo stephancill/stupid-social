@@ -174,6 +174,7 @@ Keep source-specific clients concrete behind adapters:
 - `FarcasterNotificationSource`
 - `BlueskyClient`
 - `BlueskyNotificationSource`
+- `GitHubActivitySource`
 
 ## X Integration
 
@@ -259,6 +260,8 @@ Use strict `Codable` response models.
 - Normalize source responses into `NotificationItem` immediately after decoding.
 
 If X endpoint responses prove unstable during the required spike, document the issue before changing this strategy.
+
+GitHub's For You endpoint is HTML rather than JSON. Parse the JSON objects embedded in `data-hydro-view` and `data-hydro-click` attributes instead of presentation text. Normalize all underlying rollup events, then group them by actor for story display.
 
 ## Feed Assembly
 

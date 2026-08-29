@@ -426,6 +426,8 @@ struct ProfileDetailView: View {
             return URL(string: "https://open.spotify.com/user/\(username)")
         case .bluesky:
             return URL(string: "https://bsky.app/profile/\(username)")
+        case .github:
+            return URL(string: "https://github.com/\(username)")
         case .debug:
             return nil
         }

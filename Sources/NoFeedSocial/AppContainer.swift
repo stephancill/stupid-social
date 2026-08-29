@@ -15,6 +15,7 @@ final class AppContainer {
     private let cacheStore: NotificationCacheStore
     private let instagramSource: InstagramNotificationSource
     private let spotifyActivitySource: SpotifyActivitySource
+    private let githubActivitySource: GitHubActivitySource
     private let notificationSources: [any NotificationFetching]
     private let accountValidators: [any AccountValidating]
     private let profileFetchersByNetwork: [SocialNetwork: any ProfileFetching]
@@ -37,6 +38,11 @@ final class AppContainer {
 
         spotifyActivitySource = SpotifyActivitySource(
             client: spotifyClient,
+            metadataStore: metadataStore,
+        )
+        githubActivitySource = GitHubActivitySource(
+            client: GitHubClient(),
+            credentialStore: keychainStore,
             metadataStore: metadataStore,
         )
 
@@ -70,6 +76,7 @@ final class AppContainer {
             instagramSource,
             spotifyActivitySource,
             blueskySource,
+            githubActivitySource,
             debugSource,
         ]
         profileFetchersByNetwork = [
@@ -105,6 +112,7 @@ final class AppContainer {
         storyBarViewModel = StoryBarViewModel(
             instagramSource: instagramSource,
             spotifyActivitySource: spotifyActivitySource,
+            githubActivitySource: githubActivitySource,
         )
 
         profileSearchViewModel = ProfileSearchViewModel(feedService: feedService)

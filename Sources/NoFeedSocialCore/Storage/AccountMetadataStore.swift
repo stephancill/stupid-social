@@ -160,6 +160,18 @@ public struct BlueskyAccountMetadata: Codable, Equatable {
     }
 }
 
+public struct GitHubAccountMetadata: Codable, Equatable {
+    public var accountId: String
+    public var username: String?
+    public var status: AccountStatusSnapshot
+
+    public init(accountId: String, username: String?, status: AccountStatusSnapshot) {
+        self.accountId = accountId
+        self.username = username
+        self.status = status
+    }
+}
+
 public enum AccountStatusSnapshot: String, Codable, Equatable {
     case notConfigured
     case valid
@@ -176,6 +188,7 @@ public final class AccountMetadataStore {
         static let instagramAccount = "account.instagram"
         static let spotifyAccount = "account.spotify"
         static let blueskyAccount = "account.bluesky"
+        static let githubAccount = "account.github"
         static let debugAccount = "account.debug"
     }
 
@@ -210,6 +223,11 @@ public final class AccountMetadataStore {
     public var blueskyAccount: BlueskyAccountMetadata? {
         get { load(BlueskyAccountMetadata.self, key: Key.blueskyAccount) }
         set { save(newValue, key: Key.blueskyAccount) }
+    }
+
+    public var githubAccount: GitHubAccountMetadata? {
+        get { load(GitHubAccountMetadata.self, key: Key.githubAccount) }
+        set { save(newValue, key: Key.githubAccount) }
     }
 
     public var debugAccount: DebugAccountMetadata? {

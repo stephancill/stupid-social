@@ -6,6 +6,7 @@ public enum SocialNetwork: String, Codable, CaseIterable, Identifiable, Sendable
     case instagram
     case spotify
     case bluesky
+    case github
     case debug
 
     public var id: String {
@@ -19,6 +20,7 @@ public enum SocialNetwork: String, Codable, CaseIterable, Identifiable, Sendable
         case .instagram: "Instagram"
         case .spotify: "Spotify"
         case .bluesky: "Bluesky"
+        case .github: "GitHub"
         case .debug: "Debug"
         }
     }
@@ -523,11 +525,13 @@ public struct InstagramStoryLink: Hashable, Sendable {
 public enum StoryBarItem: Identifiable, Hashable, Sendable {
     case instagram(InstagramStoryReel)
     case spotify(SpotifyActivityItem)
+    case github(GitHubActivityGroup)
 
     public var id: String {
         switch self {
         case let .instagram(reel): "ig-\(reel.id)"
         case let .spotify(item): "sp-\(item.userURI)"
+        case let .github(group): "gh-\(group.actor.id)"
         }
     }
 
@@ -536,6 +540,7 @@ public enum StoryBarItem: Identifiable, Hashable, Sendable {
         case let .instagram(reel):
             Date(timeIntervalSince1970: reel.slides.first?.takenAt ?? 0)
         case let .spotify(item): item.timestamp
+        case let .github(group): group.timestamp
         }
     }
 
@@ -543,6 +548,7 @@ public enum StoryBarItem: Identifiable, Hashable, Sendable {
         switch self {
         case let .instagram(reel): reel.isSeen
         case let .spotify(item): item.isSeen
+        case let .github(group): group.isSeen
         }
     }
 
@@ -550,6 +556,7 @@ public enum StoryBarItem: Identifiable, Hashable, Sendable {
         switch self {
         case let .instagram(reel): reel.user.avatarURL
         case let .spotify(item): item.userAvatarURL
+        case let .github(group): group.actor.avatarURL
         }
     }
 
@@ -557,6 +564,7 @@ public enum StoryBarItem: Identifiable, Hashable, Sendable {
         switch self {
         case let .instagram(reel): reel.user.username ?? reel.user.displayName ?? ""
         case let .spotify(item): item.userName
+        case let .github(group): group.actor.username ?? group.actor.displayName ?? ""
         }
     }
 
@@ -564,7 +572,91 @@ public enum StoryBarItem: Identifiable, Hashable, Sendable {
         switch self {
         case .instagram: .instagram
         case .spotify: .spotify
+        case .github: .github
         }
+    }
+}
+
+public enum GitHubActivityKind: String, Hashable, Sendable {
+    case starredRepository = "STARRED_REPOSITORY"
+    case followed = "FOLLOW"
+    case forkedRepository = "FORKED_REPOSITORY"
+    case unknown
+}
+
+public struct GitHubActivityItem: Identifiable, Hashable, Sendable {
+    public let id: String
+    public let kind: GitHubActivityKind
+    public let timestamp: Date
+    public let actor: NotificationActor
+    public let targetId: String
+    public let targetName: String
+    public let targetURL: URL
+    public let targetAvatarURL: URL?
+    public let summary: String
+    public let repoDescription: String?
+    public let repoLanguage: String?
+    public let repoStars: String?
+    public let repoLanguageColor: String?
+    public let followUserDisplayName: String?
+    public let followUserBio: String?
+    public let followUserRepos: String?
+    public let followUserFollowers: String?
+
+    public init(
+        id: String,
+        kind: GitHubActivityKind,
+        timestamp: Date,
+        actor: NotificationActor,
+        targetId: String,
+        targetName: String,
+        targetURL: URL,
+        targetAvatarURL: URL?,
+        summary: String,
+        repoDescription: String? = nil,
+        repoLanguage: String? = nil,
+        repoStars: String? = nil,
+        repoLanguageColor: String? = nil,
+        followUserDisplayName: String? = nil,
+        followUserBio: String? = nil,
+        followUserRepos: String? = nil,
+        followUserFollowers: String? = nil,
+    ) {
+        self.id = id
+        self.kind = kind
+        self.timestamp = timestamp
+        self.actor = actor
+        self.targetId = targetId
+        self.targetName = targetName
+        self.targetURL = targetURL
+        self.targetAvatarURL = targetAvatarURL
+        self.summary = summary
+        self.repoDescription = repoDescription
+        self.repoLanguage = repoLanguage
+        self.repoStars = repoStars
+        self.repoLanguageColor = repoLanguageColor
+        self.followUserDisplayName = followUserDisplayName
+        self.followUserBio = followUserBio
+        self.followUserRepos = followUserRepos
+        self.followUserFollowers = followUserFollowers
+    }
+}
+
+public struct GitHubActivityGroup: Identifiable, Hashable, Sendable {
+    public let id: String
+    public let actor: NotificationActor
+    public let activities: [GitHubActivityItem]
+    public let isSeen: Bool
+
+    public init(actor: NotificationActor, activities: [GitHubActivityItem], isSeen: Bool = false) {
+        id = actor.id
+        self.actor = actor
+        self.activities = activities
+        self.isSeen = isSeen
+    }
+
+    public var timestamp: Date {
+        activities.map(\.timestamp).max() ?? .distantPast
     }
 }
 

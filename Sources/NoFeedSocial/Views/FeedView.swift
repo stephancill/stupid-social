@@ -139,6 +139,9 @@ struct FeedView: View {
                 onSpotifyItemSeen: { userURI in
                     storyViewModel.markSpotifyActivityAsSeen(userURI: userURI)
                 },
+                onGitHubItemSeen: { actorId in
+                    storyViewModel.markGitHubActivityAsSeen(actorId: actorId)
+                },
                 onInstagramStoryDelete: { mediaId, isVideo in
                     try await storyViewModel.deleteInstagramStory(mediaId: mediaId, isVideo: isVideo)
                 },
@@ -168,6 +171,9 @@ struct FeedView: View {
                         },
                         onSpotifyItemSeen: { userURI in
                             storyViewModel.markSpotifyActivityAsSeen(userURI: userURI)
+                        },
+                        onGitHubItemSeen: { actorId in
+                            storyViewModel.markGitHubActivityAsSeen(actorId: actorId)
                         },
                         onInstagramStoryDelete: { mediaId, isVideo in
                             try await storyViewModel.deleteInstagramStory(mediaId: mediaId, isVideo: isVideo)
@@ -413,23 +419,17 @@ private struct StoriesBar: View {
             InstagramStoryBubble(reel: reel)
         case let .spotify(spotifyItem):
             SpotifyStoryBubble(item: spotifyItem)
+        case let .github(group):
+            GitHubStoryBubble(group: group)
         }
     }
 
     private var availableFeedModes: [StoryBarFeedMode] {
-        let hasInstagramStories = ownInstagramActor != nil || items.contains(where: StoryBarFeedMode.instagram.includes)
-        let hasSpotifyStories = items.contains(where: StoryBarFeedMode.spotify.includes)
-
-        switch (hasInstagramStories, hasSpotifyStories) {
-        case (true, true):
-            return StoryBarFeedMode.allCases
-        case (true, false):
-            return [.instagram]
-        case (false, true):
-            return [.spotify]
-        case (false, false):
-            return []
-        }
+        var specific: [StoryBarFeedMode] = []
+        if ownInstagramActor != nil || items.contains(where: StoryBarFeedMode.instagram.includes) { specific.append(.instagram) }
+        if items.contains(where: StoryBarFeedMode.spotify.includes) { specific.append(.spotify) }
+        if items.contains(where: StoryBarFeedMode.github.includes) { specific.append(.github) }
+        return specific.count > 1 ? [.general] + specific : specific
     }
 
     private func filteredItems(for mode: StoryBarFeedMode) -> [StoryBarItem] {
@@ -442,7 +442,7 @@ private struct StoriesBar: View {
     }
 
     private func showsOwnInstagramBubble(in mode: StoryBarFeedMode) -> Bool {
-        ownInstagramActor != nil && mode != .spotify
+        ownInstagramActor != nil && (mode == .general || mode == .instagram)
     }
 
     private func pagerModes(for modes: [StoryBarFeedMode]) -> [StoryBarFeedPage] {
@@ -550,12 +550,14 @@ private enum StoryBarFeedMode: CaseIterable {
     case general
     case instagram
     case spotify
+    case github
 
     var label: String {
         switch self {
         case .general: "All Stories"
         case .instagram: "Instagram"
         case .spotify: "Spotify"
+        case .github: "GitHub"
         }
     }
 
@@ -567,6 +569,8 @@ private enum StoryBarFeedMode: CaseIterable {
             Color.pink.opacity(0.75)
         case .spotify:
             Color.spotifyActivityBorder
+        case .github:
+            Color(red: 0.20, green: 0.22, blue: 0.25)
         }
     }
 
@@ -582,6 +586,8 @@ private enum StoryBarFeedMode: CaseIterable {
             item.network == .instagram
         case .spotify:
             item.network == .spotify
+        case .github:
+            item.network == .github
         }
     }
 }
@@ -789,6 +795,58 @@ private struct SpotifyStoryBubble: View {
 
     private var displayUserName: String {
         DebugRedaction.username(item.userName, enabled: devModeEnabled)
+    }
+}
+
+private struct GitHubStoryBubble: View {
+    let group: GitHubActivityGroup
+    @AppStorage("devModeEnabled") private var devModeEnabled = false
+
+    var body: some View {
+        VStack(spacing: 6) {
+            ZStack(alignment: .bottomTrailing) {
+                CachedAsyncImage(url: group.actor.avatarURL, cacheKey: "github-avatar-\(group.actor.id)") {
+                    avatarPlaceholder
+                } failure: {
+                    avatarPlaceholder
+                }
+                .frame(width: 70, height: 70)
+                .clipShape(Circle())
+                .overlay {
+                    Circle()
+                        .stroke(group.isSeen ? Color.gray.opacity(0.4) : Color.primary, lineWidth: 3)
+                }
+
+                Image(systemName: "chevron.left.forwardslash.chevron.right")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 24, height: 24)
+                    .background(Color.black, in: Circle())
+                    .overlay { Circle().stroke(.background, lineWidth: 2) }
+                    .offset(x: 3, y: 3)
+            }
+
+            Text(displayName)
+                .font(.caption2)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(width: 70)
+        }
+        .accessibilityLabel("GitHub activity from \(displayName)")
+    }
+
+    private var displayName: String {
+        DebugRedaction.actorName(group.actor, enabled: devModeEnabled)
+    }
+
+    private var avatarPlaceholder: some View {
+        ZStack {
+            Color.secondary.opacity(0.18)
+            Text(displayName.first.map { String($0).uppercased() } ?? "?")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.secondary)
+        }
     }
 }
 

@@ -42,6 +42,21 @@ public enum CookieHeaderParser {
             igDid: cookies["ig_did"],
         )
     }
+
+    public static func extractGitHubCredentials(from header: String) -> GitHubCredentials? {
+        let cookies = parse(header)
+        guard let userSession = cookies["user_session"],
+              let sameSiteUserSession = cookies["__Host-user_session_same_site"]
+        else {
+            return nil
+        }
+
+        return GitHubCredentials(
+            userSession: userSession,
+            sameSiteUserSession: sameSiteUserSession,
+            username: cookies["dotcom_user"],
+        )
+    }
 }
 
 public struct XCredentials: Codable, Equatable, Sendable {
@@ -117,5 +132,17 @@ public struct SpotifyCredentials: Codable, Equatable, Sendable {
             initialBearerTokenExpiresAt: initialBearerTokenExpiresAt,
             username: username,
         )
+    }
+}
+
+public struct GitHubCredentials: Codable, Equatable, Sendable {
+    public let userSession: String
+    public let sameSiteUserSession: String
+    public let username: String?
+
+    public init(userSession: String, sameSiteUserSession: String, username: String? = nil) {
+        self.userSession = userSession
+        self.sameSiteUserSession = sameSiteUserSession
+        self.username = username
     }
 }

@@ -59,6 +59,16 @@ struct SettingsView: View {
                     )
                 }
 
+                NavigationLink {
+                    GitHubConnectionView(viewModel: viewModel)
+                } label: {
+                    connectionRow(
+                        name: "GitHub",
+                        subtitle: viewModel.githubConnectionLabel,
+                        isInvalid: viewModel.githubStatus == .invalidCredentials,
+                    )
+                }
+
                 if devModeEnabled {
                     NavigationLink {
                         DebugConnectionView(viewModel: viewModel)

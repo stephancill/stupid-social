@@ -67,8 +67,9 @@ def api(token, method, path, body=None):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("action", choices=["groups", "get-build", "add-to-group", "submit"])
+    ap.add_argument("action", choices=["groups", "get-build", "add-to-group", "submit", "whats-new"])
     ap.add_argument("--group", help="beta group id")
+    ap.add_argument("--text", help="'What's New' notes for the build")
     args = ap.parse_args()
     token = make_token()
 
@@ -112,6 +113,24 @@ def main():
             "id": sub.get("id"),
             "state": sub.get("attributes", {}).get("betaReviewState"),
         }, indent=2))
+
+    elif args.action == "whats-new":
+        if not args.text:
+            ap.error("--text is required for whats-new")
+        locs = api(token, "GET", f"/builds/{BUILD_ID}/betaBuildLocalizations")
+        items = locs.get("data", [])
+        if items:
+            loc_id = items[0]["id"]
+            api(token, "PATCH", f"/betaBuildLocalizations/{loc_id}",
+                {"data": {"id": loc_id, "type": "betaBuildLocalizations",
+                          "attributes": {"whatsNew": args.text}}})
+            print(f"Updated What's New for build {BUILD_ID}")
+        else:
+            data = api(token, "POST", "/betaBuildLocalizations",
+                       {"data": {"type": "betaBuildLocalizations",
+                                 "attributes": {"whatsNew": args.text},
+                                 "relationships": {"build": {"data": {"id": BUILD_ID, "type": "builds"}}}}})
+            print("Created beta build localization", data.get("data", {}).get("id"))
 
 
 if __name__ == "__main__":

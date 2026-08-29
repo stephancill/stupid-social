@@ -64,6 +64,10 @@ public protocol ActivityFetching: SocialSource {
     func fetchActivity(reason: RefreshReason) async throws -> [SpotifyActivityItem]
 }
 
+public protocol GitHubActivityFetching: SocialSource {
+    func fetchGitHubActivity(reason: RefreshReason) async throws -> [GitHubActivityGroup]
+}
+
 public struct NotificationTargetDetails: Hashable, Sendable {
     public let author: NotificationActor?
     public let text: String?
