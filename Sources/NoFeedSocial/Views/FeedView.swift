@@ -819,7 +819,7 @@ private struct GitHubStoryBubble: View {
 
                 githubBadgeOverlay
                     .frame(width: 24, height: 24)
-                    .background(Color.black, in: Circle())
+                    .clipShape(Circle())
                     .overlay { Circle().stroke(.background, lineWidth: 2) }
                     .offset(x: 3, y: 3)
             }
@@ -840,7 +840,7 @@ private struct GitHubStoryBubble: View {
 
     private var githubBadgeOverlay: some View {
         Group {
-            if let image = networkBadgeImage(named: "GitHubMark") {
+            if let image = networkBadgeImage(named: SocialNetwork.github.badgeAssetName) {
                 image
                     .resizable()
                     .interpolation(.high)
@@ -848,6 +848,7 @@ private struct GitHubStoryBubble: View {
                 Image(systemName: "chevron.left.forwardslash.chevron.right")
                     .font(.caption2.weight(.bold))
                     .foregroundStyle(.white)
+                    .background(Color.black, in: Circle())
             }
         }
     }
