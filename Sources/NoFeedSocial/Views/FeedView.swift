@@ -819,6 +819,7 @@ private struct GitHubStoryBubble: View {
 
                 githubBadgeOverlay
                     .frame(width: 24, height: 24)
+                    .background(Color.white, in: Circle())
                     .clipShape(Circle())
                     .overlay { Circle().stroke(.background, lineWidth: 2) }
                     .offset(x: 3, y: 3)
