@@ -298,6 +298,7 @@ struct ProfileDetailView: View {
 
     private var shouldHydrateProfile: Bool {
         guard let profile else { return true }
+        if profile.network == .github { return false }
         if profile.network == .x || profile.network == .instagram, profile.isFollowing == nil { return true }
         if profile.network == .x, profile.isNotifiedForPosts == nil { return true }
         if profile.network == .instagram, profile.posts.isEmpty, profile.postsCount != 0 { return true }

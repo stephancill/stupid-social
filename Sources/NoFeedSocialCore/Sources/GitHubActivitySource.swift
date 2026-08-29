@@ -37,13 +37,23 @@ public final class GitHubActivitySource: GitHubActivityFetching, AccountValidati
     private func fetch(credentials: GitHubCredentials) async throws -> [GitHubActivityGroup] {
         let result = try await client.forYouFeed(credentials: credentials)
         guard case let .feed(response) = result else { return [] }
-        return try GitHubActivityParser.parse(response.html)
+        return try GitHubActivityParser.parse(response.html, viewerUsername: credentials.username).storyGroups
     }
 
     private func markInvalid() {
         guard var account = metadataStore.githubAccount else { return }
         account.status = .invalidCredentials
         metadataStore.githubAccount = account
+    }
+}
+
+public struct GitHubFeedParseResult: Equatable, Sendable {
+    public let storyGroups: [GitHubActivityGroup]
+    public let notificationItems: [GitHubActivityItem]
+
+    public init(storyGroups: [GitHubActivityGroup], notificationItems: [GitHubActivityItem]) {
+        self.storyGroups = storyGroups
+        self.notificationItems = notificationItems
     }
 }
 
@@ -125,7 +135,7 @@ public enum GitHubActivityParser {
         }
     }
 
-    public static func parse(_ html: String) throws -> [GitHubActivityGroup] {
+    public static func parse(_ html: String, viewerUsername: String? = nil) throws -> GitHubFeedParseResult {
         let tagPattern = #"<[^>]+data-hydro-(view|click)="([^"]+)"[^>]*>"#
         let regex = try NSRegularExpression(pattern: tagPattern)
         let range = NSRange(html.startIndex..., in: html)
@@ -197,11 +207,24 @@ public enum GitHubActivityParser {
             return updated
         }
 
-        let grouped = Dictionary(grouping: complete, by: { $0.actor.id })
-        return grouped.values.compactMap { activities in
+        let storyCandidates = complete.filter { !isStarOfYourRepository($0, viewerUsername: viewerUsername) }
+        let notificationCandidates = complete.filter { isStarOfYourRepository($0, viewerUsername: viewerUsername) }
+
+        let grouped = Dictionary(grouping: storyCandidates, by: { $0.actor.id })
+        let storyGroups: [GitHubActivityGroup] = grouped.values.compactMap { activities in
             guard let actor = activities.first?.actor else { return nil }
             return GitHubActivityGroup(actor: actor, activities: activities.sorted { $0.timestamp < $1.timestamp })
         }.sorted { $0.timestamp > $1.timestamp }
+        return GitHubFeedParseResult(storyGroups: storyGroups, notificationItems: notificationCandidates)
+    }
+
+    /// A "starred your repository" event is a notification about the viewer's
+    /// own repo rather than story content, so it is separated from the stories
+    /// (e.g. `SystemWOWS starred stephancill/pfwc`).
+    private static func isStarOfYourRepository(_ item: GitHubActivityItem, viewerUsername: String?) -> Bool {
+        guard item.kind == .starredRepository, let viewerUsername, !viewerUsername.isEmpty else { return false }
+        guard let owner = item.targetName.split(separator: "/").first else { return false }
+        return owner.caseInsensitiveCompare(viewerUsername) == .orderedSame
     }
 
     private static func normalize(_ card: ParsedCard) -> GitHubActivityItem? {

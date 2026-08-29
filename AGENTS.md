@@ -40,6 +40,7 @@ Sources/
       InstagramClient.swift / InstagramSession.swift / Instagram*Models.swift / Instagram*Parser.swift / InstagramNotificationSource.swift
       GitHubClient.swift
       GitHubActivitySource.swift
+      GitHubNotificationSource.swift
       SpotifyClient.swift / SpotifyActivitySource.swift
       XClient.swift / XNotificationSource.swift
       FarcasterClient.swift / FarcasterNotificationSource.swift

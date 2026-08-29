@@ -19,6 +19,7 @@ Build a universal macOS and iOS app with xtool that shows a combined social noti
 - Instagram messaging settings allow users to suppress DM notifications whose latest item is a shared post or reel.
 - Bluesky notifications are supported through the AT Protocol OAuth flow.
 - GitHub's authenticated For You activity is shown in the stories bar, grouped into one story reel per actor.
+- GitHub "starred your repository" events are notifications about the viewer's own repos, so they appear in the main notifications feed instead of the stories bar.
 
 ## Out Of Scope For MVP
 
@@ -65,7 +66,8 @@ Build a universal macOS and iOS app with xtool that shows a combined social noti
 - User signs in through an embedded GitHub web login.
 - Store only the selected `user_session` and `__Host-user_session_same_site` cookies in Keychain.
 - Fetch the authenticated HTML `GET /conduit/for_you_feed` endpoint and parse its machine-readable Hydro metadata.
-- Show GitHub activity only in the stories bar, grouped by actor; do not add it to the notifications list.
+- Show GitHub activity in the stories bar, grouped by actor.
+- "Starred your repository" events (target repo owner equals the viewer username) are routed to the main notifications feed, not the stories bar.
 - The OAuth `client_id` is `https://stupidtech.net/stupid-social/oauth/client-metadata.json`; login requires that exact public client metadata document to be hosted before authorization can complete.
 
 ## Credential Storage
@@ -120,7 +122,7 @@ Reference behavior from `docs/CLI_DOCS.md`:
 - Instagram story likes remain in the main notifications feed.
 - Unread Instagram DMs remain in the main notifications feed.
 - Spotify listening activity is not shown in the main notifications list.
-- GitHub For You activity is not shown in the main notifications list.
+- GitHub For You activity is not shown in the main notifications list, except "starred your repository" events, which route to the notifications feed.
 - GitHub story tiles group stars, follows, and repository forks by actor, with each activity represented as a slide.
 - Spotify listening story tiles show the album/track artwork as the thumbnail with the listener's avatar overlaid in the bottom-right corner.
 - Tapping a Spotify listening story opens the Listening detail screen.

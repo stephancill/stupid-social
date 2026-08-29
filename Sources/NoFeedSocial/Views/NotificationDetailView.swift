@@ -120,15 +120,28 @@ struct NotificationDetailView: View {
 
     private var title: String {
         switch displayItem.item.type {
-        case .mention: "Mention"
-        case .reply: "Reply"
+        case .mention:
+            return "Mention"
+        case .reply:
+            return "Reply"
         case .reaction:
-            displayItem.item.text.localizedCaseInsensitiveContains("retweet") ? "Retweet" : "Like"
-        case .follow: "Follow"
-        case .post: "Tweet"
-        case .message: "Message"
-        case .music: "Listening"
-        case .unknown: "Notification"
+            let text = displayItem.item.text.lowercased()
+            if text.contains("starred") {
+                return "Starred"
+            } else if text.contains("retweet") {
+                return "Retweet"
+            }
+            return "Like"
+        case .follow:
+            return "Follow"
+        case .post:
+            return "Tweet"
+        case .message:
+            return "Message"
+        case .music:
+            return "Listening"
+        case .unknown:
+            return "Notification"
         }
     }
 

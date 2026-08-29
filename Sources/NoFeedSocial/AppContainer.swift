@@ -16,6 +16,7 @@ final class AppContainer {
     private let instagramSource: InstagramNotificationSource
     private let spotifyActivitySource: SpotifyActivitySource
     private let githubActivitySource: GitHubActivitySource
+    private let githubNotificationSource: GitHubNotificationSource
     private let notificationSources: [any NotificationFetching]
     private let accountValidators: [any AccountValidating]
     private let profileFetchersByNetwork: [SocialNetwork: any ProfileFetching]
@@ -45,6 +46,11 @@ final class AppContainer {
             credentialStore: keychainStore,
             metadataStore: metadataStore,
         )
+        githubNotificationSource = GitHubNotificationSource(
+            client: GitHubClient(),
+            credentialStore: keychainStore,
+            metadataStore: metadataStore,
+        )
 
         let xSource = XNotificationSource(
             client: XClient(credentialStore: keychainStore),
@@ -68,6 +74,7 @@ final class AppContainer {
             farcasterSource,
             instagramSource,
             blueskySource,
+            githubNotificationSource,
             debugSource,
         ]
         accountValidators = [
@@ -77,6 +84,7 @@ final class AppContainer {
             spotifyActivitySource,
             blueskySource,
             githubActivitySource,
+            githubNotificationSource,
             debugSource,
         ]
         profileFetchersByNetwork = [
@@ -85,12 +93,14 @@ final class AppContainer {
             .instagram: instagramSource,
             .spotify: spotifyActivitySource,
             .bluesky: blueskySource,
+            .github: githubNotificationSource,
         ]
         targetDetailFetchersByNetwork = [
             .x: xSource,
             .farcaster: farcasterSource,
             .instagram: instagramSource,
             .bluesky: blueskySource,
+            .github: githubNotificationSource,
         ]
         relationshipMutatorsByNetwork = [
             .x: xSource,

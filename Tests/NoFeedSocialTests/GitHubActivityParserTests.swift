@@ -11,7 +11,7 @@ final class GitHubActivityParserTests: XCTestCase {
                  actorHref: "/octocat", actorId: "1", repoHref: "/example/older", position: 1, subPosition: nil),
         ].joined()
 
-        let groups = try GitHubActivityParser.parse(html)
+        let groups = try GitHubActivityParser.parse(html).storyGroups
 
         XCTAssertEqual(groups.count, 1)
         XCTAssertEqual(groups[0].actor.id, "1")
@@ -43,7 +43,7 @@ final class GitHubActivityParserTests: XCTestCase {
         </div>
         """
 
-        let groups = try GitHubActivityParser.parse(html)
+        let groups = try GitHubActivityParser.parse(html).storyGroups
         let actor = try XCTUnwrap(groups.first?.actor)
         let activities = try XCTUnwrap(groups.first?.activities)
 
@@ -74,7 +74,7 @@ final class GitHubActivityParserTests: XCTestCase {
         </article>
         """
 
-        let groups = try GitHubActivityParser.parse(html)
+        let groups = try GitHubActivityParser.parse(html).storyGroups
         let activity = try XCTUnwrap(groups.first?.activities.first)
 
         XCTAssertEqual(groups.flatMap(\.activities).count, 1)
@@ -108,6 +108,33 @@ final class GitHubActivityParserTests: XCTestCase {
         XCTAssertFalse(metadata.bio?.contains("repositories") ?? false)
         XCTAssertEqual(metadata.repos, "66")
         XCTAssertEqual(metadata.followers, "13.8k")
+    }
+
+    func testMovesStarOfViewerRepositoryToNotifications() throws {
+        let viewer = "stephancill"
+        let html = [
+            card(cardType: "STARRED_REPOSITORY", createdAt: "2026-08-29T05:30:41.000-07:00", recordId: "star-your-1",
+                 actorHref: "/SystemWOWS", actorId: "700", repoHref: "/\(viewer)/pfwc", position: 0, subPosition: nil),
+            card(cardType: "STARRED_REPOSITORY", createdAt: "2026-08-29T04:11:25.000-07:00", recordId: "star-other-1",
+                 actorHref: "/noctisatrae", actorId: "701", repoHref: "/apache/datafusion", position: 1, subPosition: nil),
+        ].joined()
+
+        let result = try GitHubActivityParser.parse(html, viewerUsername: viewer)
+
+        XCTAssertEqual(result.notificationItems.map(\.targetName), ["\(viewer)/pfwc"])
+        XCTAssertEqual(result.notificationItems.map(\.kind), [.starredRepository])
+        let storyTargets = result.storyGroups.flatMap(\.activities).map(\.targetName)
+        XCTAssertEqual(storyTargets, ["apache/datafusion"])
+    }
+
+    func testWithoutViewerUsernameEverythingStaysStories() throws {
+        let html = card(cardType: "STARRED_REPOSITORY", createdAt: "2026-08-29T05:30:41.000-07:00", recordId: "star-a",
+                        actorHref: "/SystemWOWS", actorId: "700", repoHref: "/stephancill/pfwc", position: 0, subPosition: nil)
+
+        let result = try GitHubActivityParser.parse(html)
+
+        XCTAssertTrue(result.notificationItems.isEmpty)
+        XCTAssertEqual(result.storyGroups.flatMap(\.activities).map(\.targetName), ["stephancill/pfwc"])
     }
 
     // MARK: - Card builders
