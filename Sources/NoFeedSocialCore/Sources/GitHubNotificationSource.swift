@@ -39,8 +39,30 @@ public final class GitHubNotificationSource: NotificationFetching, AccountValida
     }
 
     public func fetchProfile(id: String) async throws -> NetworkProfile {
-        let avatarURL = URL(string: "https://github.com/\(id).png?size=192")
-        return NetworkProfile(id: id, network: .github, username: id, displayName: nil, avatarURL: avatarURL, followerCount: nil, followingCount: nil)
+        let sourceId = id.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let fallback = NetworkProfile(
+            id: id,
+            network: .github,
+            username: sourceId,
+            displayName: nil,
+            avatarURL: URL(string: "https://github.com/\(sourceId).png?size=192"),
+            followerCount: nil,
+            followingCount: nil,
+        )
+        guard let user = try? await client.userPage(for: sourceId) else { return fallback }
+        return NetworkProfile(
+            id: id,
+            network: .github,
+            username: user.username,
+            displayName: user.displayName,
+            bio: user.bio,
+            location: user.location,
+            avatarURL: user.avatarURL,
+            followerCount: user.followerCount,
+            followingCount: user.followingCount,
+            postsCount: user.repositoryCount,
+            websiteURL: user.websiteURL,
+        )
     }
 
     public func searchProfiles(query _: String) async throws -> [NetworkProfile] {
@@ -149,7 +171,7 @@ public final class GitHubNotificationSource: NotificationFetching, AccountValida
             actors: [actor],
             target: NotificationTarget(
                 id: item.targetName,
-                text: item.repoDescription ?? item.targetName,
+                text: item.targetName,
                 url: item.targetURL,
                 imageURL: item.targetAvatarURL,
                 author: viewer,

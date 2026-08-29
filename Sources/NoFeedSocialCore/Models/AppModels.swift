@@ -215,6 +215,7 @@ public struct NetworkProfile: Identifiable, Hashable, Codable, Sendable {
     public let username: String?
     public let displayName: String?
     public let bio: String?
+    public let location: String?
     public let avatarURL: URL?
     public let followerCount: Int?
     public let followingCount: Int?
@@ -235,6 +236,7 @@ public struct NetworkProfile: Identifiable, Hashable, Codable, Sendable {
         case username
         case displayName
         case bio
+        case location
         case avatarURL
         case followerCount
         case followingCount
@@ -256,6 +258,7 @@ public struct NetworkProfile: Identifiable, Hashable, Codable, Sendable {
         username: String?,
         displayName: String?,
         bio: String? = nil,
+        location: String? = nil,
         avatarURL: URL?,
         followerCount: Int?,
         followingCount: Int?,
@@ -275,6 +278,7 @@ public struct NetworkProfile: Identifiable, Hashable, Codable, Sendable {
         self.username = username
         self.displayName = displayName
         self.bio = bio
+        self.location = location
         self.avatarURL = avatarURL
         self.followerCount = followerCount
         self.followingCount = followingCount
@@ -297,6 +301,7 @@ public struct NetworkProfile: Identifiable, Hashable, Codable, Sendable {
         username = try container.decodeIfPresent(String.self, forKey: .username)
         displayName = try container.decodeIfPresent(String.self, forKey: .displayName)
         bio = try container.decodeIfPresent(String.self, forKey: .bio)
+        location = try container.decodeIfPresent(String.self, forKey: .location)
         avatarURL = try container.decodeIfPresent(URL.self, forKey: .avatarURL)
         followerCount = try container.decodeIfPresent(Int.self, forKey: .followerCount)
         followingCount = try container.decodeIfPresent(Int.self, forKey: .followingCount)

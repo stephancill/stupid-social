@@ -129,8 +129,14 @@ struct ProfileDetailView: View {
                         LabeledContent("Following", value: formatCount(followingCount))
                     }
                     if let posts = profile.postsCount {
-                        LabeledContent("Posts", value: formatCount(posts))
+                        LabeledContent(profile.network == .github ? "Repositories" : "Posts", value: formatCount(posts))
                     }
+                }
+            }
+
+            if let location = profile.location, !location.isEmpty {
+                Section {
+                    LabeledContent("Location", value: location)
                 }
             }
 
@@ -443,6 +449,7 @@ private extension NetworkProfile {
             username: username,
             displayName: displayName,
             bio: bio,
+            location: location,
             avatarURL: avatarURL,
             followerCount: followerCount,
             followingCount: followingCount,
@@ -466,6 +473,7 @@ private extension NetworkProfile {
             username: username,
             displayName: displayName,
             bio: bio,
+            location: location,
             avatarURL: avatarURL,
             followerCount: followerCount,
             followingCount: followingCount,
@@ -493,6 +501,7 @@ private extension NetworkProfile {
             username: username,
             displayName: displayName,
             bio: bio,
+            location: location,
             avatarURL: avatarURL,
             followerCount: followerCount,
             followingCount: followingCount,

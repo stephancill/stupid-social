@@ -158,6 +158,34 @@ final class GitHubActivityParserTests: XCTestCase {
         XCTAssertEqual(Set(result.notificationItems.map(\.targetName)), ["\(viewer)/pfwc"])
     }
 
+    /// Each aggregated ''starred your repository'' row carries its own star time.
+    /// The timestamp is read from the card's hovercard URL, where the ``created_at``
+    /// key is URL-encoded as ``…%5Bcreated_at%5D=2026-08-29+02%3A14%3A51+-0700``.
+    /// When that parse fails, the parser must not fall back to "now" for every row.
+    func testAggregatedYourRepositoryRowsKeepPerCardTimestamp() throws {
+        let viewer = "stephancill"
+        let html = """
+        <article data-hovercard-url="https://github.com/users/s0urledd/hovercard?payload%5Bfeed_card%5D%5Bcreated_at%5D=2026-08-29+02%3A14%3A51+-0700">
+          <a href="/\(viewer)/pfwc" class="Link--primary Link text-bold">\(viewer)/pfwc</a>
+          <a href="/s0urledd" class="Link text-bold">s0urledd</a> starred
+        </article>
+        """
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss Z"
+        let expected = try XCTUnwrap(formatter.date(from: "2026-08-29 02:14:51 -0700"))
+
+        let result = try GitHubActivityParser.parse(html, viewerUsername: viewer)
+        let item = try XCTUnwrap(result.notificationItems.first)
+        XCTAssertEqual(item.timestamp.timeIntervalSince1970, expected.timeIntervalSince1970, accuracy: 0.001)
+        XCTAssertEqual(
+            try XCTUnwrap(item.actor.timestamp).timeIntervalSince1970,
+            expected.timeIntervalSince1970,
+            accuracy: 0.001,
+        )
+    }
+
     // MARK: - Card builders
 
     private func starred(createdAt: String, recordId: String, actorHref: String, actorId: String, repoHref: String, sub: Int?) -> String {

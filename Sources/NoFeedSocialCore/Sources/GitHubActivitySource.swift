@@ -285,13 +285,15 @@ public enum GitHubActivityParser {
     }
 
     private static func createdTimestamp(in article: String) -> Date? {
-        // payload[feed_card][created_at]=2026-08-29 02:14:51 -0700 with
-        // URL-encoded colons (%3A) and spaces (+).
+        // The card's hovercard URL carries `payload[feed_card][created_at]=2026-08-29 02:14:51 -0700`
+        // with URL-encoded brackets (%5B/%5D), colons (%3A), slashes (%2F), and spaces (+).
         let decoded = article
+            .replacingOccurrences(of: "%5B", with: "[")
+            .replacingOccurrences(of: "%5D", with: "]")
             .replacingOccurrences(of: "%3A", with: ":")
             .replacingOccurrences(of: "%2F", with: "/")
             .replacingOccurrences(of: "+", with: " ")
-        guard let regex = try? NSRegularExpression(pattern: #"created_at=([0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} [+-][0-9]{4})"#),
+        guard let regex = try? NSRegularExpression(pattern: #"created_at\]?=([0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} [+-][0-9]{4})"#),
               let match = regex.firstMatch(in: decoded, range: NSRange(decoded.startIndex..., in: decoded)),
               let value = Range(match.range(at: 1), in: decoded)
         else { return nil }
