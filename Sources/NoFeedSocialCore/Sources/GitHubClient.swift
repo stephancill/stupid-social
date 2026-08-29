@@ -118,6 +118,22 @@ public struct GitHubClient: Sendable {
         )
     }
 
+    /// Fetches a repo's public page and returns its OpenGraph card (name, title,
+    /// description, image). Public, lazy read so a repo detail can render the
+    /// repo's own og:image instead of an avatar.
+    public func repoPage(for repoName: String) async throws -> GitHubRepoDescription {
+        let path = repoName.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let url = URL(string: "https://github.com/\(path)")!
+        let html = try await publicHTML(url: url)
+        let ogURL = Self.ogMeta(in: html, property: "og:url").flatMap(URL.init(string:))
+        let name = ogURL?.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")) ?? path
+        let title = Self.ogMeta(in: html, property: "og:title")
+        let description = Self.ogMeta(in: html, property: "og:description")
+            .flatMap { Self.stripTrailingRepoSuffix($0, name: name) }
+        let imageURL = Self.ogMeta(in: html, property: "og:image").flatMap(URL.init(string:))
+        return GitHubRepoDescription(name: name, title: title, description: description, url: url, imageURL: imageURL)
+    }
+
     private func publicHTML(url: URL) async throws -> String {
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
@@ -173,6 +189,22 @@ public struct GitHubOriginalRepo: Equatable, Sendable {
 
     public init(name: String, description: String?, url: URL, imageURL: URL?) {
         self.name = name
+        self.description = description
+        self.url = url
+        self.imageURL = imageURL
+    }
+}
+
+public struct GitHubRepoDescription: Equatable, Sendable {
+    public let name: String
+    public let title: String?
+    public let description: String?
+    public let url: URL
+    public let imageURL: URL?
+
+    public init(name: String, title: String?, description: String?, url: URL, imageURL: URL?) {
+        self.name = name
+        self.title = title
         self.description = description
         self.url = url
         self.imageURL = imageURL

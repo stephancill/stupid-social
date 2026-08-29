@@ -48,17 +48,19 @@ public final class GitHubNotificationSource: NotificationFetching, AccountValida
     }
 
     public func fetchTargetDetails(for item: NotificationItem) async throws -> NotificationTargetDetails {
-        let viewer = NotificationActor(
-            id: item.accountId,
-            network: .github,
-            username: item.accountId,
-            displayName: nil,
-            avatarURL: URL(string: "https://github.com/\(item.accountId).png?size=96"),
-        )
+        if let name = item.target?.id, let page = try? await client.repoPage(for: name) {
+            return NotificationTargetDetails(
+                author: nil,
+                text: page.description ?? page.name,
+                imageURLs: page.imageURL.map { [$0] } ?? [],
+                postedAt: nil,
+            )
+        }
         return NotificationTargetDetails(
-            author: item.target?.author ?? viewer,
+            author: nil,
             text: item.target?.text,
-            postedAt: item.timestamp,
+            imageURLs: item.target?.imageURL.map { [$0] } ?? [],
+            postedAt: nil,
         )
     }
 

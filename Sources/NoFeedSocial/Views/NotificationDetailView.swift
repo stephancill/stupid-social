@@ -48,7 +48,13 @@ struct NotificationDetailView: View {
                 }
             } else if let target = displayItem.item.target {
                 Section(targetSectionTitle) {
-                    if displayItem.item.type == .message {
+                    if displayItem.item.network == .github {
+                        GitHubRepoDetailView(
+                            target: target,
+                            details: targetDetails,
+                            isLoading: isLoadingTargetDetails,
+                        )
+                    } else if displayItem.item.type == .message {
                         MessageBubbleView(
                             target: target,
                             actors: displayItem.item.actors,
@@ -146,7 +152,8 @@ struct NotificationDetailView: View {
     }
 
     private var targetSectionTitle: String {
-        displayItem.item.type == .message ? "Message" : "Post"
+        if displayItem.item.network == .github { return "Repository" }
+        return displayItem.item.type == .message ? "Message" : "Post"
     }
 
     private var targetURL: URL? {
@@ -590,6 +597,79 @@ private struct TargetPostView: View {
         let digitsBeforeDecimal = max(1, Int(floor(log10(abs(scaled)))) + 1)
         let fractionDigits = max(0, 2 - digitsBeforeDecimal)
         return String(format: "%.*f%@", fractionDigits, scaled, unit.suffix)
+    }
+}
+
+private struct GitHubRepoDetailView: View {
+    let target: NotificationTarget
+    let details: NotificationTargetDetails?
+    let isLoading: Bool
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if isLoading, details == nil {
+                ProgressView()
+                    .frame(maxWidth: .infinity, minHeight: 120)
+            } else {
+                if let imageURL = displayImageURL {
+                    CachedAsyncImage(url: imageURL) {
+                        Color.secondary.opacity(0.15)
+                    } failure: {
+                        Color.secondary.opacity(0.15)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+
+                Text(repoName)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+
+                if let text = displayText, !text.isEmpty {
+                    Text(DebugRedaction.text(text, actors: [], enabled: devModeEnabled))
+                        .font(.body)
+                        .foregroundStyle(.primary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if let repoURL = target.url {
+                    Button {
+                        openURL(repoURL)
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text("View on GitHub")
+                            Image(systemName: "arrow.up.forward.square")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .font(.subheadline.weight(.medium))
+                }
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if let url = target.url { openURL(url) }
+        }
+    }
+
+    @AppStorage("devModeEnabled") private var devModeEnabled = false
+
+    private var repoName: String {
+        target.id
+    }
+
+    private var displayText: String? {
+        if let text = details?.text, !text.isEmpty { return text }
+        return target.text
+    }
+
+    private var displayImageURL: URL? {
+        if let url = details?.imageURLs.first { return url }
+        if let url = target.imageURL { return url }
+        return target.imageURLs.first
     }
 }
 
