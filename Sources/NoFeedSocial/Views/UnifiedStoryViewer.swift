@@ -765,7 +765,7 @@ struct UnifiedStoryViewer: View {
                 if touchStartedAt == nil {
                     touchStartedAt = Date()
                 }
-                if currentItem?.isInstagram == true {
+                if currentItem?.isInstagram == true || currentItem?.isGitHub == true {
                     isPaused = true
                     player?.pause()
                 }
@@ -1469,6 +1469,11 @@ private struct GitHubStoryContent: View {
 
     var isInstagram: Bool {
         if case .instagram = self { return true }
+        return false
+    }
+
+    var isGitHub: Bool {
+        if case .github = self { return true }
         return false
     }
 

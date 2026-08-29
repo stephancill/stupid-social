@@ -2,6 +2,10 @@
 
 ## 2026-08-29
 
+- Tapping and holding now pauses the slide timer for GitHub stories too, matching Instagram stories. Holding already set `isPaused = true` in `UnifiedStoryViewer.storyGesture`, but only while `currentItem?.isInstagram`; GitHub has no audio player, so only the timer needed pausing (the `onReceive` tick returns early when `isPaused`). Added an `isGitHub` helper on `StoryBarItem` and paused on hold for `isInstagram || isGitHub`. Release already resets `isPaused = false` unconditionally (the `player?.play()` stays Instagram-only since GitHub plays no media).
+
+## 2026-08-29
+
 - Removed the per-connection "Credentials" storage-location row (it surfaced `iCloud` / `This device` via `*CredentialStorage` labels) from the X, Instagram, Spotify, Bluesky, and GitHub connection screens. The backing `*CredentialStorage` published properties remain because `hasLocalOnlyCredentials` still drives the Settings-wide local-credentials warning.
 - Fixed GitHub so the signed-in account is resolved and persisted. The login WebView only names the user when GitHub's `dotcom_user` cookie is captured during the flow, which is unreliable, so a fresh connection could show just "Connected" and "starred your repository" notifications could fail to route (no viewer username). `GitHubClient.authenticatedUser(credentials:)` now fetches the authenticated `https://github.com/` homepage and reads the signed-in user's login from the user-menu JSON (`"userMenu":{"owner":{"login":"..."}}`), verified live on `stephancill`; it returns nil for a logged-out page and throws `notConfigured` on HTTP 401/403. `SettingsViewModel.saveGitHubCookies` resolves and persists that username when the captured session had none, and `validateDiscoveredGitHubCredentials` now heals legacy already-connected sessions that were saved username-less (re-resolving and re-saving). Covered by three new `GitHubClientTests`.
 
