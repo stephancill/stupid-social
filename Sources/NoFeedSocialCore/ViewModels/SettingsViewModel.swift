@@ -187,13 +187,27 @@ public final class SettingsViewModel: ObservableObject {
     }
 
     public func saveGitHubCookies(_ credentials: GitHubCredentials) async {
+        var stored = credentials
         do {
-            githubCredentialStorage = try keychainStore.saveGitHubCredentials(credentials)
-            let result = try await GitHubClient().forYouFeed(credentials: credentials)
+            // The login WebView only sets a username when GitHub's `dotcom_user`
+            // cookie was captured during the flow, which is unreliable. Resolve the
+            // signed-in account from the authenticated homepage so the persisted
+            // session (and "starred your repository" routing) names the real user.
+            if stored.username == nil || stored.username!.isEmpty {
+                if let resolved = try await GitHubClient().authenticatedUser(credentials: stored) {
+                    stored = GitHubCredentials(
+                        userSession: stored.userSession,
+                        sameSiteUserSession: stored.sameSiteUserSession,
+                        username: resolved,
+                    )
+                }
+            }
+            githubCredentialStorage = try keychainStore.saveGitHubCredentials(stored)
+            let result = try await GitHubClient().forYouFeed(credentials: stored)
             guard case let .feed(response) = result else { throw SourceError.invalidResponse }
             _ = try GitHubActivityParser.parse(response.html)
-            let accountId = credentials.username ?? "github"
-            metadataStore.githubAccount = GitHubAccountMetadata(accountId: accountId, username: credentials.username, status: .valid)
+            let accountId = stored.username ?? "github"
+            metadataStore.githubAccount = GitHubAccountMetadata(accountId: accountId, username: stored.username, status: .valid)
             githubStatus = .valid
             message = "GitHub account connected."
         } catch SourceError.notConfigured {
@@ -813,10 +827,23 @@ public final class SettingsViewModel: ObservableObject {
     private func validateDiscoveredGitHubCredentials() async {
         guard let credentials = try? keychainStore.loadGitHubCredentials() else { return }
         do {
-            let result = try await GitHubClient().forYouFeed(credentials: credentials)
+            var stored = credentials
+            // Heal legacy sessions that were saved before the signed-in username
+            // was reliably captured or resolved.
+            if stored.username == nil || stored.username!.isEmpty {
+                if let resolved = try await GitHubClient().authenticatedUser(credentials: stored) {
+                    stored = GitHubCredentials(
+                        userSession: stored.userSession,
+                        sameSiteUserSession: stored.sameSiteUserSession,
+                        username: resolved,
+                    )
+                    _ = try? keychainStore.saveGitHubCredentials(stored)
+                }
+            }
+            let result = try await GitHubClient().forYouFeed(credentials: stored)
             guard case let .feed(response) = result else { return }
             _ = try GitHubActivityParser.parse(response.html)
-            metadataStore.githubAccount = GitHubAccountMetadata(accountId: credentials.username ?? "github", username: credentials.username, status: .valid)
+            metadataStore.githubAccount = GitHubAccountMetadata(accountId: stored.username ?? "github", username: stored.username, status: .valid)
             githubStatus = .valid
         } catch SourceError.notConfigured {
             if var account = metadataStore.githubAccount {

@@ -52,14 +52,6 @@ struct BlueskyConnectionView: View {
                     Text(viewModel.blueskyConnectionLabel)
                         .foregroundStyle(.secondary)
                 }
-                if let storage = viewModel.blueskyCredentialStorage {
-                    HStack {
-                        Text("Credentials")
-                        Spacer()
-                        Text(storage.label)
-                            .foregroundStyle(.secondary)
-                    }
-                }
             }
 
             if viewModel.blueskyHandle != nil || viewModel.blueskyStatus != .notConfigured {

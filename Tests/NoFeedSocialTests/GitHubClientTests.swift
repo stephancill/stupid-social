@@ -72,6 +72,50 @@ final class GitHubClientTests: XCTestCase {
         }
     }
 
+    func testAuthenticatedUserReadsUserMenuLogin() async throws {
+        GitHubURLProtocolStub.handler = { request in
+            XCTAssertEqual(request.url?.absoluteString, "https://github.com/")
+            XCTAssertEqual(
+                request.value(forHTTPHeaderField: "Cookie"),
+                "user_session=session; __Host-user_session_same_site=same-site; logged_in=yes",
+            )
+            let html = #"<script>{"userMenu":{"owner":{"login":"stephancill","name":"Stephan Cilliers"}}}</script>"#
+            return (200, ["Content-Type": "text/html; charset=utf-8"], Data(html.utf8))
+        }
+
+        let username = try await makeClient().authenticatedUser(
+            credentials: GitHubCredentials(userSession: "session", sameSiteUserSession: "same-site"),
+        )
+
+        XCTAssertEqual(username, "stephancill")
+    }
+
+    func testAuthenticatedUserReturnsNilWhenNoUserMenu() async throws {
+        GitHubURLProtocolStub.handler = { _ in
+            (200, ["Content-Type": "text/html; charset=utf-8"], Data("<html>logged out</html>".utf8))
+        }
+
+        let username = try await makeClient().authenticatedUser(
+            credentials: GitHubCredentials(userSession: "session", sameSiteUserSession: "same-site"),
+        )
+
+        XCTAssertNil(username)
+    }
+
+    func testAuthenticatedUserThrowsNotConfiguredOnExpiredSession() async {
+        GitHubURLProtocolStub.handler = { _ in (403, ["Content-Type": "text/html"], Data()) }
+
+        await XCTAssertThrowsErrorAsync {
+            _ = try await self.makeClient().authenticatedUser(
+                credentials: GitHubCredentials(userSession: "session", sameSiteUserSession: "same-site"),
+            )
+        } verify: { error in
+            guard case SourceError.notConfigured = error else {
+                return XCTFail("Expected notConfigured, got \(error)")
+            }
+        }
+    }
+
     private func makeClient() -> GitHubClient {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [GitHubURLProtocolStub.self]

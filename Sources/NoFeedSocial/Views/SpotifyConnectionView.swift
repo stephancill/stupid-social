@@ -30,14 +30,6 @@ struct SpotifyConnectionView: View {
                     Text(viewModel.spotifyConnectionLabel)
                         .foregroundStyle(.secondary)
                 }
-                if let storage = viewModel.spotifyCredentialStorage {
-                    HStack {
-                        Text("Credentials")
-                        Spacer()
-                        Text(storage.label)
-                            .foregroundStyle(.secondary)
-                    }
-                }
             }
 
             if devModeEnabled, viewModel.spotifyHandle == nil {

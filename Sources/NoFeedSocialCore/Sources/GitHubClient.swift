@@ -83,6 +83,43 @@ public struct GitHubClient: Sendable {
         ))
     }
 
+    /// Resolves the currently signed-in GitHub username from the authenticated
+    /// homepage's user menu JSON (`"userMenu":{"owner":{"login":"..."}}`). The
+    /// login WebView can finish before GitHub has set its `dotcom_user` cookie,
+    /// so the stored session sometimes has no username; this recovers it from an
+    /// authenticated read so the account can be named and "starred your repo"
+    /// notifications can be routed. Returns nil when the homepage carries no user
+    /// menu (e.g. not logged in), and throws `notConfigured` on an expired session.
+    public func authenticatedUser(credentials: GitHubCredentials) async throws -> String? {
+        var request = URLRequest(url: URL(string: "https://github.com/")!)
+        request.httpMethod = "GET"
+        request.httpShouldHandleCookies = false
+        request.setValue("text/html", forHTTPHeaderField: "Accept")
+        request.setValue(Locale.preferredLanguages.first ?? "en-US", forHTTPHeaderField: "Accept-Language")
+        request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(cookieHeader(credentials: credentials), forHTTPHeaderField: "Cookie")
+
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw SourceError.invalidResponse
+        }
+        if http.statusCode == 401 || http.statusCode == 403 {
+            throw SourceError.notConfigured
+        }
+        guard (200 ..< 300).contains(http.statusCode),
+              let html = String(data: data, encoding: .utf8),
+              !html.isEmpty
+        else {
+            throw SourceError.invalidResponse
+        }
+        guard let regex = try? NSRegularExpression(pattern: #""userMenu":\{"owner":\{"login":"([^"]+)""#),
+              let match = regex.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
+              let range = Range(match.range(at: 1), in: html)
+        else { return nil }
+        let username = String(html[range]).trimmingCharacters(in: .whitespacesAndNewlines)
+        return username.isEmpty ? nil : username
+    }
+
     private func cookieHeader(credentials: GitHubCredentials) -> String {
         [
             "user_session=\(credentials.userSession)",

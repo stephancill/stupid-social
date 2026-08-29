@@ -30,14 +30,6 @@ struct GitHubConnectionView: View {
                     Text(viewModel.githubConnectionLabel)
                         .foregroundStyle(.secondary)
                 }
-                if let storage = viewModel.githubCredentialStorage {
-                    HStack {
-                        Text("Credentials")
-                        Spacer()
-                        Text(storage.label)
-                            .foregroundStyle(.secondary)
-                    }
-                }
             }
 
             if devModeEnabled, viewModel.githubStatus == .notConfigured {
