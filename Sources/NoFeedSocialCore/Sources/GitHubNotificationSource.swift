@@ -48,8 +48,15 @@ public final class GitHubNotificationSource: NotificationFetching, AccountValida
     }
 
     public func fetchTargetDetails(for item: NotificationItem) async throws -> NotificationTargetDetails {
-        NotificationTargetDetails(
-            author: item.actors.first,
+        let viewer = NotificationActor(
+            id: item.accountId,
+            network: .github,
+            username: item.accountId,
+            displayName: nil,
+            avatarURL: URL(string: "https://github.com/\(item.accountId).png?size=96"),
+        )
+        return NotificationTargetDetails(
+            author: item.target?.author ?? viewer,
             text: item.target?.text,
             postedAt: item.timestamp,
         )
@@ -122,6 +129,13 @@ public final class GitHubNotificationSource: NotificationFetching, AccountValida
             avatarURL: item.actor.avatarURL,
             timestamp: item.timestamp,
         )
+        let viewer = NotificationActor(
+            id: accountId,
+            network: .github,
+            username: accountId,
+            displayName: nil,
+            avatarURL: URL(string: "https://github.com/\(accountId).png?size=96"),
+        )
         return NotificationItem(
             id: "github:\(accountId):\(item.id)",
             network: .github,
@@ -133,9 +147,10 @@ public final class GitHubNotificationSource: NotificationFetching, AccountValida
             actors: [actor],
             target: NotificationTarget(
                 id: item.targetName,
-                text: item.targetName,
+                text: item.repoDescription ?? item.targetName,
                 url: item.targetURL,
-                author: actor,
+                imageURL: item.targetAvatarURL,
+                author: viewer,
                 postedAt: item.timestamp,
             ),
         )
