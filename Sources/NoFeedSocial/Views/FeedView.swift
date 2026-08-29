@@ -804,25 +804,16 @@ private struct GitHubStoryBubble: View {
 
     var body: some View {
         VStack(spacing: 6) {
-            ZStack(alignment: .bottomTrailing) {
-                CachedAsyncImage(url: group.actor.avatarURL, cacheKey: "github-avatar-\(group.actor.id)") {
-                    avatarPlaceholder
-                } failure: {
-                    avatarPlaceholder
-                }
-                .frame(width: 70, height: 70)
-                .clipShape(Circle())
-                .overlay {
-                    Circle()
-                        .stroke(group.isSeen ? Color.gray.opacity(0.4) : Color.primary, lineWidth: 3)
-                }
-
-                githubBadgeOverlay
-                    .frame(width: 24, height: 24)
-                    .background(Color.white, in: Circle())
-                    .clipShape(Circle())
-                    .overlay { Circle().stroke(.background, lineWidth: 2) }
-                    .offset(x: 3, y: 3)
+            CachedAsyncImage(url: group.actor.avatarURL, cacheKey: "github-avatar-\(group.actor.id)") {
+                avatarPlaceholder
+            } failure: {
+                avatarPlaceholder
+            }
+            .frame(width: 70, height: 70)
+            .clipShape(Circle())
+            .overlay {
+                Circle()
+                    .stroke(group.isSeen ? Color.gray.opacity(0.4) : Color.primary, lineWidth: 3)
             }
 
             Text(displayName)
@@ -837,21 +828,6 @@ private struct GitHubStoryBubble: View {
 
     private var displayName: String {
         DebugRedaction.actorName(group.actor, enabled: devModeEnabled)
-    }
-
-    private var githubBadgeOverlay: some View {
-        Group {
-            if let image = networkBadgeImage(named: SocialNetwork.github.badgeAssetName) {
-                image
-                    .resizable()
-                    .interpolation(.high)
-            } else {
-                Image(systemName: "chevron.left.forwardslash.chevron.right")
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(.white)
-                    .background(Color.black, in: Circle())
-            }
-        }
     }
 
     private var avatarPlaceholder: some View {
