@@ -19,6 +19,7 @@ public struct ContentView: View {
                 ProgressView()
             }
         }
+        .background(refreshShortcutButton)
         .task {
             if container == nil {
                 configureDependencies()
@@ -154,6 +155,20 @@ public struct ContentView: View {
         async let feedRefresh = container.feedViewModel.refresh()
         async let storyRefresh: Void = container.storyBarViewModel.fetchStoryBarContent()
         _ = await (feedRefresh, storyRefresh)
+    }
+
+    private var refreshShortcutButton: some View {
+        Button {
+            if let container {
+                Task {
+                    await refreshFeedAndStories(container: container)
+                }
+            }
+        } label: {
+            EmptyView()
+        }
+        .keyboardShortcut("r", modifiers: .command)
+        .hidden()
     }
 
     private func tabSelection(container: AppContainer) -> Binding<MainTab> {

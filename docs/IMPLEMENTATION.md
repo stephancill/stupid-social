@@ -2,6 +2,10 @@
 
 ## 2026-08-30
 
+- Added a global `Command+R` refresh shortcut. `ContentView` attaches a hidden `Button` bound to `.keyboardShortcut("r", modifiers: .command)` in the root background; it calls the shared `refreshFeedAndStories(container:)` (feed + stories) from any pane. SwiftUI `.keyboardShortcut` routes through hardware `UIKeyCommand`s, so it works on iPad keyboards and the Mac-compatibility path (`stupid-app run --mac`); on iPhone it's inert unless a hardware keyboard is connected. Verified the app still builds/launches on both the iPhone (compact) and iPad (wide) simulators.
+
+## 2026-08-30
+
 - Added a wide, platform-adaptive layout driven by `horizontalSizeClass`, with no macOS-specific code: on `.regular` widths (now reachable on iPad and the Mac compatibility canvas) `ContentView` switches from the compact bottom `TabView` to a `NavigationSplitView` with a Home/Search/Settings sidebar (`wideLayout`) and the same three panes in the detail column (`detailView`); compact stays the existing bottom tab bar. Selection is centralised in `tabSelection` / `tabSelectionOptional` / `setSelectedTab`, keeping the refresh-on-re-selecting-Home behavior for both paths. To actually run at native iPad size (and reach `.regular`), `Info.plist`'s `UIDeviceFamily` was changed from `[1]` (iPhone-only, which made iPad run the app in 375×667 phone-boxed mode forced to `.compact`) to `[1, 2]` (iPhone + iPad). Verified on an iOS 26.3 iPad Pro 11 simulator: native ~680×1210 canvas, sidebar shows Home/Search/Settings, tapping Search loads the search pane; and on the iPhone simulator the bottom TabView is unchanged.
 
 ## 2026-08-30
