@@ -5,6 +5,7 @@ import SwiftUI
 public struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var container: AppContainer?
     @State private var selectedTab = MainTab.home
 
@@ -33,6 +34,15 @@ public struct ContentView: View {
 
     @ViewBuilder
     private func tabs(container: AppContainer) -> some View {
+        if horizontalSizeClass == .regular {
+            wideLayout(container: container)
+        } else {
+            compactLayout(container: container)
+        }
+    }
+
+    @ViewBuilder
+    private func compactLayout(container: AppContainer) -> some View {
         let tabView = TabView(selection: tabSelection(container: container)) {
             FeedView(
                 viewModel: container.feedViewModel,
@@ -77,6 +87,53 @@ public struct ContentView: View {
         }
     }
 
+    private func wideLayout(container: AppContainer) -> some View {
+        NavigationSplitView {
+            List(selection: tabSelectionOptional(container: container)) {
+                Label("Home", systemImage: "house")
+                    .tag(MainTab.home)
+                Label("Search", systemImage: "magnifyingglass")
+                    .tag(MainTab.search)
+                Label("Settings", systemImage: "gear")
+                    .badge(container.settingsViewModel.hasInvalidCredentials ? "!" : nil)
+                    .tag(MainTab.settings)
+            }
+            .navigationSplitViewColumnWidth(min: 180, ideal: 220)
+            .navigationTitle("Social")
+        } detail: {
+            detailView(for: selectedTab, container: container)
+        }
+        .navigationSplitViewStyle(.balanced)
+    }
+
+    @ViewBuilder
+    private func detailView(for tab: MainTab, container: AppContainer) -> some View {
+        switch tab {
+        case .home:
+            FeedView(
+                viewModel: container.feedViewModel,
+                storyViewModel: container.storyBarViewModel,
+                spotifyClient: container.spotifyClient,
+                onOpenSettings: {
+                    selectedTab = .settings
+                },
+            )
+        case .search:
+            SearchView(
+                viewModel: container.profileSearchViewModel,
+            )
+        case .settings:
+            NavigationStack {
+                SettingsView(viewModel: container.settingsViewModel)
+            }
+            .onDisappear {
+                Task {
+                    await foregroundRefreshFeedAndStories(container: container)
+                }
+            }
+        }
+    }
+
     private func configureDependencies() {
         let appContainer = AppContainer(modelContext: modelContext)
         container = appContainer
@@ -103,15 +160,30 @@ public struct ContentView: View {
         Binding(
             get: { selectedTab },
             set: { newTab in
-                if selectedTab == .home, newTab == .home {
-                    Task {
-                        await refreshFeedAndStories(container: container)
-                    }
-                }
-
-                selectedTab = newTab
+                setSelectedTab(newTab, container: container)
             },
         )
+    }
+
+    private func tabSelectionOptional(container: AppContainer) -> Binding<MainTab?> {
+        Binding(
+            get: { selectedTab },
+            set: { newTab in
+                if let newTab {
+                    setSelectedTab(newTab, container: container)
+                }
+            },
+        )
+    }
+
+    private func setSelectedTab(_ newTab: MainTab, container: AppContainer) {
+        if selectedTab == .home, newTab == .home {
+            Task {
+                await refreshFeedAndStories(container: container)
+            }
+        }
+
+        selectedTab = newTab
     }
 }
 
