@@ -29,326 +29,171 @@ struct SpotifyLoginWebView: View {
     }
 }
 
-#if os(iOS)
-    struct SpotifyLoginWKWebView: UIViewRepresentable {
-        let url: URL
+struct SpotifyLoginWKWebView: UIViewRepresentable {
+    let url: URL
+    let onCredentialsFound: (SpotifyCredentials) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onCredentialsFound: onCredentialsFound)
+    }
+
+    func makeUIView(context: Context) -> WKWebView {
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = .nonPersistent()
+
+        let script = WKUserScript(
+            source: captureScript,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: false,
+        )
+        config.userContentController.addUserScript(script)
+        config.userContentController.add(context.coordinator, name: "spotifyTokenCapture")
+
+        let webView = WKWebView(frame: .zero, configuration: config)
+        webView.navigationDelegate = context.coordinator
+        webView.load(URLRequest(url: url))
+        return webView
+    }
+
+    func updateUIView(_: WKWebView, context _: Context) {}
+
+    class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         let onCredentialsFound: (SpotifyCredentials) -> Void
+        private var captured = false
+        private var pendingBearerToken: String?
+        private var pendingClientToken: String?
+        private weak var webView: WKWebView?
+        private var forcedWebNavigationURL: URL?
 
-        func makeCoordinator() -> Coordinator {
-            Coordinator(onCredentialsFound: onCredentialsFound)
+        init(onCredentialsFound: @escaping (SpotifyCredentials) -> Void) {
+            self.onCredentialsFound = onCredentialsFound
         }
 
-        func makeUIView(context: Context) -> WKWebView {
-            let config = WKWebViewConfiguration()
-            config.websiteDataStore = .nonPersistent()
-
-            let script = WKUserScript(
-                source: captureScript,
-                injectionTime: .atDocumentStart,
-                forMainFrameOnly: false,
-            )
-            config.userContentController.addUserScript(script)
-            config.userContentController.add(context.coordinator, name: "spotifyTokenCapture")
-
-            let webView = WKWebView(frame: .zero, configuration: config)
-            webView.navigationDelegate = context.coordinator
-            webView.load(URLRequest(url: url))
-            return webView
+        func userContentController(_: WKUserContentController, didReceive message: WKScriptMessage) {
+            guard !captured, let body = message.body as? [String: String] else { return }
+            guard let bearerToken = body["bearerToken"] else { return }
+            pendingBearerToken = bearerToken
+            pendingClientToken = body["clientToken"]
+            tryExtractCredentials()
         }
 
-        func updateUIView(_: WKWebView, context _: Context) {}
+        func webView(_ webView: WKWebView, didFinish _: WKNavigation!) {
+            self.webView = webView
+            tryExtractCredentials()
+        }
 
-        class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
-            let onCredentialsFound: (SpotifyCredentials) -> Void
-            private var captured = false
-            private var pendingBearerToken: String?
-            private var pendingClientToken: String?
-            private weak var webView: WKWebView?
-            private var forcedWebNavigationURL: URL?
-
-            init(onCredentialsFound: @escaping (SpotifyCredentials) -> Void) {
-                self.onCredentialsFound = onCredentialsFound
-            }
-
-            func userContentController(_: WKUserContentController, didReceive message: WKScriptMessage) {
-                guard !captured, let body = message.body as? [String: String] else { return }
-                guard let bearerToken = body["bearerToken"] else { return }
-                pendingBearerToken = bearerToken
-                pendingClientToken = body["clientToken"]
-                tryExtractCredentials()
-            }
-
-            func webView(_ webView: WKWebView, didFinish _: WKNavigation!) {
-                self.webView = webView
-                tryExtractCredentials()
-            }
-
-            func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void) {
-                self.webView = webView
-                guard let url = navigationAction.request.url else {
-                    decisionHandler(.allow)
-                    return
-                }
-
-                if shouldBlockExternalSpotifyNavigation(url) {
-                    decisionHandler(.cancel)
-                    return
-                }
-
-                if shouldForceSpotifyWebNavigation(url) {
-                    forcedWebNavigationURL = url
-                    webView.load(URLRequest(url: url))
-                    decisionHandler(.cancel)
-                    return
-                }
-
-                if forcedWebNavigationURL == url {
-                    forcedWebNavigationURL = nil
-                }
-
+        func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void) {
+            self.webView = webView
+            guard let url = navigationAction.request.url else {
                 decisionHandler(.allow)
+                return
             }
 
-            private func shouldBlockExternalSpotifyNavigation(_ url: URL) -> Bool {
-                guard let scheme = url.scheme?.lowercased() else { return false }
-                return !["http", "https", "about"].contains(scheme)
+            if shouldBlockExternalSpotifyNavigation(url) {
+                decisionHandler(.cancel)
+                return
             }
 
-            private func shouldForceSpotifyWebNavigation(_ url: URL) -> Bool {
-                guard forcedWebNavigationURL != url else { return false }
-                return url.host?.lowercased() == "open.spotify.com"
+            if shouldForceSpotifyWebNavigation(url) {
+                forcedWebNavigationURL = url
+                webView.load(URLRequest(url: url))
+                decisionHandler(.cancel)
+                return
             }
 
-            private func tryExtractCredentials() {
-                guard !captured, let bearer = pendingBearerToken, let view = webView else { return }
-
-                view.configuration.websiteDataStore.httpCookieStore.getAllCookies { [weak self] cookies in
-                    guard let self, !self.captured else { return }
-                    let spDC = cookies.first(where: { $0.name == "sp_dc" })?.value ?? ""
-                    let spT = cookies.first(where: { $0.name == "sp_t" })?.value ?? ""
-                    let spKey = cookies.first(where: { $0.name == "sp_key" })?.value
-                    guard !spDC.isEmpty, !spT.isEmpty else { return }
-
-                    captured = true
-                    let creds = SpotifyCredentials(
-                        bearerToken: bearer,
-                        clientToken: pendingClientToken ?? "",
-                        spDC: spDC,
-                        spT: spT,
-                        spKey: spKey,
-                        username: nil,
-                    )
-                    DispatchQueue.main.async {
-                        self.onCredentialsFound(creds)
-                    }
-                }
+            if forcedWebNavigationURL == url {
+                forcedWebNavigationURL = nil
             }
+
+            decisionHandler(.allow)
         }
 
-        private var captureScript: String {
-            // swiftlint:disable line_length
-            """
-            (function() {
-                const origFetch = window.fetch;
-                window.fetch = function(...args) {
-                    return origFetch.apply(this, args).then(response => {
-                        try {
-                            const reqHeaders = args[1]?.headers;
-                            if (reqHeaders) {
-                                let bearer = null;
-                                let clientToken = null;
-                                if (reqHeaders instanceof Headers) {
-                                    bearer = reqHeaders.get('authorization');
-                                    clientToken = reqHeaders.get('client-token');
-                                } else if (typeof reqHeaders === 'object') {
-                                    for (const [k, v] of Object.entries(reqHeaders)) {
-                                        if (k.toLowerCase() === 'authorization') bearer = v;
-                                        if (k.toLowerCase() === 'client-token') clientToken = v;
-                                    }
-                                }
-                                if (bearer && bearer.startsWith('Bearer ')) {
-                                    window.webkit.messageHandlers.spotifyTokenCapture.postMessage({
-                                        bearerToken: bearer.replace('Bearer ', ''),
-                                        clientToken: clientToken || ''
-                                    });
-                                }
-                            }
-                        } catch(e) {}
-                        return response;
-                    });
-                };
+        private func shouldBlockExternalSpotifyNavigation(_ url: URL) -> Bool {
+            guard let scheme = url.scheme?.lowercased() else { return false }
+            return !["http", "https", "about"].contains(scheme)
+        }
 
-                const origXHROpen = XMLHttpRequest.prototype.open;
-                XMLHttpRequest.prototype.open = function(method, url) {
-                    this._spotifyUrl = url;
-                    return origXHROpen.apply(this, arguments);
-                };
-                const origXHRSetHeader = XMLHttpRequest.prototype.setRequestHeader;
-                XMLHttpRequest.prototype.setRequestHeader = function(header, value) {
-                    if (header.toLowerCase() === 'authorization' && value.startsWith('Bearer ')) {
-                        window.webkit.messageHandlers.spotifyTokenCapture.postMessage({
-                            bearerToken: value.replace('Bearer ', ''),
-                            clientToken: ''
-                        });
-                    }
-                    return origXHRSetHeader.apply(this, arguments);
-                };
-            })();
-            """
-            // swiftlint:enable line_length
+        private func shouldForceSpotifyWebNavigation(_ url: URL) -> Bool {
+            guard forcedWebNavigationURL != url else { return false }
+            return url.host?.lowercased() == "open.spotify.com"
+        }
+
+        private func tryExtractCredentials() {
+            guard !captured, let bearer = pendingBearerToken, let view = webView else { return }
+
+            view.configuration.websiteDataStore.httpCookieStore.getAllCookies { [weak self] cookies in
+                guard let self, !self.captured else { return }
+                let spDC = cookies.first(where: { $0.name == "sp_dc" })?.value ?? ""
+                let spT = cookies.first(where: { $0.name == "sp_t" })?.value ?? ""
+                let spKey = cookies.first(where: { $0.name == "sp_key" })?.value
+                guard !spDC.isEmpty, !spT.isEmpty else { return }
+
+                captured = true
+                let creds = SpotifyCredentials(
+                    bearerToken: bearer,
+                    clientToken: pendingClientToken ?? "",
+                    spDC: spDC,
+                    spT: spT,
+                    spKey: spKey,
+                    username: nil,
+                )
+                DispatchQueue.main.async {
+                    self.onCredentialsFound(creds)
+                }
+            }
         }
     }
-#else
-    struct SpotifyLoginWKWebView: NSViewRepresentable {
-        let url: URL
-        let onCredentialsFound: (SpotifyCredentials) -> Void
 
-        func makeCoordinator() -> Coordinator {
-            Coordinator(onCredentialsFound: onCredentialsFound)
-        }
-
-        func makeNSView(context: Context) -> WKWebView {
-            let config = WKWebViewConfiguration()
-            config.websiteDataStore = .nonPersistent()
-
-            let script = WKUserScript(
-                source: captureScript,
-                injectionTime: .atDocumentStart,
-                forMainFrameOnly: false,
-            )
-            config.userContentController.addUserScript(script)
-            config.userContentController.add(context.coordinator, name: "spotifyTokenCapture")
-
-            let webView = WKWebView(frame: .zero, configuration: config)
-            webView.navigationDelegate = context.coordinator
-            webView.load(URLRequest(url: url))
-            return webView
-        }
-
-        func updateNSView(_: WKWebView, context _: Context) {}
-
-        class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
-            let onCredentialsFound: (SpotifyCredentials) -> Void
-            private var captured = false
-            private var pendingBearerToken: String?
-            private var pendingClientToken: String?
-            private weak var webView: WKWebView?
-            private var forcedWebNavigationURL: URL?
-
-            init(onCredentialsFound: @escaping (SpotifyCredentials) -> Void) {
-                self.onCredentialsFound = onCredentialsFound
-            }
-
-            func userContentController(_: WKUserContentController, didReceive message: WKScriptMessage) {
-                guard !captured, let body = message.body as? [String: String] else { return }
-                guard let bearerToken = body["bearerToken"] else { return }
-                pendingBearerToken = bearerToken
-                pendingClientToken = body["clientToken"]
-                tryExtractCredentials()
-            }
-
-            func webView(_ webView: WKWebView, didFinish _: WKNavigation!) {
-                self.webView = webView
-                tryExtractCredentials()
-            }
-
-            func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void) {
-                self.webView = webView
-                guard let url = navigationAction.request.url else {
-                    decisionHandler(.allow)
-                    return
-                }
-
-                if shouldBlockExternalSpotifyNavigation(url) {
-                    decisionHandler(.cancel)
-                    return
-                }
-
-                if shouldForceSpotifyWebNavigation(url) {
-                    forcedWebNavigationURL = url
-                    webView.load(URLRequest(url: url))
-                    decisionHandler(.cancel)
-                    return
-                }
-
-                if forcedWebNavigationURL == url {
-                    forcedWebNavigationURL = nil
-                }
-
-                decisionHandler(.allow)
-            }
-
-            private func shouldBlockExternalSpotifyNavigation(_ url: URL) -> Bool {
-                guard let scheme = url.scheme?.lowercased() else { return false }
-                return !["http", "https", "about"].contains(scheme)
-            }
-
-            private func shouldForceSpotifyWebNavigation(_ url: URL) -> Bool {
-                guard forcedWebNavigationURL != url else { return false }
-                return url.host?.lowercased() == "open.spotify.com"
-            }
-
-            private func tryExtractCredentials() {
-                guard !captured, let bearer = pendingBearerToken, let view = webView else { return }
-
-                view.configuration.websiteDataStore.httpCookieStore.getAllCookies { [weak self] cookies in
-                    guard let self, !self.captured else { return }
-                    let spDC = cookies.first(where: { $0.name == "sp_dc" })?.value ?? ""
-                    let spT = cookies.first(where: { $0.name == "sp_t" })?.value ?? ""
-                    let spKey = cookies.first(where: { $0.name == "sp_key" })?.value
-                    guard !spDC.isEmpty, !spT.isEmpty else { return }
-
-                    captured = true
-                    let creds = SpotifyCredentials(
-                        bearerToken: bearer,
-                        clientToken: pendingClientToken ?? "",
-                        spDC: spDC,
-                        spT: spT,
-                        spKey: spKey,
-                        username: nil,
-                    )
-                    DispatchQueue.main.async {
-                        self.onCredentialsFound(creds)
-                    }
-                }
-            }
-        }
-
-        private var captureScript: String {
-            // swiftlint:disable line_length
-            """
-            (function() {
-                const origFetch = window.fetch;
-                window.fetch = function(...args) {
-                    return origFetch.apply(this, args).then(response => {
-                        try {
-                            const reqHeaders = args[1]?.headers;
-                            if (reqHeaders) {
-                                let bearer = null;
-                                let clientToken = null;
-                                if (reqHeaders instanceof Headers) {
-                                    bearer = reqHeaders.get('authorization');
-                                    clientToken = reqHeaders.get('client-token');
-                                } else if (typeof reqHeaders === 'object') {
-                                    for (const [k, v] of Object.entries(reqHeaders)) {
-                                        if (k.toLowerCase() === 'authorization') bearer = v;
-                                        if (k.toLowerCase() === 'client-token') clientToken = v;
-                                    }
-                                }
-                                if (bearer && bearer.startsWith('Bearer ')) {
-                                    window.webkit.messageHandlers.spotifyTokenCapture.postMessage({
-                                        bearerToken: bearer.replace('Bearer ', ''),
-                                        clientToken: clientToken || ''
-                                    });
+    private var captureScript: String {
+        // swiftlint:disable line_length
+        """
+        (function() {
+            const origFetch = window.fetch;
+            window.fetch = function(...args) {
+                return origFetch.apply(this, args).then(response => {
+                    try {
+                        const reqHeaders = args[1]?.headers;
+                        if (reqHeaders) {
+                            let bearer = null;
+                            let clientToken = null;
+                            if (reqHeaders instanceof Headers) {
+                                bearer = reqHeaders.get('authorization');
+                                clientToken = reqHeaders.get('client-token');
+                            } else if (typeof reqHeaders === 'object') {
+                                for (const [k, v] of Object.entries(reqHeaders)) {
+                                    if (k.toLowerCase() === 'authorization') bearer = v;
+                                    if (k.toLowerCase() === 'client-token') clientToken = v;
                                 }
                             }
-                        } catch(e) {}
-                        return response;
+                            if (bearer && bearer.startsWith('Bearer ')) {
+                                window.webkit.messageHandlers.spotifyTokenCapture.postMessage({
+                                    bearerToken: bearer.replace('Bearer ', ''),
+                                    clientToken: clientToken || ''
+                                });
+                            }
+                        }
+                    } catch(e) {}
+                    return response;
+                });
+            };
+
+            const origXHROpen = XMLHttpRequest.prototype.open;
+            XMLHttpRequest.prototype.open = function(method, url) {
+                this._spotifyUrl = url;
+                return origXHROpen.apply(this, arguments);
+            };
+            const origXHRSetHeader = XMLHttpRequest.prototype.setRequestHeader;
+            XMLHttpRequest.prototype.setRequestHeader = function(header, value) {
+                if (header.toLowerCase() === 'authorization' && value.startsWith('Bearer ')) {
+                    window.webkit.messageHandlers.spotifyTokenCapture.postMessage({
+                        bearerToken: value.replace('Bearer ', ''),
+                        clientToken: ''
                     });
-                };
-            })();
-            """
-            // swiftlint:enable line_length
-        }
+                }
+                return origXHRSetHeader.apply(this, arguments);
+            };
+        })();
+        """
+        // swiftlint:enable line_length
     }
-#endif
+}

@@ -1,12 +1,7 @@
 import AuthenticationServices
 import NoFeedSocialCore
 import SwiftUI
-
-#if os(iOS)
-    import UIKit
-#elseif os(macOS)
-    import AppKit
-#endif
+import UIKit
 
 struct BlueskyConnectionView: View {
     @ObservedObject var viewModel: SettingsViewModel
@@ -114,10 +109,6 @@ private final class WebAuthenticationSession: NSObject, ASWebAuthenticationPrese
     }
 
     func presentationAnchor(for _: ASWebAuthenticationSession) -> ASPresentationAnchor {
-        #if os(iOS)
-            UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first ?? ASPresentationAnchor()
-        #else
-            NSApplication.shared.keyWindow ?? ASPresentationAnchor()
-        #endif
+        UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first ?? ASPresentationAnchor()
     }
 }

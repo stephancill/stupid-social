@@ -2,7 +2,7 @@
 
 A notifications-only social app. See what matters without the algorithmic feed.
 
-iOS &bull; macOS
+iOS
 
 ## Screenshots
 
@@ -19,7 +19,6 @@ iOS &bull; macOS
 - Unread/read sections with compact timestamps
 - Pull-to-refresh
 - Liquid Glass design on iOS 26
-- Runs on macOS too
 
 ## Setup
 
@@ -54,18 +53,6 @@ xtool dev run --simulator
 ```bash
 xtool devices --all --no-wait        # find your device UDID
 xtool dev run --network -u <udid>
-```
-
-### Run on macOS
-
-```bash
-# Build and launch via SwiftPM
-swift build
-.xcode-derived/Build/Products/Debug/NoFeedSocialMac
-
-# Or via xcodebuild
-xcodebuild -scheme NoFeedSocialMac -destination 'platform=macOS' -derivedDataPath .xcode-derived build 2>&1 | xcpretty
-open .xcode-derived/Build/Products/Debug/NoFeedSocialMac
 ```
 
 ### Regenerate Xcode workspace (after changing Info.plist or xtool.yml)

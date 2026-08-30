@@ -50,17 +50,11 @@ struct FarcasterConnectionView: View {
         .navigationTitle("Farcaster")
     }
 
-    @ViewBuilder
     private var farcasterUsernameField: some View {
-        #if os(iOS)
-            TextField("Username", text: $viewModel.farcasterUsername)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .focused($isFocused)
-        #else
-            TextField("Username", text: $viewModel.farcasterUsername)
-                .focused($isFocused)
-        #endif
+        TextField("Username", text: $viewModel.farcasterUsername)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .focused($isFocused)
     }
 
     private func binding(for category: FarcasterNotificationCategory) -> Binding<Bool> {

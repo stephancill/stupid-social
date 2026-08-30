@@ -1,14 +1,7 @@
 import SwiftUI
+import UIKit
 
-#if os(iOS)
-    import UIKit
-
-    typealias PlatformImage = UIImage
-#elseif os(macOS)
-    import AppKit
-
-    typealias PlatformImage = NSImage
-#endif
+typealias PlatformImage = UIImage
 
 struct CachedAsyncImage<Placeholder: View, Failure: View>: View {
     let url: URL?
@@ -110,11 +103,7 @@ struct CachedAsyncImage<Placeholder: View, Failure: View>: View {
     }
 
     private func platformImage(_ image: PlatformImage) -> Image {
-        #if os(iOS)
-            Image(uiImage: image)
-        #elseif os(macOS)
-            Image(nsImage: image)
-        #endif
+        Image(uiImage: image)
     }
 }
 

@@ -1,15 +1,10 @@
+import ImageIO
 import NoFeedSocialCore
+import Photos
 import PhotosUI
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
-
-#if os(iOS)
-    import ImageIO
-    import Photos
-    import UIKit
-#elseif os(macOS)
-    import AppKit
-#endif
 
 struct StoryComposerView: View {
     @Environment(\.dismiss) private var dismiss
@@ -83,50 +78,43 @@ struct StoryComposerView: View {
                             .zIndex(1)
                     }
 
-                    #if os(iOS)
-                        ForEach($captions) { $caption in
-                            SmoothDraggableTextOverlay(
-                                id: caption.id,
-                                text: $caption.text,
-                                isFocused: captionFocusBinding(caption.id),
-                                offset: $caption.offset,
-                                scale: $caption.scale,
-                                textBackground: $caption.textBackground,
-                                fontStyle: $caption.fontStyle,
-                                textColor: $caption.textColor,
-                                selectAllOnFocus: $caption.selectAllOnFocus,
-                                maxTextWidth: min(proxy.size.width - 88, 420),
-                                onDragEnded: { id, shouldDelete in
-                                    if shouldDelete {
-                                        removeCaption(id)
-                                    }
-                                },
-                                onTrashVisibilityChange: { visible in
-                                    captionTrashVisible = visible
-                                },
-                                onTextChange: { id, text in
-                                    guard let index = captions.firstIndex(where: { $0.id == id }) else { return }
-                                    captions[index].text = text
-                                    updateMentionQuery(for: captions[index])
-                                },
-                                onSelectionChange: { id, cursorOffset in
-                                    guard let index = captions.firstIndex(where: { $0.id == id }) else { return }
-                                    captions[index].cursorOffset = cursorOffset
-                                    updateMentionQuery(for: captions[index])
-                                },
-                            )
-                            .frame(width: proxy.size.width, height: proxy.size.height)
-                            .zIndex(focusedCaptionID == caption.id ? 2 : 0)
-                            .transaction { transaction in
-                                transaction.animation = nil
-                            }
+                    ForEach($captions) { $caption in
+                        SmoothDraggableTextOverlay(
+                            id: caption.id,
+                            text: $caption.text,
+                            isFocused: captionFocusBinding(caption.id),
+                            offset: $caption.offset,
+                            scale: $caption.scale,
+                            textBackground: $caption.textBackground,
+                            fontStyle: $caption.fontStyle,
+                            textColor: $caption.textColor,
+                            selectAllOnFocus: $caption.selectAllOnFocus,
+                            maxTextWidth: min(proxy.size.width - 88, 420),
+                            onDragEnded: { id, shouldDelete in
+                                if shouldDelete {
+                                    removeCaption(id)
+                                }
+                            },
+                            onTrashVisibilityChange: { visible in
+                                captionTrashVisible = visible
+                            },
+                            onTextChange: { id, text in
+                                guard let index = captions.firstIndex(where: { $0.id == id }) else { return }
+                                captions[index].text = text
+                                updateMentionQuery(for: captions[index])
+                            },
+                            onSelectionChange: { id, cursorOffset in
+                                guard let index = captions.firstIndex(where: { $0.id == id }) else { return }
+                                captions[index].cursorOffset = cursorOffset
+                                updateMentionQuery(for: captions[index])
+                            },
+                        )
+                        .frame(width: proxy.size.width, height: proxy.size.height)
+                        .zIndex(focusedCaptionID == caption.id ? 2 : 0)
+                        .transaction { transaction in
+                            transaction.animation = nil
                         }
-                    #else
-                        ForEach(captions) { caption in
-                            textOverlay(caption: caption, maxWidth: min(proxy.size.width - 88, 420))
-                                .zIndex(focusedCaptionID == caption.id ? 2 : 0)
-                        }
-                    #endif
+                    }
                 }
                 .onAppear {
                     canvasSize = proxy.size
@@ -275,15 +263,8 @@ struct StoryComposerView: View {
 
     private var selectedImage: Image? {
         guard let selectedImageData else { return nil }
-        #if os(iOS)
-            guard let image = UIImage(data: selectedImageData) else { return nil }
-            return Image(uiImage: image)
-        #elseif os(macOS)
-            guard let image = NSImage(data: selectedImageData) else { return nil }
-            return Image(nsImage: image)
-        #else
-            return nil
-        #endif
+        guard let image = UIImage(data: selectedImageData) else { return nil }
+        return Image(uiImage: image)
     }
 
     private var hasComposerElements: Bool {
@@ -430,68 +411,60 @@ struct StoryComposerView: View {
     }
 
     private func saveComposedStoryImage() {
-        #if os(iOS)
-            guard let image = renderedStoryImage() else {
-                composerMessage = "Add an image or text before saving."
+        guard let image = renderedStoryImage() else {
+            composerMessage = "Add an image or text before saving."
+            return
+        }
+
+        PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
+            guard status == .authorized || status == .limited else {
+                DispatchQueue.main.async {
+                    composerMessage = "Allow photo library access to save the story image."
+                }
                 return
             }
 
-            PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
-                guard status == .authorized || status == .limited else {
-                    DispatchQueue.main.async {
-                        composerMessage = "Allow photo library access to save the story image."
-                    }
-                    return
-                }
-
-                PHPhotoLibrary.shared().performChanges {
-                    PHAssetChangeRequest.creationRequestForAsset(from: image)
-                } completionHandler: { success, _ in
-                    DispatchQueue.main.async {
-                        if success {
-                            showTemporarySaveSuccess()
-                        } else {
-                            composerMessage = "Could not save the story image."
-                        }
+            PHPhotoLibrary.shared().performChanges {
+                PHAssetChangeRequest.creationRequestForAsset(from: image)
+            } completionHandler: { success, _ in
+                DispatchQueue.main.async {
+                    if success {
+                        showTemporarySaveSuccess()
+                    } else {
+                        composerMessage = "Could not save the story image."
                     }
                 }
             }
-        #else
-            composerMessage = "Saving story images is only available on iOS."
-        #endif
+        }
     }
 
     private func postComposedStoryImage() {
-        #if os(iOS)
-            guard let image = renderedStoryImage() else {
-                composerMessage = "Add an image or text before posting."
-                return
-            }
+        guard let image = renderedStoryImage() else {
+            composerMessage = "Add an image or text before posting."
+            return
+        }
 
-            guard let encodedStory = image.storyUploadData() else {
-                composerMessage = "Could not prepare the story image."
-                return
-            }
+        guard let encodedStory = image.storyUploadData() else {
+            composerMessage = "Could not prepare the story image."
+            return
+        }
 
-            isPosting = true
-            Task {
-                do {
-                    try await onPost(encodedStory.data, Int(image.size.width), Int(image.size.height), encodedStory.mimeType, mentionPlacements())
-                    await MainActor.run {
-                        isPosting = false
-                        showTemporaryPostSuccess()
-                        dismiss()
-                    }
-                } catch {
-                    await MainActor.run {
-                        isPosting = false
-                        composerMessage = error.localizedDescription
-                    }
+        isPosting = true
+        Task {
+            do {
+                try await onPost(encodedStory.data, Int(image.size.width), Int(image.size.height), encodedStory.mimeType, mentionPlacements())
+                await MainActor.run {
+                    isPosting = false
+                    showTemporaryPostSuccess()
+                    dismiss()
+                }
+            } catch {
+                await MainActor.run {
+                    isPosting = false
+                    composerMessage = error.localizedDescription
                 }
             }
-        #else
-            composerMessage = "Posting stories is only available on iOS."
-        #endif
+        }
     }
 
     private func updateMentionQuery(for caption: StoryCaption) {

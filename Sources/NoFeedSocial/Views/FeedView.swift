@@ -1,11 +1,6 @@
 import NoFeedSocialCore
 import SwiftUI
-
-#if os(iOS)
-    import UIKit
-#elseif os(macOS)
-    import AppKit
-#endif
+import UIKit
 
 struct FeedView: View {
     @ObservedObject var viewModel: FeedViewModel
@@ -124,7 +119,6 @@ struct FeedView: View {
                 Text(alertMessage)
             }
         }
-        #if os(iOS)
         .fullScreenCover(item: $storyViewerSelection) { selection in
             UnifiedStoryViewer(
                 items: selection.items,
@@ -157,40 +151,6 @@ struct FeedView: View {
                 try await storyViewModel.postInstagramStory(imageData: imageData, width: width, height: height, mimeType: mimeType, mentions: mentions)
             }
         }
-        #else
-        .sheet(item: $storyViewerSelection) { selection in
-                    UnifiedStoryViewer(
-                        items: selection.items,
-                        startIndex: selection.startIndex,
-                        startSlideIndex: selection.startSlideIndex,
-                        spotifyClient: spotifyClient,
-                        feedService: viewModel.service,
-                        ownInstagramAccountId: storyViewModel.ownInstagramStoryActor?.id,
-                        onInstagramReelSeen: { reelId in
-                            storyViewModel.markInstagramReelAsSeen(reelId: reelId)
-                        },
-                        onSpotifyItemSeen: { userURI in
-                            storyViewModel.markSpotifyActivityAsSeen(userURI: userURI)
-                        },
-                        onGitHubItemSeen: { actorId in
-                            storyViewModel.markGitHubActivityAsSeen(actorId: actorId)
-                        },
-                        onInstagramStoryDelete: { mediaId, isVideo in
-                            try await storyViewModel.deleteInstagramStory(mediaId: mediaId, isVideo: isVideo)
-                        },
-                        onInstagramStoryLike: { mediaId, liked in
-                            try await storyViewModel.setInstagramStoryLiked(mediaId: mediaId, liked: liked)
-                        },
-                    )
-                }
-                .sheet(isPresented: $showingStoryComposer) {
-                    StoryComposerView(onMentionSearch: { query in
-                        await viewModel.service.searchProfiles(query: query).filter { $0.network == .instagram }
-                    }) { imageData, width, height, mimeType, mentions in
-                        try await storyViewModel.postInstagramStory(imageData: imageData, width: width, height: height, mimeType: mimeType, mentions: mentions)
-                    }
-                }
-        #endif
     }
 
     private var notificationItems: [DisplayNotificationItem] {
@@ -1081,33 +1041,15 @@ private extension Color {
     }
 
     static var storySkeletonFill: Color {
-        #if os(iOS)
-            Color(.tertiaryLabel)
-        #elseif os(macOS)
-            Color(nsColor: .tertiaryLabelColor)
-        #else
-            Color.secondary.opacity(0.35)
-        #endif
+        Color(.tertiaryLabel)
     }
 
     static var storySkeletonPulseFill: Color {
-        #if os(iOS)
-            Color(.label)
-        #elseif os(macOS)
-            Color(nsColor: .labelColor)
-        #else
-            Color.primary
-        #endif
+        Color(.label)
     }
 
     static var storySkeletonStroke: Color {
-        #if os(iOS)
-            Color(.separator)
-        #elseif os(macOS)
-            Color(nsColor: .separatorColor)
-        #else
-            Color.secondary.opacity(0.25)
-        #endif
+        Color(.separator)
     }
 }
 

@@ -1,11 +1,6 @@
 import NoFeedSocialCore
 import SwiftUI
-
-#if os(iOS)
-    import UIKit
-#elseif os(macOS)
-    import AppKit
-#endif
+import UIKit
 
 struct NetworkBadgeIcon: View {
     let network: SocialNetwork
@@ -112,13 +107,6 @@ extension SocialNetwork {
 func networkBadgeImage(named name: String) -> Image? {
     guard let path = Bundle.main.path(forResource: name, ofType: "png") else { return nil }
 
-    #if os(iOS)
-        guard let image = UIImage(contentsOfFile: path) else { return nil }
-        return Image(uiImage: image)
-    #elseif os(macOS)
-        guard let image = NSImage(contentsOfFile: path) else { return nil }
-        return Image(nsImage: image)
-    #else
-        return nil
-    #endif
+    guard let image = UIImage(contentsOfFile: path) else { return nil }
+    return Image(uiImage: image)
 }

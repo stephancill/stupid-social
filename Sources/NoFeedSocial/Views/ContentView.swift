@@ -70,15 +70,11 @@ public struct ContentView: View {
             }
         }
 
-        #if os(iOS)
-            if #available(iOS 26.0, *) {
-                tabView.tabBarMinimizeBehavior(.onScrollDown)
-            } else {
-                tabView
-            }
-        #else
+        if #available(iOS 26.0, *) {
+            tabView.tabBarMinimizeBehavior(.onScrollDown)
+        } else {
             tabView
-        #endif
+        }
     }
 
     private func configureDependencies() {

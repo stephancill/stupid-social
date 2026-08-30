@@ -1,11 +1,6 @@
 import NoFeedSocialCore
 import SwiftUI
-
-#if os(iOS)
-    import UIKit
-#elseif os(macOS)
-    import AppKit
-#endif
+import UIKit
 
 struct NotificationDetailView: View {
     let displayItem: DisplayNotificationItem

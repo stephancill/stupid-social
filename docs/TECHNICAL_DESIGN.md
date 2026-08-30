@@ -8,7 +8,7 @@ Implementation work should follow this document unless `docs/PLAN.md` changes or
 
 ## Current Scope
 
-The MVP is a universal macOS and iOS SwiftUI app built with xtool. It supports a combined notifications feed for one account per supported network.
+The MVP is an iOS SwiftUI app built with xtool. It supports a combined notifications feed for one account per supported network. Previous macOS support was removed.
 
 Out of scope for this technical design:
 

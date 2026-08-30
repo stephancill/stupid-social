@@ -1125,38 +1125,6 @@ struct UnifiedStoryViewer: View {
             }
         }
     }
-
-#elseif os(macOS)
-    private struct StoryVideoPlayer: NSViewRepresentable {
-        let player: AVPlayer
-
-        func makeNSView(context _: Context) -> PlayerLayerView {
-            let view = PlayerLayerView()
-            view.playerLayer.player = player
-            return view
-        }
-
-        func updateNSView(_ nsView: PlayerLayerView, context _: Context) {
-            nsView.playerLayer.player = player
-        }
-
-        final class PlayerLayerView: NSView {
-            let playerLayer = AVPlayerLayer()
-
-            override init(frame frameRect: NSRect) {
-                super.init(frame: frameRect)
-                wantsLayer = true
-                layer = playerLayer
-                playerLayer.videoGravity = .resizeAspect
-                playerLayer.backgroundColor = NSColor.black.cgColor
-            }
-
-            @available(*, unavailable)
-            required init?(coder _: NSCoder) {
-                nil
-            }
-        }
-    }
 #endif
 
 // MARK: - StoryBarItem Provider Extensions

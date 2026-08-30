@@ -26,35 +26,19 @@ struct GitHubLoginWebView: View {
     }
 }
 
-#if os(iOS)
-    private struct GitHubLoginWKWebView: UIViewRepresentable {
-        let onCredentialsFound: (GitHubCredentials) -> Void
+private struct GitHubLoginWKWebView: UIViewRepresentable {
+    let onCredentialsFound: (GitHubCredentials) -> Void
 
-        func makeCoordinator() -> Coordinator {
-            Coordinator(onCredentialsFound: onCredentialsFound)
-        }
-
-        func makeUIView(context: Context) -> WKWebView {
-            makeWebView(coordinator: context.coordinator)
-        }
-
-        func updateUIView(_: WKWebView, context _: Context) {}
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onCredentialsFound: onCredentialsFound)
     }
-#else
-    private struct GitHubLoginWKWebView: NSViewRepresentable {
-        let onCredentialsFound: (GitHubCredentials) -> Void
 
-        func makeCoordinator() -> Coordinator {
-            Coordinator(onCredentialsFound: onCredentialsFound)
-        }
-
-        func makeNSView(context: Context) -> WKWebView {
-            makeWebView(coordinator: context.coordinator)
-        }
-
-        func updateNSView(_: WKWebView, context _: Context) {}
+    func makeUIView(context: Context) -> WKWebView {
+        makeWebView(coordinator: context.coordinator)
     }
-#endif
+
+    func updateUIView(_: WKWebView, context _: Context) {}
+}
 
 @MainActor
 private func makeWebView(coordinator: Coordinator) -> WKWebView {

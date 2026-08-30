@@ -2,11 +2,11 @@
 
 ## Product Goal
 
-Build a universal macOS and iOS app with xtool that shows a combined social notifications feed without requiring users to open algorithmic feeds. The app started with X and Farcaster notifications and now includes Instagram stories, Spotify listening stories, Instagram story posting, and Bluesky notifications.
+Build an iOS app with xtool that shows a combined social network notifications feed without requiring users to open algorithmic feeds. The app started as a universal macOS and iOS app but is now iOS-only. The app started with X and Farcaster notifications and now includes Instagram stories, Spotify listening stories, Instagram story posting, and Bluesky notifications.
 
 ## MVP Scope
 
-- Universal SwiftUI app for macOS and iOS using xtool.
+- Universal iOS app using xtool (previous macOS support was removed).
 - Combined notifications feed for X and Farcaster.
 - One account per supported network.
 - Manual account setup through a minimal settings form.
@@ -30,10 +30,9 @@ Build a universal macOS and iOS app with xtool that shows a combined social noti
 - App lock, Face ID lock, hidden previews, or custom privacy overlay.
 - Cross-network identity merging.
 
-## Platforms
+## Platform
 
-- macOS and iOS from the same SwiftUI codebase.
-- Preserve platform-native behavior where possible.
+- iOS only. The previous macOS target was removed.
 - Use xtool for project build and run workflows.
 
 ## Account Setup

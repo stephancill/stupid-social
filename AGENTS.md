@@ -58,8 +58,6 @@ Sources/
       ProfileSearchViewModel.swift
       StoryBarViewModel.swift
       SettingsViewModel.swift
-  NoFeedSocialMac/                  # macOS app entry point
-    NoFeedSocialMacApp.swift
 ```
 
 - Keep `## Project Structure` in sync when files are added, moved, or renamed.
