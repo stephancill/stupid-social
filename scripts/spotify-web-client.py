@@ -125,6 +125,12 @@ class SpotifyWebClient:
             },
         )
         token_response = parse_token_response(response)
+        # The clientId returned by /api/token is required to mint a fresh
+        # client-token (the Pathfinder `client-token` header). Capture it so the
+        # reliable username path can refresh the token when the stored one is stale.
+        client_id = response.get("clientId") or response.get("client_id")
+        if client_id:
+            self.credentials["clientId"] = client_id
         if reason == "init":
             self.credentials["initialBearerToken"] = token_response.access_token
             self.credentials["initialBearerTokenExpiresAt"] = token_response.expires_at_seconds
@@ -137,6 +143,79 @@ class SpotifyWebClient:
             "accessToken": "present",
             "accessTokenExpirationTimestampMs": token_response.expires_at_ms,
         }
+
+    def request_client_token(self) -> dict[str, Any]:
+        """Mint a fresh client-token from the same cookie/session that buddylist
+        uses. A stale or missing `client-token` is what makes Pathfinder (the
+        username source) return HTTP 401/403 while spclient `buddylist` still 200s.
+        Requires `clientId`, which /api/token (reason=init) returns for free."""
+        client_id = self.credentials.get("clientId")
+        if not client_id:
+            self.refresh_web_player_token(reason="init")
+            client_id = self.credentials.get("clientId")
+        if not client_id:
+            raise SystemExit("Could not obtain clientId to mint a client-token from /api/token")
+        data = {
+            "client_data": {
+                "client_version": APP_VERSION,
+                "client_id": client_id,
+                "js_sdk_data": {
+                    "device_brand": "",
+                    "device_id": "",
+                    "device_model": "",
+                    "device_type": "",
+                    "os": "",
+                    "os_version": "",
+                },
+            }
+        }
+        headers = {
+            "User-Agent": BROWSER_USER_AGENT,
+            "Accept": "application/json",
+            "Origin": OPEN_SPOTIFY_BASE_URL,
+            "Referer": OPEN_SPOTIFY_BASE_URL + "/",
+            "App-Platform": "WebPlayer",
+            "Content-Type": "application/json",
+        }
+        response = self.request_json(
+            "POST",
+            "https://clienttoken.spotify.com/v1/clienttoken",
+            headers=headers,
+            body=json.dumps(data, separators=(",", ":")).encode(),
+        )
+        granted = response.get("granted_token") or {}
+        token = granted.get("token")
+        if not token:
+            raise SystemExit("No granted_token.token in client-token mint response")
+        return {
+            "status": "ok",
+            "client_token": "present",
+            "client_token_refresh": response.get("granted_token", {}).get("refresh_token"),
+        }
+
+    def resolve_username(self) -> dict[str, Any]:
+        """Reliable username resolution: use a freshly minted client-token plus
+        the current access token — both derived from the same `sp_dc`-backed
+        session that makes `buddylist` succeed — then call Pathfinder."""
+        init_token = self.pathfinder_bearer_token()  # guarantees a fresh init token
+        self.request_client_token()  # guarantees a fresh client-token in credentials
+        client_token = self.client_token()
+        operation = PATHFINDER_OPERATIONS["profile-attributes"]
+        body = {
+            "variables": {},
+            "operationName": operation["operationName"],
+            "extensions": {
+                "persistedQuery": {"version": 1, "sha256Hash": operation["sha256Hash"]}
+            },
+        }
+        headers = self.pathfinder_headers(init_token)
+        headers["Client-Token"] = client_token
+        response = self.request_json(
+            "POST", PATHFINDER_URL, headers=headers,
+            body=json.dumps(body, separators=(",", ":")).encode(),
+        )
+        username = response.get("data", {}).get("me", {}).get("profile", {}).get("username")
+        return {"status": "ok", "username": username}
 
     def server_time(self) -> float | None:
         try:
@@ -194,6 +273,28 @@ class SpotifyWebClient:
 
     def profile_attributes(self) -> dict[str, Any]:
         return self.pathfinder_query("profile-attributes", variables={}, use_initial_token=False)
+
+    def current_username(self) -> dict[str, Any]:
+        """Resolve the current user with the *same* bearer token config that
+        buddylist uses (no client-token, no Pathfinder). `/v1/me` is the canonical
+        current-user endpoint and returns `id` (the username) + `display_name`.
+        Falls back via a token refresh on 401/403, mirroring `buddylist`."""
+        headers = {"Authorization": f"Bearer {self.bearer_token()}", "Accept": "application/json"}
+        try:
+            response = self.request_json("GET", "https://api.spotify.com/v1/me", headers=headers)
+        except SpotifyHTTPError as exc:
+            if exc.status_code in {401, 403} and self.sp_dc():
+                self.refresh_web_player_token(reason="transport")
+                refreshed_headers = {**headers, "Authorization": f"Bearer {self.bearer_token()}"}
+                response = self.request_json("GET", "https://api.spotify.com/v1/me", headers=refreshed_headers)
+            else:
+                raise SystemExit(str(exc)) from exc
+        return {
+            "status": "ok",
+            "username": response.get("id"),
+            "display_name": response.get("display_name"),
+            "uri": response.get("uri"),
+        }
 
     def is_track_saved(self, track_id: str) -> dict[str, Any]:
         track_id = spotify_id(track_id)
@@ -636,6 +737,9 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("totp", help="Print a current Spotify WebPlayer TOTP for debugging.")
     subparsers.add_parser("buddylist", help="Fetch friend listening activity from presence-view/v1/buddylist.")
     subparsers.add_parser("profile-attributes", help="Resolve the current user through api-partner profileAttributes.")
+    subparsers.add_parser("current-username", help="Resolve the current user via GET api.spotify.com/v1/me (same bearer token as buddylist, no client-token).")
+    subparsers.add_parser("client-token", help="Mint a fresh client-token from the same session as buddylist (spclient/Pthfinder 'client-token' header).")
+    subparsers.add_parser("username", help="Resolve username by minting a fresh client-token, then Pathfinder (reliable when buddylist works).")
 
     profile = subparsers.add_parser("user-profile", help="Fetch a Spotify user profile by username.")
     profile.add_argument("username", help="Spotify username or spotify:user URI.")
@@ -684,6 +788,12 @@ def main() -> None:
         result = client.buddylist()
     elif args.command == "profile-attributes":
         result = client.profile_attributes()
+    elif args.command == "current-username":
+        result = client.current_username()
+    elif args.command == "client-token":
+        result = client.request_client_token()
+    elif args.command == "username":
+        result = client.resolve_username()
     elif args.command == "user-profile":
         result = client.user_profile(args.username)
     elif args.command == "search-users":

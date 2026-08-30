@@ -97,6 +97,7 @@ public struct SpotifyCredentials: Codable, Equatable, Sendable {
     public let initialBearerToken: String?
     public let initialBearerTokenExpiresAt: Date?
     public let username: String?
+    public let clientId: String?
 
     public init(
         bearerToken: String,
@@ -108,6 +109,7 @@ public struct SpotifyCredentials: Codable, Equatable, Sendable {
         initialBearerToken: String? = nil,
         initialBearerTokenExpiresAt: Date? = nil,
         username: String?,
+        clientId: String? = nil,
     ) {
         self.bearerToken = bearerToken
         self.clientToken = clientToken
@@ -118,6 +120,7 @@ public struct SpotifyCredentials: Codable, Equatable, Sendable {
         self.initialBearerToken = initialBearerToken
         self.initialBearerTokenExpiresAt = initialBearerTokenExpiresAt
         self.username = username
+        self.clientId = clientId
     }
 
     public func updatingWebPlayerToken(_ token: String, expiresAt: Date?) -> SpotifyCredentials {
@@ -131,6 +134,7 @@ public struct SpotifyCredentials: Codable, Equatable, Sendable {
             initialBearerToken: initialBearerToken,
             initialBearerTokenExpiresAt: initialBearerTokenExpiresAt,
             username: username,
+            clientId: clientId,
         )
     }
 }

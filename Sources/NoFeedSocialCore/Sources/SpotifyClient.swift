@@ -124,9 +124,17 @@ public struct SpotifyClient {
         }
 
         let decoded = try JSONDecoder().decode(SpotifyTokenResponse.self, from: data)
-        let refreshed = creds.updatingWebPlayerToken(
-            decoded.accessToken,
-            expiresAt: decoded.accessTokenExpirationTimestampMs.map { Date(timeIntervalSince1970: TimeInterval($0) / 1000) },
+        let refreshed = SpotifyCredentials(
+            bearerToken: decoded.accessToken,
+            clientToken: creds.clientToken,
+            spDC: creds.spDC,
+            spT: creds.spT,
+            spKey: creds.spKey,
+            accessTokenExpiresAt: decoded.accessTokenExpirationTimestampMs.map { Date(timeIntervalSince1970: TimeInterval($0) / 1000) },
+            initialBearerToken: creds.initialBearerToken,
+            initialBearerTokenExpiresAt: creds.initialBearerTokenExpiresAt,
+            username: creds.username,
+            clientId: decoded.clientId ?? creds.clientId,
         )
         _ = try credentialStore.saveSpotifyCredentials(refreshed)
         return refreshed
@@ -172,6 +180,7 @@ public struct SpotifyClient {
             initialBearerToken: decoded.accessToken,
             initialBearerTokenExpiresAt: decoded.accessTokenExpirationTimestampMs.map { Date(timeIntervalSince1970: TimeInterval($0) / 1000) },
             username: creds.username,
+            clientId: decoded.clientId ?? creds.clientId,
         )
         _ = try credentialStore.saveSpotifyCredentials(refreshed)
         return refreshed
@@ -188,17 +197,55 @@ public struct SpotifyClient {
         return values.joined(separator: "; ")
     }
 
-    public func validateAccount() async throws -> String {
+    public func validateAccount() async throws -> String? {
+        // The buddy list is the authoritative account-validity check: it is the
+        // same spclient endpoint the activity feed reads and needs only the
+        // current bearer token (no `client-token`). If it returns 200, the
+        // account works regardless of anything below.
         let (data, _) = try await makeRequest("presence-view/v1/buddylist")
         _ = try JSONDecoder().decode(SpotifyBuddyListResponse.self, from: data)
-        return try await resolveUsername()
+
+        // The username is display-only (Settings row). Resolve it best-effort
+        // and fall back to the stored username: the Pathfinder `profileAttributes`
+        // call requires a fresh `client-token` that the buddy-list path does not,
+        // so a failing username lookup must never invalidate an otherwise-working
+        // account (it previously surfaced as a bogus "Service error: Validation failed").
+        if let resolved = try? await resolveUsername(), !resolved.isEmpty {
+            return resolved
+        }
+        return try? credentials().username
     }
 
     private func resolveUsername() async throws -> String {
         let creds = try await credentialsForRequest()
+        let token = SpotifyCredentials(
+            bearerToken: creds.bearerToken,
+            clientToken: creds.clientToken,
+            spDC: creds.spDC,
+            spT: creds.spT,
+            spKey: creds.spKey,
+            accessTokenExpiresAt: creds.accessTokenExpiresAt,
+            initialBearerToken: creds.initialBearerToken,
+            initialBearerTokenExpiresAt: creds.initialBearerTokenExpiresAt,
+            username: creds.username,
+            clientId: creds.clientId,
+        )
+        do {
+            return try await resolveUsername(with: token)
+        } catch {
+            // Retry with an initl bearer token + a freshly minted client-token:
+            // a stale stored `client-token` is the usual cause of Pathfinder 401/403.
+            guard let minted = try? await mintClientToken(from: token) else {
+                throw SourceError.serviceError("Could not resolve username")
+            }
+            return try await resolveUsername(with: minted)
+        }
+    }
+
+    private func resolveUsername(with creds: SpotifyCredentials) async throws -> String {
         let data = try await makePathfinderRequest(
             credentials: creds,
-            bearerToken: creds.bearerToken,
+            bearerToken: creds.initialBearerToken ?? creds.bearerToken,
             body: pathfinderBody(
                 operationName: "profileAttributes",
                 variables: [:],
@@ -209,6 +256,64 @@ public struct SpotifyClient {
 
         let decoded = try JSONDecoder().decode(SpotifyProfileAttributesResponse.self, from: data)
         return decoded.data.me.profile.username
+    }
+
+    /// Mint a fresh Pathfinder `client-token` from the same `sp_dc` session that
+    /// drives `buddylist`, using the `clientId` returned by `/api/token`.
+    private func mintClientToken(from creds: SpotifyCredentials) async throws -> SpotifyCredentials {
+        let refreshed = try await refreshInitialBearerToken(existing: creds)
+        guard let clientId = refreshed.clientId, !clientId.isEmpty else {
+            throw SourceError.serviceError("Missing clientId")
+        }
+        let body: [String: Any] = [
+            "client_data": [
+                "client_version": Self.appVersion,
+                "client_id": clientId,
+                "js_sdk_data": [
+                    "device_brand": "",
+                    "device_id": "",
+                    "device_model": "",
+                    "device_type": "",
+                    "os": "",
+                    "os_version": "",
+                ],
+            ],
+        ]
+        var request = URLRequest(url: URL(string: "https://clienttoken.spotify.com/v1/clienttoken")!)
+        request.httpMethod = "POST"
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        request.setValue(Self.browserUserAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("https://open.spotify.com", forHTTPHeaderField: "Origin")
+        request.setValue("https://open.spotify.com/", forHTTPHeaderField: "Referer")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let (data, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw SourceError.serviceError("Invalid response")
+        }
+        guard (200 ... 299).contains(httpResponse.statusCode) else {
+            throw SourceError.serviceError("HTTP \(httpResponse.statusCode)")
+        }
+        let decoded = try JSONDecoder().decode(SpotifyClientTokenResponse.self, from: data)
+        guard let fresh = decoded.grantedToken?.token, !fresh.isEmpty else {
+            throw SourceError.invalidResponse
+        }
+
+        let minted = SpotifyCredentials(
+            bearerToken: refreshed.bearerToken,
+            clientToken: fresh,
+            spDC: refreshed.spDC,
+            spT: refreshed.spT,
+            spKey: refreshed.spKey,
+            accessTokenExpiresAt: refreshed.accessTokenExpiresAt,
+            initialBearerToken: refreshed.initialBearerToken,
+            initialBearerTokenExpiresAt: refreshed.initialBearerTokenExpiresAt,
+            username: refreshed.username,
+            clientId: refreshed.clientId,
+        )
+        _ = try? credentialStore.saveSpotifyCredentials(minted)
+        return minted
     }
 
     func friendActivity() async throws -> [SpotifyFriend] {
@@ -507,10 +612,19 @@ struct SpotifyProfileAttributesProfile: Decodable {
 struct SpotifyTokenResponse: Decodable {
     let accessToken: String
     let accessTokenExpirationTimestampMs: Int64?
+    let clientId: String?
 }
 
 struct SpotifyServerTimeResponse: Decodable {
     let serverTime: TimeInterval
+}
+
+private struct SpotifyClientTokenResponse: Decodable {
+    struct GrantedToken: Decodable {
+        let token: String?
+    }
+
+    let grantedToken: GrantedToken?
 }
 
 struct SpotifyUserProfileJSON: Decodable {

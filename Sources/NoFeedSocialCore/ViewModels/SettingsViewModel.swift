@@ -487,8 +487,8 @@ public final class SettingsViewModel: ObservableObject {
         } catch {
             try? keychainStore.deleteSpotifyCredentials()
             metadataStore.spotifyAccount = nil
-            spotifyStatus = .serviceError("Could not resolve username")
-            message = "Spotify login failed: could not resolve username. Please try logging in again."
+            spotifyStatus = .serviceError("Could not validate account")
+            message = "Spotify login failed: couldn't validate the account (Spotify rejected the buddy-list request). Please try logging in again."
             return
         }
 
@@ -590,8 +590,8 @@ public final class SettingsViewModel: ObservableObject {
         } catch {
             try? keychainStore.deleteSpotifyCredentials()
             metadataStore.spotifyAccount = nil
-            spotifyStatus = .serviceError("Could not resolve username")
-            message = "Spotify login failed: could not resolve username. Please try logging in again."
+            spotifyStatus = .serviceError("Could not validate account")
+            message = "Spotify login failed: couldn't validate the account (Spotify rejected the buddy-list request). Please try logging in again."
         }
     }
 
