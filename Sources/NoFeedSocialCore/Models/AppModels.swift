@@ -586,6 +586,7 @@ public enum GitHubActivityKind: String, Hashable, Sendable {
     case starredRepository = "STARRED_REPOSITORY"
     case followed = "FOLLOW"
     case forkedRepository = "FORKED_REPOSITORY"
+    case createdRepository = "CREATED_REPOSITORY"
     case unknown
 }
 

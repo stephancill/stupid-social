@@ -16,3 +16,7 @@ DerivedData/
 /.xcode-derived
 logs/
 __pycache__/
+
+# generated screenshots
+/.tmp-ipad.png
+/screenshots/

@@ -103,7 +103,7 @@ struct FeedView: View {
             }
             .navigationTitle("Social")
             .toolbar {
-                if viewModel.isForegroundRefreshing {
+                if viewModel.isRefreshing || viewModel.isForegroundRefreshing {
                     ToolbarItem(placement: .navigation) {
                         ProgressView()
                             .controlSize(.small)
@@ -563,7 +563,7 @@ private struct StoryBarFeedPage: Identifiable {
 private struct StoryComposerBubble: View {
     let actor: NotificationActor?
     let reel: InstagramStoryReel?
-    @AppStorage("devModeEnabled") private var devModeEnabled = false
+    @AppStorage("redactionEnabled") private var redactionEnabled = false
 
     var body: some View {
         VStack(spacing: 6) {
@@ -613,7 +613,7 @@ private struct StoryComposerBubble: View {
 
     private var label: String {
         if let actor {
-            return DebugRedaction.actorName(actor, enabled: devModeEnabled)
+            return DebugRedaction.actorName(actor, enabled: redactionEnabled)
         }
         return "Create"
     }
@@ -634,7 +634,7 @@ private struct StoryComposerBubble: View {
 
 private struct InstagramStoryBubble: View {
     let reel: InstagramStoryReel
-    @AppStorage("devModeEnabled") private var devModeEnabled = false
+    @AppStorage("redactionEnabled") private var redactionEnabled = false
 
     var body: some View {
         VStack(spacing: 6) {
@@ -705,7 +705,7 @@ private struct InstagramStoryBubble: View {
     }
 
     private var label: String {
-        DebugRedaction.actorName(reel.user, enabled: devModeEnabled)
+        DebugRedaction.actorName(reel.user, enabled: redactionEnabled)
     }
 
     private var initial: String {
@@ -715,7 +715,7 @@ private struct InstagramStoryBubble: View {
 
 private struct SpotifyStoryBubble: View {
     let item: SpotifyActivityItem
-    @AppStorage("devModeEnabled") private var devModeEnabled = false
+    @AppStorage("redactionEnabled") private var redactionEnabled = false
 
     var body: some View {
         VStack(spacing: 6) {
@@ -754,13 +754,13 @@ private struct SpotifyStoryBubble: View {
     }
 
     private var displayUserName: String {
-        DebugRedaction.username(item.userName, enabled: devModeEnabled)
+        DebugRedaction.username(item.userName, enabled: redactionEnabled)
     }
 }
 
 private struct GitHubStoryBubble: View {
     let group: GitHubActivityGroup
-    @AppStorage("devModeEnabled") private var devModeEnabled = false
+    @AppStorage("redactionEnabled") private var redactionEnabled = false
 
     var body: some View {
         VStack(spacing: 6) {
@@ -787,7 +787,7 @@ private struct GitHubStoryBubble: View {
     }
 
     private var displayName: String {
-        DebugRedaction.actorName(group.actor, enabled: devModeEnabled)
+        DebugRedaction.actorName(group.actor, enabled: redactionEnabled)
     }
 
     private var avatarPlaceholder: some View {
@@ -853,7 +853,7 @@ private struct SpotifyAnimatedStoryThumbnail: View {
 
 private struct NotificationRow: View {
     let displayItem: DisplayNotificationItem
-    @AppStorage("devModeEnabled") private var devModeEnabled = false
+    @AppStorage("redactionEnabled") private var redactionEnabled = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -901,14 +901,14 @@ private struct NotificationRow: View {
         } else if let targetText = displayItem.item.target?.text, !targetText.isEmpty,
                   displayItem.item.type == .reaction || displayItem.item.type == .reply || displayItem.item.type == .mention || displayItem.item.type == .message || displayItem.item.type == .music
         {
-            Text(DebugRedaction.text(targetText, actors: displayItem.item.actors, enabled: devModeEnabled))
+            Text(DebugRedaction.text(targetText, actors: displayItem.item.actors, enabled: redactionEnabled))
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
         } else if let imageUrl = displayItem.item.target?.imageURL {
             messageImagePreview(url: imageUrl)
         } else if displayItem.item.network != .bluesky, let actor = displayItem.item.actors.first {
-            Text(DebugRedaction.actorName(actor, enabled: devModeEnabled))
+            Text(DebugRedaction.actorName(actor, enabled: redactionEnabled))
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
@@ -1023,12 +1023,12 @@ private struct NotificationRow: View {
             guard let username = actor.username else { return text }
             return text.replacingOccurrences(of: "@\(username)", with: username)
         }
-        return DebugRedaction.text(sanitized, actors: displayItem.item.actors, enabled: devModeEnabled)
+        return DebugRedaction.text(sanitized, actors: displayItem.item.actors, enabled: redactionEnabled)
     }
 
     private var actorSummary: String {
         guard let first = displayItem.item.actors.first else { return "Someone" }
-        let firstName = DebugRedaction.actorName(first, enabled: devModeEnabled)
+        let firstName = DebugRedaction.actorName(first, enabled: redactionEnabled)
         let remainingCount = displayItem.item.actors.count - 1
         guard remainingCount > 0 else { return firstName }
         return "\(firstName) and \(remainingCount) other\(remainingCount == 1 ? "" : "s")"
@@ -1139,7 +1139,7 @@ private struct NotificationTypeIcon: View {
 
 private struct AvatarStrip: View {
     let actors: [NotificationActor]
-    @AppStorage("devModeEnabled") private var devModeEnabled = false
+    @AppStorage("redactionEnabled") private var redactionEnabled = false
 
     var body: some View {
         HStack(spacing: -6) {
@@ -1167,7 +1167,7 @@ private struct AvatarStrip: View {
 
     private var avatarAccessibilityLabel: String {
         let visibleNames = actors.prefix(5).map { actor in
-            DebugRedaction.actorName(actor, enabled: devModeEnabled)
+            DebugRedaction.actorName(actor, enabled: redactionEnabled)
         }
         let suffix = actors.count > 5 ? ", and \(actors.count - 5) more" : ""
         return "Actors: \(visibleNames.joined(separator: ", "))\(suffix)"
@@ -1201,7 +1201,7 @@ private struct ActorAvatar: View {
 
 private struct AvatarFallback: View {
     let actor: NotificationActor
-    @AppStorage("devModeEnabled") private var devModeEnabled = false
+    @AppStorage("redactionEnabled") private var redactionEnabled = false
 
     var body: some View {
         ZStack {
@@ -1215,7 +1215,7 @@ private struct AvatarFallback: View {
     }
 
     private var initial: String {
-        let value = DebugRedaction.actorName(actor, enabled: devModeEnabled)
+        let value = DebugRedaction.actorName(actor, enabled: redactionEnabled)
         return value.first.map { String($0).uppercased() } ?? "?"
     }
 }

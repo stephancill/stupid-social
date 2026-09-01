@@ -13,6 +13,10 @@ public struct GitHubActivitySeenStore {
         timestamps[actorId].map { activityTimestamp.timeIntervalSince1970 <= $0 } ?? false
     }
 
+    public func seenTimestamp(actorId: String) -> Double {
+        timestamps[actorId] ?? 0
+    }
+
     public func markSeen(actorId: String, activityTimestamp: Date) {
         var values = timestamps
         values[actorId] = max(values[actorId] ?? 0, activityTimestamp.timeIntervalSince1970)

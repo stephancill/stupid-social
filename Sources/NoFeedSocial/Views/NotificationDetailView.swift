@@ -6,7 +6,7 @@ struct NotificationDetailView: View {
     let displayItem: DisplayNotificationItem
     let feedService: FeedService
     @Environment(\.openURL) private var openURL
-    @AppStorage("devModeEnabled") private var devModeEnabled = false
+    @AppStorage("redactionEnabled") private var redactionEnabled = false
     @State private var targetDetails: NotificationTargetDetails?
     @State private var parentTargetDetails: NotificationTargetDetails?
     @State private var isLoadingTargetDetails = false
@@ -18,7 +18,7 @@ struct NotificationDetailView: View {
                 LabeledContent("Network", value: displayItem.item.network.displayName)
                 LabeledContent(
                     "Activity",
-                    value: DebugRedaction.text(displayItem.item.text, actors: displayItem.item.actors, enabled: devModeEnabled),
+                    value: DebugRedaction.text(displayItem.item.text, actors: displayItem.item.actors, enabled: redactionEnabled),
                 )
             }
 
@@ -92,7 +92,7 @@ struct NotificationDetailView: View {
                 }
             } else {
                 Section("Content") {
-                    Text(DebugRedaction.text(displayItem.item.text, actors: displayItem.item.actors, enabled: devModeEnabled))
+                    Text(DebugRedaction.text(displayItem.item.text, actors: displayItem.item.actors, enabled: redactionEnabled))
                 }
             }
 
@@ -233,7 +233,7 @@ private struct MessageBubbleView: View {
     let targetURL: URL?
     let openURL: (URL) -> Void
 
-    @AppStorage("devModeEnabled") private var devModeEnabled = false
+    @AppStorage("redactionEnabled") private var redactionEnabled = false
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 10) {
@@ -257,7 +257,7 @@ private struct MessageBubbleView: View {
 
                 VStack(alignment: .leading, spacing: 8) {
                     if let displayText {
-                        Text(DebugRedaction.text(displayText, actors: actors, enabled: devModeEnabled))
+                        Text(DebugRedaction.text(displayText, actors: actors, enabled: redactionEnabled))
                             .font(.body)
                             .foregroundStyle(.primary)
                             .textSelection(.enabled)
@@ -286,7 +286,7 @@ private struct MessageBubbleView: View {
 
     private var actorName: String? {
         guard let actor = actors.first else { return nil }
-        return DebugRedaction.actorName(actor, enabled: devModeEnabled)
+        return DebugRedaction.actorName(actor, enabled: redactionEnabled)
     }
 
     private var displayText: String? {
@@ -328,7 +328,7 @@ private struct MessagePreviewImage: View {
 
 private struct PersonRow: View {
     let actor: NotificationActor
-    @AppStorage("devModeEnabled") private var devModeEnabled = false
+    @AppStorage("redactionEnabled") private var redactionEnabled = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -337,7 +337,7 @@ private struct PersonRow: View {
             HStack(spacing: 6) {
                 DetailNetworkUsernameBadge(network: actor.network)
 
-                Text(DebugRedaction.actorName(actor, enabled: devModeEnabled))
+                Text(DebugRedaction.actorName(actor, enabled: redactionEnabled))
                     .foregroundStyle(.primary)
             }
 
@@ -425,7 +425,7 @@ private struct TargetPostView: View {
     let showsInlineLoadingRow: Bool
     let openURL: (URL) -> Void
 
-    @AppStorage("devModeEnabled") private var devModeEnabled = false
+    @AppStorage("redactionEnabled") private var redactionEnabled = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -468,7 +468,7 @@ private struct TargetPostView: View {
                     if !hidesAuthorWhileLoading {
                         HStack(spacing: 6) {
                             if let username = displayAuthor?.username {
-                                Text("@\(DebugRedaction.username(username, enabled: devModeEnabled))")
+                                Text("@\(DebugRedaction.username(username, enabled: redactionEnabled))")
                             } else {
                                 Text(fallbackNetwork.displayName)
                             }
@@ -493,7 +493,7 @@ private struct TargetPostView: View {
             }
 
             if let text = displayText, !text.isEmpty {
-                Text(DebugRedaction.text(text, actors: redactionActors, enabled: devModeEnabled))
+                Text(DebugRedaction.text(text, actors: redactionActors, enabled: redactionEnabled))
                     .font(.body)
                     .foregroundStyle(.primary)
                     .textSelection(.enabled)
@@ -537,7 +537,7 @@ private struct TargetPostView: View {
 
     private var authorName: String {
         guard let author = displayAuthor else { return fallbackNetwork.displayName }
-        guard !devModeEnabled else { return "Redacted" }
+        guard !redactionEnabled else { return "Redacted" }
         return author.displayName ?? author.username ?? author.id
     }
 
@@ -622,7 +622,7 @@ private struct GitHubRepoDetailView: View {
                     .foregroundStyle(.primary)
 
                 if let text = displayText, !text.isEmpty {
-                    Text(DebugRedaction.text(text, actors: [], enabled: devModeEnabled))
+                    Text(DebugRedaction.text(text, actors: [], enabled: redactionEnabled))
                         .font(.body)
                         .foregroundStyle(.primary)
                         .textSelection(.enabled)
@@ -650,7 +650,7 @@ private struct GitHubRepoDetailView: View {
         }
     }
 
-    @AppStorage("devModeEnabled") private var devModeEnabled = false
+    @AppStorage("redactionEnabled") private var redactionEnabled = false
 
     private var repoName: String {
         target.id
@@ -768,7 +768,7 @@ private struct DetailActorAvatar: View {
 
 private struct DetailAvatarFallback: View {
     let actor: NotificationActor
-    @AppStorage("devModeEnabled") private var devModeEnabled = false
+    @AppStorage("redactionEnabled") private var redactionEnabled = false
 
     var body: some View {
         ZStack {
@@ -782,7 +782,7 @@ private struct DetailAvatarFallback: View {
     }
 
     private var initial: String {
-        let value = DebugRedaction.actorName(actor, enabled: devModeEnabled)
+        let value = DebugRedaction.actorName(actor, enabled: redactionEnabled)
         return value.first.map { String($0).uppercased() } ?? "?"
     }
 }

@@ -3,7 +3,7 @@ import SwiftUI
 
 struct SearchView: View {
     @ObservedObject var viewModel: ProfileSearchViewModel
-    @AppStorage("devModeEnabled") private var devModeEnabled = false
+    @AppStorage("redactionEnabled") private var redactionEnabled = false
     @FocusState private var isSearchFocused: Bool
 
     private static let searchNetworks: [SocialNetwork] = [
@@ -27,7 +27,7 @@ struct SearchView: View {
                                     initialProfile: profile,
                                 )
                             } label: {
-                                ProfileSearchRow(profile: profile, devModeEnabled: devModeEnabled)
+                                ProfileSearchRow(profile: profile, redactionEnabled: redactionEnabled)
                             }
                         }
                     }
@@ -136,7 +136,7 @@ struct SearchView: View {
 
 private struct ProfileSearchRow: View {
     let profile: NetworkProfile
-    let devModeEnabled: Bool
+    let redactionEnabled: Bool
 
     var body: some View {
         HStack(spacing: 12) {
@@ -157,7 +157,7 @@ private struct ProfileSearchRow: View {
                 HStack(spacing: 6) {
                     NetworkBadgeIcon(network: profile.network, size: 15)
                     if let username = profile.username, !username.isEmpty {
-                        Text(devModeEnabled ? "Redacted" : "@\(username)")
+                        Text(redactionEnabled ? "Redacted" : "@\(username)")
                     }
                 }
                 .font(.subheadline)
@@ -193,7 +193,7 @@ private struct ProfileSearchRow: View {
 
     private var displayName: String {
         let value = profile.displayName ?? profile.username ?? profile.id
-        return DebugRedaction.username(value, enabled: devModeEnabled)
+        return DebugRedaction.username(value, enabled: redactionEnabled)
     }
 
     private var initial: String {

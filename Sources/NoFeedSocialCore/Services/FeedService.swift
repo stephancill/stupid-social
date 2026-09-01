@@ -33,7 +33,29 @@ public final class FeedService {
         try cacheStore.loadRecent().map(DisplayNotificationItem.init)
     }
 
+    /// Populates the in-memory/persisted cache with Debug-only demo feed items.
+    /// No-op outside `#if DEBUG` builds so it can never ship in the App Store build.
+    public func loadDemoFeed() throws {
+        #if DEBUG
+            try cacheStore.replaceAll(DemoData.feedItems())
+        #endif
+    }
+
+    /// Empties the cache so the live feed can repopulate when demo mode is turned off.
+    /// No-op outside `#if DEBUG` builds.
+    public func clearDemoFeed() throws {
+        #if DEBUG
+            try cacheStore.replaceAll([])
+        #endif
+    }
+
     public func manualRefresh() async throws -> [DisplayNotificationItem] {
+        #if DEBUG
+            if DemoData.isDemoMode {
+                try loadDemoFeed()
+                return try loadCachedFeed()
+            }
+        #endif
         logger.info("Manual refresh started")
         var incoming: [NotificationItem] = []
         var errors: [String] = []
@@ -82,6 +104,12 @@ public final class FeedService {
     }
 
     public func foregroundActivationRefresh() async throws {
+        #if DEBUG
+            if DemoData.isDemoMode {
+                try loadDemoFeed()
+                return
+            }
+        #endif
         logger.info("Foreground activation refresh started")
         var incoming: [NotificationItem] = []
         var refreshedNetworks = Set<SocialNetwork>()

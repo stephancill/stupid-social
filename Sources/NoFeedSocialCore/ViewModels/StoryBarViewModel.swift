@@ -39,6 +39,30 @@ public final class StoryBarViewModel: ObservableObject {
         await fetchStoryBarContent()
     }
 
+    /// Replaces the story bar with Debug-only demo stories and marks content loaded.
+    /// No-op outside `#if DEBUG` builds.
+    public func loadDemoStoryBarItems() {
+        #if DEBUG
+            storyBarItems = DemoData.storyBarItems()
+            ownInstagramStoryActor = nil
+            ownInstagramStoryReel = nil
+            storyBarContentLoaded = true
+            storyBarLoading = false
+        #endif
+    }
+
+    /// Resets the story bar so a live reload can repopulate it after demo mode is
+    /// turned off. No-op outside `#if DEBUG` builds.
+    public func clearDemoStoryItems() {
+        #if DEBUG
+            storyBarItems = []
+            ownInstagramStoryActor = nil
+            ownInstagramStoryReel = nil
+            storyBarContentLoaded = false
+            storyBarLoading = false
+        #endif
+    }
+
     public func fetchSpotifyActivity() async {
         await fetchStoryBarContent()
     }
@@ -55,6 +79,12 @@ public final class StoryBarViewModel: ObservableObject {
     }
 
     private func performStoryBarContentFetch() async {
+        #if DEBUG
+            if DemoData.isDemoMode {
+                loadDemoStoryBarItems()
+                return
+            }
+        #endif
         storyBarLoading = true
         async let reels = instagramReels()
         async let spots = spotifyItems()
@@ -251,8 +281,21 @@ public final class StoryBarViewModel: ObservableObject {
     }
 
     public func storyViewerStartSlideIndex(for selectedItem: StoryBarItem, in items: [StoryBarItem]) -> Int {
-        guard case let .instagram(reel) = items.first(where: { $0.id == selectedItem.id }) else { return 0 }
-        return reel.slides.firstIndex(where: { $0.takenAt > reel.seenTimestamp }) ?? 0
+        guard let item = items.first(where: { $0.id == selectedItem.id }) else { return 0 }
+        switch item {
+        case let .instagram(reel):
+            return resumeIndex(in: reel.slides.map(\.takenAt), after: reel.seenTimestamp)
+        case let .github(group):
+            return resumeIndex(in: group.activities.map(\.timestamp.timeIntervalSince1970), after: githubSeenStore.seenTimestamp(actorId: group.actor.id))
+        case .spotify:
+            return 0
+        }
+    }
+
+    /// Returns the index of the first slide taken after the given seen timestamp
+    /// (the oldest un-viewed slide), or 0 when every slide has been viewed.
+    private func resumeIndex(in slideTimes: [Double], after seenTimestamp: Double) -> Int {
+        slideTimes.firstIndex(where: { $0 > seenTimestamp }) ?? 0
     }
 
     var instagramStoryReels: [InstagramStoryReel] {

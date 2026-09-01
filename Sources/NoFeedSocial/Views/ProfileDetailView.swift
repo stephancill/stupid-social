@@ -8,7 +8,7 @@ struct ProfileDetailView: View {
     let feedService: FeedService
     let initialProfile: NetworkProfile?
     @Environment(\.openURL) private var openURL
-    @AppStorage("devModeEnabled") private var devModeEnabled = false
+    @AppStorage("redactionEnabled") private var redactionEnabled = false
 
     @State private var profile: NetworkProfile?
     @State private var isLoading = true
@@ -66,7 +66,7 @@ struct ProfileDetailView: View {
                     VStack(spacing: 4) {
                         HStack(spacing: 4) {
                             if let displayName = profile.displayName, !displayName.isEmpty {
-                                Text(DebugRedaction.username(displayName, enabled: devModeEnabled))
+                                Text(DebugRedaction.username(displayName, enabled: redactionEnabled))
                                     .font(.title2.weight(.bold))
                             }
                             if profile.isVerified == true {
@@ -76,7 +76,7 @@ struct ProfileDetailView: View {
                             }
                         }
                         if let username = profile.username {
-                            Text(devModeEnabled ? "Redacted" : "@\(username)")
+                            Text(redactionEnabled ? "Redacted" : "@\(username)")
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
                         }

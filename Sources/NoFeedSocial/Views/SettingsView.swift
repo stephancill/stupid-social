@@ -3,8 +3,11 @@ import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject var viewModel: SettingsViewModel
+    var onLoadDemoData: (() -> Void)?
+    var onClearDemoData: (() -> Void)?
     @Environment(\.openURL) private var openURL
     @AppStorage("devModeEnabled") private var devModeEnabled = false
+    @AppStorage("redactionEnabled") private var redactionEnabled = false
 
     var body: some View {
         Form {
@@ -82,6 +85,24 @@ struct SettingsView: View {
                 }
             }
 
+            #if DEBUG
+                if devModeEnabled {
+                    Section("Demo Data") {
+                        Button {
+                            onLoadDemoData?()
+                        } label: {
+                            Label("Load preview content", systemImage: "sparkles")
+                        }
+                        Button(role: .destructive) {
+                            onClearDemoData?()
+                        } label: {
+                            Label("Unload preview content", systemImage: "minus.rectangle")
+                        }
+                        Toggle("Redact names", isOn: $redactionEnabled)
+                    }
+                }
+            #endif
+
             if viewModel.hasLocalOnlyCredentials {
                 Section {
                     #if targetEnvironment(simulator)
@@ -127,6 +148,15 @@ struct SettingsView: View {
         .onAppear {
             viewModel.loadStatuses()
         }
+        .onChange(of: devModeEnabled) { _, enabled in
+            #if DEBUG
+                if enabled {
+                    onLoadDemoData?()
+                } else {
+                    onClearDemoData?()
+                }
+            #endif
+        }
     }
 
     private func connectionRow(name: String, subtitle: String, isInvalid: Bool = false) -> some View {
@@ -147,7 +177,7 @@ struct SettingsView: View {
     }
 
     private func redactedSubtitle(_ subtitle: String) -> String {
-        guard devModeEnabled, subtitle.hasPrefix("@") else { return subtitle }
+        guard redactionEnabled, subtitle.hasPrefix("@") else { return subtitle }
         return "Redacted"
     }
 }

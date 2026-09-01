@@ -67,7 +67,11 @@ public struct ContentView: View {
             .tag(MainTab.search)
 
             NavigationStack {
-                SettingsView(viewModel: container.settingsViewModel)
+                SettingsView(
+                    viewModel: container.settingsViewModel,
+                    onLoadDemoData: { container.loadDemoData() },
+                    onClearDemoData: { container.clearDemoData() },
+                )
             }
             .tabItem {
                 Label("Settings", systemImage: "gear")
@@ -125,7 +129,11 @@ public struct ContentView: View {
             )
         case .settings:
             NavigationStack {
-                SettingsView(viewModel: container.settingsViewModel)
+                SettingsView(
+                    viewModel: container.settingsViewModel,
+                    onLoadDemoData: { container.loadDemoData() },
+                    onClearDemoData: { container.clearDemoData() },
+                )
             }
             .onDisappear {
                 Task {

@@ -3,6 +3,19 @@ import Foundation
 import XCTest
 
 final class GitHubActivityParserTests: XCTestCase {
+    func testNormalizesCreatedRepositoryCards() throws {
+        let html = card(cardType: "CREATED_REPOSITORY", createdAt: "2026-08-30T06:13:17.000-07:00", recordId: "created-1",
+                        actorHref: "/octocat", actorId: "1", repoHref: "/octocat/brand-new", position: 0, subPosition: nil)
+
+        let groups = try GitHubActivityParser.parse(html).storyGroups
+        let activity = try XCTUnwrap(groups.first?.activities.first)
+
+        XCTAssertEqual(activity.kind, .createdRepository)
+        XCTAssertEqual(activity.actor.username, "octocat")
+        XCTAssertEqual(activity.targetName, "octocat/brand-new")
+        XCTAssertEqual(activity.summary, "octocat created octocat/brand-new")
+    }
+
     func testGroupsActivitiesByActorAndOrdersSlidesChronologically() throws {
         let html = [
             card(cardType: "STARRED_REPOSITORY", createdAt: "2026-08-28T15:24:40.000-07:00", recordId: "star-1",

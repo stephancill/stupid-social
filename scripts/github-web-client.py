@@ -299,10 +299,14 @@ def normalize_card(entry: dict[str, Any]) -> dict[str, Any]:
         actor = resource_from_actions(actions, resource_type="USER", resource_id=resource_id)
         target = resource_from_actions(actions, resource_type="USER", resource_id=record_id)
         summary = f"{resource_name(actor, 'Someone')} followed {resource_name(target, 'a user')}"
-    elif card_type in {"STARRED_REPOSITORY", "FORKED_REPOSITORY"}:
+    elif card_type in {"STARRED_REPOSITORY", "FORKED_REPOSITORY", "CREATED_REPOSITORY"}:
         actor = resource_from_actions(actions, resource_type="USER")
         target = resource_from_actions(actions, resource_type="REPO", resource_id=resource_id)
-        verb = "starred" if card_type == "STARRED_REPOSITORY" else "forked"
+        verb = {
+            "STARRED_REPOSITORY": "starred",
+            "FORKED_REPOSITORY": "forked",
+            "CREATED_REPOSITORY": "created",
+        }[card_type]
         summary = f"{resource_name(actor, 'Someone')} {verb} {resource_name(target, 'a repository')}"
     else:
         actor = resource_from_actions(actions, resource_type="USER")
@@ -356,6 +360,7 @@ def inherit_rollup_actors(items: list[dict[str, Any]]) -> None:
             "STARRED_REPOSITORY": "starred",
             "FOLLOW": "followed",
             "FORKED_REPOSITORY": "forked",
+            "CREATED_REPOSITORY": "created",
         }.get(item["type"])
         if verb:
             item["summary"] = (

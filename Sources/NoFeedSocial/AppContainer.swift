@@ -133,5 +133,36 @@ final class AppContainer {
             farcasterClient: farcasterClient,
             cacheStore: cacheStore,
         )
+
+        #if DEBUG
+            if DemoData.shouldAutoLoad {
+                loadDemoData()
+            }
+        #endif
+    }
+
+    func loadDemoData() {
+        #if DEBUG
+            DemoData.enableDemoMode()
+            try? feedService.loadDemoFeed()
+            feedViewModel.loadCachedFeed()
+            storyBarViewModel.loadDemoStoryBarItems()
+        #endif
+    }
+
+    /// Turns demo mode off, empties the demo-seeded cache/story bar, then reloads
+    /// live content so the app returns to its real state.
+    func clearDemoData() {
+        #if DEBUG
+            DemoData.disableDemoMode()
+            try? feedService.clearDemoFeed()
+            feedViewModel.loadCachedFeed()
+            storyBarViewModel.clearDemoStoryItems()
+            Task {
+                try? await feedService.foregroundActivationRefresh()
+                feedViewModel.loadCachedFeed()
+                await storyBarViewModel.fetchStoryBarContent()
+            }
+        #endif
     }
 }

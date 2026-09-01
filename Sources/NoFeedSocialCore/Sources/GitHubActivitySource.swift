@@ -195,7 +195,7 @@ public enum GitHubActivityParser {
                 ?? (item.actor.username == nil ? actorByFollowResourceId[item.actor.id] : item.actor)
             guard let actor, actor.username != nil else { return nil }
             var updated = item.replacingActor(actor)
-            if item.kind == .starredRepository || item.kind == .forkedRepository {
+            if item.kind == .starredRepository || item.kind == .forkedRepository || item.kind == .createdRepository {
                 if let detail = repoDetails[item.targetName] {
                     updated = updated.withRepoMetadata(detail)
                 }
@@ -350,7 +350,7 @@ public enum GitHubActivityParser {
             actorAction = action(in: card.actions, type: "USER", id: actorId)
             targetId = metadata.recordId.value
             targetAction = action(in: card.actions, type: "USER", id: targetId)
-        case .starredRepository, .forkedRepository:
+        case .starredRepository, .forkedRepository, .createdRepository:
             guard let userAction = action(in: card.actions, type: "USER") else { return nil }
             actorId = userAction.metadata?.clickedResourceId.value ?? ""
             actorAction = userAction
@@ -373,7 +373,7 @@ public enum GitHubActivityParser {
         let targetAvatarURL: URL? = switch kind {
         case .followed:
             URL(string: "https://avatars.githubusercontent.com/u/\(targetId)?s=192&v=4")
-        case .starredRepository, .forkedRepository:
+        case .starredRepository, .forkedRepository, .createdRepository:
             targetName.split(separator: "/").first.map { owner in URL(string: "https://github.com/\(owner).png?size=192")! }
         case .unknown:
             nil
@@ -382,6 +382,7 @@ public enum GitHubActivityParser {
         case .starredRepository: "starred"
         case .followed: "followed"
         case .forkedRepository: "forked"
+        case .createdRepository: "created"
         case .unknown: "updated"
         }
         return GitHubActivityItem(
@@ -599,6 +600,7 @@ private extension GitHubActivityItem {
         case .starredRepository: "starred"
         case .followed: "followed"
         case .forkedRepository: "forked"
+        case .createdRepository: "created"
         case .unknown: "updated"
         }
         return GitHubActivityItem(

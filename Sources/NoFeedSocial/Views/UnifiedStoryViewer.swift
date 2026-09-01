@@ -21,7 +21,7 @@ struct UnifiedStoryViewer: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @AppStorage("devModeEnabled") private var devModeEnabled = false
+    @AppStorage("redactionEnabled") private var redactionEnabled = false
     @AppStorage("storyViewerMuted") private var isMuted: Bool = false
 
     @State private var viewerItems: [StoryBarItem]
@@ -732,11 +732,11 @@ struct UnifiedStoryViewer: View {
         guard let item = currentItem else { return "" }
         switch item {
         case let .instagram(reel):
-            return DebugRedaction.actorName(reel.user, enabled: devModeEnabled)
+            return DebugRedaction.actorName(reel.user, enabled: redactionEnabled)
         case let .spotify(spotifyItem):
-            return DebugRedaction.username(spotifyItem.userName, enabled: devModeEnabled)
+            return DebugRedaction.username(spotifyItem.userName, enabled: redactionEnabled)
         case let .github(group):
-            return DebugRedaction.actorName(group.actor, enabled: devModeEnabled)
+            return DebugRedaction.actorName(group.actor, enabled: redactionEnabled)
         }
     }
 
@@ -1419,6 +1419,7 @@ private struct GitHubStoryContent: View {
         case .starredRepository: "star.fill"
         case .followed: "person.badge.plus"
         case .forkedRepository: "arrow.triangle.branch"
+        case .createdRepository: "folder.badge.plus"
         case .unknown: "chevron.left.forwardslash.chevron.right"
         }
     }

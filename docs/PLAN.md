@@ -122,7 +122,7 @@ Reference behavior from `docs/CLI_DOCS.md`:
 - Unread Instagram DMs remain in the main notifications feed.
 - Spotify listening activity is not shown in the main notifications list.
 - GitHub For You activity is not shown in the main notifications list, except "starred your repository" events, which route to the notifications feed.
-- GitHub story tiles group stars, follows, and repository forks by actor, with each activity represented as a slide.
+- GitHub story tiles group stars, follows, created repositories, and repository forks by actor, with each activity represented as a slide.
 - Spotify listening story tiles show the album/track artwork as the thumbnail with the listener's avatar overlaid in the bottom-right corner.
 - Tapping a Spotify listening story opens the Listening detail screen.
 - Each item shows a network badge.
