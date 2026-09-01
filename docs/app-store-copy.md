@@ -12,7 +12,7 @@ stupid social
 ## Subtitle (≤30 chars)
 
 ```
-The best parts of social
+only the best parts of social
 ```
 
 ## Promotional text (≤170 chars)
