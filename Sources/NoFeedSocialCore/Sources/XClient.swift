@@ -1378,7 +1378,7 @@ private enum XNotificationsTimelineParser {
 
         let actor = actor(from: author)
         let sourceId = tweet.stableId
-        let text = notificationText(element: element, actorName: author.name ?? author.stableId, tweetText: legacy.fullText)
+        let text = notificationText(element: element, actorName: actor.username ?? actor.displayName ?? author.stableId, tweetText: legacy.fullText)
 
         return NotificationItem(
             id: "x:\(sourceId):\(element)",
