@@ -190,6 +190,7 @@ public final class AccountMetadataStore {
         static let blueskyAccount = "account.bluesky"
         static let githubAccount = "account.github"
         static let debugAccount = "account.debug"
+        static let xFollowsMigrated = "account.x.followsMigrated"
     }
 
     private let defaults: UserDefaults
@@ -201,7 +202,20 @@ public final class AccountMetadataStore {
     }
 
     public var xAccount: XAccountMetadata? {
-        get { load(XAccountMetadata.self, key: Key.xAccount) }
+        get {
+            guard var account = load(XAccountMetadata.self, key: Key.xAccount) else { return nil }
+            // One-time migration: enable the new "follows" category for accounts
+            // that predate it. The flag keeps this from overriding a later
+            // user choice to disable X follows.
+            if !defaults.bool(forKey: Key.xFollowsMigrated) {
+                var categories = account.enabledCategories
+                categories.insert(.follows)
+                account.enabledCategories = categories
+                save(account, key: Key.xAccount)
+                defaults.set(true, forKey: Key.xFollowsMigrated)
+            }
+            return account
+        }
         set { save(newValue, key: Key.xAccount) }
     }
 

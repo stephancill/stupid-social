@@ -5,6 +5,7 @@ public enum XNotificationCategory: String, CaseIterable, Codable, Sendable {
     case replies
     case reactions
     case tweets
+    case follows
 
     public var displayLabel: String {
         switch self {
@@ -12,6 +13,7 @@ public enum XNotificationCategory: String, CaseIterable, Codable, Sendable {
         case .replies: "Replies"
         case .reactions: "Reactions"
         case .tweets: "Tweets"
+        case .follows: "Follows"
         }
     }
 
@@ -21,7 +23,8 @@ public enum XNotificationCategory: String, CaseIterable, Codable, Sendable {
         case .reply: .replies
         case .reaction: .reactions
         case .post: .tweets
-        case .follow, .message, .music, .unknown: nil
+        case .follow: .follows
+        case .message, .music, .unknown: nil
         }
     }
 }
@@ -33,6 +36,7 @@ public struct XClient {
 
     private static let bearerToken = "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
     private static let searchTimelineQueryId = "hz_94eVAtrtQo_vO3my7Rw"
+    private static let notificationsTimelineQueryId = "8kmedJD_u653xqEjZIS7yA"
     private static let appUserAgent = "NoFeedSocial/1"
 
     public init(credentialStore: KeychainCredentialStore, session: URLSession = defaultSession) {
@@ -307,13 +311,30 @@ public struct XClient {
             throw SourceError.notConfigured
         }
 
-        var components = URLComponents(string: "https://x.com/i/api/2/notifications/all.json")!
-        components.queryItems = [
-            URLQueryItem(name: "include_tweet_replies", value: "true"),
-            URLQueryItem(name: "count", value: "40"),
+        let variables: [String: Any] = [
+            "timeline_type": "All",
+            "count": 40,
         ]
+        let features = notificationsTimelineFeatures()
 
-        var request = URLRequest(url: components.url!)
+        guard
+            let varsData = try? JSONSerialization.data(withJSONObject: variables),
+            let featData = try? JSONSerialization.data(withJSONObject: features),
+            let varsJSON = String(data: varsData, encoding: .utf8),
+            let featJSON = String(data: featData, encoding: .utf8)
+        else {
+            throw SourceError.invalidResponse
+        }
+
+        let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+        let varsEncoded = varsJSON.addingPercentEncoding(withAllowedCharacters: allowed) ?? varsJSON
+        let featEncoded = featJSON.addingPercentEncoding(withAllowedCharacters: allowed) ?? featJSON
+
+        guard let url = URL(string: "https://x.com/i/api/graphql/\(Self.notificationsTimelineQueryId)/NotificationsTimeline?variables=\(varsEncoded)&features=\(featEncoded)") else {
+            throw SourceError.invalidResponse
+        }
+
+        var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.allHTTPHeaderFields = headers(credentials: credentials)
 
@@ -331,9 +352,8 @@ public struct XClient {
         }
 
         let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-        let decoded = try decoder.decode(XNotificationsResponse.self, from: data)
-        return try XNotificationParser.parse(response: decoded)
+        let decoded = try decoder.decode(XNotificationsTimelineResponse.self, from: data)
+        return try XNotificationsTimelineParser.parse(response: decoded)
     }
 
     func tweetDetails(tweetId: String) async throws -> NotificationTargetDetails {
@@ -465,6 +485,49 @@ public struct XClient {
             "creator_subscriptions_tweet_preview_api_enabled": true,
             "responsive_web_graphql_timeline_navigation_enabled": true,
             "responsive_web_graphql_skip_user_profile_image_extensions_enabled": false,
+            "premium_content_api_read_enabled": false,
+            "communities_web_enable_tweet_community_results_fetch": true,
+            "c9s_tweet_anatomy_moderator_badge_enabled": true,
+            "responsive_web_grok_analyze_button_fetch_trends_enabled": false,
+            "responsive_web_grok_analyze_post_followups_enabled": true,
+            "rweb_cashtags_composer_attachment_enabled": true,
+            "responsive_web_jetfuel_frame": true,
+            "responsive_web_grok_share_attachment_enabled": true,
+            "responsive_web_grok_annotations_enabled": true,
+            "articles_preview_enabled": true,
+            "responsive_web_edit_tweet_api_enabled": true,
+            "rweb_conversational_replies_downvote_enabled": false,
+            "graphql_is_translatable_rweb_tweet_is_translatable_enabled": true,
+            "view_counts_everywhere_api_enabled": true,
+            "longform_notetweets_consumption_enabled": true,
+            "responsive_web_twitter_article_tweet_consumption_enabled": true,
+            "content_disclosure_indicator_enabled": true,
+            "content_disclosure_ai_generated_indicator_enabled": true,
+            "responsive_web_grok_show_grok_translated_post": true,
+            "responsive_web_grok_analysis_button_from_backend": true,
+            "post_ctas_fetch_enabled": false,
+            "freedom_of_speech_not_reach_fetch_enabled": true,
+            "standardized_nudges_misinfo": true,
+            "tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled": true,
+            "longform_notetweets_rich_text_read_enabled": true,
+            "longform_notetweets_inline_media_enabled": false,
+            "responsive_web_grok_image_annotation_enabled": true,
+            "responsive_web_grok_imagine_annotation_enabled": true,
+            "responsive_web_grok_community_note_auto_translation_is_enabled": true,
+            "responsive_web_enhance_cards_enabled": false,
+        ]
+    }
+
+    private func notificationsTimelineFeatures() -> [String: Any] {
+        [
+            "rweb_video_screen_enabled": false,
+            "rweb_cashtags_enabled": true,
+            "profile_label_improvements_pcf_label_in_post_enabled": true,
+            "responsive_web_profile_redirect_enabled": true,
+            "rweb_tipjar_consumption_enabled": false,
+            "verified_phone_label_enabled": false,
+            "creator_subscriptions_tweet_preview_api_enabled": true,
+            "responsive_web_graphql_timeline_navigation_enabled": true,
             "premium_content_api_read_enabled": false,
             "communities_web_enable_tweet_community_results_fetch": true,
             "c9s_tweet_anatomy_moderator_badge_enabled": true,
@@ -917,7 +980,7 @@ private enum XNotificationParser {
 
         let actors = notificationRef.fromUsers.compactMap { userId in
             users[userId].map(actor(from:))
-        }.reversed().map(\.self)
+        }
         guard !actors.isEmpty else { return nil }
 
         let notificationTarget: NotificationTarget?
@@ -1072,6 +1135,416 @@ private enum XNotificationParser {
             author: users[tweet.userIdStr].map(actor(from:)),
             postedAt: parseTwitterDate(tweet.createdAt),
             likeCount: tweet.favoriteCount,
+        )
+    }
+
+    private static func parseTwitterDate(_ value: String) -> Date? {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "EEE MMM dd HH:mm:ss Z yyyy"
+        return formatter.date(from: value)
+    }
+}
+
+// MARK: - Notifications Timeline (GraphQL) Response Models
+
+private struct XNotificationsTimelineResponse: Decodable {
+    let data: XNTData
+}
+
+private struct XNTData: Decodable {
+    let viewerV2: XNTViewerV2
+    enum CodingKeys: String, CodingKey { case viewerV2 = "viewer_v2" }
+}
+
+private struct XNTViewerV2: Decodable {
+    let userResults: XNTUserResults
+    enum CodingKeys: String, CodingKey { case userResults = "user_results" }
+}
+
+private struct XNTUserResults: Decodable {
+    let result: XNTResult
+}
+
+private struct XNTResult: Decodable {
+    let notificationTimeline: XNTTimeline
+    enum CodingKeys: String, CodingKey { case notificationTimeline = "notification_timeline" }
+}
+
+private struct XNTTimeline: Decodable {
+    let timeline: XNTTimelineBody
+}
+
+private struct XNTTimelineBody: Decodable {
+    let instructions: [XNTInstruction]
+}
+
+private struct XNTInstruction: Decodable {
+    let entries: [XNTEntry]?
+}
+
+private struct XNTEntry: Decodable {
+    let entryId: String
+    let sortIndex: String
+    let content: XNTEntryContent?
+}
+
+private struct XNTEntryContent: Decodable {
+    let entryType: String?
+    let cursorType: String?
+    let clientEventInfo: XNTClientEventInfo?
+    let itemContent: XNTItemContent?
+}
+
+private struct XNTClientEventInfo: Decodable {
+    let element: String?
+}
+
+private struct XNTItemContent: Decodable {
+    let itemType: String?
+    let typename: String?
+    let id: String?
+    let notificationUrl: XNTUrl?
+    let template: XNTUserActionsTemplate?
+    let tweetResults: XNTTweetResult?
+    enum CodingKeys: String, CodingKey {
+        case itemType
+        case typename = "__typename"
+        case id
+        case notificationUrl = "notification_url"
+        case template
+        case tweetResults = "tweet_results"
+    }
+}
+
+private struct XNTUrl: Decodable {
+    let url: String?
+}
+
+private struct XNTUserActionsTemplate: Decodable {
+    let fromUsers: [XNTUserRef]?
+    let targetObjects: [XNTTargetObject]?
+    enum CodingKeys: String, CodingKey {
+        case fromUsers = "from_users"
+        case targetObjects = "target_objects"
+    }
+}
+
+private struct XNTTargetObject: Decodable {
+    let tweetResults: XNTTweetResult?
+    enum CodingKeys: String, CodingKey { case tweetResults = "tweet_results" }
+}
+
+private struct XNTTweetResult: Decodable {
+    let result: XNTTweet?
+}
+
+private struct XNTUserRef: Decodable {
+    let userResults: XNTUserResultHolder?
+    enum CodingKeys: String, CodingKey { case userResults = "user_results" }
+}
+
+private struct XNTUserResultHolder: Decodable {
+    let result: XNTUser?
+}
+
+private struct XNTUser: Decodable {
+    let id: String?
+    let restId: String?
+    let core: XNTCore?
+    let avatar: XNTAvatar?
+
+    var stableId: String {
+        restId ?? id ?? core?.screenName ?? ""
+    }
+
+    var name: String? {
+        core?.name
+    }
+
+    var screenName: String? {
+        core?.screenName
+    }
+
+    var avatarURL: URL? {
+        avatar?.imageUrl.flatMap { urlString in
+            URL(string: urlString.replacingOccurrences(of: "_normal", with: ""))
+        }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case restId = "rest_id"
+        case core
+        case avatar
+    }
+}
+
+private struct XNTCore: Decodable {
+    let screenName: String?
+    let name: String?
+    enum CodingKeys: String, CodingKey {
+        case screenName = "screen_name"
+        case name
+    }
+}
+
+private struct XNTAvatar: Decodable {
+    let imageUrl: String?
+    enum CodingKeys: String, CodingKey { case imageUrl = "image_url" }
+}
+
+private struct XNTTweet: Decodable {
+    let restId: String?
+    let legacy: XNTTweetLegacy?
+    let core: XNTTweetCore?
+    let extendedEntities: XNTExtendedEntities?
+
+    var stableId: String {
+        restId ?? legacy?.idStr ?? ""
+    }
+
+    var author: XNTUser? {
+        core?.userResults?.result
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case restId = "rest_id"
+        case legacy
+        case core
+        case extendedEntities = "extended_entities"
+    }
+}
+
+private struct XNTTweetCore: Decodable {
+    let userResults: XNTUserResultHolder?
+    enum CodingKeys: String, CodingKey { case userResults = "user_results" }
+}
+
+private struct XNTTweetLegacy: Decodable {
+    let idStr: String?
+    let createdAt: String?
+    let fullText: String?
+    let favoriteCount: Int?
+    enum CodingKeys: String, CodingKey {
+        case idStr = "id_str"
+        case createdAt = "created_at"
+        case fullText = "full_text"
+        case favoriteCount = "favorite_count"
+    }
+}
+
+private struct XNTExtendedEntities: Decodable {
+    let media: [XNTMedia]?
+}
+
+private struct XNTMedia: Decodable {
+    let mediaUrlHttps: String?
+    enum CodingKeys: String, CodingKey { case mediaUrlHttps = "media_url_https" }
+}
+
+// MARK: - Notifications Timeline Parser
+
+private enum XNotificationsTimelineParser {
+    static func parse(response: XNotificationsTimelineResponse) throws -> [NotificationItem] {
+        let entries = response.data.viewerV2.userResults.result.notificationTimeline.timeline.instructions.compactMap(\.entries).flatMap(\.self)
+
+        var items: [NotificationItem] = []
+        for entry in entries {
+            guard let content = entry.content, content.cursorType == nil, let item = content.itemContent else {
+                continue
+            }
+            let element = content.clientEventInfo?.element ?? "unknown"
+            let type = notificationType(from: element)
+
+            if item.itemType == "TimelineTweet", let tweet = item.tweetResults?.result,
+               let notificationItem = parseTweetEntry(element: element, type: type, tweet: tweet)
+            {
+                items.append(notificationItem)
+            } else if let template = item.template,
+                      let notificationItem = parseAggregateEntry(entry: entry, element: element, type: type, item: item, template: template)
+            {
+                items.append(notificationItem)
+            }
+        }
+        return items
+    }
+
+    private static func parseTweetEntry(element: String, type: NotificationType, tweet: XNTTweet) -> NotificationItem? {
+        guard let legacy = tweet.legacy, let createdAt = legacy.createdAt, let author = tweet.author else {
+            return nil
+        }
+        guard let timestamp = parseTwitterDate(createdAt) else { return nil }
+
+        let actor = actor(from: author)
+        let sourceId = tweet.stableId
+        let text = notificationText(element: element, actorName: author.name ?? author.stableId, tweetText: legacy.fullText)
+
+        return NotificationItem(
+            id: "x:\(sourceId):\(element)",
+            network: .x,
+            accountId: "x",
+            sourceId: sourceId,
+            type: type,
+            timestamp: timestamp,
+            text: text,
+            actors: [actor],
+            target: target(from: tweet),
+            parentTarget: nil,
+        )
+    }
+
+    private static func parseAggregateEntry(
+        entry: XNTEntry,
+        element: String,
+        type: NotificationType,
+        item: XNTItemContent,
+        template: XNTUserActionsTemplate,
+    ) -> NotificationItem? {
+        guard let fromUsers = template.fromUsers else { return nil }
+        let actors = fromUsers.compactMap { ref in
+            ref.userResults?.result.map(actor(from:))
+        }
+        guard !actors.isEmpty else { return nil }
+
+        let timestamp = Date(timeIntervalSince1970: (Double(entry.sortIndex) ?? 0) / 1000)
+        let targetTweet = template.targetObjects?.first?.tweetResults?.result
+
+        let sourceId: String
+        let notificationTarget: NotificationTarget?
+        if let targetTweet {
+            notificationTarget = target(from: targetTweet)
+            sourceId = targetTweet.stableId
+        } else {
+            let url = item.notificationUrl?.url.flatMap(URL.init)
+            notificationTarget = type == .post ? NotificationTarget(
+                id: item.id ?? entry.entryId,
+                text: nil,
+                url: url,
+                author: actors.first,
+                postedAt: timestamp,
+            ) : nil
+            sourceId = item.id ?? entry.entryId
+        }
+
+        let text = groupedNotificationText(element: element, actors: actors, tweetText: notificationTarget?.text)
+
+        return NotificationItem(
+            id: "x:\(sourceId):\(element)",
+            network: .x,
+            accountId: "x",
+            sourceId: sourceId,
+            type: type,
+            timestamp: timestamp,
+            text: text,
+            actors: actors,
+            target: notificationTarget,
+            parentTarget: nil,
+        )
+    }
+
+    private static func notificationType(from element: String) -> NotificationType {
+        switch element {
+        case "user_mentioned_you",
+             "user_mentioned_you_in_a_quote_tweet":
+            .mention
+        case "user_replied_to_your_tweet",
+             "user_quoted_your_tweet":
+            .reply
+        case "users_liked_your_tweet",
+             "user_liked_multiple_tweets",
+             "users_retweeted_your_tweet":
+            .reaction
+        case "users_followed_you",
+             "follow_from_recommended_user":
+            .follow
+        case "device_follow_tweet_notification_entry",
+             "user_tweeted",
+             "user_tweeted_entry",
+             "tweet_notification",
+             "user_posted":
+            .post
+        default:
+            .unknown
+        }
+    }
+
+    private static func notificationText(element: String, actorName: String, tweetText: String?) -> String {
+        switch element {
+        case "user_mentioned_you":
+            "\(actorName) mentioned you"
+        case "user_mentioned_you_in_a_quote_tweet":
+            "\(actorName) mentioned you in a quote tweet"
+        case "user_replied_to_your_tweet":
+            "\(actorName) replied to your tweet"
+        case "user_quoted_your_tweet":
+            "\(actorName) quoted your tweet"
+        case "users_liked_your_tweet",
+             "user_liked_multiple_tweets":
+            "\(actorName) liked your tweet"
+        case "users_retweeted_your_tweet":
+            "\(actorName) retweeted your tweet"
+        case "follow_from_recommended_user",
+             "users_followed_you":
+            "\(actorName) followed you"
+        case "device_follow_tweet_notification_entry",
+             "user_tweeted",
+             "user_tweeted_entry",
+             "tweet_notification",
+             "user_posted":
+            "New post from \(actorName)"
+        default:
+            tweetText ?? "New X notification"
+        }
+    }
+
+    private static func groupedNotificationText(
+        element: String,
+        actors: [NotificationActor],
+        tweetText: String?,
+    ) -> String {
+        let actorName = actors.first?.username.map { "@\($0)" } ?? actors.first?.displayName ?? "Someone"
+        let suffix = actors.count > 1 ? " and \(actors.count - 1) other\(actors.count == 2 ? "" : "s")" : ""
+
+        switch element {
+        case "users_liked_your_tweet",
+             "user_liked_multiple_tweets":
+            return "\(actorName)\(suffix) liked your tweet"
+        case "users_retweeted_your_tweet":
+            return "\(actorName)\(suffix) retweeted your tweet"
+        case "follow_from_recommended_user",
+             "users_followed_you":
+            return "\(actorName)\(suffix) followed you"
+        case "device_follow_tweet_notification_entry":
+            return "New post from \(actorName)\(suffix)"
+        default:
+            return notificationText(element: element, actorName: actorName, tweetText: tweetText)
+        }
+    }
+
+    private static func actor(from user: XNTUser) -> NotificationActor {
+        NotificationActor(
+            id: user.stableId,
+            network: .x,
+            username: user.screenName,
+            displayName: user.name,
+            avatarURL: user.avatarURL,
+        )
+    }
+
+    private static func target(from tweet: XNTTweet) -> NotificationTarget {
+        let media = tweet.extendedEntities?.media ?? []
+        let imageURL = media.first?.mediaUrlHttps.flatMap(URL.init)
+        let imageURLs = media.compactMap { $0.mediaUrlHttps.flatMap(URL.init) }
+        return NotificationTarget(
+            id: tweet.stableId,
+            text: tweet.legacy?.fullText,
+            url: nil,
+            imageURL: imageURL,
+            imageURLs: imageURLs,
+            author: tweet.author.map(actor(from:)),
+            postedAt: tweet.legacy?.createdAt.flatMap(parseTwitterDate),
+            likeCount: tweet.legacy?.favoriteCount,
         )
     }
 

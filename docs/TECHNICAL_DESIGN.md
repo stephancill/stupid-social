@@ -334,7 +334,7 @@ Unit test targets:
 
 - Cookie header parsing and selected-cookie extraction.
 - Hypersnap response decoding.
-- X response decoding for `notifications/all.json` globalObjects + timeline entries.
+- X response decoding for `TimelineNotification` / `NotificationsTimeline` GraphQL entries.
 - Source-specific normalization into `NotificationItem`.
 - 24-hour cache retention behavior.
 - Feed merge and sort behavior.

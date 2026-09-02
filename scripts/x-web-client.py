@@ -23,6 +23,7 @@ from typing import Any
 BASE_URL = "https://x.com"
 BEARER_TOKEN = "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
 SEARCH_TIMELINE_QUERY_ID = "hz_94eVAtrtQo_vO3my7Rw"
+NOTIFICATIONS_TIMELINE_QUERY_ID = "8kmedJD_u653xqEjZIS7yA"
 APP_USER_AGENT = "NoFeedSocial/1"
 SIM_PREFS_SCRIPT = os.path.expanduser(
     "~/.config/opencode/skills/sim-prefs/sim-prefs/scripts/read_prefs.py"
@@ -39,6 +40,47 @@ SEARCH_TIMELINE_FEATURES = {
     "creator_subscriptions_tweet_preview_api_enabled": True,
     "responsive_web_graphql_timeline_navigation_enabled": True,
     "responsive_web_graphql_skip_user_profile_image_extensions_enabled": False,
+    "premium_content_api_read_enabled": False,
+    "communities_web_enable_tweet_community_results_fetch": True,
+    "c9s_tweet_anatomy_moderator_badge_enabled": True,
+    "responsive_web_grok_analyze_button_fetch_trends_enabled": False,
+    "responsive_web_grok_analyze_post_followups_enabled": True,
+    "rweb_cashtags_composer_attachment_enabled": True,
+    "responsive_web_jetfuel_frame": True,
+    "responsive_web_grok_share_attachment_enabled": True,
+    "responsive_web_grok_annotations_enabled": True,
+    "articles_preview_enabled": True,
+    "responsive_web_edit_tweet_api_enabled": True,
+    "rweb_conversational_replies_downvote_enabled": False,
+    "graphql_is_translatable_rweb_tweet_is_translatable_enabled": True,
+    "view_counts_everywhere_api_enabled": True,
+    "longform_notetweets_consumption_enabled": True,
+    "responsive_web_twitter_article_tweet_consumption_enabled": True,
+    "content_disclosure_indicator_enabled": True,
+    "content_disclosure_ai_generated_indicator_enabled": True,
+    "responsive_web_grok_show_grok_translated_post": True,
+    "responsive_web_grok_analysis_button_from_backend": True,
+    "post_ctas_fetch_enabled": False,
+    "freedom_of_speech_not_reach_fetch_enabled": True,
+    "standardized_nudges_misinfo": True,
+    "tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled": True,
+    "longform_notetweets_rich_text_read_enabled": True,
+    "longform_notetweets_inline_media_enabled": False,
+    "responsive_web_grok_image_annotation_enabled": True,
+    "responsive_web_grok_imagine_annotation_enabled": True,
+    "responsive_web_grok_community_note_auto_translation_is_enabled": True,
+    "responsive_web_enhance_cards_enabled": False,
+}
+
+NOTIFICATIONS_TIMELINE_FEATURES = {
+    "rweb_video_screen_enabled": False,
+    "rweb_cashtags_enabled": True,
+    "profile_label_improvements_pcf_label_in_post_enabled": True,
+    "responsive_web_profile_redirect_enabled": True,
+    "rweb_tipjar_consumption_enabled": False,
+    "verified_phone_label_enabled": False,
+    "creator_subscriptions_tweet_preview_api_enabled": True,
+    "responsive_web_graphql_timeline_navigation_enabled": True,
     "premium_content_api_read_enabled": False,
     "communities_web_enable_tweet_community_results_fetch": True,
     "c9s_tweet_anatomy_moderator_badge_enabled": True,
@@ -183,6 +225,20 @@ class XWebClient:
         except json.JSONDecodeError as exc:
             raise SystemExit(f"Expected JSON for friendships/{path}, got {len(text)} bytes: {exc}") from exc
 
+    def notifications(self, count: int = 40) -> dict[str, Any]:
+        variables = {"timeline_type": "All", "count": count}
+        query = urllib.parse.urlencode(
+            {
+                "variables": json.dumps(variables, separators=(",", ":")).encode(),
+                "features": json.dumps(NOTIFICATIONS_TIMELINE_FEATURES, separators=(",", ":")).encode(),
+            }
+        )
+        response = self.request_json(
+            "GET",
+            BASE_URL + f"/i/api/graphql/{NOTIFICATIONS_TIMELINE_QUERY_ID}/NotificationsTimeline?{query}",
+        )
+        return summarize_notifications(response)
+
     def auth_token(self) -> str:
         token = str(self.credentials.get("authToken") or self.credentials.get("auth_token") or "")
         if not token:
@@ -267,6 +323,77 @@ def summarize_search_timeline_users(response: dict[str, Any]) -> list[dict[str, 
     return users
 
 
+def summarize_notifications(response: dict[str, Any]) -> dict[str, Any]:
+    """Summarize grouped X notifications, focusing on actor ordering.
+
+    Parses the GraphQL `NotificationsTimeline` response: walks the timeline
+    instructions and, for each aggregate-engagement entry (liked/retweeted/
+    followed), prints the resolved `from_users` order exactly as X serves it
+    (the app displays these in the same order, newest-like-first).
+    """
+    instructions = (
+        response.get("data", {})
+        .get("viewer_v2", {})
+        .get("user_results", {})
+        .get("result", {})
+        .get("notification_timeline", {})
+        .get("timeline", {})
+        .get("instructions")
+        or []
+    )
+    entries: list[dict[str, Any]] = []
+    for instruction in instructions:
+        entries.extend(instruction.get("entries") or [])
+
+    def user_summary(user: dict[str, Any]) -> dict[str, Any]:
+        core = user.get("core") or {}
+        return {
+            "id": user.get("rest_id") or user.get("id"),
+            "username": core.get("screen_name"),
+            "display_name": core.get("name"),
+        }
+
+    grouped: list[dict[str, Any]] = []
+    action_elements = {
+        "users_liked_your_tweet",
+        "users_retweeted_your_tweet",
+        "user_liked_multiple_tweets",
+        "follow_from_recommended_user",
+        "users_followed_you",
+    }
+    for entry in entries:
+        content = entry.get("content") or {}
+        item = content.get("itemContent") or {}
+        event = (content.get("clientEventInfo") or {}).get("element")
+        if event not in action_elements:
+            continue
+        template = item.get("template") or {}
+        resolved = []
+        for ref in template.get("from_users") or []:
+            user = (ref.get("user_results") or {}).get("result") or {}
+            resolved.append(user_summary(user))
+        targets = []
+        for obj in template.get("target_objects") or []:
+            tweet = (obj.get("tweet_results") or {}).get("result") or {}
+            targets.append(tweet.get("rest_id"))
+        grouped.append(
+            {
+                "entry_id": entry.get("entryId"),
+                "element": event,
+                "from_users": [u.get("username") for u in resolved],
+                "from_users_detail": resolved,
+                "target_tweet_ids": targets,
+            }
+        )
+
+    return {
+        "status": "ok",
+        "grouped_count": len(grouped),
+        "grouped": grouped,
+        "total_entries": len(entries),
+    }
+
+
 def summarize(value: Any, max_depth: int = 3) -> Any:
     if isinstance(value, dict) and "users" in value and "query" in value:
         return {
@@ -318,6 +445,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("bootstrap", help="Print credential presence without making an X API request.")
+    notifications = subparsers.add_parser("notifications", help="Fetch the X notifications feed and summarize grouped actor order.")
+    notifications.add_argument("--count", type=int, default=40, help="Number of notifications to fetch (default 40).")
     search_users = subparsers.add_parser("search-users", help="Search X users through the web API endpoint used by the app.")
     search_users.add_argument("query", help="Search query.")
     follow = subparsers.add_parser("follow", help="Follow an X user by numeric user id.")
@@ -338,6 +467,8 @@ def main() -> None:
 
     if args.command == "bootstrap":
         result = client.bootstrap()
+    elif args.command == "notifications":
+        result = client.notifications(count=args.count)
     elif args.command == "search-users":
         result = client.search_users(args.query)
     elif args.command == "follow":
