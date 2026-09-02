@@ -209,6 +209,32 @@ public struct DisplayNotificationItem: Identifiable, Hashable {
     }
 }
 
+public enum NotificationTargetURL {
+    public static func resolve(network: SocialNetwork, target: NotificationTarget) -> URL? {
+        switch network {
+        case .farcaster:
+            let hash = target.id.hasPrefix("0x") ? target.id : "0x\(target.id)"
+            guard hash.range(of: #"^0x[0-9a-fA-F]+$"#, options: .regularExpression) != nil else {
+                return nil
+            }
+            return URL(string: "https://farcaster.xyz/~/conversations/\(hash)")
+        case .x:
+            guard target.id.allSatisfy(\.isNumber), !target.id.isEmpty else { return nil }
+            return URL(string: "https://x.com/i/status/\(target.id)")
+        case .instagram:
+            return target.url
+        case .spotify:
+            return target.url
+        case .bluesky:
+            return target.url
+        case .github:
+            return target.url
+        case .debug:
+            return nil
+        }
+    }
+}
+
 public struct NetworkProfile: Identifiable, Hashable, Codable, Sendable {
     public let id: String
     public let network: SocialNetwork

@@ -10,6 +10,7 @@ struct FeedView: View {
     @State private var notificationDetailSelection: DisplayNotificationItem?
     @State private var storyViewerSelection: StoryViewerSelection?
     @State private var showingStoryComposer = false
+    @Environment(\.openURL) private var openURL
 
     var body: some View {
         NavigationStack {
@@ -84,6 +85,16 @@ struct FeedView: View {
                             }
                             .buttonStyle(.plain)
                             .listRowSeparator(index == 0 ? .hidden : .visible, edges: .top)
+                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                if let url = targetPostURL(for: displayItem) {
+                                    Button {
+                                        openURL(url)
+                                    } label: {
+                                        Label("Open Post", systemImage: "arrow.up.right.square")
+                                    }
+                                    .tint(.blue)
+                                }
+                            }
                         }
                     }
                     .listSectionSeparator(.hidden)
@@ -185,6 +196,11 @@ struct FeedView: View {
         async let feedRefresh = viewModel.refresh()
         async let storyRefresh: Void = storyViewModel.fetchStoryBarContent()
         _ = await (feedRefresh, storyRefresh)
+    }
+
+    private func targetPostURL(for displayItem: DisplayNotificationItem) -> URL? {
+        guard let target = displayItem.item.target else { return nil }
+        return NotificationTargetURL.resolve(network: displayItem.item.network, target: target)
     }
 
     private func foregroundRefreshFeedAndStories() async {

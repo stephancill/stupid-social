@@ -153,34 +153,11 @@ struct NotificationDetailView: View {
 
     private var targetURL: URL? {
         guard let target = displayItem.item.target else { return nil }
-        return postURL(for: target)
+        return NotificationTargetURL.resolve(network: displayItem.item.network, target: target)
     }
 
     private func postURL(for target: NotificationTarget) -> URL? {
-        switch displayItem.item.network {
-        case .farcaster:
-            let hash = target.id.hasPrefix("0x") ? target.id : "0x\(target.id)"
-            guard hash.range(of: #"^0x[0-9a-fA-F]+$"#, options: .regularExpression) != nil else {
-                return nil
-            }
-            return URL(string: "https://farcaster.xyz/~/conversations/\(hash)")
-        case .x:
-            guard target.id.allSatisfy(\.isNumber), !target.id.isEmpty
-            else {
-                return nil
-            }
-            return URL(string: "https://x.com/i/status/\(target.id)")
-        case .instagram:
-            return target.url
-        case .spotify:
-            return target.url
-        case .bluesky:
-            return target.url
-        case .github:
-            return target.url
-        case .debug:
-            return nil
-        }
+        NotificationTargetURL.resolve(network: displayItem.item.network, target: target)
     }
 
     private func loadTargetDetails() async {

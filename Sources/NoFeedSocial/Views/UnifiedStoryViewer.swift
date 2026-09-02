@@ -145,8 +145,9 @@ struct UnifiedStoryViewer: View {
                 .contentShape(Rectangle())
                 .gesture(storyGesture(width: geo.size.width))
             }
+            .background(keyboardShortcutButtons)
             #if os(iOS)
-            .toolbar(.hidden, for: .navigationBar)
+                .toolbar(.hidden, for: .navigationBar)
             #endif
         }
         .onAppear {
@@ -298,6 +299,7 @@ struct UnifiedStoryViewer: View {
         defer {
             preloadAdjacentSpotifyPreviews()
             preloadAdjacentInstagramStories()
+            preloadAdjacentGitHubStories()
         }
 
         if case let .instagram(reel) = currentItem {
@@ -865,6 +867,71 @@ struct UnifiedStoryViewer: View {
         currentSlideIndex = 0
     }
 
+    private func togglePause() {
+        if isPaused {
+            isPaused = false
+            if currentItem?.isInstagram == true {
+                player?.play()
+            }
+        } else {
+            isPaused = true
+            if currentItem?.isInstagram == true {
+                player?.pause()
+            }
+        }
+    }
+
+    // MARK: - Keyboard Shortcuts
+
+    /// Routed through hardware UIKeyCommands (works with external/iPad
+    /// keyboards and the Mac-compatibility path); inert with a touch-only
+    /// experience on the onscreen iPhone keyboard.
+    private var keyboardShortcutButtons: some View {
+        VStack(spacing: 0) {
+            Button {
+                advance()
+            } label: {
+                EmptyView()
+            }
+            .keyboardShortcut(.rightArrow, modifiers: [])
+            .accessibilityHidden(true)
+
+            Button {
+                goBack()
+            } label: {
+                EmptyView()
+            }
+            .keyboardShortcut(.leftArrow, modifiers: [])
+            .accessibilityHidden(true)
+
+            Button {
+                goToNextItem()
+            } label: {
+                EmptyView()
+            }
+            .keyboardShortcut(.rightArrow, modifiers: .shift)
+            .accessibilityHidden(true)
+
+            Button {
+                goToPreviousItem()
+            } label: {
+                EmptyView()
+            }
+            .keyboardShortcut(.leftArrow, modifiers: .shift)
+            .accessibilityHidden(true)
+
+            Button {
+                togglePause()
+            } label: {
+                EmptyView()
+            }
+            .keyboardShortcut(.space, modifiers: [])
+            .accessibilityHidden(true)
+        }
+        .frame(width: 0, height: 0)
+        .hidden()
+    }
+
     // MARK: - Spotify Audio
 
     private func loadPreviewURL(for item: SpotifyActivityItem) {
@@ -996,6 +1063,39 @@ struct UnifiedStoryViewer: View {
         guard viewerItems.indices.contains(itemIndex), case let .instagram(reel) = viewerItems[itemIndex] else { return }
         guard reel.slides.indices.contains(slideIndex) else { return }
         StoryImageCache.shared.preload(url: reel.slides[slideIndex].imageURL)
+    }
+
+    // MARK: - GitHub slide pre-warm
+
+    /// Warms the avatar images the upcoming GitHub slide will render so the card
+    /// appears instantly instead of showing a placeholder while it downloads.
+    private func preloadAdjacentGitHubStories() {
+        preloadGitHubSlide(itemIndex: currentItemIndex, slideIndex: currentSlideIndex - 1)
+        preloadGitHubSlide(itemIndex: currentItemIndex, slideIndex: currentSlideIndex + 1)
+        preloadGitHubSlide(itemIndex: currentItemIndex - 1, slideIndex: 0)
+        preloadGitHubSlide(itemIndex: currentItemIndex + 1, slideIndex: 0)
+    }
+
+    private func preloadGitHubSlide(itemIndex: Int, slideIndex: Int) {
+        guard viewerItems.indices.contains(itemIndex),
+              case let .github(group) = viewerItems[itemIndex],
+              group.activities.indices.contains(slideIndex)
+        else { return }
+        let activity = group.activities[slideIndex]
+
+        // The fork card swaps to the original repo's owner avatar once its
+        // OpenGraph data resolves; preload both candidates so either state is
+        // ready. The original owner avatar is also kicked off when the fork is
+        // resolved in `GitHubOriginalCache`.
+        if activity.kind == .forkedRepository, let owner = GitHubOriginalCache.originalOwnerName(forFork: activity.targetName) {
+            githubOwnerAvatarURL(for: owner).map(StoryImageCache.shared.preload)
+        }
+        activity.targetAvatarURL.map(StoryImageCache.shared.preload)
+    }
+
+    private func githubOwnerAvatarURL(for owner: String) -> URL? {
+        guard !owner.isEmpty else { return nil }
+        return URL(string: "https://github.com/\(owner).png?size=192")
     }
 
     private func spotifyItem(from item: StoryBarItem) -> SpotifyActivityItem? {
@@ -1147,7 +1247,7 @@ private enum GitHubOriginalCache {
             return await task.value
         }
         guard let repo = try? await client.originalRepo(forFork: fork) else { return nil }
-        values[fork] = repo
+        store(repo, forFork: fork)
         return repo
     }
 
@@ -1156,10 +1256,28 @@ private enum GitHubOriginalCache {
         let task = Task<GitHubOriginalRepo?, Never> { [fork] in
             defer { inFlight.removeValue(forKey: fork) }
             guard let repo = try? await client.originalRepo(forFork: fork) else { return nil }
-            values[fork] = repo
+            store(repo, forFork: fork)
             return repo
         }
         inFlight[fork] = task
+    }
+
+    /// Owner segment (e.g. `expo` in `expo/expo`) of an already-resolved
+    /// original repo, so the fork card's avatar can be preloaded ahead.
+    static func originalOwnerName(forFork fork: String) -> String? {
+        guard let name = values[fork]?.name else { return nil }
+        return name.split(separator: "/").first.map(String.init)
+    }
+
+    /// Warehouses the resolved original repo and kicks off a background fetch
+    /// of its owner avatar so the fork card renders instantly.
+    private static func store(_ repo: GitHubOriginalRepo, forFork fork: String) {
+        values[fork] = repo
+        guard let owner = originalOwnerName(forFork: fork),
+              !owner.isEmpty,
+              let url = URL(string: "https://github.com/\(owner).png?size=192")
+        else { return }
+        StoryImageCache.shared.preload(url: url)
     }
 }
 

@@ -118,6 +118,7 @@ Reference behavior from `docs/CLI_DOCS.md`:
 - Default layout is a single combined chronological list.
 - A horizontal stories bar appears above the list for story-like activity.
 - The stories bar currently shows Spotify listening activity; Instagram stories are planned for the bar later.
+- The story viewer supports hardware-keyboard navigation (external/iPad keyboards and the Mac-compatibility path): Left/Right for prev/next slide, Shift+Left/Shift+Right for prev/next user, and Space to pause the slide timer.
 - Instagram story likes remain in the main notifications feed.
 - Unread Instagram DMs remain in the main notifications feed.
 - Spotify listening activity is not shown in the main notifications list.
