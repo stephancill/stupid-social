@@ -20,6 +20,7 @@ Build an iOS app with xtool that shows a combined social network notifications f
 - Bluesky notifications are supported through the AT Protocol OAuth flow.
 - GitHub's authenticated For You activity is shown in the stories bar, grouped into one story reel per actor.
 - GitHub "starred your repository" events are notifications about the viewer's own repos, so they appear in the main notifications feed instead of the stories bar.
+- Spotify and GitHub story seen state syncs across the user's devices through iCloud Key-Value storage (new capability, see `App.entitlements`). Full notification items remain local-only.
 
 ## Out Of Scope For MVP
 

@@ -53,6 +53,7 @@ Sources/
       NotificationCacheStore.swift
       SpotifyActivitySeenStore.swift
       GitHubActivitySeenStore.swift
+      StorySeenSync.swift             # iCloud KVS seen-state sync (Spotify/GitHub)
     ViewModels/
       FeedViewModel.swift
       ProfileSearchViewModel.swift

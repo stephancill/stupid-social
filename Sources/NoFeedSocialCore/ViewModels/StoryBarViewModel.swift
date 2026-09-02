@@ -15,6 +15,8 @@ public final class StoryBarViewModel: ObservableObject {
     private let githubActivitySource: (any GitHubActivityFetching)?
     private let spotifySeenStore: SpotifyActivitySeenStore
     private let githubSeenStore: GitHubActivitySeenStore
+    private let seenSync: StorySeenSync?
+    private var seenSyncObserver: NSObjectProtocol?
     private let chronologicalInstagramPrefixCount = 15
     private var orderedInstagramStoryReels: [InstagramStoryReel] = []
     private var hasMoreInstagramStoryReels = false
@@ -27,12 +29,23 @@ public final class StoryBarViewModel: ObservableObject {
         githubActivitySource: (any GitHubActivityFetching)? = nil,
         spotifySeenStore: SpotifyActivitySeenStore = SpotifyActivitySeenStore(),
         githubSeenStore: GitHubActivitySeenStore = GitHubActivitySeenStore(),
+        seenSync: StorySeenSync? = nil,
     ) {
         self.instagramSource = instagramSource
         self.spotifyActivitySource = spotifyActivitySource
         self.githubActivitySource = githubActivitySource
         self.spotifySeenStore = spotifySeenStore
         self.githubSeenStore = githubSeenStore
+        self.seenSync = seenSync
+        if seenSync != nil {
+            seenSyncObserver = NotificationCenter.default.addObserver(
+                forName: StorySeenSync.didChangeNotification,
+                object: nil,
+                queue: .main,
+            ) { [weak self] _ in
+                Task { @MainActor in self?.refreshSeenState() }
+            }
+        }
     }
 
     public func fetchInstagramStories() async {
@@ -218,6 +231,7 @@ public final class StoryBarViewModel: ObservableObject {
         guard case let .spotify(item) = storyItem else { return }
 
         spotifySeenStore.markSeen(userURI: userURI, activityTimestamp: item.timestamp)
+        seenSync?.pushSpotifySeen()
 
         let updated = spotifyItemWithSeenState(item)
         storyBarItems[itemIndex] = .spotify(updated)
@@ -231,8 +245,33 @@ public final class StoryBarViewModel: ObservableObject {
         }), case let .github(group) = storyBarItems[index]
         else { return }
         githubSeenStore.markSeen(actorId: actorId, activityTimestamp: group.timestamp)
+        seenSync?.pushGitHubSeen()
         storyBarItems[index] = .github(GitHubActivityGroup(actor: group.actor, activities: group.activities, isSeen: true))
         storyBarItems = mergedStoryBarItems(instagramReels: orderedInstagramStoryReels, spotifyItems: spotifyActivityItems, githubItems: githubActivityGroups)
+    }
+
+    /// Re-derives each current item's seen flag from the seen stores and
+    /// reapplies the unread-first ordering. Called when a remote iCloud change
+    /// lands so stories viewed on another device update in place.
+    func refreshSeenState() {
+        guard storyBarContentLoaded else { return }
+        let spotify = spotifyActivityItems
+            .map(spotifyItemWithSeenState)
+            .sorted(by: spotifySortedUnreadFirst)
+        let github = githubActivityGroups
+            .map { group -> GitHubActivityGroup in
+                GitHubActivityGroup(
+                    actor: group.actor,
+                    activities: group.activities,
+                    isSeen: githubSeenStore.isSeen(actorId: group.actor.id, activityTimestamp: group.timestamp),
+                )
+            }
+            .sorted(by: githubSortedUnreadFirst)
+        storyBarItems = mergedStoryBarItems(
+            instagramReels: orderedInstagramStoryReels,
+            spotifyItems: spotify,
+            githubItems: github,
+        )
     }
 
     public func markInstagramReelAsSeen(reelIndex: Int) {
@@ -345,12 +384,7 @@ public final class StoryBarViewModel: ObservableObject {
                     seenUserURIs.insert(item.userURI).inserted
                 }
                 .map(spotifyItemWithSeenState)
-                .sorted { a, b in
-                    if a.isSeen != b.isSeen {
-                        return !a.isSeen
-                    }
-                    return a.timestamp > b.timestamp
-                }
+                .sorted(by: spotifySortedUnreadFirst)
         } catch {
             return []
         }
@@ -375,6 +409,12 @@ public final class StoryBarViewModel: ObservableObject {
         )
     }
 
+    /// Orders Spotify items unread-first, then by newest activity.
+    private func spotifySortedUnreadFirst(_ lhs: SpotifyActivityItem, _ rhs: SpotifyActivityItem) -> Bool {
+        if lhs.isSeen != rhs.isSeen { return !lhs.isSeen }
+        return lhs.timestamp > rhs.timestamp
+    }
+
     private func githubItems() async -> [GitHubActivityGroup] {
         guard let githubActivitySource else { return [] }
         do {
@@ -386,13 +426,17 @@ public final class StoryBarViewModel: ObservableObject {
                     activities: group.activities,
                     isSeen: githubSeenStore.isSeen(actorId: group.actor.id, activityTimestamp: group.timestamp),
                 )
-            }.sorted { lhs, rhs in
-                if lhs.isSeen != rhs.isSeen { return !lhs.isSeen }
-                return lhs.timestamp > rhs.timestamp
             }
+            .sorted(by: githubSortedUnreadFirst)
         } catch {
             return []
         }
+    }
+
+    /// Orders GitHub groups unread-first, then by newest activity.
+    private func githubSortedUnreadFirst(_ lhs: GitHubActivityGroup, _ rhs: GitHubActivityGroup) -> Bool {
+        if lhs.isSeen != rhs.isSeen { return !lhs.isSeen }
+        return lhs.timestamp > rhs.timestamp
     }
 
     private func storyItemWithOldestFirstSlides(_ item: StoryBarItem) -> StoryBarItem {

@@ -123,6 +123,7 @@ final class AppContainer {
             instagramSource: instagramSource,
             spotifyActivitySource: spotifyActivitySource,
             githubActivitySource: githubActivitySource,
+            seenSync: StorySeenSync(),
         )
 
         profileSearchViewModel = ProfileSearchViewModel(feedService: feedService)
