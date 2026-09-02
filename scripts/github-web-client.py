@@ -452,11 +452,21 @@ def truncate(value: str, limit: int) -> str:
 def extract_starred_your_repo(html: str, viewer: str) -> list[dict[str, Any]]:
     """Return every "starred YOUR repository" notification from the For You feed.
 
-    GitHub aggregates several distinct stars of the same owned repo into one visible
-    rollup card (e.g. ``s0urledd starred your repository`` rows), which the
-    record_id-based story parser collapses to a single event. To surface every real
-    notification we walk each <article> and pair every starring-actor row with the
-    owned repo(s) the card names. Returns one entry per (actor, repo)."""
+    GitHub collapses a user's stars of the viewer's repos two ways, and both must
+    be expanded to per-(actor, repo) notifications:
+
+    1. Several different people starred the *same* owned repo -> one card with
+       multiple ``NAME</a> starred`` rows sharing one repo link.
+    2. One person starred *many* owned repos -> a rollup head card
+       (``NAME starred 5 of your repositories``, ``card_sub_position`` 0) that
+       renders only the first repo body, plus sibling cards (sub_positions 1..N)
+       that carry one additional repo each but no actor row.
+
+    For (2), GitHub scopes every sibling card to the same ``card_position``, so we
+    propagate the rollup head's actor (the card whose sub_position is 0) to the
+    repos named by the actor-less siblings. Record_id-based parsers collapse these
+    (they pair an actor and a repo only when both are in one <article>), so this
+    text walk is the source of truth. Returns one entry per (actor, repo)."""
     viewer_lower = (viewer or "").lower()
 
     actor_re = re.compile(
@@ -464,8 +474,12 @@ def extract_starred_your_repo(html: str, viewer: str) -> list[dict[str, Any]]:
         re.S,
     )
     repo_re = re.compile(r'href="/(' + re.escape(viewer_lower) + r'/[\w.-]+)' + r'[/"]')
+    position_re = re.compile(r"&quot;card_position&quot;:(\d+)")
+    sub_re = re.compile(r"&quot;card_sub_position&quot;:(\d+|null)")
 
-    result: dict[tuple[str, str], dict[str, Any]] = {}
+    # (actors, repos, position, sub) per article. Every star rollup member is
+    # itself a feed <article>, so the split keeps head and sibling cards apart.
+    records: list[tuple[set[str], set[str], int | None, int | None]] = []
     for article in re.split(r"(?=<article\b)", html or ""):
         actors = set()
         for m in actor_re.finditer(article):
@@ -473,11 +487,31 @@ def extract_starred_your_repo(html: str, viewer: str) -> list[dict[str, Any]]:
         repos = set()
         for rm in repo_re.finditer(article):
             repos.add(rm.group(1).strip("/"))
-        if not actors:
+        if not actors and not repos:
             continue
-        if not repos and "your repository" not in article:
+        pos_match = position_re.search(article)
+        sub_match = sub_re.search(article)
+        position = int(pos_match.group(1)) if pos_match else None
+        sub = None
+        if sub_match and sub_match.group(1) != "null":
+            sub = int(sub_match.group(1))
+        records.append((actors, repos, position, sub))
+
+    # The rollup head (sub_position 0) names the performer; every actor-less
+    # sibling under the same card_position is that performer's too.
+    rollup_actor_by_position: dict[int, set[str]] = {}
+    for actors, _repos, position, sub in records:
+        if actors and sub == 0 and position is not None:
+            rollup_actor_by_position.setdefault(position, set()).update(actors)
+
+    result: dict[tuple[str, str], dict[str, Any]] = {}
+    for actors, repos, position, sub in records:
+        effective_actors = actors
+        if not effective_actors and position is not None:
+            effective_actors = rollup_actor_by_position.get(position, set())
+        if not effective_actors or not repos:
             continue
-        for actor in actors:
+        for actor in effective_actors:
             for repo in repos:
                 result.setdefault((actor, repo), {"actor": actor, "target": repo})
     return sorted(result.values(), key=lambda r: r["actor"])

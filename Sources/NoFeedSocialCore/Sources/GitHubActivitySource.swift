@@ -246,10 +246,14 @@ public enum GitHubActivityParser {
         }.sorted { $0.timestamp > $1.timestamp }
     }
 
-    /// Recovers aggregated "starred your repository" notifications from rendered
-    /// feed rows. Each card (an <article>) that names at least one of the viewer's
-    /// repos and contains one or more ``NAME</a> starred`` rows yields a
-    /// notification per (actor, owned repo). Mirrors the Python probe.
+    /// Recovers "starred your repository" notifications from rendered feed rows.
+    /// Each card (an <article>) that renders a ``NAME</a> starred`` row and names
+    /// an owned repo yields a notification per (actor, owned repo). It also
+    /// expands GitHub's multi-repo rollups: when one user stars N of the viewer's
+    /// repos, the head card (``card_sub_position`` 0) names the actor and renders
+    /// only the first repo, while the actor-less sibling cards (sub_positions
+    /// 1..N) carry one extra repo each — so the head's actor is propagated to
+    /// siblings at the same ``card_position``. Mirrors the Python probe.
     private static func aggregatedYourRepositoryItems(in html: String, viewerUsername: String?) -> [GitHubActivityItem]? {
         guard let viewerUsername, !viewerUsername.isEmpty else { return nil }
         let viewerOwner = viewerUsername.split(separator: "/").first.map(String.init) ?? viewerUsername
@@ -258,26 +262,56 @@ public enum GitHubActivityParser {
               let repoLinkRe = try? NSRegularExpression(pattern: #"<a[^>]*href="/(\#(viewerEsc)/[A-Za-z0-9_.-]+)"#)
         else { return nil }
 
-        var items: [GitHubActivityItem] = []
-        for article in html.components(separatedBy: "<article") where article.contains("starred") {
+        struct RollupRecord {
+            let actors: Set<String>
+            let repos: Set<String>
+            let position: Int?
+            let subPosition: Int?
+            let timestamp: Date
+        }
+
+        var records: [RollupRecord] = []
+        for article in html.components(separatedBy: "<article")
+            where article.contains("starred") || article.contains("STARRED_REPOSITORY")
+        {
             var actors = Set<String>()
             for match in actorRe.matches(in: article, range: NSRange(article.startIndex..., in: article)) {
                 if let name = Range(match.range(at: 1), in: article) {
                     actors.insert(String(article[name]))
                 }
             }
-            guard !actors.isEmpty else { continue }
             var repos = Set<String>()
             for capture in repoLinkRe.matches(in: article, range: NSRange(article.startIndex..., in: article)) {
                 if let value = Range(capture.range(at: 1), in: article) {
                     repos.insert(String(article[value]).trimmingCharacters(in: CharacterSet(charactersIn: "/")))
                 }
             }
-            guard !repos.isEmpty else { continue }
+            guard !actors.isEmpty || !repos.isEmpty else { continue }
+            let position = firstCapture(in: article, pattern: #"&quot;card_position&quot;:(\d+)"#).flatMap(Int.init)
+            let subRaw = firstCapture(in: article, pattern: #"&quot;card_sub_position&quot;:(\d+|null)"#)
+            let subPosition = subRaw.flatMap { $0 == "null" ? nil : Int($0) }
             let timestamp = createdTimestamp(in: article) ?? Date()
+            records.append(RollupRecord(actors: actors, repos: repos, position: position, subPosition: subPosition, timestamp: timestamp))
+        }
+
+        // GitHub names the performer only on a multi-repo rollup's head
+        // (sub_position 0); propagate it to the same position's actor-less
+        // siblings so every repo in the rollup gets the owner performer.
+        var rollupActors: [Int: Set<String>] = [:]
+        for record in records {
+            guard record.subPosition == 0, let position = record.position else { continue }
+            rollupActors[position, default: []].formUnion(record.actors)
+        }
+
+        var items: [GitHubActivityItem] = []
+        for record in records {
+            let actors = record.actors.isEmpty
+                ? (record.position.flatMap { rollupActors[$0] } ?? [])
+                : record.actors
+            guard !actors.isEmpty else { continue }
             for actorName in actors {
-                for repo in repos {
-                    items.append(yourRepositoryStarItem(actor: actorName, repo: repo, timestamp: timestamp))
+                for repo in record.repos {
+                    items.append(yourRepositoryStarItem(actor: actorName, repo: repo, timestamp: record.timestamp))
                 }
             }
         }

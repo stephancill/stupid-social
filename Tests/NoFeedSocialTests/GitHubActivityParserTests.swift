@@ -232,6 +232,39 @@ final class GitHubActivityParserTests: XCTestCase {
         )
     }
 
+    /// GitHub renders one person starring several of the viewer's repos as a
+    /// rollup: a head card (sub_position 0) names the actor and shows only the
+    /// first repo, plus actor-less sibling cards (sub_positions 1..N) each with
+    /// one more repo. The head's actor must be propagated to the siblings so all
+    /// N repos surface, not just the head's.
+    func testRollupExpandsSameActorAcrossManyRepos() throws {
+        let viewer = "stephancill"
+        func chunk(sub: Int, repo: String, actorKey: String?) -> String {
+            let row = actorKey.map { "<a href=\"/\($0)\" class=\"Link--primary text-bold\">\($0)</a> starred 5 of your repositories" } ?? ""
+            return """
+            <article data-hydro-inert="&quot;card_type&quot;:&quot;STARRED_REPOSITORY&quot;,&quot;card_position&quot;:1,&quot;card_sub_position&quot;:\(sub)">
+              <a href="/\(viewer)/\(repo)" class="Link--primary Link text-bold">\(viewer)/\(repo)</a>
+            \(row)
+            </article>
+            """
+        }
+        let html = chunk(sub: 0, repo: "rpc-racer", actorKey: "Sandalots")
+            + chunk(sub: 1, repo: "search-bangs-worker", actorKey: nil)
+            + chunk(sub: 2, repo: "stupid-app-cli", actorKey: nil)
+            + chunk(sub: 3, repo: "agent-cal", actorKey: nil)
+
+        let result = try GitHubActivityParser.parse(html, viewerUsername: viewer)
+        let sandalotsTargets = Set(result.notificationItems
+            .filter { $0.actor.username == "Sandalots" }
+            .map(\.targetName))
+        XCTAssertEqual(sandalotsTargets, [
+            "\(viewer)/rpc-racer",
+            "\(viewer)/search-bangs-worker",
+            "\(viewer)/stupid-app-cli",
+            "\(viewer)/agent-cal",
+        ])
+    }
+
     // MARK: - Card builders
 
     private func starred(createdAt: String, recordId: String, actorHref: String, actorId: String, repoHref: String, sub: Int?) -> String {
