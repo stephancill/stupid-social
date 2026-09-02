@@ -486,7 +486,7 @@ public enum GitHubActivityParser {
             let language = firstCapture(in: chunk, pattern: #"itemprop="programmingLanguage">([^<]+)</span>"#)
                 .flatMap { trimmed($0) }
             let stars = firstCapture(in: chunk, pattern: #"aria-label="([0-9.,]+[kKmM]?)\s+stargazers""#)
-                .flatMap { trimmed($0) }
+                .flatMap { formattedStarCount($0) }
             let color = firstCapture(in: chunk, pattern: #"repo-language-color"[^>]*style="background-color:\s*(#[0-9A-Fa-f]{6})"#)
                 .flatMap { trimmed($0) }
             result[name] = GitHubRepoMetadata(
@@ -499,9 +499,65 @@ public enum GitHubActivityParser {
         return result
     }
 
+    /// Formats a raw GitHub star count (exact integer from the aria-label, or
+    /// an already-abbreviated value like "1.2k") to at most 3 significant
+    /// figures, e.g. "63", "1.23k", "12.4k", "1.05m".
+    private static func formattedStarCount(_ raw: String) -> String? {
+        guard let value = parseStarCount(raw) else { return nil }
+        let absValue = abs(value)
+        let (suffix, divisor): (String, Double) =
+            absValue >= 1_000_000_000 ? ("b", 1_000_000_000) :
+            absValue >= 1_000_000 ? ("m", 1_000_000) :
+            absValue >= 1000 ? ("k", 1000) :
+            ("", 1)
+        let scaled = value / divisor
+        let locale = Locale(identifier: "en_US_POSIX")
+        let formatted = if scaled >= 100 {
+            String(format: "%.0f", locale: locale, scaled.rounded())
+        } else if scaled >= 10 {
+            String(format: "%.1f", locale: locale, scaled)
+        } else {
+            String(format: "%.2f", locale: locale, scaled)
+        }
+        return Self.trimmingZeros(formatted) + suffix
+    }
+
+    private static func parseStarCount(_ raw: String) -> Double? {
+        let cleaned = raw.replacingOccurrences(of: ",", with: "")
+        var multiplier: Double = 1
+        var numberText = cleaned
+        let lower = cleaned.lowercased()
+        if lower.hasSuffix("k") {
+            multiplier = 1000
+            numberText = String(cleaned.dropLast(1))
+        } else if lower.hasSuffix("m") {
+            multiplier = 1_000_000
+            numberText = String(cleaned.dropLast(1))
+        } else if lower.hasSuffix("b") {
+            multiplier = 1_000_000_000
+            numberText = String(cleaned.dropLast(1))
+        }
+        guard let number = Double(numberText) else { return nil }
+        return number * multiplier
+    }
+
     private static func trimmed(_ value: String) -> String? {
         let trimmedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmedValue.isEmpty ? nil : trimmedValue
+    }
+
+    /// Removes trailing fractional zeros and a trailing decimal point, e.g.
+    /// "12.30" -> "12.3", "1.00" -> "1", "12." -> "12".
+    private static func trimmingZeros(_ value: String) -> String {
+        guard value.contains(".") else { return value }
+        var result = value
+        while result.hasSuffix("0") {
+            result.removeLast()
+        }
+        if result.hasSuffix(".") {
+            result.removeLast()
+        }
+        return result
     }
 
     private static func firstCapture(in text: String, pattern: String) -> String? {

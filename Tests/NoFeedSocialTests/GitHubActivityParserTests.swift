@@ -97,6 +97,39 @@ final class GitHubActivityParserTests: XCTestCase {
         XCTAssertEqual(activity.repoStars, "63")
     }
 
+    func testFormatsRepoStarCountToThreeSignificantFigures() throws {
+        let cases: [(labels: String, expected: String)] = [
+            ("63", "63"),
+            ("1,234", "1.23k"),
+            ("12,300", "12.3k"),
+            ("104,000", "104k"),
+            ("1,234,000", "1.23m"),
+            ("1,050,000", "1.05m"),
+        ]
+        for testCase in cases {
+            let view = payload(cardType: "STARRED_REPOSITORY", createdAt: "2026-08-28T15:24:40.000-07:00", recordId: "repo-1", position: 0, subPosition: nil)
+            let actorClick = payload(cardType: "STARRED_REPOSITORY", createdAt: "2026-08-28T15:24:40.000-07:00", recordId: "repo-1", position: 0, subPosition: nil, clickTarget: "feed_user_link", metadata: ["clicked_resource_type": "USER", "clicked_resource_id": "1"])
+            let repoClick = payload(cardType: "STARRED_REPOSITORY", createdAt: "2026-08-28T15:24:40.000-07:00", recordId: "repo-1", position: 0, subPosition: nil, clickTarget: "repository_link", metadata: ["clicked_resource_type": "REPO", "clicked_resource_id": "repo-1"])
+            let html = """
+            <article data-hydro-view="\(view)">
+            <a href="/octocat" data-hydro-click="\(actorClick)"></a>
+            <a href="/example/star" data-hydro-click="\(repoClick)"></a>
+            <div class="d-flex mb-2 wb-break-word">
+              <a href="#" class="Link d-block"></a>
+              <a href="/example/star" class="Link--primary Link text-bold">example/star</a>
+            </div>
+            <div class="pt-2">
+              <span itemprop="programmingLanguage">Go</span>
+              <a aria-label="\(testCase.labels) stargazers" href="#">\(testCase.labels)</a>
+            </div>
+            </article>
+            """
+            let groups = try GitHubActivityParser.parse(html).storyGroups
+            let activity = try XCTUnwrap(groups.first?.activities.first)
+            XCTAssertEqual(activity.repoStars, testCase.expected, "for raw count \(testCase.labels)")
+        }
+    }
+
     func testFollowedUserBioExcludesMutedHandleAndCounts() throws {
         let username = "knadh"
         let html = #"""
