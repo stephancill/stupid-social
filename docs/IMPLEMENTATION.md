@@ -2,6 +2,8 @@
 
 ## 2026-09-03
 
+- Released internal TestFlight build **1.0.0 (123)** containing provider-side notification read marking and the single-home-screen navigation redesign. Archived IPA SHA-256 `9c39d44f…fbc8`; App Store Connect build upload `a0c7c2d6-73e8-4c2c-b31e-d846eb40d53d` completed as `VALID` and `IN_BETA_TESTING`. Before upload, the packaged release binary was checked for both new provider endpoint markers (`notifications/all/last_seen_cursor.json` and `app.bsky.notification.updateSeen`).
+
 - **Reverted** an attempt to vertically center the Search screen's empty state: wrapping the `List` in a `GeometryReader` and sizing the empty row to `geometry.size.height` made the transition to/from the empty state animate jankily on iOS 26 (and the first attempt using `.containerRelativeFrame(.vertical)` crashed with a Swift assertion inside `UICollectionView` layout invalidation). The empty state is back to its original fixed-height row (`.frame(minHeight: 320)`); centering is left as-is.
 
 - Replaced the tab navigation (bottom `TabView` on compact widths / `NavigationSplitView` sidebar on regular widths) with a single home screen. `ContentView` now owns the root `NavigationStack` (path-driven via `[HomeDestination]`) and renders `FeedView` as its root; Search and Settings are pushed destinations registered via `.navigationDestination(for:)` on the home root, and SearchView/SettingsView dropped their internal `NavigationStack` wrappers and sheet-only Done buttons.
