@@ -5,16 +5,15 @@ import SwiftUI
 public struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.scenePhase) private var scenePhase
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var container: AppContainer?
-    @State private var selectedTab = MainTab.home
+    @State private var path: [HomeDestination] = []
 
     public init() {}
 
     public var body: some View {
         Group {
             if let container {
-                tabs(container: container)
+                home(container: container)
             } else {
                 ProgressView()
             }
@@ -33,111 +32,24 @@ public struct ContentView: View {
         }
     }
 
-    @ViewBuilder
-    private func tabs(container: AppContainer) -> some View {
-        if horizontalSizeClass == .regular {
-            wideLayout(container: container)
-        } else {
-            compactLayout(container: container)
-        }
-    }
-
-    @ViewBuilder
-    private func compactLayout(container: AppContainer) -> some View {
-        let tabView = TabView(selection: tabSelection(container: container)) {
+    private func home(container: AppContainer) -> some View {
+        NavigationStack(path: $path) {
             FeedView(
                 viewModel: container.feedViewModel,
                 storyViewModel: container.storyBarViewModel,
                 spotifyClient: container.spotifyClient,
-                onOpenSettings: {
-                    selectedTab = .settings
-                },
+                settingsNeedsAttention: container.settingsViewModel.hasInvalidCredentials,
             )
-            .tabItem {
-                Label("Home", systemImage: "house")
-            }
-            .tag(MainTab.home)
-
-            SearchView(
-                viewModel: container.profileSearchViewModel,
-            )
-            .tabItem {
-                Label("Search", systemImage: "magnifyingglass")
-            }
-            .tag(MainTab.search)
-
-            NavigationStack {
-                SettingsView(
-                    viewModel: container.settingsViewModel,
-                    onLoadDemoData: { container.loadDemoData() },
-                    onClearDemoData: { container.clearDemoData() },
-                )
-            }
-            .tabItem {
-                Label("Settings", systemImage: "gear")
-            }
-            .badge(container.settingsViewModel.hasInvalidCredentials ? "" : nil)
-            .tag(MainTab.settings)
-            .onDisappear {
-                Task {
-                    await foregroundRefreshFeedAndStories(container: container)
-                }
-            }
-        }
-
-        if #available(iOS 26.0, *) {
-            tabView.tabBarMinimizeBehavior(.onScrollDown)
-        } else {
-            tabView
-        }
-    }
-
-    private func wideLayout(container: AppContainer) -> some View {
-        NavigationSplitView {
-            List(selection: tabSelectionOptional(container: container)) {
-                Label("Home", systemImage: "house")
-                    .tag(MainTab.home)
-                Label("Search", systemImage: "magnifyingglass")
-                    .tag(MainTab.search)
-                Label("Settings", systemImage: "gear")
-                    .badge(container.settingsViewModel.hasInvalidCredentials ? "!" : nil)
-                    .tag(MainTab.settings)
-            }
-            .navigationSplitViewColumnWidth(min: 180, ideal: 220)
-            .navigationTitle("Social")
-        } detail: {
-            detailView(for: selectedTab, container: container)
-        }
-        .navigationSplitViewStyle(.balanced)
-    }
-
-    @ViewBuilder
-    private func detailView(for tab: MainTab, container: AppContainer) -> some View {
-        switch tab {
-        case .home:
-            FeedView(
-                viewModel: container.feedViewModel,
-                storyViewModel: container.storyBarViewModel,
-                spotifyClient: container.spotifyClient,
-                onOpenSettings: {
-                    selectedTab = .settings
-                },
-            )
-        case .search:
-            SearchView(
-                viewModel: container.profileSearchViewModel,
-            )
-        case .settings:
-            NavigationStack {
-                SettingsView(
-                    viewModel: container.settingsViewModel,
-                    onLoadDemoData: { container.loadDemoData() },
-                    onClearDemoData: { container.clearDemoData() },
-                )
-            }
-            .onDisappear {
-                Task {
-                    await foregroundRefreshFeedAndStories(container: container)
+            .navigationDestination(for: HomeDestination.self) { destination in
+                switch destination {
+                case .search:
+                    SearchView(viewModel: container.profileSearchViewModel)
+                case .settings:
+                    SettingsView(
+                        viewModel: container.settingsViewModel,
+                        onLoadDemoData: { container.loadDemoData() },
+                        onClearDemoData: { container.clearDemoData() },
+                    )
                 }
             }
         }
@@ -178,40 +90,9 @@ public struct ContentView: View {
         .keyboardShortcut("r", modifiers: .command)
         .hidden()
     }
-
-    private func tabSelection(container: AppContainer) -> Binding<MainTab> {
-        Binding(
-            get: { selectedTab },
-            set: { newTab in
-                setSelectedTab(newTab, container: container)
-            },
-        )
-    }
-
-    private func tabSelectionOptional(container: AppContainer) -> Binding<MainTab?> {
-        Binding(
-            get: { selectedTab },
-            set: { newTab in
-                if let newTab {
-                    setSelectedTab(newTab, container: container)
-                }
-            },
-        )
-    }
-
-    private func setSelectedTab(_ newTab: MainTab, container: AppContainer) {
-        if selectedTab == .home, newTab == .home {
-            Task {
-                await refreshFeedAndStories(container: container)
-            }
-        }
-
-        selectedTab = newTab
-    }
 }
 
-private enum MainTab: Hashable {
-    case home
+enum HomeDestination: Hashable {
     case search
     case settings
 }

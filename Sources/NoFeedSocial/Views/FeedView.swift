@@ -6,129 +6,146 @@ struct FeedView: View {
     @ObservedObject var viewModel: FeedViewModel
     @ObservedObject var storyViewModel: StoryBarViewModel
     let spotifyClient: SpotifyClient
-    let onOpenSettings: () -> Void
+    let settingsNeedsAttention: Bool
     @State private var notificationDetailSelection: DisplayNotificationItem?
     @State private var storyViewerSelection: StoryViewerSelection?
     @State private var showingStoryComposer = false
     @Environment(\.openURL) private var openURL
 
     var body: some View {
-        NavigationStack {
-            List {
-                if showsStoryBarSkeleton {
-                    StoriesBarSkeleton()
-                }
+        List {
+            if showsStoryBarSkeleton {
+                StoriesBarSkeleton()
+            }
 
-                if hasVisibleStoriesBar {
-                    StoriesBar(
-                        items: storyViewModel.storyBarItems,
-                        ownInstagramActor: storyViewModel.ownInstagramStoryActor,
-                        ownInstagramReel: storyViewModel.ownInstagramStoryReel,
-                        onComposeTap: {
-                            showingStoryComposer = true
-                        },
-                        onOwnStoryTap: {
-                            if let ownInstagramStoryReel = storyViewModel.ownInstagramStoryReel {
-                                storyViewerSelection = StoryViewerSelection(
-                                    items: [.instagram(ownInstagramStoryReel)],
-                                    startIndex: 0,
-                                    startSlideIndex: 0,
-                                )
-                            } else {
-                                showingStoryComposer = true
-                            }
-                        },
-                        onItemTap: { selectedItem, visibleItems in
-                            let items = storyViewModel.storyViewerItems(for: selectedItem, in: visibleItems)
+            if hasVisibleStoriesBar {
+                StoriesBar(
+                    items: storyViewModel.storyBarItems,
+                    ownInstagramActor: storyViewModel.ownInstagramStoryActor,
+                    ownInstagramReel: storyViewModel.ownInstagramStoryReel,
+                    onComposeTap: {
+                        showingStoryComposer = true
+                    },
+                    onOwnStoryTap: {
+                        if let ownInstagramStoryReel = storyViewModel.ownInstagramStoryReel {
                             storyViewerSelection = StoryViewerSelection(
-                                items: items,
-                                startIndex: storyViewModel.storyViewerStartIndex(for: selectedItem, in: items),
-                                startSlideIndex: storyViewModel.storyViewerStartSlideIndex(for: selectedItem, in: items),
+                                items: [.instagram(ownInstagramStoryReel)],
+                                startIndex: 0,
+                                startSlideIndex: 0,
                             )
-                        },
-                        onItemAppear: { item in
-                            Task {
-                                await storyViewModel.loadNextStoryBarPageIfNeeded(currentItem: item)
-                            }
-                        },
-                    )
-                }
-
-                if notificationItems.isEmpty, !hasVisibleStoriesBar, !storyViewModel.storyBarLoading {
-                    VStack {
-                        Spacer(minLength: 0)
-                        VStack(spacing: 8) {
-                            ContentUnavailableView(
-                                "No Notifications",
-                                systemImage: "bell.slash",
-                                description: Text("Connect social accounts to get started."),
-                            )
-                            .fixedSize(horizontal: false, vertical: true)
-
-                            Button("Open Settings") {
-                                onOpenSettings()
-                            }
-                            .buttonStyle(.bordered)
+                        } else {
+                            showingStoryComposer = true
                         }
-                        Spacer(minLength: 0)
+                    },
+                    onItemTap: { selectedItem, visibleItems in
+                        let items = storyViewModel.storyViewerItems(for: selectedItem, in: visibleItems)
+                        storyViewerSelection = StoryViewerSelection(
+                            items: items,
+                            startIndex: storyViewModel.storyViewerStartIndex(for: selectedItem, in: items),
+                            startSlideIndex: storyViewModel.storyViewerStartSlideIndex(for: selectedItem, in: items),
+                        )
+                    },
+                    onItemAppear: { item in
+                        Task {
+                            await storyViewModel.loadNextStoryBarPageIfNeeded(currentItem: item)
+                        }
+                    },
+                )
+            }
+
+            if notificationItems.isEmpty, !hasVisibleStoriesBar, !storyViewModel.storyBarLoading {
+                VStack {
+                    Spacer(minLength: 0)
+                    VStack(spacing: 8) {
+                        ContentUnavailableView(
+                            "No Notifications",
+                            systemImage: "bell.slash",
+                            description: Text("Connect social accounts to get started."),
+                        )
+                        .fixedSize(horizontal: false, vertical: true)
+
+                        NavigationLink(value: HomeDestination.settings) {
+                            Text("Open Settings")
+                        }
+                        .buttonStyle(.bordered)
                     }
-                    .frame(minHeight: 600)
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(Color.clear)
-                } else {
-                    Section {
-                        ForEach(Array(notificationItems.enumerated()), id: \.element.id) { index, displayItem in
-                            Button {
-                                notificationDetailSelection = displayItem
-                            } label: {
-                                NotificationRow(displayItem: displayItem)
-                            }
-                            .buttonStyle(.plain)
-                            .listRowSeparator(index == 0 ? .hidden : .visible, edges: .top)
-                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                if let url = targetPostURL(for: displayItem) {
-                                    Button {
-                                        openURL(url)
-                                    } label: {
-                                        Label("Open Post", systemImage: "arrow.up.right.square")
-                                    }
-                                    .tint(.blue)
+                    Spacer(minLength: 0)
+                }
+                .frame(minHeight: 600)
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
+            } else {
+                Section {
+                    ForEach(Array(notificationItems.enumerated()), id: \.element.id) { index, displayItem in
+                        Button {
+                            notificationDetailSelection = displayItem
+                        } label: {
+                            NotificationRow(displayItem: displayItem)
+                        }
+                        .buttonStyle(.plain)
+                        .listRowSeparator(index == 0 ? .hidden : .visible, edges: .top)
+                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                            if let url = targetPostURL(for: displayItem) {
+                                Button {
+                                    openURL(url)
+                                } label: {
+                                    Label("Open Post", systemImage: "arrow.up.right.square")
                                 }
+                                .tint(.blue)
                             }
                         }
                     }
-                    .listSectionSeparator(.hidden)
+                }
+                .listSectionSeparator(.hidden)
+            }
+        }
+        #if os(iOS)
+        .listStyle(.plain)
+        .listSectionSpacing(0)
+        .scrollContentBackground(.hidden)
+        .toolbarBackground(.hidden, for: .navigationBar)
+        #endif
+        .refreshable {
+            await refreshFeedAndStories()
+        }
+        .navigationDestination(item: $notificationDetailSelection) { displayItem in
+            NotificationDetailView(displayItem: displayItem, feedService: viewModel.service)
+        }
+        .navigationTitle("Social")
+        .toolbar {
+            if viewModel.isRefreshing || viewModel.isForegroundRefreshing {
+                ToolbarItem(placement: .navigation) {
+                    ProgressView()
+                        .controlSize(.small)
                 }
             }
-            #if os(iOS)
-            .listStyle(.plain)
-            .listSectionSpacing(0)
-            .scrollContentBackground(.hidden)
-            .toolbarBackground(.hidden, for: .navigationBar)
-            #endif
-            .refreshable {
-                await refreshFeedAndStories()
-            }
-            .navigationDestination(item: $notificationDetailSelection) { displayItem in
-                NotificationDetailView(displayItem: displayItem, feedService: viewModel.service)
-            }
-            .navigationTitle("Social")
-            .toolbar {
-                if viewModel.isRefreshing || viewModel.isForegroundRefreshing {
-                    ToolbarItem(placement: .navigation) {
-                        ProgressView()
-                            .controlSize(.small)
+
+            ToolbarItemGroup(placement: .primaryAction) {
+                NavigationLink(value: HomeDestination.search) {
+                    Image(systemName: "magnifyingglass")
+                }
+                .accessibilityLabel("Search")
+
+                NavigationLink(value: HomeDestination.settings) {
+                    Image(systemName: "gear")
+                }
+                .overlay(alignment: .topTrailing) {
+                    if settingsNeedsAttention {
+                        Circle()
+                            .fill(.red)
+                            .frame(width: 8, height: 8)
                     }
                 }
+                .accessibilityLabel("Settings")
             }
-            .alert("Refresh Issue", isPresented: errorBinding) {
-                Button("OK", role: .cancel) {
-                    viewModel.errorMessage = nil
-                    storyViewModel.errorMessage = nil
-                }
-            } message: {
-                Text(alertMessage)
+        }
+        .alert("Refresh Issue", isPresented: errorBinding) {
+            Button("OK", role: .cancel) {
+                viewModel.errorMessage = nil
+                storyViewModel.errorMessage = nil
             }
+        } message: {
+            Text(alertMessage)
         }
         .fullScreenCover(item: $storyViewerSelection) { selection in
             UnifiedStoryViewer(

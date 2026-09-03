@@ -4,88 +4,56 @@ import SwiftUI
 struct SearchView: View {
     @ObservedObject var viewModel: ProfileSearchViewModel
     @AppStorage("redactionEnabled") private var redactionEnabled = false
-    @FocusState private var isSearchFocused: Bool
 
     private static let searchNetworks: [SocialNetwork] = [
         .x, .instagram, .farcaster, .spotify, .bluesky,
     ]
 
     var body: some View {
-        NavigationStack {
-            List {
-                if viewModel.filteredResults.isEmpty {
-                    emptyState
-                        .listRowSeparator(.hidden)
-                        .listRowBackground(Color.clear)
-                } else {
-                    Section("Profiles") {
-                        ForEach(viewModel.filteredResults, id: \.self) { profile in
-                            NavigationLink {
-                                ProfileDetailView(
-                                    actor: actor(from: profile),
-                                    feedService: viewModel.service,
-                                    initialProfile: profile,
-                                )
-                            } label: {
-                                ProfileSearchRow(profile: profile, redactionEnabled: redactionEnabled)
-                            }
+        List {
+            if viewModel.filteredResults.isEmpty {
+                emptyState
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
+            } else {
+                Section("Profiles") {
+                    ForEach(viewModel.filteredResults, id: \.self) { profile in
+                        NavigationLink {
+                            ProfileDetailView(
+                                actor: actor(from: profile),
+                                feedService: viewModel.service,
+                                initialProfile: profile,
+                            )
+                        } label: {
+                            ProfileSearchRow(profile: profile, redactionEnabled: redactionEnabled)
                         }
                     }
                 }
             }
-            #if os(iOS)
-            .listStyle(.insetGrouped)
-            #endif
-            .safeAreaInset(edge: .top, spacing: 0) {
-                searchField
+        }
+        #if os(iOS)
+        .listStyle(.insetGrouped)
+        #endif
+        .navigationTitle("Search")
+        .searchable(text: $viewModel.query, placement: .automatic, prompt: "Search")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                filterMenu
             }
-            .navigationTitle("Search")
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Menu {
-                        ForEach(Self.searchNetworks, id: \.self) { network in
-                            Toggle(network.displayName, isOn: networkBinding(network))
-                        }
-                    } label: {
-                        Image(systemName: "line.3.horizontal.decrease")
-                    }
-                }
-            }
-            .onChange(of: viewModel.query) { _, _ in
-                viewModel.scheduleSearch()
-            }
+        }
+        .onChange(of: viewModel.query) { _, _ in
+            viewModel.scheduleSearch()
         }
     }
 
-    private var searchField: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass")
-                .foregroundStyle(.secondary)
-            TextField("Search profiles", text: $viewModel.query)
-                .focused($isSearchFocused)
-            #if os(iOS)
-                .textInputAutocapitalization(.never)
-            #endif
-                .autocorrectionDisabled()
-                .onSubmit {
-                    Task { await viewModel.search() }
-                }
-            if !viewModel.query.isEmpty {
-                Button {
-                    viewModel.query = ""
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Clear search")
+    private var filterMenu: some View {
+        Menu {
+            ForEach(Self.searchNetworks, id: \.self) { network in
+                Toggle(network.displayName, isOn: networkBinding(network))
             }
+        } label: {
+            Image(systemName: "line.3.horizontal.decrease")
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(.secondary.opacity(0.15), in: RoundedRectangle(cornerRadius: 10))
-        .padding(.horizontal)
-        .padding(.vertical, 8)
     }
 
     @ViewBuilder
