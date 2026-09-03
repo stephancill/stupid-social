@@ -183,12 +183,13 @@ X must use a native Swift client. Do not shell out to `twitter-cli` in the produ
 Known behavior from `docs/CLI_DOCS.md`:
 
 - Count-only polling should not mark X notifications read.
-- Full notification timeline fetch can mark fetched entries read server-side; this is accepted for foreground activation and manual refresh.
+- A full GraphQL notification timeline fetch does not itself advance X's server-side read cursor.
 
 Implementation rule:
 
 - True background refresh uses count-only behavior if reintroduced.
 - Foreground activation and manual refresh use a full X notification fetch.
+- After decoding a successful full fetch, `POST /i/api/2/notifications/all/last_seen_cursor.json?cursor=<top-cursor>` using the opaque `Top` cursor from the timeline response.
 - Opening the feed shows cached X items first, then foreground activation refresh updates the cache.
 
 Endpoint discovery is a required implementation spike before building the X client.
@@ -244,11 +245,12 @@ OAuth requirements:
 API endpoints:
 
 - Fetch notifications: `GET /xrpc/app.bsky.notification.listNotifications`
+- Mark fetched notifications read: `POST /xrpc/app.bsky.notification.updateSeen` with `{"seenAt":"<ISO-8601>"}` against the user's PDS.
 - Validate/profile: `GET /xrpc/app.bsky.actor.getProfile`
 - Search profiles: `GET /xrpc/app.bsky.actor.searchActors`
 - Hydrate post details: `GET /xrpc/app.bsky.feed.getPostThread`
 
-Bluesky notifications use the same cache and immediate-refresh behavior as other sources.
+Bluesky notifications use the same cache and immediate-refresh behavior as other sources. A successful notification load calls `app.bsky.notification.updateSeen` before returning the fetched items.
 
 ## Decoding Strategy
 
@@ -296,6 +298,7 @@ Design expectations:
 
 - Trigger an automatic refresh on `scenePhase == .active`.
 - X foreground automatic refresh performs a full notification fetch.
+- Successful X and Bluesky full fetches advance provider-side read state before the source refresh completes. Instagram's activity `POST /api/v1/news/inbox/` has the equivalent activity-read side effect; Instagram DM threads are intentionally not marked read.
 - Farcaster foreground automatic refresh may fetch notifications because it does not alter server-side read state.
 - Foreground automatic refresh updates the local cache and visible feed immediately.
 

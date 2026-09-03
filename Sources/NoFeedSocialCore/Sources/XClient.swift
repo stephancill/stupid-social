@@ -353,7 +353,32 @@ public struct XClient {
 
         let decoder = JSONDecoder()
         let decoded = try decoder.decode(XNotificationsTimelineResponse.self, from: data)
-        return try XNotificationsTimelineParser.parse(response: decoded)
+        let items = try XNotificationsTimelineParser.parse(response: decoded)
+        guard let cursor = decoded.topCursor else {
+            throw SourceError.invalidResponse
+        }
+        try await markNotificationsRead(cursor: cursor, credentials: credentials)
+        return items
+    }
+
+    private func markNotificationsRead(cursor: String, credentials: XCredentials) async throws {
+        var components = URLComponents(string: "https://x.com/i/api/2/notifications/all/last_seen_cursor.json")!
+        components.queryItems = [URLQueryItem(name: "cursor", value: cursor)]
+
+        var request = URLRequest(url: components.url!)
+        request.httpMethod = "POST"
+        request.allHTTPHeaderFields = mutationHeaders(credentials: credentials)
+
+        let (_, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw SourceError.invalidResponse
+        }
+        if http.statusCode == 401 || http.statusCode == 403 {
+            throw SourceError.notConfigured
+        }
+        guard (200 ..< 300).contains(http.statusCode) else {
+            throw SourceError.invalidResponse
+        }
     }
 
     func tweetDetails(tweetId: String) async throws -> NotificationTargetDetails {
@@ -1150,6 +1175,14 @@ private enum XNotificationParser {
 
 private struct XNotificationsTimelineResponse: Decodable {
     let data: XNTData
+
+    var topCursor: String? {
+        data.viewerV2.userResults.result.notificationTimeline.timeline.instructions
+            .compactMap(\.entries)
+            .flatMap(\.self)
+            .first { $0.content?.cursorType == "Top" }?
+            .content?.value
+    }
 }
 
 private struct XNTData: Decodable {
@@ -1192,6 +1225,7 @@ private struct XNTEntry: Decodable {
 private struct XNTEntryContent: Decodable {
     let entryType: String?
     let cursorType: String?
+    let value: String?
     let clientEventInfo: XNTClientEventInfo?
     let itemContent: XNTItemContent?
 }

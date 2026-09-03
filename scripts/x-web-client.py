@@ -237,7 +237,44 @@ class XWebClient:
             "GET",
             BASE_URL + f"/i/api/graphql/{NOTIFICATIONS_TIMELINE_QUERY_ID}/NotificationsTimeline?{query}",
         )
-        return summarize_notifications(response)
+        summary = summarize_notifications(response)
+        summary["top_cursor"] = notification_top_cursor(response)
+        return summary
+
+    def unread_count(self) -> int:
+        response = self.request_json(
+            "GET",
+            BASE_URL + "/i/api/2/notifications/all/unread_count.json",
+        )
+        return int(response.get("unread_count") or 0)
+
+    def mark_notifications_read(self, cursor: str) -> dict[str, Any]:
+        url = (
+            BASE_URL
+            + "/i/api/2/notifications/all/last_seen_cursor.json?"
+            + urllib.parse.urlencode({"cursor": cursor})
+        )
+        request = urllib.request.Request(url, headers=self.headers(), method="POST")
+        try:
+            with self.opener.open(request, timeout=30) as response:
+                charset = response.headers.get_content_charset() or "utf-8"
+                text = response.read().decode(charset, errors="replace")
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            raise SystemExit(f"HTTP {exc.code} POST notifications/all/last_seen_cursor\n{truncate(body, 1200)}") from exc
+        try:
+            return json.loads(text) if text else {}
+        except json.JSONDecodeError as exc:
+            raise SystemExit(f"Expected JSON for notifications/all/last_seen_cursor, got {len(text)} bytes: {exc}") from exc
+
+    def load_notifications(self, count: int = 40) -> dict[str, Any]:
+        summary = self.notifications(count=count)
+        cursor = summary.get("top_cursor")
+        if not cursor:
+            raise SystemExit("X notifications response did not include a top cursor")
+        summary["mark_read_response"] = self.mark_notifications_read(cursor)
+        summary["unread_count_after"] = self.unread_count()
+        return summary
 
     def auth_token(self) -> str:
         token = str(self.credentials.get("authToken") or self.credentials.get("auth_token") or "")
@@ -394,6 +431,25 @@ def summarize_notifications(response: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def notification_top_cursor(response: dict[str, Any]) -> str | None:
+    instructions = (
+        response.get("data", {})
+        .get("viewer_v2", {})
+        .get("user_results", {})
+        .get("result", {})
+        .get("notification_timeline", {})
+        .get("timeline", {})
+        .get("instructions")
+        or []
+    )
+    for instruction in instructions:
+        for entry in instruction.get("entries") or []:
+            content = entry.get("content") or {}
+            if content.get("cursorType") == "Top" and content.get("value"):
+                return str(content["value"])
+    return None
+
+
 def summarize(value: Any, max_depth: int = 3) -> Any:
     if isinstance(value, dict) and "users" in value and "query" in value:
         return {
@@ -447,6 +503,12 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("bootstrap", help="Print credential presence without making an X API request.")
     notifications = subparsers.add_parser("notifications", help="Fetch the X notifications feed and summarize grouped actor order.")
     notifications.add_argument("--count", type=int, default=40, help="Number of notifications to fetch (default 40).")
+    load_notifications = subparsers.add_parser(
+        "load-notifications",
+        help="Fetch X notifications, advance the server last-seen cursor, and verify the unread count.",
+    )
+    load_notifications.add_argument("--count", type=int, default=40, help="Number of notifications to fetch (default 40).")
+    subparsers.add_parser("unread-count", help="Fetch the server-side X notification unread count.")
     search_users = subparsers.add_parser("search-users", help="Search X users through the web API endpoint used by the app.")
     search_users.add_argument("query", help="Search query.")
     follow = subparsers.add_parser("follow", help="Follow an X user by numeric user id.")
@@ -469,6 +531,10 @@ def main() -> None:
         result = client.bootstrap()
     elif args.command == "notifications":
         result = client.notifications(count=args.count)
+    elif args.command == "load-notifications":
+        result = client.load_notifications(count=args.count)
+    elif args.command == "unread-count":
+        result = {"unread_count": client.unread_count()}
     elif args.command == "search-users":
         result = client.search_users(args.query)
     elif args.command == "follow":

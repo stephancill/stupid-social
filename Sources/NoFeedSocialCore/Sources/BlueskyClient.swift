@@ -148,7 +148,9 @@ public final class BlueskyClient: @unchecked Sendable {
         var credentials = try await validCredentials()
         var components = URLComponents(url: credentials.pdsURL.appending(path: "/xrpc/app.bsky.notification.listNotifications"), resolvingAgainstBaseURL: false)!
         components.queryItems = [URLQueryItem(name: "limit", value: String(limit))]
-        return try await authorizedRequest(url: components.url!, credentials: &credentials, response: BlueskyNotificationsResponse.self).notifications
+        let notifications = try await authorizedRequest(url: components.url!, credentials: &credentials, response: BlueskyNotificationsResponse.self).notifications
+        try await markNotificationsSeen(at: Date(), credentials: &credentials)
+        return notifications
     }
 
     public func profile(did: String) async throws -> BlueskyProfileViewDetailed {
@@ -289,6 +291,14 @@ public final class BlueskyClient: @unchecked Sendable {
         return try await authorizedRequest(url: components.url!, credentials: &credentials, response: BlueskyProfileViewDetailed.self)
     }
 
+    private func markNotificationsSeen(at date: Date, credentials: inout BlueskyOAuthCredentials) async throws {
+        let url = credentials.pdsURL.appending(path: "/xrpc/app.bsky.notification.updateSeen")
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let body = try JSONSerialization.data(withJSONObject: ["seenAt": formatter.string(from: date)])
+        try await authorizedWrite(url: url, body: body, credentials: &credentials)
+    }
+
     private func authorizedRequest<T: Decodable>(url: URL, credentials: inout BlueskyOAuthCredentials, response type: T.Type) async throws -> T {
         let privateKey = try P256.Signing.PrivateKey(rawRepresentation: credentials.dpopPrivateKey)
         var request = URLRequest(url: url)
@@ -308,6 +318,29 @@ public final class BlueskyClient: @unchecked Sendable {
         }
         guard http.statusCode == 200 else { throw SourceError.serviceError("Bluesky request failed") }
         return try decoder.decode(T.self, from: data)
+    }
+
+    private func authorizedWrite(url: URL, body: Data, credentials: inout BlueskyOAuthCredentials) async throws {
+        let privateKey = try P256.Signing.PrivateKey(rawRepresentation: credentials.dpopPrivateKey)
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.httpBody = body
+        request.setValue("application/json", forHTTPHeaderField: "accept")
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.setValue("DPoP \(credentials.accessToken)", forHTTPHeaderField: "authorization")
+        request.setValue(dpopProof(method: "POST", url: url, privateKey: privateKey, nonce: credentials.resourceNonce, accessToken: credentials.accessToken), forHTTPHeaderField: "DPoP")
+        let (_, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw SourceError.invalidResponse }
+        if let nonce = http.value(forHTTPHeaderField: "DPoP-Nonce"), nonce != credentials.resourceNonce {
+            credentials.resourceNonce = nonce
+            _ = try? credentialStore.saveBlueskyCredentials(credentials)
+        }
+        if http.statusCode == 401, let nonce = http.value(forHTTPHeaderField: "DPoP-Nonce") {
+            credentials.resourceNonce = nonce
+            _ = try? credentialStore.saveBlueskyCredentials(credentials)
+            return try await authorizedWrite(url: url, body: body, credentials: &credentials)
+        }
+        guard http.statusCode == 200 else { throw SourceError.serviceError("Bluesky request failed") }
     }
 
     private func credentials(from token: BlueskyTokenResponse, session oauthSession: BlueskyOAuthSession) -> BlueskyOAuthCredentials {

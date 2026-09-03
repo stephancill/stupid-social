@@ -90,7 +90,8 @@ Build an iOS app with xtool that shows a combined social network notifications f
 Reference behavior from `docs/CLI_DOCS.md`:
 
 - `notifications-count` reads unread count and should not mark notifications as read.
-- `notifications` fetches structured notification objects but may behave like opening the X notifications tab and clear unread state for fetched entries.
+- `notifications` fetches structured notification objects but does not itself clear X's unread badge.
+- After a successful foreground/manual full fetch, advance X's server-side last-seen cursor to the fetched timeline's opaque top cursor.
 
 ### Farcaster
 
@@ -112,7 +113,7 @@ Reference behavior from `docs/CLI_DOCS.md`:
 
 - Fetch notifications with `GET /xrpc/app.bsky.notification.listNotifications` using DPoP-bound OAuth access tokens.
 - Supported notification reasons include mentions, replies, likes, reposts, quotes, and follows.
-- The app does not track separate Bluesky read state.
+- After a successful notification fetch, mark Bluesky notifications seen through the standard `app.bsky.notification.updateSeen` API.
 
 ## Combined Feed
 
@@ -155,7 +156,8 @@ The MVP should not attempt to merge or link X and Farcaster actors.
 
 - Manual refresh is always available.
 - The app refreshes automatically when entering the foreground.
-- X foreground automatic refresh should full-fetch X notifications, accepting the server-side read side effect in exchange for current feed content.
+- X foreground automatic refresh should full-fetch X notifications, then explicitly advance the server-side last-seen cursor.
+- Successful foreground/manual loads mark fetched X, Instagram activity, and Bluesky notifications read on their providers. Instagram DMs remain unread until the user opens the conversation.
 - Farcaster foreground automatic refresh may fetch notifications because Hypersnap does not alter server-side notification state.
 - Foreground automatic refresh should update the visible feed immediately after caching fetched items.
 

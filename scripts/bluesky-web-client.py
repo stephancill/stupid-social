@@ -19,6 +19,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -129,6 +130,7 @@ def request_json(
     method: str,
     url: str,
     query: dict[str, str] | None = None,
+    body: dict[str, Any] | None = None,
     retry_nonce: bool = True,
 ) -> Any:
     if query:
@@ -140,27 +142,33 @@ def request_json(
         nonce=credentials.resource_nonce,
         access_token=credentials.access_token,
     )
+    encoded_body = json.dumps(body, separators=(",", ":")).encode() if body is not None else None
+    headers = {
+        "accept": "application/json",
+        "authorization": f"DPoP {credentials.access_token}",
+        "dpop": proof,
+        "user-agent": USER_AGENT,
+    }
+    if encoded_body is not None:
+        headers["content-type"] = "application/json"
     req = urllib.request.Request(
         url,
         method=method,
-        headers={
-            "accept": "application/json",
-            "authorization": f"DPoP {credentials.access_token}",
-            "dpop": proof,
-            "user-agent": USER_AGENT,
-        },
+        data=encoded_body,
+        headers=headers,
     )
     try:
         with urllib.request.urlopen(req, timeout=30) as response:
             nonce = response.headers.get("DPoP-Nonce")
             if nonce:
                 credentials.resource_nonce = nonce
-            return json.loads(response.read())
+            response_body = response.read()
+            return json.loads(response_body) if response_body else {}
     except urllib.error.HTTPError as error:
         nonce = error.headers.get("DPoP-Nonce")
         if retry_nonce and error.code == 401 and nonce:
             credentials.resource_nonce = nonce
-            return request_json(credentials=credentials, method=method, url=url, retry_nonce=False)
+            return request_json(credentials=credentials, method=method, url=url, body=body, retry_nonce=False)
         body = error.read().decode(errors="replace")
         raise SystemExit(f"HTTP {error.code} {url}\n{body}") from error
 
@@ -184,9 +192,19 @@ def summarize_notifications(value: dict[str, Any]) -> None:
         print(f"- {item.get('reason')} from {author}: {subject} {text[:80]!r}")
 
 
+def mark_notifications_seen(*, credentials: Credentials, seen_at: str | None = None) -> Any:
+    timestamp = seen_at or datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    return request_json(
+        credentials=credentials,
+        method="POST",
+        url=f"{credentials.pds_url}/xrpc/app.bsky.notification.updateSeen",
+        body={"seenAt": timestamp},
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Fetch Bluesky API responses using simulator OAuth credentials.")
-    parser.add_argument("command", choices=["notifications", "post-thread", "profile"])
+    parser.add_argument("command", choices=["notifications", "load-notifications", "post-thread", "profile"])
     parser.add_argument("--output", type=Path, help="Write raw JSON response to this path.")
     parser.add_argument("--limit", type=int, default=50)
     parser.add_argument("--uri", help="Post URI for post-thread. Defaults to first notification reasonSubject/uri.")
@@ -196,13 +214,16 @@ def main() -> None:
 
     credentials = load_simulator_credentials()
 
-    if args.command == "notifications":
+    if args.command in {"notifications", "load-notifications"}:
         value = request_json(
             credentials=credentials,
             method="GET",
             url=f"{credentials.pds_url}/xrpc/app.bsky.notification.listNotifications",
             query={"limit": str(args.limit)},
         )
+        if args.command == "load-notifications":
+            mark_notifications_seen(credentials=credentials)
+            value = {"notifications": value.get("notifications", []), "marked_seen": True}
         if args.summary:
             summarize_notifications(value)
         else:
