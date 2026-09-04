@@ -2,6 +2,10 @@
 
 ## 2026-09-04
 
+- Released **1.0.0 (124)** to external TestFlight (build upload `432ce44b-6f29-42ce-bd7e-0dbef8da20a4`; IPA SHA-256 `099cb2fd…14e1`) into the **External** group (`ac67336d-4435-4ad7-9c6d-17ef19701dd1`). Set per-build "What's New"/What-to-Test note covering the changelog since build 121: X reply/mention/quote username fix, provider-side read marking, one-person-starring-many-repos fix, single-home navigation, and the pull-to-refresh-unconfigured fix described below. The `external-beta` CLI poll timed out after creating the submission, but live ASC state confirmed external `IN_BETA_TESTING`.
+
+## 2026-09-04
+
 - Fixed pull-to-refresh failing with a "Refresh Issue" alert when fewer social accounts than the full set were connected. Root cause: `FeedService.manualRefresh()` appended `"<network> is not configured"` for every unconfigured notification source to its `errors` array, and then threw `SourceError.serviceError(...)` whenever `!errors.isEmpty && incoming.isEmpty`. With only one network connected (e.g. Spotify), the unconfigured sources made `errors` non-empty, and if the connected source returned no items that pull-to-refresh threw. Now unconfigured (`SourceError.notConfigured`) and endpoint-spike-pending sources are logged/skipped but never counted as refresh failures, so `errors` only contains genuine runtime failures. The throw-iff-empty-and-failed fallback survives for real failures. Verified with `swiftformat` and `stupid-app build`.
 
 ## 2026-09-03
