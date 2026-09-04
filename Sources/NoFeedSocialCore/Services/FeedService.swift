@@ -67,7 +67,8 @@ public final class FeedService {
             if let error = result.error {
                 switch error {
                 case SourceError.notConfigured:
-                    errors.append("\(result.network.displayName) is not configured")
+                    // Unconfigured sources are expected unless the user connected them; never treat them as a refresh failure.
+                    logger.info("Skipping unconfigured source: \(result.network.rawValue, privacy: .public)")
                 case SourceError.endpointSpikeRequired:
                     logger.info("Skipping source pending endpoint spike: \(result.network.rawValue, privacy: .public)")
                 default:

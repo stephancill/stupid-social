@@ -1,5 +1,9 @@
 # Implementation Notes
 
+## 2026-09-04
+
+- Fixed pull-to-refresh failing with a "Refresh Issue" alert when fewer social accounts than the full set were connected. Root cause: `FeedService.manualRefresh()` appended `"<network> is not configured"` for every unconfigured notification source to its `errors` array, and then threw `SourceError.serviceError(...)` whenever `!errors.isEmpty && incoming.isEmpty`. With only one network connected (e.g. Spotify), the unconfigured sources made `errors` non-empty, and if the connected source returned no items that pull-to-refresh threw. Now unconfigured (`SourceError.notConfigured`) and endpoint-spike-pending sources are logged/skipped but never counted as refresh failures, so `errors` only contains genuine runtime failures. The throw-iff-empty-and-failed fallback survives for real failures. Verified with `swiftformat` and `stupid-app build`.
+
 ## 2026-09-03
 
 - Released internal TestFlight build **1.0.0 (123)** containing provider-side notification read marking and the single-home-screen navigation redesign. Archived IPA SHA-256 `9c39d44f…fbc8`; App Store Connect build upload `a0c7c2d6-73e8-4c2c-b31e-d846eb40d53d` completed as `VALID` and `IN_BETA_TESTING`. Before upload, the packaged release binary was checked for both new provider endpoint markers (`notifications/all/last_seen_cursor.json` and `app.bsky.notification.updateSeen`).
