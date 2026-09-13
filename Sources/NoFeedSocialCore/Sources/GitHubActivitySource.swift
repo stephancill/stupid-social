@@ -31,13 +31,31 @@ public final class GitHubActivitySource: GitHubActivityFetching, AccountValidati
 
     public func fetchGitHubActivity(reason _: RefreshReason) async throws -> [GitHubActivityGroup] {
         guard let credentials = try credentialStore.loadGitHubCredentials() else { return [] }
-        return try await fetch(credentials: credentials)
+        do {
+            return try await fetch(credentials: credentials)
+        } catch SourceError.notConfigured {
+            markInvalid()
+            throw SourceError.notConfigured
+        }
     }
 
     private func fetch(credentials: GitHubCredentials) async throws -> [GitHubActivityGroup] {
         let result = try await client.forYouFeed(credentials: credentials)
         guard case let .feed(response) = result else { return [] }
+        persistRefreshedSession(from: response, original: credentials)
         return try GitHubActivityParser.parse(response.html, viewerUsername: credentials.username).storyGroups
+    }
+
+    /// Persists a `user_session` GitHub re-issued via `Set-Cookie`. GitHub does
+    /// not normally re-issue it, so this is usually a no-op; keeping the stored
+    /// credentials current is what lets the same session stay valid long-term.
+    private func persistRefreshedSession(from response: GitHubForYouFeedResponse, original: GitHubCredentials) {
+        let userSession = response.refreshedUserSession ?? original.userSession
+        let sameSite = response.refreshedSameSiteUserSession ?? original.sameSiteUserSession
+        guard userSession != original.userSession || sameSite != original.sameSiteUserSession else { return }
+        _ = try? credentialStore.saveGitHubCredentials(
+            original.replacingSessionCookies(userSession: userSession, sameSiteUserSession: sameSite),
+        )
     }
 
     private func markInvalid() {

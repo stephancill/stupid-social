@@ -31,11 +31,16 @@ public final class GitHubNotificationSource: NotificationFetching, AccountValida
 
     public func fetchNotifications(reason _: RefreshReason) async throws -> [NotificationItem] {
         guard let credentials = try credentialStore.loadGitHubCredentials() else { return [] }
-        let accountId = credentials.username ?? "github"
-        let items = try await fetch(credentials: credentials).notificationItems.map { item in
-            notificationItem(from: item, accountId: accountId)
+        do {
+            let accountId = credentials.username ?? "github"
+            let items = try await fetch(credentials: credentials).notificationItems.map { item in
+                notificationItem(from: item, accountId: accountId)
+            }
+            return mergeByRepository(items)
+        } catch SourceError.notConfigured {
+            markInvalid()
+            throw SourceError.notConfigured
         }
-        return mergeByRepository(items)
     }
 
     public func fetchProfile(id: String) async throws -> NetworkProfile {
@@ -91,7 +96,20 @@ public final class GitHubNotificationSource: NotificationFetching, AccountValida
         guard case let .feed(response) = result else {
             return GitHubFeedParseResult(storyGroups: [], notificationItems: [])
         }
+        persistRefreshedSession(from: response, original: credentials)
         return try GitHubActivityParser.parse(response.html, viewerUsername: credentials.username)
+    }
+
+    /// Persists a `user_session` GitHub re-issued via `Set-Cookie`. GitHub does
+    /// not normally re-issue it, so this is usually a no-op; keeping the stored
+    /// credentials current is what lets the same session stay valid long-term.
+    private func persistRefreshedSession(from response: GitHubForYouFeedResponse, original: GitHubCredentials) {
+        let userSession = response.refreshedUserSession ?? original.userSession
+        let sameSite = response.refreshedSameSiteUserSession ?? original.sameSiteUserSession
+        guard userSession != original.userSession || sameSite != original.sameSiteUserSession else { return }
+        _ = try? credentialStore.saveGitHubCredentials(
+            original.replacingSessionCookies(userSession: userSession, sameSiteUserSession: sameSite),
+        )
     }
 
     /// Groups "starred your repository" notifications by repo, the same way

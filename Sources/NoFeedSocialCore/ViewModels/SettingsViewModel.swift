@@ -199,6 +199,7 @@ public final class SettingsViewModel: ObservableObject {
                         userSession: stored.userSession,
                         sameSiteUserSession: stored.sameSiteUserSession,
                         username: resolved,
+                        additionalCookies: stored.additionalCookies,
                     )
                 }
             }
@@ -836,6 +837,7 @@ public final class SettingsViewModel: ObservableObject {
                         userSession: stored.userSession,
                         sameSiteUserSession: stored.sameSiteUserSession,
                         username: resolved,
+                        additionalCookies: stored.additionalCookies,
                     )
                     _ = try? keychainStore.saveGitHubCredentials(stored)
                 }

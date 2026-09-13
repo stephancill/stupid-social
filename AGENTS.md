@@ -99,6 +99,7 @@ Sources/
 
 ## Network Integration
 
+- Always diagnose network behavior and validate the fix in the dependency-free Python client first, before implementing or changing the native Swift client. The probes (`scripts/x-web-client.py`, `scripts/instagram-web-client.py`, `scripts/github-web-client.py`, `scripts/spotify-web-client.py`, `scripts/bluesky-web-client.py`) are the source of truth for endpoint behavior, auth/session freshness, redirects, and response shape. Reproduce the issue live with the probe (using simulator credentials where applicable), add or update a probe command that demonstrates the diagnosis, then port the validated behavior into Swift. Do not guess endpoint/auth behavior from Swift alone.
 - Implement X as a native Swift client using `docs/CLI_DOCS.md` and the patched `twitter-cli` behavior as references only.
 - Do not shell out to `twitter-cli` for the production app path.
 - X background polling must use count-only behavior to avoid marking notifications read server-side.

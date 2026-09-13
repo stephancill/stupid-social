@@ -55,6 +55,9 @@ public enum CookieHeaderParser {
             userSession: userSession,
             sameSiteUserSession: sameSiteUserSession,
             username: cookies["dotcom_user"],
+            additionalCookies: cookies.filter {
+                $0.key != "user_session" && $0.key != "__Host-user_session_same_site"
+            },
         )
     }
 }
@@ -143,10 +146,33 @@ public struct GitHubCredentials: Codable, Equatable, Sendable {
     public let userSession: String
     public let sameSiteUserSession: String
     public let username: String?
+    /// Other GitHub browser cookies captured at login (e.g. `dotcom_user`,
+    /// `_device_id`, `_octo`, `saved_user_sessions`). Replayed alongside the
+    /// session cookies so requests look like the browser session. `_gh_sess` is
+    /// not replayed because it rotates on every request. Optional so credentials
+    /// saved before this field existed still decode.
+    public let additionalCookies: [String: String]?
 
-    public init(userSession: String, sameSiteUserSession: String, username: String? = nil) {
+    public init(
+        userSession: String,
+        sameSiteUserSession: String,
+        username: String? = nil,
+        additionalCookies: [String: String]? = nil,
+    ) {
         self.userSession = userSession
         self.sameSiteUserSession = sameSiteUserSession
         self.username = username
+        self.additionalCookies = additionalCookies
+    }
+
+    /// Returns a copy with the session cookies replaced, preserving the username
+    /// and additional cookies. Used when GitHub re-issues `user_session`.
+    public func replacingSessionCookies(userSession: String, sameSiteUserSession: String) -> GitHubCredentials {
+        GitHubCredentials(
+            userSession: userSession,
+            sameSiteUserSession: sameSiteUserSession,
+            username: username,
+            additionalCookies: additionalCookies,
+        )
     }
 }

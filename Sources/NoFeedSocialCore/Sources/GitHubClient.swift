@@ -3,10 +3,23 @@ import Foundation
 public struct GitHubForYouFeedResponse: Equatable, Sendable {
     public let html: String
     public let etag: String?
+    /// A `user_session` / `__Host-user_session_same_site` pair GitHub re-issued
+    /// via `Set-Cookie`. GitHub does not normally re-issue these (only
+    /// `_gh_sess`), so this is usually nil; when present callers should persist
+    /// it so the session stays fresh.
+    public let refreshedUserSession: String?
+    public let refreshedSameSiteUserSession: String?
 
-    public init(html: String, etag: String?) {
+    public init(
+        html: String,
+        etag: String?,
+        refreshedUserSession: String? = nil,
+        refreshedSameSiteUserSession: String? = nil,
+    ) {
         self.html = html
         self.etag = etag
+        self.refreshedUserSession = refreshedUserSession
+        self.refreshedSameSiteUserSession = refreshedSameSiteUserSession
     }
 }
 
@@ -62,7 +75,7 @@ public struct GitHubClient: Sendable {
         if http.statusCode == 304 {
             return .notModified
         }
-        if http.statusCode == 401 || http.statusCode == 403 {
+        if http.statusCode == 401 || http.statusCode == 403 || Self.isLoginRedirect(http) {
             throw SourceError.notConfigured
         }
         guard (200 ..< 300).contains(http.statusCode) else {
@@ -77,9 +90,12 @@ public struct GitHubClient: Sendable {
             throw SourceError.invalidResponse
         }
 
+        let refreshed = Self.refreshedSessionCookies(from: http)
         return .feed(GitHubForYouFeedResponse(
             html: html,
             etag: http.value(forHTTPHeaderField: "ETag"),
+            refreshedUserSession: refreshed.userSession,
+            refreshedSameSiteUserSession: refreshed.sameSiteUserSession,
         ))
     }
 
@@ -103,7 +119,7 @@ public struct GitHubClient: Sendable {
         guard let http = response as? HTTPURLResponse else {
             throw SourceError.invalidResponse
         }
-        if http.statusCode == 401 || http.statusCode == 403 {
+        if http.statusCode == 401 || http.statusCode == 403 || Self.isLoginRedirect(http) {
             throw SourceError.notConfigured
         }
         guard (200 ..< 300).contains(http.statusCode),
@@ -120,12 +136,65 @@ public struct GitHubClient: Sendable {
         return username.isEmpty ? nil : username
     }
 
+    /// GitHub answers a request with an expired or revoked `user_session` by
+    /// redirecting to `/login`, so a protected request that follows the redirect
+    /// returns HTTP 200 with the login page instead of an error. Treat any GitHub
+    /// response whose final URL is the login route as an expired session, so the
+    /// feed parser never mistakes the login page for an empty feed.
+    static func isLoginRedirect(_ http: HTTPURLResponse) -> Bool {
+        guard let url = http.url, let host = url.host else { return false }
+        return host.hasSuffix("github.com") && url.path.hasPrefix("/login")
+    }
+
+    /// Parses any `user_session`/`__Host-user_session_same_site` values GitHub
+    /// re-issued via `Set-Cookie`. Multiple `Set-Cookie` headers are read from
+    /// `allHeaderFields` because `value(forHTTPHeaderField:)` collapses them.
+    static func refreshedSessionCookies(from http: HTTPURLResponse) -> (userSession: String?, sameSiteUserSession: String?) {
+        var session: String?
+        var sameSite: String?
+        for (key, value) in http.allHeaderFields where (key as? String)?.caseInsensitiveCompare("Set-Cookie") == .orderedSame {
+            let lines: [String] = if let values = value as? [String] {
+                values
+            } else if let single = value as? String {
+                [single]
+            } else {
+                []
+            }
+            for line in lines {
+                let pair = line.split(separator: ";", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? ""
+                let nameValue = pair.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+                guard nameValue.count == 2 else { continue }
+                let name = nameValue[0].trimmingCharacters(in: .whitespaces)
+                let cookieValue = nameValue[1].trimmingCharacters(in: .whitespaces)
+                guard !cookieValue.isEmpty else { continue }
+                switch name {
+                case "user_session": session = cookieValue
+                case "__Host-user_session_same_site": sameSite = cookieValue
+                default: break
+                }
+            }
+        }
+        return (session, sameSite)
+    }
+
     private func cookieHeader(credentials: GitHubCredentials) -> String {
-        [
+        var cookies = [
             "user_session=\(credentials.userSession)",
             "__Host-user_session_same_site=\(credentials.sameSiteUserSession)",
             "logged_in=yes",
-        ].joined(separator: "; ")
+        ]
+        // Replay the other captured browser cookies (dotcom_user, _device_id,
+        // _octo, saved_user_sessions, ...) so requests look like the browser
+        // session. `_gh_sess` rotates on every request, so a stored value is
+        // always stale and is never replayed.
+        let reserved: Set = ["user_session", "__Host-user_session_same_site", "logged_in", "_gh_sess"]
+        let extras = (credentials.additionalCookies ?? [:]).filter { name, value in
+            !value.isEmpty && !reserved.contains(name)
+        }
+        for (name, value) in extras.sorted(by: { $0.key < $1.key }) {
+            cookies.append("\(name)=\(value)")
+        }
+        return cookies.joined(separator: "; ")
     }
 
     /// Resolves a fork's parent repository and returns its OpenGraph text

@@ -86,7 +86,15 @@ private final class Coordinator: NSObject, WKNavigationDelegate, WKHTTPCookieSto
             )
             guard let session = values["user_session"], let sameSite = values["__Host-user_session_same_site"] else { return }
             captured = true
-            let credentials = GitHubCredentials(userSession: session, sameSiteUserSession: sameSite, username: values["dotcom_user"])
+            let additionalCookies = values.filter {
+                $0.key != "user_session" && $0.key != "__Host-user_session_same_site"
+            }
+            let credentials = GitHubCredentials(
+                userSession: session,
+                sameSiteUserSession: sameSite,
+                username: values["dotcom_user"],
+                additionalCookies: additionalCookies,
+            )
             DispatchQueue.main.async {
                 self.onCredentialsFound(credentials)
             }

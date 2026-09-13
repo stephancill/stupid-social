@@ -38,6 +38,18 @@ class GitHubHTTPError(Exception):
     pass
 
 
+class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Keep urllib from following redirects so an expired session is observable.
+
+    GitHub answers a stale/revoked ``user_session`` with a 302 to ``/login``.
+    Following that redirect yields a 200 HTML login page, which a naive client can
+    mistake for a feed with zero items; the ``validate`` probe needs the raw 302.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 class GitHubFeedParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -153,6 +165,7 @@ class GitHubWebClient:
                 charset = response.headers.get_content_charset() or "utf-8"
                 html = response.read().decode(charset, errors="replace")
                 response_etag = response.headers.get("ETag")
+                refreshed = refreshed_session_cookies(response.headers)
                 status = response.status
         except urllib.error.HTTPError as exc:
             if exc.code == 304:
@@ -187,18 +200,89 @@ class GitHubWebClient:
                 "bytes": len(html.encode("utf-8")),
                 "lines": len(html.splitlines()),
                 "etag": response_etag,
+                "refreshed_user_session": bool(refreshed),
             }
         )
         return html, summary
 
     def cookie_header(self) -> str:
-        return "; ".join(
-            [
-                f"user_session={self.user_session()}",
-                f"__Host-user_session_same_site={self.same_site_user_session()}",
-                "logged_in=yes",
-            ]
-        )
+        cookies = {
+            "user_session": self.user_session(),
+            "__Host-user_session_same_site": self.same_site_user_session(),
+            "logged_in": "yes",
+        }
+        # Additional cookies captured from the browser/WKWebView (e.g. dotcom_user,
+        # _device_id, _octo, saved_user_sessions) can be replayed to look like the
+        # browser session. `_gh_sess` is deliberately excluded: it rotates on every
+        # request, so a stored value is always stale.
+        extras = self.credentials.get("additionalCookies") or self.credentials.get("additional_cookies")
+        if isinstance(extras, dict):
+            for name, value in extras.items():
+                if value and name not in cookies and name != "_gh_sess":
+                    cookies[name] = str(value)
+        return "; ".join(f"{name}={value}" for name, value in cookies.items())
+
+    def validate(self) -> dict[str, Any]:
+        """Diagnose whether the stored session can still read the For You feed.
+
+        GitHub answers an expired or revoked ``user_session`` with a 302 to
+        ``/login``. A client that follows redirects receives a 200 HTML login page
+        and would normalize it to zero items, silently hiding the failure. This
+        probe deliberately does not follow redirects, so ``status`` is one of
+        ``valid``, ``expired``, or ``error``.
+        """
+        nonce = "v2:" + str(uuid.uuid4())
+        headers = {
+            "Accept": "text/html",
+            "Accept-Language": self.accept_language,
+            "Cookie": self.cookie_header(),
+            "Referer": BASE_URL + "/",
+            "User-Agent": APP_USER_AGENT,
+            "X-Fetch-Nonce": nonce,
+            "X-Fetch-Nonce-To-Validate": nonce,
+            "X-Requested-With": "XMLHttpRequest",
+        }
+        opener = urllib.request.build_opener(NoRedirectHandler)
+        request = urllib.request.Request(FOR_YOU_FEED_URL, headers=headers, method="GET")
+        try:
+            with opener.open(request, timeout=30) as response:
+                charset = response.headers.get_content_charset() or "utf-8"
+                html = response.read().decode(charset, errors="replace")
+                structured = parse_structured_html(html)
+                return {
+                    "status": "valid",
+                    "authenticated": True,
+                    "http_status": response.status,
+                    "final_url": response.geturl(),
+                    "feed_item_count": structured["item_count"],
+                }
+        except urllib.error.HTTPError as exc:
+            location = exc.headers.get("Location")
+            if exc.code in {301, 302, 303, 307, 308} and location and "/login" in location:
+                return {
+                    "status": "expired",
+                    "authenticated": False,
+                    "http_status": exc.code,
+                    "location": location,
+                    "detail": (
+                        "GitHub redirected the authenticated feed to the login page; the "
+                        "user_session cookie is expired or revoked. Log in again to capture "
+                        "fresh cookies."
+                    ),
+                }
+            return {
+                "status": "error",
+                "authenticated": False,
+                "http_status": exc.code,
+                "location": location,
+                "detail": truncate(exc.read().decode("utf-8", errors="replace"), 500),
+            }
+        except urllib.error.URLError as exc:
+            return {
+                "status": "error",
+                "authenticated": False,
+                "detail": f"GitHub request failed: {exc.reason}",
+            }
 
     def user_session(self) -> str:
         value = str(
@@ -228,6 +312,20 @@ def parse_cookie_header(header: str) -> dict[str, str]:
         if separator and name:
             cookies[name] = value
     return cookies
+
+
+def refreshed_session_cookies(headers: Any) -> dict[str, str]:
+    """Return any ``user_session`` / ``__Host-user_session_same_site`` cookies
+    GitHub re-issued via ``Set-Cookie``. GitHub does not normally re-issue
+    ``user_session`` (only ``_gh_sess``), so an empty result is expected; callers
+    use a non-empty result as an opportunity to persist fresh credentials."""
+    result: dict[str, str] = {}
+    for raw in headers.get_all("Set-Cookie") or []:
+        name, separator, value = raw.split(";", 1)[0].partition("=")
+        name = name.strip()
+        if separator and name in {"user_session", "__Host-user_session_same_site"} and value:
+            result[name] = value
+    return result
 
 
 def load_credentials(args: argparse.Namespace) -> dict[str, Any]:
@@ -654,6 +752,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Fetch the feed and print 'starred YOUR repository' notifications ",
     )
     notifications.add_argument("--output", help="Write notification JSON to this path.")
+    validate = subparsers.add_parser(
+        "validate",
+        help="Check whether the stored session is still authenticated (no redirects followed).",
+    )
+    validate.add_argument("--output", help="Write the diagnostic JSON to this path.")
     feed = subparsers.add_parser("feed", help="Fetch the GitHub For You HTML feed.")
     feed.add_argument("--etag", help="Send If-None-Match with this ETag.")
     feed.add_argument("--output", help="Write raw HTML to this path.")
@@ -699,6 +802,11 @@ def main() -> None:
         client = GitHubWebClient(credentials, accept_language=args.accept_language)
         if args.command == "bootstrap":
             print(json.dumps(client.bootstrap(), indent=2, sort_keys=True))
+            return
+        if args.command == "validate":
+            result = client.validate()
+            write_json(args.output, result)
+            print(json.dumps(result, indent=2, sort_keys=True))
             return
         if args.command == "feed":
             html, summary = client.for_you_feed(etag=args.etag)

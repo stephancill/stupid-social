@@ -26,14 +26,15 @@ final class CookieHeaderParserTests: XCTestCase {
         XCTAssertNil(CookieHeaderParser.extractXCredentials(from: header))
     }
 
-    func testExtractsOnlyRequiredGitHubCredentials() {
-        let header = "_device_id=device; user_session=session; __Host-user_session_same_site=same-site; _gh_sess=ignored"
+    func testExtractsRequiredGitHubSessionCookiesAndRetainsExtras() {
+        let header = "_device_id=device; user_session=session; __Host-user_session_same_site=same-site; _gh_sess=ephemeral"
 
         let credentials = CookieHeaderParser.extractGitHubCredentials(from: header)
 
         XCTAssertEqual(credentials, GitHubCredentials(
             userSession: "session",
             sameSiteUserSession: "same-site",
+            additionalCookies: ["_device_id": "device", "_gh_sess": "ephemeral"],
         ))
     }
 
