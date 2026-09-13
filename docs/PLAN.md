@@ -197,3 +197,10 @@ Use a minimal display model first. Suggested fields:
 - `target`: referenced post, cast, profile, or other object needed for display/navigation
 
 Do not persist raw source payloads for the MVP unless needed during development diagnostics, and never log or store secrets with notification data.
+
+## App Review Preview Access
+
+- Include the existing sample notifications and stories in release builds.
+- Keep preview controls hidden behind four taps on the Settings About heading; do not add a public Try Demo button.
+- Reviewers explicitly select Load preview content after revealing developer settings. Document these steps in App Review Information.
+- Preserve real notification cache and credentials when loading/unloading sample content.

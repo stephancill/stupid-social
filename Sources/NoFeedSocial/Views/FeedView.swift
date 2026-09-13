@@ -7,6 +7,7 @@ struct FeedView: View {
     @ObservedObject var storyViewModel: StoryBarViewModel
     let spotifyClient: SpotifyClient
     let settingsNeedsAttention: Bool
+    let onOpenSettings: () -> Void
     @State private var notificationDetailSelection: DisplayNotificationItem?
     @State private var storyViewerSelection: StoryViewerSelection?
     @State private var showingStoryComposer = false
@@ -64,10 +65,10 @@ struct FeedView: View {
                         )
                         .fixedSize(horizontal: false, vertical: true)
 
-                        NavigationLink(value: HomeDestination.settings) {
-                            Text("Open Settings")
-                        }
-                        .buttonStyle(.bordered)
+                        Button("Open Settings", action: onOpenSettings)
+                            .buttonStyle(.borderless)
+                            .fixedSize()
+                            .frame(maxWidth: .infinity, alignment: .center)
                     }
                     Spacer(minLength: 0)
                 }

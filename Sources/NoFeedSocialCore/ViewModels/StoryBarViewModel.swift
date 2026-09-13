@@ -52,28 +52,23 @@ public final class StoryBarViewModel: ObservableObject {
         await fetchStoryBarContent()
     }
 
-    /// Replaces the story bar with Debug-only demo stories and marks content loaded.
-    /// No-op outside `#if DEBUG` builds.
+    /// Replaces the story bar with demo stories and marks content loaded.
     public func loadDemoStoryBarItems() {
-        #if DEBUG
-            storyBarItems = DemoData.storyBarItems()
-            ownInstagramStoryActor = nil
-            ownInstagramStoryReel = nil
-            storyBarContentLoaded = true
-            storyBarLoading = false
-        #endif
+        storyBarItems = DemoData.storyBarItems()
+        ownInstagramStoryActor = nil
+        ownInstagramStoryReel = nil
+        storyBarContentLoaded = true
+        storyBarLoading = false
     }
 
     /// Resets the story bar so a live reload can repopulate it after demo mode is
-    /// turned off. No-op outside `#if DEBUG` builds.
+    /// turned off.
     public func clearDemoStoryItems() {
-        #if DEBUG
-            storyBarItems = []
-            ownInstagramStoryActor = nil
-            ownInstagramStoryReel = nil
-            storyBarContentLoaded = false
-            storyBarLoading = false
-        #endif
+        storyBarItems = []
+        ownInstagramStoryActor = nil
+        ownInstagramStoryReel = nil
+        storyBarContentLoaded = false
+        storyBarLoading = false
     }
 
     public func fetchSpotifyActivity() async {
@@ -92,12 +87,10 @@ public final class StoryBarViewModel: ObservableObject {
     }
 
     private func performStoryBarContentFetch() async {
-        #if DEBUG
-            if DemoData.isDemoMode {
-                loadDemoStoryBarItems()
-                return
-            }
-        #endif
+        if DemoData.isDemoMode {
+            loadDemoStoryBarItems()
+            return
+        }
         storyBarLoading = true
         async let reels = instagramReels()
         async let spots = spotifyItems()
@@ -201,7 +194,9 @@ public final class StoryBarViewModel: ObservableObject {
 
     public func setInstagramStoryLiked(mediaId: String, liked: Bool) async throws {
         guard let instagramSource else { throw SourceError.notConfigured }
-        try await instagramSource.setStoryLiked(mediaId: mediaId, liked: liked)
+        if !DemoData.isDemoMode {
+            try await instagramSource.setStoryLiked(mediaId: mediaId, liked: liked)
+        }
         updateInstagramStorySlide(mediaId: mediaId) { slide in
             InstagramStorySlide(
                 id: slide.id,
@@ -222,6 +217,7 @@ public final class StoryBarViewModel: ObservableObject {
     }
 
     public func markSpotifyActivityAsSeen(userURI: String) {
+        guard !DemoData.isDemoMode else { return }
         guard let itemIndex = storyBarItems.firstIndex(where: {
             if case let .spotify(item) = $0, item.userURI == userURI { return true }
             return false
@@ -244,8 +240,10 @@ public final class StoryBarViewModel: ObservableObject {
             return false
         }), case let .github(group) = storyBarItems[index]
         else { return }
-        githubSeenStore.markSeen(actorId: actorId, activityTimestamp: group.timestamp)
-        seenSync?.pushGitHubSeen()
+        if !DemoData.isDemoMode {
+            githubSeenStore.markSeen(actorId: actorId, activityTimestamp: group.timestamp)
+            seenSync?.pushGitHubSeen()
+        }
         storyBarItems[index] = .github(GitHubActivityGroup(actor: group.actor, activities: group.activities, isSeen: true))
         storyBarItems = mergedStoryBarItems(instagramReels: orderedInstagramStoryReels, spotifyItems: spotifyActivityItems, githubItems: githubActivityGroups)
     }
@@ -284,7 +282,7 @@ public final class StoryBarViewModel: ObservableObject {
     public func markInstagramReelAsSeen(reelId: String) {
         if let reel = ownInstagramStoryReel, reel.id == reelId, !reel.isSeen {
             Task {
-                await instagramSource?.markReelAsSeen(slides: reel.slides)
+                if !DemoData.isDemoMode { await instagramSource?.markReelAsSeen(slides: reel.slides) }
             }
 
             ownInstagramStoryReel = InstagramStoryReel(id: reel.id, user: reel.user, slides: reel.slides, isSeen: true, seenTimestamp: reel.slides.map(\.takenAt).max() ?? reel.seenTimestamp, hasCloseFriendsMedia: reel.hasCloseFriendsMedia)
@@ -300,7 +298,7 @@ public final class StoryBarViewModel: ObservableObject {
         guard case let .instagram(reel) = storyItem, !reel.isSeen else { return }
 
         Task {
-            await instagramSource?.markReelAsSeen(slides: reel.slides)
+            if !DemoData.isDemoMode { await instagramSource?.markReelAsSeen(slides: reel.slides) }
         }
 
         let updated = InstagramStoryReel(id: reel.id, user: reel.user, slides: reel.slides, isSeen: true, seenTimestamp: reel.slides.map(\.takenAt).max() ?? reel.seenTimestamp, hasCloseFriendsMedia: reel.hasCloseFriendsMedia)

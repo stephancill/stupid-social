@@ -39,6 +39,7 @@ public struct ContentView: View {
                 storyViewModel: container.storyBarViewModel,
                 spotifyClient: container.spotifyClient,
                 settingsNeedsAttention: container.settingsViewModel.hasInvalidCredentials,
+                onOpenSettings: { path.append(.settings) },
             )
             .navigationDestination(for: HomeDestination.self) { destination in
                 switch destination {

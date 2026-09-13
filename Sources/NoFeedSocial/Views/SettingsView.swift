@@ -85,23 +85,25 @@ struct SettingsView: View {
                 }
             }
 
-            #if DEBUG
-                if devModeEnabled {
-                    Section("Demo Data") {
-                        Button {
-                            onLoadDemoData?()
-                        } label: {
-                            Label("Load preview content", systemImage: "sparkles")
-                        }
-                        Button(role: .destructive) {
-                            onClearDemoData?()
-                        } label: {
-                            Label("Unload preview content", systemImage: "minus.rectangle")
-                        }
-                        Toggle("Redact names", isOn: $redactionEnabled)
+            if devModeEnabled {
+                Section {
+                    Button {
+                        onLoadDemoData?()
+                    } label: {
+                        Text("Load preview content")
                     }
+                    Button(role: .destructive) {
+                        onClearDemoData?()
+                    } label: {
+                        Text("Unload preview content")
+                    }
+                    Toggle("Redact names", isOn: $redactionEnabled)
+                } header: {
+                    Text("Demo Data")
+                } footer: {
+                    Text("Preview content uses sample notifications and stories. Unload it to return to your connected accounts.")
                 }
-            #endif
+            }
 
             if viewModel.hasLocalOnlyCredentials {
                 Section {
@@ -149,13 +151,9 @@ struct SettingsView: View {
             viewModel.loadStatuses()
         }
         .onChange(of: devModeEnabled) { _, enabled in
-            #if DEBUG
-                if enabled {
-                    onLoadDemoData?()
-                } else {
-                    onClearDemoData?()
-                }
-            #endif
+            if !enabled {
+                onClearDemoData?()
+            }
         }
     }
 

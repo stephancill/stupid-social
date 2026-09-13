@@ -30,32 +30,16 @@ public final class FeedService {
     }
 
     public func loadCachedFeed() throws -> [DisplayNotificationItem] {
-        try cacheStore.loadRecent().map(DisplayNotificationItem.init)
-    }
-
-    /// Populates the in-memory/persisted cache with Debug-only demo feed items.
-    /// No-op outside `#if DEBUG` builds so it can never ship in the App Store build.
-    public func loadDemoFeed() throws {
-        #if DEBUG
-            try cacheStore.replaceAll(DemoData.feedItems())
-        #endif
-    }
-
-    /// Empties the cache so the live feed can repopulate when demo mode is turned off.
-    /// No-op outside `#if DEBUG` builds.
-    public func clearDemoFeed() throws {
-        #if DEBUG
-            try cacheStore.replaceAll([])
-        #endif
+        if DemoData.isDemoMode {
+            return DemoData.feedItems().map(DisplayNotificationItem.init)
+        }
+        return try cacheStore.loadRecent().map(DisplayNotificationItem.init)
     }
 
     public func manualRefresh() async throws -> [DisplayNotificationItem] {
-        #if DEBUG
-            if DemoData.isDemoMode {
-                try loadDemoFeed()
-                return try loadCachedFeed()
-            }
-        #endif
+        if DemoData.isDemoMode {
+            return try loadCachedFeed()
+        }
         logger.info("Manual refresh started")
         var incoming: [NotificationItem] = []
         var errors: [String] = []
@@ -105,12 +89,9 @@ public final class FeedService {
     }
 
     public func foregroundActivationRefresh() async throws {
-        #if DEBUG
-            if DemoData.isDemoMode {
-                try loadDemoFeed()
-                return
-            }
-        #endif
+        if DemoData.isDemoMode {
+            return
+        }
         logger.info("Foreground activation refresh started")
         var incoming: [NotificationItem] = []
         var refreshedNetworks = Set<SocialNetwork>()
@@ -183,6 +164,12 @@ public final class FeedService {
     }
 
     public func fetchProfile(for actorId: String, network: SocialNetwork, username: String? = nil) async throws -> NetworkProfile {
+        if DemoData.isDemoMode {
+            let actor = DemoData.feedItems().flatMap(\.actors).first { $0.id == actorId && $0.network == network }
+            return NetworkProfile(id: actorId, network: network, username: actor?.username ?? username,
+                                  displayName: actor?.displayName ?? username, bio: "Sample profile for demonstration.",
+                                  avatarURL: actor?.avatarURL, followerCount: 128, followingCount: 64)
+        }
         guard let source = profileFetchersByNetwork[network] else {
             throw SourceError.serviceError("No source for network \(network)")
         }
@@ -221,6 +208,11 @@ public final class FeedService {
     }
 
     public func fetchTargetDetails(for item: NotificationItem) async throws -> NotificationTargetDetails {
+        if item.accountId == "demo-viewer" {
+            return NotificationTargetDetails(author: item.target?.author, text: item.target?.text,
+                                             imageURLs: [item.target?.imageURL].compactMap(\.self),
+                                             postedAt: item.target?.postedAt, likeCount: item.target?.likeCount)
+        }
         let cacheKey = targetDetailsCacheKey(for: item)
         if let cached = targetDetailsCache[cacheKey] {
             return cached
@@ -239,6 +231,7 @@ public final class FeedService {
     }
 
     public func setFollowing(_ profile: NetworkProfile, follow: Bool) async throws {
+        guard !DemoData.isDemoMode else { throw SourceError.serviceError("Connect an account after exiting preview content to use this action.") }
         guard let source = relationshipMutatorsByNetwork[profile.network] else {
             throw SourceError.unsupported
         }
@@ -246,6 +239,7 @@ public final class FeedService {
     }
 
     public func setPostNotifications(_ profile: NetworkProfile, enabled: Bool) async throws {
+        guard !DemoData.isDemoMode else { throw SourceError.serviceError("Connect an account after exiting preview content to use this action.") }
         guard let source = relationshipMutatorsByNetwork[profile.network] else {
             throw SourceError.unsupported
         }
