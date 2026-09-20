@@ -211,6 +211,9 @@ public struct SpotifyClient {
         // so a failing username lookup must never invalidate an otherwise-working
         // account (it previously surfaced as a bogus "Service error: Validation failed").
         if let resolved = try? await resolveUsername(), !resolved.isEmpty {
+            if let current = try? credentials() {
+                _ = try? credentialStore.saveSpotifyCredentials(current.updatingUsername(username: resolved))
+            }
             return resolved
         }
         return try? credentials().username
@@ -251,7 +254,6 @@ public struct SpotifyClient {
                 variables: [:],
                 sha256Hash: "53bcb064f6cd18c23f752bc324a791194d20df612d8e1239c735144ab0399ced",
             ),
-            includeBrowserHeaders: false,
         )
 
         let decoded = try JSONDecoder().decode(SpotifyProfileAttributesResponse.self, from: data)
@@ -286,6 +288,7 @@ public struct SpotifyClient {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("https://open.spotify.com", forHTTPHeaderField: "Origin")
         request.setValue("https://open.spotify.com/", forHTTPHeaderField: "Referer")
+        request.setValue("WebPlayer", forHTTPHeaderField: "App-Platform")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
         let (data, response) = try await session.data(for: request)
@@ -625,6 +628,10 @@ private struct SpotifyClientTokenResponse: Decodable {
     }
 
     let grantedToken: GrantedToken?
+
+    enum CodingKeys: String, CodingKey {
+        case grantedToken = "granted_token"
+    }
 }
 
 struct SpotifyUserProfileJSON: Decodable {

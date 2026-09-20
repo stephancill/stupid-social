@@ -48,4 +48,55 @@ final class CookieHeaderParserTests: XCTestCase {
         XCTAssertEqual(SpotifyWebPlayerToken.current(date: date), "031750")
         XCTAssertEqual(SpotifyWebPlayerToken.version, "61")
     }
+
+    func testSpotifyLoginCompletesFromSessionCookieWithoutPlayerTokens() throws {
+        let credentials = try XCTUnwrap(CookieHeaderParser.extractSpotifyLoginCredentials(from: [
+            spotifyCookie(name: "sp_dc", value: "session"),
+        ]))
+
+        XCTAssertEqual(credentials.spDC, "session")
+        XCTAssertNil(credentials.spT)
+        XCTAssertTrue(credentials.bearerToken.isEmpty)
+        XCTAssertTrue(credentials.clientToken.isEmpty)
+        XCTAssertEqual(credentials.accessTokenExpiresAt, .distantPast)
+    }
+
+    func testSpotifyLoginKeepsOnlySelectedCookies() throws {
+        let credentials = try XCTUnwrap(CookieHeaderParser.extractSpotifyLoginCredentials(from: [
+            spotifyCookie(name: "sp_dc", value: "session"),
+            spotifyCookie(name: "sp_t", value: "tracking"),
+            spotifyCookie(name: "sp_key", value: "key"),
+            spotifyCookie(name: "unrelated", value: "discard"),
+        ]))
+
+        XCTAssertEqual(credentials.spT, "tracking")
+        XCTAssertEqual(credentials.spKey, "key")
+        XCTAssertNil(credentials.username)
+    }
+
+    func testSpotifyLoginRejectsMissingEmptyExpiredAndForeignSessionCookies() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        for cookies in [
+            [],
+            [spotifyCookie(name: "sp_t", value: "tracking")],
+            [spotifyCookie(name: "sp_dc", value: "")],
+            [spotifyCookie(name: "sp_dc", value: "expired", expires: now.addingTimeInterval(-1))],
+            [spotifyCookie(name: "sp_dc", value: "foreign", domain: ".spotify.com.example.org")],
+            [spotifyCookie(name: "sp_dc", value: "host-only", domain: "accounts.spotify.com")],
+        ] {
+            XCTAssertNil(CookieHeaderParser.extractSpotifyLoginCredentials(from: cookies, now: now))
+        }
+    }
+
+    private func spotifyCookie(name: String, value: String, domain: String = ".spotify.com", expires: Date? = nil) -> HTTPCookie {
+        var properties: [HTTPCookiePropertyKey: Any] = [
+            .name: name,
+            .value: value,
+            .domain: domain,
+            .path: "/",
+            .secure: "TRUE",
+        ]
+        properties[.expires] = expires
+        return HTTPCookie(properties: properties)!
+    }
 }

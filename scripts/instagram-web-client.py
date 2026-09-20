@@ -309,7 +309,10 @@ class InstagramWebClient:
 
     def current_user(self) -> dict[str, Any]:
         response = self.rest_direct_inbox()
-        return {"status": response.get("status"), "viewer": response.get("viewer")}
+        viewer = response.get("viewer") or {}
+        if not viewer.get("username") or not (viewer.get("pk") or viewer.get("id")):
+            raise SystemExit("Instagram inbox did not include the signed-in viewer identity")
+        return {"status": response.get("status"), "viewer": viewer}
 
     def rest_profile_by_username(self, username: str) -> dict[str, Any]:
         self._ensure_bootstrapped()
@@ -961,7 +964,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("stories-tray", help="Call PolarisStoriesV3TrayContainerQuery.")
     story_page = subparsers.add_parser("story-page", help="Fetch /stories/<username>/ and extract the preloaded Relay story payload.")
     story_page.add_argument("username", help="Instagram username with an active story.")
-    subparsers.add_parser("current-user", help="Resolve the current viewer through web GraphQL data.")
+    subparsers.add_parser("current-user", help="Resolve signed-in username and avatar from Direct inbox viewer, without a profile lookup.")
     subparsers.add_parser("news-inbox", help="Call web-visible REST /api/v1/news/inbox/.")
     subparsers.add_parser("direct-inbox", help="Call web-visible REST /api/v1/direct_v2/inbox/.")
 

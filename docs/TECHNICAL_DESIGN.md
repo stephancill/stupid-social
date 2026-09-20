@@ -230,6 +230,22 @@ Known notification types:
 
 Hypersnap seen/write endpoints are not part of the MVP because they return `501 Not Implemented`.
 
+## Native Spotify Login
+
+The native iOS login sheet uses an ephemeral WKWebView for Spotify Accounts only. A cookie-store observer completes login as soon as a nonempty, unexpired `sp_dc` cookie valid for the WebPlayer token host is available; `sp_t` and `sp_key` are optional. Main-frame navigation to `open.spotify.com` is canceled before the full player executes. The sheet no longer intercepts browser fetch/XHR headers or waits for browser-generated bearer/client tokens.
+
+Initial credentials carry an expired access-token date so the existing native Spotify client obtains its first bearer through its established token-renewal path before validating friend activity. Network endpoints and renewal behavior remain unchanged. `scripts/spotify-web-client.py validate-cookie-login` verifies that same flow with only selected cookies and prints a redacted result.
+
+Navigation failures and web-content process termination check for a completed login before displaying a native Retry action. Retry is explicit and retains the ephemeral cookie store within the sheet. Dismissal removes the observer/delegate, stops loading, and invalidates pending cookie callbacks; retry generations reject callbacks from an earlier attempt.
+
+Spotify account identity uses Pathfinder `profileAttributes` with the same Origin, Referer and browser User-Agent as the web client. Fresh client-token responses decode `granted_token`; the resolved username is retained with the session, and token enrichment preserves the client ID. Username lookup remains independent of the buddy-list account-validity check.
+
+## Native Account Identity Repair
+
+Instagram's own-account username, display name and avatar come directly from the authenticated Direct inbox `viewer`. This small identity lookup decodes only the viewer and does not depend on message payloads or a second `web_profile_info` request. Full profile details still use their existing dedicated profile requests.
+
+Foreground connection discovery also retries identity lookup for already-connected Instagram accounts missing a username/avatar and Spotify accounts missing a username. Repair preserves Instagram notification and story preferences, and requires no new login when the saved session works.
+
 ## Bluesky Integration
 
 Use AT Protocol OAuth through the Bluesky entryway authorization server at `https://bsky.social`.

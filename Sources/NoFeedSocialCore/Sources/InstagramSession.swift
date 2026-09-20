@@ -292,7 +292,7 @@ extension InstagramClient {
             URLQueryItem(name: "limit", value: "1"),
         ]
         let data = try await webJSONRequest(credentials: credentials, method: "GET", url: components.url!)
-        let decoded = try JSONDecoder().decode(InstagramDirectInboxResponse.self, from: data)
+        let decoded = try JSONDecoder().decode(InstagramCurrentViewerResponse.self, from: data)
         guard let viewer = decoded.viewer else { throw SourceError.invalidResponse }
         return viewer
     }

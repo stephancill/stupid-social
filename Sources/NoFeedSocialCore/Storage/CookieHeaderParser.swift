@@ -60,6 +60,28 @@ public enum CookieHeaderParser {
             },
         )
     }
+
+    public static func extractSpotifyLoginCredentials(from cookies: [HTTPCookie], now: Date = Date()) -> SpotifyCredentials? {
+        let selected = cookies.filter {
+            let domain = $0.domain.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
+            return ["spotify.com", "open.spotify.com"].contains(domain)
+                && $0.path == "/"
+                && !$0.value.isEmpty
+                && ($0.expiresDate.map { $0 > now } ?? true)
+        }
+        guard let spDC = selected.first(where: { $0.name == "sp_dc" })?.value else { return nil }
+
+        // The existing native refresh path obtains the first token without running the WebPlayer.
+        return SpotifyCredentials(
+            bearerToken: "",
+            clientToken: "",
+            spDC: spDC,
+            spT: selected.first(where: { $0.name == "sp_t" })?.value,
+            spKey: selected.first(where: { $0.name == "sp_key" })?.value,
+            accessTokenExpiresAt: .distantPast,
+            username: nil,
+        )
+    }
 }
 
 public struct XCredentials: Codable, Equatable, Sendable {
@@ -134,6 +156,21 @@ public struct SpotifyCredentials: Codable, Equatable, Sendable {
             spT: spT,
             spKey: spKey,
             accessTokenExpiresAt: expiresAt,
+            initialBearerToken: initialBearerToken,
+            initialBearerTokenExpiresAt: initialBearerTokenExpiresAt,
+            username: username,
+            clientId: clientId,
+        )
+    }
+
+    public func updatingUsername(username: String) -> SpotifyCredentials {
+        SpotifyCredentials(
+            bearerToken: bearerToken,
+            clientToken: clientToken,
+            spDC: spDC,
+            spT: spT,
+            spKey: spKey,
+            accessTokenExpiresAt: accessTokenExpiresAt,
             initialBearerToken: initialBearerToken,
             initialBearerTokenExpiresAt: initialBearerTokenExpiresAt,
             username: username,

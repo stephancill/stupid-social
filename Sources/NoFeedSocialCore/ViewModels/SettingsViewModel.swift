@@ -532,6 +532,7 @@ public final class SettingsViewModel: ObservableObject {
                 initialBearerToken: decoded.accessToken,
                 initialBearerTokenExpiresAt: decoded.accessTokenExpirationTimestampMs.map { Date(timeIntervalSince1970: TimeInterval($0) / 1000) },
                 username: existing.username,
+                clientId: decoded.clientId ?? existing.clientId,
             )
             spotifyCredentialStorage = try keychainStore.saveSpotifyCredentials(enriched)
         } catch {
@@ -703,6 +704,10 @@ public final class SettingsViewModel: ObservableObject {
         let discoveredSpotify = metadataStore.spotifyAccount == nil && (try? keychainStore.loadSpotifyCredentials()) != nil
         let discoveredBluesky = metadataStore.blueskyAccount == nil && (try? keychainStore.loadBlueskyCredentials()) != nil
         let discoveredGitHub = metadataStore.githubAccount == nil && (try? keychainStore.loadGitHubCredentials()) != nil
+        let needsInstagramIdentity = (metadataStore.instagramAccount?.username?.isEmpty != false || metadataStore.instagramAccount?.avatarURL == nil)
+            && (try? keychainStore.loadInstagramCredentials()) != nil
+        let needsSpotifyIdentity = metadataStore.spotifyAccount?.username?.isEmpty != false
+            && (try? keychainStore.loadSpotifyCredentials()) != nil
 
         if discoveredX {
             metadataStore.xAccount = XAccountMetadata(accountId: "x", handle: nil, status: .valid)
@@ -741,10 +746,10 @@ public final class SettingsViewModel: ObservableObject {
         if discoveredX {
             await validateDiscoveredXCredentials()
         }
-        if discoveredInstagram {
+        if needsInstagramIdentity {
             await validateDiscoveredInstagramCredentials()
         }
-        if discoveredSpotify {
+        if needsSpotifyIdentity {
             await validateDiscoveredSpotifyCredentials()
         }
         if discoveredBluesky {
@@ -777,7 +782,7 @@ public final class SettingsViewModel: ObservableObject {
     private func validateDiscoveredInstagramCredentials() async {
         do {
             let profile = try await InstagramClient(credentialStore: keychainStore).currentUserProfile()
-            metadataStore.instagramAccount = instagramMetadata(from: profile, categories: Set(InstagramNotificationCategory.allCases))
+            metadataStore.instagramAccount = instagramMetadata(from: profile, categories: metadataStore.instagramAccount?.enabledCategories ?? Set(InstagramNotificationCategory.allCases))
             instagramStatus = .valid
         } catch SourceError.notConfigured {
             markInstagramCredentialsInvalid()

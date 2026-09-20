@@ -21,6 +21,10 @@ public struct InstagramCurrentUserProfile {
     public let isPrivate: Bool?
 }
 
+struct InstagramCurrentViewerResponse: Decodable {
+    let viewer: InstagramDirectViewer?
+}
+
 struct InstagramWebStoriesTrayResponse: Decodable {
     struct Payload: Decodable {
         let reelsTray: InstagramReelsTrayResponse?

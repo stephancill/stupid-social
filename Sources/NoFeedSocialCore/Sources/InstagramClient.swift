@@ -81,20 +81,21 @@ public final class InstagramClient {
             throw SourceError.notConfigured
         }
         let viewer = try await directInboxViewer(credentials: credentials)
-        let profileResponse = try await webProfile(username: viewer.username, credentials: credentials)
-        let profile = profileResponse.data.user
+        guard let userID = UInt64(viewer.pk), userID > 0, !viewer.username.isEmpty else {
+            throw SourceError.invalidResponse
+        }
         return InstagramCurrentUserProfile(
-            pk: profile.id.flatMap(UInt64.init) ?? UInt64(viewer.pk) ?? UInt64(credentials.dsUserId) ?? 0,
-            username: profile.username ?? viewer.username,
-            fullName: profile.fullName,
-            profilePicURL: profile.profilePicUrl.flatMap(URL.init) ?? viewer.profilePicUrl.flatMap(URL.init),
-            followerCount: profile.edgeFollowedBy?.count,
-            followingCount: profile.edgeFollow?.count,
-            postsCount: profile.edgeOwnerToTimelineMedia?.count,
-            bio: profile.biography,
-            websiteURL: profile.externalUrl.flatMap(URL.init),
-            isVerified: profile.isVerified,
-            isPrivate: profile.isPrivate,
+            pk: userID,
+            username: viewer.username,
+            fullName: viewer.fullName,
+            profilePicURL: viewer.profilePicUrl.flatMap(URL.init),
+            followerCount: nil,
+            followingCount: nil,
+            postsCount: nil,
+            bio: nil,
+            websiteURL: nil,
+            isVerified: nil,
+            isPrivate: nil,
         )
     }
 

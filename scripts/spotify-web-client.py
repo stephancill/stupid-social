@@ -187,6 +187,7 @@ class SpotifyWebClient:
         token = granted.get("token")
         if not token:
             raise SystemExit("No granted_token.token in client-token mint response")
+        self.credentials["clientToken"] = token
         return {
             "status": "ok",
             "client_token": "present",
@@ -215,6 +216,9 @@ class SpotifyWebClient:
             body=json.dumps(body, separators=(",", ":")).encode(),
         )
         username = response.get("data", {}).get("me", {}).get("profile", {}).get("username")
+        if not isinstance(username, str) or not username:
+            raise SystemExit("Spotify profile response did not include a username")
+        self.credentials["username"] = username
         return {"status": "ok", "username": username}
 
     def server_time(self) -> float | None:
@@ -736,7 +740,9 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("server-time", help="Fetch Spotify server time.")
     subparsers.add_parser("totp", help="Print a current Spotify WebPlayer TOTP for debugging.")
     subparsers.add_parser("buddylist", help="Fetch friend listening activity from presence-view/v1/buddylist.")
+    subparsers.add_parser("validate-cookie-login", help="Validate login using only selected cookies, without captured WebPlayer tokens.")
     subparsers.add_parser("profile-attributes", help="Resolve the current user through api-partner profileAttributes.")
+    subparsers.add_parser("resolve-username", help="Resolve the current user with a fresh session client-token.")
     subparsers.add_parser("current-username", help="Resolve the current user via GET api.spotify.com/v1/me (same bearer token as buddylist, no client-token).")
     subparsers.add_parser("client-token", help="Mint a fresh client-token from the same session as buddylist (spclient/Pthfinder 'client-token' header).")
     subparsers.add_parser("username", help="Resolve username by minting a fresh client-token, then Pathfinder (reliable when buddylist works).")
@@ -786,6 +792,21 @@ def main() -> None:
         result = {"totp": spotify_totp(), "totpVer": TOTP_VERSION, "selfTest": spotify_totp(1_777_993_436) == "031750"}
     elif args.command == "buddylist":
         result = client.buddylist()
+    elif args.command == "validate-cookie-login":
+        client.credentials = {
+            key: value for key, value in credentials.items()
+            if key in {"spDC", "sp_dc", "spT", "sp_t", "spKey", "sp_key"}
+        }
+        token = client.refresh_web_player_token(reason="transport")
+        activity = client.buddylist()
+        result = {
+            "status": "ok",
+            "captured_player_tokens_required": False,
+            "token": token,
+            "friend_count": len(activity.get("friends", [])),
+        }
+    elif args.command == "resolve-username":
+        result = client.resolve_username()
     elif args.command == "profile-attributes":
         result = client.profile_attributes()
     elif args.command == "current-username":
