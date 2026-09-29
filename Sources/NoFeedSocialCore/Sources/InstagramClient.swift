@@ -206,15 +206,10 @@ public final class InstagramClient {
             throw SourceError.notConfigured
         }
 
-        let trimmedIdentifier = uid.trimmingCharacters(in: .whitespacesAndNewlines)
-        let escapedIdentifier = trimmedIdentifier.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? trimmedIdentifier
-        let username: String = if trimmedIdentifier.allSatisfy(\.isNumber), let account = try? await verifiedUser(), String(account.pk) == trimmedIdentifier {
-            account.username
-        } else {
-            escapedIdentifier
-        }
-        let decoded = try await webProfile(username: username, credentials: credentials)
-        return InstagramUserInfoResponse(user: decoded.data.user.asInfoUser, status: decoded.status)
+        let data = try await profileQuery(credentials: credentials, identifier: uid)
+        let decoded = try JSONDecoder().decode(InstagramProfileQueryResponse.self, from: data)
+        guard let user = decoded.data.user else { throw SourceError.invalidResponse }
+        return InstagramUserInfoResponse(user: user, status: "ok")
     }
 
     public func userPosts(uid: String, count: Int = 12) async throws -> [NetworkProfilePost] {
@@ -230,25 +225,13 @@ public final class InstagramClient {
         guard !trimmed.isEmpty else {
             return NetworkProfilePostsPage(posts: [], nextCursor: nil, hasMore: false)
         }
-        let pathIdentifier = trimmed.urlPathEncoded
-        var path = if trimmed.allSatisfy(\.isNumber) {
-            "/api/v1/feed/user/\(pathIdentifier)/?count=\(count)"
-        } else {
-            "/api/v1/feed/user/\(pathIdentifier)/username/?count=\(count)"
-        }
-        if let cursor, !cursor.isEmpty {
-            path += "&max_id=\(cursor.urlFormEncoded)"
-        }
-        let data = try await webJSONRequest(
-            credentials: credentials,
-            method: "GET",
-            path: path,
-        )
-        let decoded = try JSONDecoder().decode(InstagramUserFeedResponse.self, from: data)
+        let data = try await profileQuery(credentials: credentials, identifier: trimmed, posts: true, cursor: cursor, count: count)
+        let decoded = try JSONDecoder().decode(InstagramProfilePostsResponse.self, from: data).data.connection
+        guard !decoded.pageInfo.hasNextPage || decoded.pageInfo.endCursor?.isEmpty == false else { throw SourceError.invalidResponse }
         return NetworkProfilePostsPage(
-            posts: decoded.items.compactMap(\.profilePost),
-            nextCursor: decoded.nextMaxId,
-            hasMore: decoded.moreAvailable == true && decoded.nextMaxId?.isEmpty == false,
+            posts: decoded.edges.compactMap(\.node.profilePost),
+            nextCursor: decoded.pageInfo.endCursor,
+            hasMore: decoded.pageInfo.hasNextPage,
         )
     }
 
@@ -267,11 +250,6 @@ public final class InstagramClient {
         )
         let decoded = try JSONDecoder().decode(InstagramTopSearchResponse.self, from: data)
         return decoded.users.map(\.user)
-    }
-
-    private func webProfile(username: String, credentials: InstagramCredentials) async throws -> InstagramWebProfileInfoResponse {
-        let data = try await webJSONRequest(credentials: credentials, method: "GET", path: "/api/v1/users/web_profile_info/?username=\(username.urlFormEncoded)")
-        return try JSONDecoder().decode(InstagramWebProfileInfoResponse.self, from: data)
     }
 
     func mediaInfo(mediaId: String) async throws -> InstagramMediaInfoResponse {

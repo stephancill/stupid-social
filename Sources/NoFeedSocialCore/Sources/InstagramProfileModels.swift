@@ -56,64 +56,6 @@ struct InstagramWebViewer: Decodable {
     let user: User
 }
 
-struct InstagramWebProfileInfoResponse: Decodable {
-    struct Payload: Decodable {
-        let user: User
-    }
-
-    struct User: Decodable {
-        let id: String?
-        let username: String?
-        let fullName: String?
-        let profilePicUrl: String?
-        let edgeFollowedBy: CountEdge?
-        let edgeFollow: CountEdge?
-        let biography: String?
-        let edgeOwnerToTimelineMedia: CountEdge?
-        let isVerified: Bool?
-        let isPrivate: Bool?
-        let externalUrl: String?
-
-        enum CodingKeys: String, CodingKey {
-            case id
-            case username
-            case fullName = "full_name"
-            case profilePicUrl = "profile_pic_url"
-            case edgeFollowedBy = "edge_followed_by"
-            case edgeFollow = "edge_follow"
-            case biography
-            case edgeOwnerToTimelineMedia = "edge_owner_to_timeline_media"
-            case isVerified = "is_verified"
-            case isPrivate = "is_private"
-            case externalUrl = "external_url"
-        }
-
-        var asInfoUser: InstagramUserInfoResponse.InfoUser {
-            InstagramUserInfoResponse.InfoUser(
-                pk: id.flatMap(UInt64.init),
-                username: username,
-                fullName: fullName,
-                profilePicUrl: profilePicUrl,
-                followerCount: edgeFollowedBy?.count,
-                followingCount: edgeFollow?.count,
-                biography: biography,
-                mediaCount: edgeOwnerToTimelineMedia?.count,
-                isVerified: isVerified,
-                isPrivate: isPrivate,
-                externalUrl: externalUrl,
-                friendshipStatus: nil,
-            )
-        }
-    }
-
-    struct CountEdge: Decodable {
-        let count: Int?
-    }
-
-    let data: Payload
-    let status: String?
-}
-
 struct InstagramCurrentUserResponse: Decodable {
     struct User: Decodable {
         let pk: UInt64
@@ -222,10 +164,54 @@ public struct InstagramUserInfoResponse: Decodable {
         public let following: Bool?
         public let followedBy: Bool?
         public let isBestie: Bool?
+
+        enum CodingKeys: String, CodingKey {
+            case following
+            case followedBy = "followed_by"
+            case isBestie = "is_bestie"
+        }
     }
 
     public let user: InfoUser
     public let status: String?
+}
+
+struct InstagramProfileQueryResponse: Decodable {
+    struct Payload: Decodable {
+        let user: InstagramUserInfoResponse.InfoUser?
+    }
+
+    let data: Payload
+}
+
+struct InstagramProfilePostsResponse: Decodable {
+    struct Payload: Decodable {
+        let connection: Connection
+        enum CodingKeys: String, CodingKey {
+            case connection = "xdt_api__v1__feed__user_timeline_graphql_connection"
+        }
+    }
+
+    struct Connection: Decodable {
+        let edges: [Edge]
+        let pageInfo: PageInfo
+        enum CodingKeys: String, CodingKey {
+            case edges
+            case pageInfo = "page_info"
+        }
+    }
+
+    struct Edge: Decodable { let node: InstagramMediaInfoItem }
+    struct PageInfo: Decodable {
+        let endCursor: String?
+        let hasNextPage: Bool
+        enum CodingKeys: String, CodingKey {
+            case endCursor = "end_cursor"
+            case hasNextPage = "has_next_page"
+        }
+    }
+
+    let data: Payload
 }
 
 struct InstagramTopSearchResponse: Decodable {
@@ -240,20 +226,6 @@ struct InstagramTopSearchResponse: Decodable {
 struct InstagramMediaInfoResponse: Decodable {
     let items: [InstagramMediaInfoItem]
     let status: String?
-}
-
-struct InstagramUserFeedResponse: Decodable {
-    let items: [InstagramMediaInfoItem]
-    let moreAvailable: Bool?
-    let nextMaxId: String?
-    let status: String?
-
-    enum CodingKeys: String, CodingKey {
-        case items
-        case moreAvailable = "more_available"
-        case nextMaxId = "next_max_id"
-        case status
-    }
 }
 
 struct InstagramMediaInfoItem: Decodable {

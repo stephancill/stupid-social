@@ -35,8 +35,6 @@ final class InstagramNotificationDecodingTests: XCTestCase {
         let json = #"""
         {
           "status": "ok",
-          "more_available": true,
-          "next_max_id": "3924926324435168551_300947541",
           "items": [
             {
               "id": "3940978710857393634_300947541",
@@ -83,11 +81,9 @@ final class InstagramNotificationDecodingTests: XCTestCase {
         }
         """#.data(using: .utf8)!
 
-        let response = try JSONDecoder().decode(InstagramUserFeedResponse.self, from: json)
+        let response = try JSONDecoder().decode(InstagramMediaInfoResponse.self, from: json)
         let post = try XCTUnwrap(response.items.first?.profilePost)
 
-        XCTAssertEqual(response.nextMaxId, "3924926324435168551_300947541")
-        XCTAssertEqual(response.moreAvailable, true)
         XCTAssertEqual(post.id, "3940978710857393634_300947541")
         XCTAssertEqual(post.imageURL, URL(string: "https://example.com/large.jpg"))
         XCTAssertEqual(post.thumbnailURL, URL(string: "https://example.com/small.jpg"))
@@ -126,7 +122,7 @@ final class InstagramNotificationDecodingTests: XCTestCase {
         }
         """#.data(using: .utf8)!
 
-        let response = try JSONDecoder().decode(InstagramUserFeedResponse.self, from: json)
+        let response = try JSONDecoder().decode(InstagramMediaInfoResponse.self, from: json)
         let post = try XCTUnwrap(response.items.first?.profilePost)
 
         XCTAssertEqual(post.imageURL, URL(string: "https://example.com/post.jpg"))

@@ -322,7 +322,7 @@ public final class InstagramNotificationSource: NotificationFetching, AccountVal
             nil
         }
 
-        if (response.user.mediaCount ?? 0) > 0, postsPage?.posts.isEmpty != false {
+        if response.user.isPrivate != true, (response.user.mediaCount ?? 0) > 0, postsPage?.posts.isEmpty != false {
             throw SourceError.serviceError("Instagram profile has posts, but no posts were decoded.")
         }
         return networkProfile(from: response.user, postsPage: postsPage)

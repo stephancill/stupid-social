@@ -38,6 +38,7 @@ Sources/
     Sources/                        # Network clients + notification sources
       NotificationSource.swift      # Protocol definition
       InstagramClient.swift / InstagramSession.swift / Instagram*Models.swift / Instagram*Parser.swift / InstagramNotificationSource.swift
+      InstagramProfile.swift       # Current web profile/posts queries and runtime configuration
       GitHubClient.swift
       GitHubActivitySource.swift
       GitHubNotificationSource.swift
