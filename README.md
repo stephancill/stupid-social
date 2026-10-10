@@ -62,6 +62,10 @@ xtool dev run --simulator --no-attach --no-logs
 open xtool/NoFeedSocial.xcworkspace
 ```
 
+## Provider development
+
+For provider API development, use the [TypeScript clients](docs/CLIENTS.md). They run with Bun and reuse the Android Expo app's request, authentication and parsing code.
+
 ## Release
 
 ### Prerequisites
@@ -101,4 +105,3 @@ open xtool/NoFeedSocial.xcworkspace
    - Set category to **Social Networking** under **App Information**
    - First external build requires Beta App Review approval
    - When ready: **App Store** tab → select build → fill in metadata → **Submit for Review**
-

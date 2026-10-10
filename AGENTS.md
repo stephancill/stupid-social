@@ -65,6 +65,28 @@ Sources/
 
 - Keep `## Project Structure` in sync when files are added, moved, or renamed.
 
+- `android-app/`: Expo Android implementation for all six networks; generated native projects and dependencies are ignored.
+  - `App.tsx`: React Navigation entry point; `ValidationApp.tsx`: retained diagnostic harness.
+  - `src/app/`: normalized models, SQLite/SecureStore storage, React Query orchestration, navigation and preview content.
+  - `src/screens/`: feed, accounts/login, search/profiles/details, story viewer, Instagram composer.
+  - `src/components/`: `forms.tsx` provides native Android rows/sections/inputs, `native.tsx` toolbar/menu adapters, and `material.tsx` native icons/avatars/theme hosts; `social.tsx` preserves the iOS notification content inside Compose rows; `StoryBar.tsx` preserves provider-specific bubbles and the vertical pager; `typography.ts` shares Android secondary-text metrics.
+  - `src/app/presentation.ts`: iOS-equivalent notification copy/preview rules and story ordering.
+  - `src/app/loginCookies.ts`: selected login-cookie detection, single-attempt validation and retry/cancellation guards for embedded Expo sign-in.
+  - `src/app/composer.ts` and `src/components/StoryCaption.tsx`: custom story caption gestures/styles, cursor-based mentions, and export geometry shared by the full-screen Instagram composer.
+  - `assets/networks/`: the same badge PNGs used by the Swift app; `assets/material/`: licensed Material vector drawables for native Android controls.
+  - `assets/android-icon.png` and `assets/android-icon-foreground.png`: enlarged legacy and adaptive Android launcher artwork, configured in `app.config.ts`.
+  - `src/x/`, `src/instagram/`, `src/github/`, `src/providers/`: source clients and parsers.
+  - `src/clientRuntime.ts` and `src/expoRuntime.ts`: provider runtime contract and Expo storage, fetch, crypto, file and OAuth adapters; provider clients also run under Bun without importing native modules.
+  - `scripts/clients/`: Bun runtime, credential input/output and command dispatch for the root `scripts/*-web-client.ts` probes. These import the production Expo clients directly; see `docs/CLIENTS.md`.
+  - `src/instagram/profile.ts`: profile-page identity, Relay runtime variables, and posts connection parsing.
+  - `src/instagram/homepage.ts`: authenticated homepage viewer validation and preloaded stories tray parsing.
+  - `modules/my-module/`: narrow Android CookieManager, early WebView injection, keyboard and diagnostic adapters.
+  - `src/components/*.ios.*`, `src/bridge.ios.tsx`, `modules/my-module/ios/`: SwiftUI controls, WKWebView cookies and hardware-keyboard adapters for the isolated Social Expo iOS simulator comparison build.
+  - `src/components/StoryIcon*`, `CaptionAccessory*`, `captionFonts*`: platform-specific story symbols, font families and caption controls. `modules/my-module/ios/StoryCaptionToolbar.swift` attaches the native iOS editing accessory.
+  - `scripts/run-ios-simulator.sh`: standalone comparison build/install with simulator-only Keychain signing; see `docs/IOS_EXPO_COMPARISON.md` for limitations.
+  - `tests/`: sanitized parser/cache regression tests; `scripts/`: local validation fixture server.
+- Android changes use the app's Bun check/lint/format/test scripts and should be installed and launched in the Android emulator; iOS-only build rules below apply to Swift changes.
+
 ## Required Context
 
 - Always read `docs/PLAN.md` before making product, architecture, or implementation decisions.
@@ -101,7 +123,7 @@ Sources/
 
 ## Network Integration
 
-- Always diagnose network behavior and validate the fix in the dependency-free Python client first, before implementing or changing the native Swift client. The probes (`scripts/x-web-client.py`, `scripts/instagram-web-client.py`, `scripts/github-web-client.py`, `scripts/spotify-web-client.py`, `scripts/bluesky-web-client.py`) are the source of truth for endpoint behavior, auth/session freshness, redirects, and response shape. Reproduce the issue live with the probe (using simulator credentials where applicable), add or update a probe command that demonstrates the diagnosis, then port the validated behavior into Swift. Do not guess endpoint/auth behavior from Swift alone.
+- Always diagnose network behavior and validate the fix in the shared TypeScript client first, before implementing or changing the native Swift client. Run the probes with Bun (`scripts/x-web-client.ts`, `scripts/instagram-web-client.ts`, `scripts/github-web-client.ts`, `scripts/spotify-web-client.ts`, `scripts/bluesky-web-client.ts`); they reuse the Expo provider clients and are the source of truth for endpoint behavior, auth/session freshness, redirects, and response shape. Reproduce the issue live with the probe (using simulator credentials where applicable), update the shared client and probe command, then port the validated behavior into Swift. Do not create a separate probe implementation of the same endpoint. See `docs/CLIENTS.md` for credential handling and command side effects.
 - Implement X as a native Swift client using `docs/CLI_DOCS.md` and the patched `twitter-cli` behavior as references only.
 - Do not shell out to `twitter-cli` for the production app path.
 - X background polling must use count-only behavior to avoid marking notifications read server-side.
@@ -109,7 +131,7 @@ Sources/
 - Use Hypersnap at `https://haatz.quilibrium.com` for Farcaster reads.
 - Resolve Farcaster usernames with `GET /v2/farcaster/user/by-username`.
 - Fetch Farcaster notifications with `GET /v2/farcaster/notifications`.
-- For Instagram AND X mutations (follow/unfollow, notify toggles, likes, seen, posting), first validate the new web endpoint in the dependency-free probe scripts (`scripts/instagram-web-client.py` / `scripts/x-web-client.py`) against live simulator credentials BEFORE implementing the mutation in the native Swift client. Add the probe command, verify it against a real account (restoring any changed state), then port the validated request shape (endpoint, headers, root field name, variables) into the client. This mirrors the existing like-story/seen/posting flow: the Python probe is the source of truth for endpoint behavior.
+- For Instagram AND X mutations (follow/unfollow, notify toggles, likes, seen, posting), first validate the new web endpoint through the shared TypeScript probes (`scripts/instagram-web-client.ts` / `scripts/x-web-client.ts`) against live simulator credentials BEFORE implementing the mutation in the native Swift client. Add the probe command, verify it against a real account (restoring any changed state), then port the validated request shape (endpoint, headers, root field name, variables) into the client. Existing mutations can be regression-tested with sanitized fixtures during refactors without repeating live side effects.
 
 ## Build And Install
 

@@ -1,0 +1,8 @@
+{
+  "extends": "expo/tsconfig.base",
+  "include": ["**/*.ts", "**/*.tsx", "../scripts/*-web-client.ts"],
+  "compilerOptions": {
+    "strict": true,
+    "types": ["react", "bun"]
+  }
+}

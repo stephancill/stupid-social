@@ -1,0 +1,26 @@
+{
+  "expo": {
+    "name": "stupid social",
+    "slug": "stupid-social",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "android": {
+      "predictiveBackGestureEnabled": false,
+      "package": "net.stupidtech.socialvalidation",
+      "permissions": [],
+      "versionCode": 1
+    },
+    "plugins": [
+      "expo-secure-store",
+      "expo-web-browser",
+      "expo-sqlite",
+      "expo-font"
+    ],
+    "scheme": "net.stupidtech",
+    "platforms": [
+      "android"
+    ]
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "platforms": [
+    "android",
+    "apple"
+  ],
+  "android": {
+    "modules": [
+      "net.stupidtech.socialvalidation.ValidationBridgeModule",
+      "net.stupidtech.socialvalidation.StoryKeyboardModule"
+    ]
+  },
+  "apple": {
+    "modules": [
+      "SocialPlatformModule",
+      "SocialKeyboardModule",
+      "StoryCaptionToolbarModule"
+    ]
+  }
+}

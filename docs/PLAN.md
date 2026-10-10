@@ -33,10 +33,20 @@ Build an iOS app with xtool that shows a combined social network notifications f
 
 ## Platform
 
-- iOS only. The previous macOS target was removed.
+- iOS Swift app and a separate Android Expo app. The previous macOS target was removed.
+- The Expo codebase also has an isolated iOS simulator comparison build, named Social Expo. Use the Swift app as its visual reference; the comparison build does not replace the supported Swift app or establish production iOS parity.
 - Use xtool for project build and run workflows.
 
+## Provider Development Clients
+
+- Maintain TypeScript command-line clients for X, Instagram, GitHub, Spotify and Bluesky, running under Bun and reusing the Expo app's provider code.
+- Keep request construction, authentication renewal, cookie rotation and parsing shared between the probes and the Expo app. Separate only platform services such as secure storage, fetch, files, crypto and browser login.
+- Retain the existing probe commands, with explicit read/mutation semantics and redacted output. Replace the Python entry points without compatibility wrappers; document interface changes in `CLIENTS.md`.
+- Validate endpoint changes through these probes before porting them into the native Swift app.
+
 ## Account Setup
+
+- Android's embedded X, Instagram, GitHub and Spotify login screens detect the selected session cookies automatically, validate the account, then return to its connection page. A Continue button is not required. Incomplete sign-in stays open; failed validation offers an explicit retry and does not repeatedly submit the same session.
 
 ### X
 
@@ -204,3 +214,22 @@ Do not persist raw source payloads for the MVP unless needed during development 
 - Keep preview controls hidden behind four taps on the Settings About heading; do not add a public Try Demo button.
 - Reviewers explicitly select Load preview content after revealing developer settings. Document these steps in App Review Information.
 - Preserve real notification cache and credentials when loading/unloading sample content.
+
+## Android App
+
+The user approved the Android Expo port after successful fresh X login validation and selected **all current networks** for the first build: X, Farcaster, Instagram, Bluesky, GitHub, and Spotify. The existing Swift iOS app remains supported and is the behavioral reference.
+
+- Build the Android app in `android-app/` with Expo and narrow native Android adapters.
+- Preserve the iOS content, hierarchy, section order, and overall layout across the feed, details, search, settings, and account forms. Standard rows, sections, navigation, menus, inputs, and switches must use platform-native elements: existing SwiftUI on iOS and native Android controls in Expo. Keep iOS screens identical to the current Swift app; Android should look native rather than imitate iOS chrome. Custom story bar/viewer/composer layouts retain the Swift dimensions, badges, provider-specific treatments, and gestures in light/dark appearance.
+- Include the combined notification feed, search, profile and notification details, Instagram/Spotify/GitHub stories, and Instagram photo-story composition, saving, and publishing. The notification feed has no network/category filter menu; keep account notification preferences in Settings and network filtering in Search.
+- Separate Android feed notifications with native dividers matching the iOS insets and subtle gray treatment: start under the avatars/text and end at the trailing content margin. Use two feed content text sizes: regular for notification summaries/previews and small for timestamps, actor counts, and story labels; retain the native app bar typography.
+- Leave a small gap between a notification's title and preview. Show each event once across refreshes, including X follows whose timeline IDs change; retain distinct events and recent cached history.
+- Preserve the foreground/manual refresh semantics of each source. Do not add a background service or push backend.
+- Use one account per network. Sign in through Android WebViews for cookie-based networks, a username for Farcaster, and independent native-browser OAuth for Bluesky.
+- Store Android sessions with Keystore-backed secure storage. Account metadata, normalized notifications, preferences, and story seen state remain local to the Android device; Apple iCloud synchronization is not available on Android.
+- Omit the iCloud comparison note from Android Settings.
+- Style Android form sections like Material Android Settings: rounded tonal groups, inset section headings, native list rows and switches, and small supporting account-status text beneath connection names. Apply the same section treatment to account and detail pages while preserving their content order and the iOS presentation.
+- The Android Instagram composer must use the same custom full-screen canvas as iOS: floating photo/text/background/save controls, aspect-fit photos, inline editable captions with style controls and mention suggestions, drag/pinch placement, drag-to-trash, and the bottom Post Story action. Do not present the creator as a scrolling form.
+- Preserve the successfully validated X session in the development app. Use a separate production application ID for distribution.
+- Include preview content behind four taps on Settings → About, preserving real data and disabling account mutations while previewing.
+- Spotify's emulator login issue is not a blocker to implementing its Android client. Keep fresh Spotify, GitHub, and full Bluesky session validation explicitly separate from implemented functionality.
