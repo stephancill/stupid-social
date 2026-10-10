@@ -17,7 +17,7 @@ extension InstagramClient {
         }
         if docIds[operation] == nil || (!posts && profileID == nil) {
             let pageUsername: String = if let username { username }
-            else { try await directInboxViewer(credentials: credentials).username }
+            else { try instagramHomepageViewer(html: state.html, accountID: credentials.dsUserId).username }
             let html = try await webTextRequest(credentials: credentials, method: "GET", url: URL(string: Self.baseURL + "/\(pageUsername.urlPathEncoded)/")!, headers: basePageHeaders(credentials: credentials))
             if profileID == nil, !posts {
                 profileID = instagramProfileRouteID(html: html)

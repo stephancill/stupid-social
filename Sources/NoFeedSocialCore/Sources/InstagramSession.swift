@@ -232,15 +232,16 @@ extension InstagramClient {
 
     func ensureBootstrapped(credentials: InstagramCredentials) async throws {
         if webState == nil {
-            if let inFlightBootstrap {
-                _ = try await inFlightBootstrap.value
-            } else {
-                let task = Task { try await refreshState(credentials: credentials) }
-                inFlightBootstrap = task
-                defer { inFlightBootstrap = nil }
-                _ = try await task.value
-            }
+            _ = try await homepageState(credentials: credentials)
         }
+    }
+
+    func homepageState(credentials: InstagramCredentials) async throws -> InstagramWebState {
+        if let inFlightBootstrap { return try await inFlightBootstrap.value }
+        let task = Task { try await refreshState(credentials: credentials) }
+        inFlightBootstrap = task
+        defer { inFlightBootstrap = nil }
+        return try await task.value
     }
 
     @discardableResult
@@ -264,37 +265,13 @@ extension InstagramClient {
     }
 
     func storiesTrayResponse(credentials: InstagramCredentials) async throws -> InstagramReelsTrayResponse {
-        let docID = try await docId(credentials: credentials, command: "stories-tray")
-        let variables: [String: Any] = [
-            "data": [
-                "is_following_feed": false,
-                "reason": "web_home",
-            ],
-            "suggestedUsersData": [
-                "max_id": "",
-                "max_number_to_display": 0,
-                "module": "discover_people",
-                "paginate": false,
-            ],
-        ]
-        let data = try await graphqlGet(credentials: credentials, docID: docID, variables: variables)
-        let decoded = try JSONDecoder().decode(InstagramWebStoriesTrayResponse.self, from: data)
-        guard let tray = decoded.data.reelsTray else { throw SourceError.invalidResponse }
-        return tray
+        let state = try await homepageState(credentials: credentials)
+        return try instagramHomepageTray(html: state.html, accountID: credentials.dsUserId)
     }
 
-    func directInboxViewer(credentials: InstagramCredentials) async throws -> InstagramDirectViewer {
-        var components = URLComponents(string: Self.baseURL + "/api/v1/direct_v2/inbox/")!
-        components.queryItems = [
-            URLQueryItem(name: "visual_message_return_type", value: "unseen"),
-            URLQueryItem(name: "thread_message_limit", value: "1"),
-            URLQueryItem(name: "persistentBadging", value: "true"),
-            URLQueryItem(name: "limit", value: "1"),
-        ]
-        let data = try await webJSONRequest(credentials: credentials, method: "GET", url: components.url!)
-        let decoded = try JSONDecoder().decode(InstagramCurrentViewerResponse.self, from: data)
-        guard let viewer = decoded.viewer else { throw SourceError.invalidResponse }
-        return viewer
+    func homepageViewer(credentials: InstagramCredentials) async throws -> InstagramDirectViewer {
+        let state = try await homepageState(credentials: credentials)
+        return try instagramHomepageViewer(html: state.html, accountID: credentials.dsUserId)
     }
 
     @discardableResult
@@ -435,6 +412,7 @@ extension InstagramClient {
         request.httpMethod = method
         request.httpBody = body
         request.allHTTPHeaderFields = headers
+        request.cachePolicy = .reloadIgnoringLocalCacheData
         configureRequest(&request)
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw SourceError.invalidResponse }
@@ -442,6 +420,9 @@ extension InstagramClient {
             wwwClaim = claim
         }
         if http.statusCode == 401 || http.statusCode == 403 { throw SourceError.notConfigured }
+        if let path = http.url?.path, path.hasPrefix("/accounts/login") || path.hasPrefix("/challenge/") {
+            throw SourceError.notConfigured
+        }
         guard (200 ..< 300).contains(http.statusCode) else {
             throw SourceError.serviceError(instagramRequestError(statusCode: http.statusCode, data: data))
         }

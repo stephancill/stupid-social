@@ -80,7 +80,7 @@ public final class InstagramClient {
         guard let credentials = try credentialStore.loadInstagramCredentials() else {
             throw SourceError.notConfigured
         }
-        let viewer = try await directInboxViewer(credentials: credentials)
+        let viewer = try await homepageViewer(credentials: credentials)
         guard let userID = UInt64(viewer.pk), userID > 0, !viewer.username.isEmpty else {
             throw SourceError.invalidResponse
         }

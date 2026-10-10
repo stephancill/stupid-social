@@ -21,41 +21,6 @@ public struct InstagramCurrentUserProfile {
     public let isPrivate: Bool?
 }
 
-struct InstagramCurrentViewerResponse: Decodable {
-    let viewer: InstagramDirectViewer?
-}
-
-struct InstagramWebStoriesTrayResponse: Decodable {
-    struct Payload: Decodable {
-        let reelsTray: InstagramReelsTrayResponse?
-        let xdtViewer: InstagramWebViewer?
-
-        enum CodingKeys: String, CodingKey {
-            case reelsTray = "xdt_api__v1__feed__reels_tray"
-            case xdtViewer = "xdt_viewer"
-        }
-    }
-
-    let data: Payload
-    let status: String?
-}
-
-struct InstagramWebViewer: Decodable {
-    struct User: Decodable {
-        let id: String
-        let username: String
-        let profilePicUrl: String?
-
-        enum CodingKeys: String, CodingKey {
-            case id
-            case username
-            case profilePicUrl = "profile_pic_url"
-        }
-    }
-
-    let user: User
-}
-
 struct InstagramCurrentUserResponse: Decodable {
     struct User: Decodable {
         let pk: UInt64

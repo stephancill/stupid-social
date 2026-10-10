@@ -242,7 +242,7 @@ Spotify account identity uses Pathfinder `profileAttributes` with the same Origi
 
 ## Native Account Identity Repair
 
-Instagram's own-account username, display name and avatar come directly from the authenticated Direct inbox `viewer`. This small identity lookup decodes only the viewer and does not depend on message payloads or a second `web_profile_info` request. Full profile details still use their existing dedicated profile requests.
+Instagram's own-account username, display name and avatar come from the authenticated homepage's `PolarisViewer` module. Verify its numeric identity against the selected session's user ID before accepting it. The stories tray comes from that page's preloaded `xdt_api__v1__feed__reels_tray`, with an empty tray distinguished from a missing or malformed payload. Identity and tray reads request fresh homepage HTML and coalesce overlapping requests; they do not use Direct inbox identity or the rejected standalone tray GraphQL query. Explicit logout, login/challenge redirects and account mismatches require reconnection; generic service and parsing failures preserve saved credentials and known identity/preferences. Story slides still use their individual preloaded story-page payloads.
 
 Foreground connection discovery also retries identity lookup for already-connected Instagram accounts missing a username/avatar and Spotify accounts missing a username. Repair preserves Instagram notification and story preferences, and requires no new login when the saved session works.
 

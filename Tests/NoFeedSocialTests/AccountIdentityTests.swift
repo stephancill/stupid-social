@@ -11,11 +11,9 @@ final class AccountIdentityTests: XCTestCase {
         IdentityURLProtocol.handler = { request in
             switch request.url?.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")) {
             case "":
-                return (200, "<html></html>")
-            case "api/v1/direct_v2/inbox":
-                return (200, #"{"status":"ok","viewer":{"pk":42,"username":"example","full_name":"Example","profile_pic_url":"https://example.org/avatar.jpg"},"inbox":{"threads":"unrelated schema"}}"#)
+                return (200, instagramHomepage)
             default:
-                XCTFail("Account identity must not request the rate-limited profile endpoint")
+                XCTFail("Account identity must use only the authenticated homepage")
                 return (429, "{}")
             }
         }
@@ -33,7 +31,8 @@ final class AccountIdentityTests: XCTestCase {
         defer { cleanUp(store: store, suite: suite) }
         _ = try store.saveInstagramCredentials(InstagramCredentials(sessionId: "session", csrfToken: "csrf", dsUserId: "42", mid: nil))
         IdentityURLProtocol.handler = { request in
-            (200, request.url?.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")) == "" ? "<html></html>" : #"{"status":"ok","viewer":{"pk":"42","username":""}}"#)
+            XCTAssertEqual(request.url?.path, "/")
+            return (200, instagramHomepage.replacingOccurrences(of: #""username":"example""#, with: #""username":"""#))
         }
         do {
             _ = try await InstagramClient(credentialStore: store, session: makeSession()).currentUserProfile()
@@ -43,6 +42,74 @@ final class AccountIdentityTests: XCTestCase {
                 return XCTFail("Expected invalid viewer identity")
             }
         }
+    }
+
+    func testInstagramHomepageRejectsOtherAccountsAndLogoutButAcceptsEmptyTray() throws {
+        XCTAssertTrue(try instagramHomepageTray(html: instagramHomepage, accountID: "42").tray.isEmpty)
+        for html in [instagramHomepage.replacingOccurrences(of: #""id":"42""#, with: #""id":"99""#), instagramHomepage.replacingOccurrences(of: #""is_logged_out_user":false"#, with: #""is_logged_out_user":true"#)] {
+            XCTAssertThrowsError(try instagramHomepageViewer(html: html, accountID: "42")) { error in
+                guard case SourceError.notConfigured = error else { return XCTFail("Expected an authentication error") }
+            }
+        }
+        XCTAssertThrowsError(try instagramHomepageViewer(html: #"<script data-sjs>{"user":{"id":"42","username":"unrelated"}}</script>"#, accountID: "42"))
+        XCTAssertThrowsError(try instagramHomepageTray(html: instagramHomepage.replacingOccurrences(of: #""tray":[]"#, with: #""tray":null"#), accountID: "42"))
+        XCTAssertThrowsError(try instagramHomepageTray(html: instagramHomepage.replacingOccurrences(of: "xdt_api__v1__feed__reels_tray", with: "unrelated"), accountID: "42"))
+    }
+
+    @MainActor
+    func testInstagramConcurrentIdentityAndTrayShareOnePageAndLaterReadsAreFresh() async throws {
+        let (store, suite) = try makeStore()
+        defer { cleanUp(store: store, suite: suite) }
+        _ = try store.saveInstagramCredentials(InstagramCredentials(sessionId: "session", csrfToken: "csrf", dsUserId: "42", mid: nil))
+        IdentityURLProtocol.requestCount = 0
+        IdentityURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/")
+            return (200, instagramHomepage)
+        }
+        let client = InstagramClient(credentialStore: store, session: makeSession())
+        let identity = Task { @MainActor in
+            let profile = try await client.currentUserProfile()
+            XCTAssertEqual(profile.username, "example")
+        }
+        let tray = Task { @MainActor in
+            let entries = try await client.reelsTray()
+            XCTAssertTrue(entries.isEmpty)
+        }
+        try await identity.value
+        try await tray.value
+        XCTAssertEqual(IdentityURLProtocol.requestCount, 1)
+        IdentityURLProtocol.handler = { _ in (200, instagramHomepage.replacingOccurrences(of: #""username":"example""#, with: #""username":"updated""#)) }
+        let refreshed = try await client.currentUserProfile()
+        XCTAssertEqual(refreshed.username, "updated")
+        XCTAssertEqual(IdentityURLProtocol.requestCount, 2)
+    }
+
+    @MainActor
+    func testInstagramServiceFailuresPreserveCredentialsIdentityAndPreferences() async throws {
+        let (store, suite) = try makeStore()
+        defer { cleanUp(store: store, suite: suite) }
+        _ = try store.saveInstagramCredentials(InstagramCredentials(sessionId: "session", csrfToken: "csrf", dsUserId: "42", mid: nil))
+        let metadata = try AccountMetadataStore(defaults: XCTUnwrap(UserDefaults(suiteName: suite)))
+        metadata.instagramAccount = InstagramAccountMetadata(accountId: "42", username: "example", status: .valid, enabledCategories: [.likes], storiesEnabled: false, directMediaSharesEnabled: false)
+        let original = metadata.instagramAccount
+        let source = InstagramNotificationSource(client: InstagramClient(credentialStore: store, session: makeSession()), metadataStore: metadata)
+        IdentityURLProtocol.handler = { _ in (503, "unavailable") }
+        do {
+            _ = try await source.fetchStoryReels()
+            XCTFail("Expected the page request to fail")
+        } catch { XCTAssertEqual(metadata.instagramAccount, original) }
+        guard case .serviceError = try await source.validateAccount() else { return XCTFail("Expected a service error rather than invalid credentials") }
+        XCTAssertEqual(metadata.instagramAccount?.status, .serviceError)
+        XCTAssertEqual(metadata.instagramAccount?.username, "example")
+        XCTAssertEqual(metadata.instagramAccount?.enabledCategories, [.likes])
+        XCTAssertEqual(metadata.instagramAccount?.storiesEnabled, false)
+        XCTAssertEqual(metadata.instagramAccount?.directMediaSharesEnabled, false)
+        XCTAssertNotNil(try store.loadInstagramCredentials())
+        IdentityURLProtocol.handler = { _ in (200, instagramHomepage) }
+        let status = try await source.validateAccount()
+        XCTAssertEqual(status, .valid)
+        XCTAssertEqual(metadata.instagramAccount?.status, .valid)
+        XCTAssertEqual(metadata.instagramAccount?.enabledCategories, [.likes])
     }
 
     @MainActor
@@ -122,6 +189,7 @@ private func spotifyResponse(request: URLRequest) -> (Int, String) {
 
 private final class IdentityURLProtocol: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) static var handler: ((URLRequest) throws -> (Int, String))?
+    nonisolated(unsafe) static var requestCount = 0
 
     override class func canInit(with _: URLRequest) -> Bool {
         true
@@ -133,6 +201,7 @@ private final class IdentityURLProtocol: URLProtocol, @unchecked Sendable {
 
     override func startLoading() {
         do {
+            Self.requestCount += 1
             let handler = try XCTUnwrap(Self.handler)
             let (status, body) = try handler(request)
             let response = try XCTUnwrap(HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: nil))
@@ -146,3 +215,5 @@ private final class IdentityURLProtocol: URLProtocol, @unchecked Sendable {
 
     override func stopLoading() {}
 }
+
+private let instagramHomepage = #"<script data-sjs>{"require":[["PolarisViewer",[],{"data":{"id":"42","username":"example","full_name":"Example","profile_pic_url":"https://example.org/avatar.jpg"}},1]],"is_logged_out_user":false,"data":{"xdt_api__v1__feed__reels_tray":{"tray":[]}}}</script>"#

@@ -80,8 +80,12 @@ public final class InstagramNotificationSource: NotificationFetching, AccountVal
             invalidateAccount()
             return .notConfigured
         } catch {
-            invalidateAccount()
-            return .notConfigured
+            let status = AccountStatus.serviceError(error.localizedDescription)
+            if var account = metadataStore.instagramAccount {
+                account.status = .serviceError
+                metadataStore.instagramAccount = account
+            }
+            return status
         }
     }
 
@@ -104,7 +108,7 @@ public final class InstagramNotificationSource: NotificationFetching, AccountVal
 
     private func currentAccountForNotificationTargets() async -> InstagramAccountMetadata? {
         guard let account = metadataStore.instagramAccount else { return nil }
-        guard account.avatarURL == nil else { return account }
+        guard account.avatarURL == nil || account.username?.isEmpty != false else { return account }
         guard let profile = try? await client.currentUserProfile() else { return account }
 
         let updated = InstagramAccountMetadata(
@@ -144,9 +148,6 @@ public final class InstagramNotificationSource: NotificationFetching, AccountVal
         } catch SourceError.notConfigured {
             invalidateAccount()
             throw SourceError.notConfigured
-        } catch {
-            invalidateAccount()
-            throw error
         }
 
         // Successful tray fetch means credentials are valid

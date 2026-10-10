@@ -314,15 +314,20 @@ public final class SettingsViewModel: ObservableObject {
             deleteInstagramCredentialsForFailedReconnect()
             message = "Instagram login expired. Log in again to reconnect."
         } catch {
-            let categories = Set(InstagramNotificationCategory.allCases)
+            let existing = metadataStore.instagramAccount
+            let categories = existing?.enabledCategories ?? Set(InstagramNotificationCategory.allCases)
             metadataStore.instagramAccount = InstagramAccountMetadata(
-                accountId: "instagram",
-                username: nil,
-                status: .valid,
+                accountId: credentials.dsUserId,
+                username: existing?.accountId == credentials.dsUserId ? existing?.username : nil,
+                avatarURL: existing?.accountId == credentials.dsUserId ? existing?.avatarURL : nil,
+                status: .serviceError,
                 enabledCategories: categories,
+                storiesEnabled: existing?.storiesEnabled ?? true,
+                directMediaSharesEnabled: existing?.directMediaSharesEnabled ?? true,
             )
             instagramEnabledCategories = categories
-            message = "Instagram credentials saved, but could not resolve username."
+            instagramStatus = .serviceError(error.localizedDescription)
+            message = "Instagram credentials saved, but account details could not load. Try again later."
         }
     }
 
@@ -355,15 +360,20 @@ public final class SettingsViewModel: ObservableObject {
             deleteInstagramCredentialsForFailedReconnect()
             message = "Instagram login expired. Log in again to reconnect."
         } catch {
-            let categories = Set(InstagramNotificationCategory.allCases)
+            let existing = metadataStore.instagramAccount
+            let categories = existing?.enabledCategories ?? Set(InstagramNotificationCategory.allCases)
             metadataStore.instagramAccount = InstagramAccountMetadata(
-                accountId: "instagram",
-                username: nil,
-                status: .valid,
+                accountId: credentials.dsUserId,
+                username: existing?.accountId == credentials.dsUserId ? existing?.username : nil,
+                avatarURL: existing?.accountId == credentials.dsUserId ? existing?.avatarURL : nil,
+                status: .serviceError,
                 enabledCategories: categories,
+                storiesEnabled: existing?.storiesEnabled ?? true,
+                directMediaSharesEnabled: existing?.directMediaSharesEnabled ?? true,
             )
             instagramEnabledCategories = categories
-            message = "Instagram credentials saved, but could not resolve username."
+            instagramStatus = .serviceError(error.localizedDescription)
+            message = "Instagram credentials saved, but account details could not load. Try again later."
         }
     }
 
@@ -896,9 +906,9 @@ public final class SettingsViewModel: ObservableObject {
         } catch SourceError.notConfigured {
             markInstagramCredentialsInvalid()
         } catch {
-            instagramStatus = .invalidCredentials
+            instagramStatus = .serviceError(error.localizedDescription)
             if var account = metadataStore.instagramAccount {
-                account.status = .invalidCredentials
+                account.status = .serviceError
                 metadataStore.instagramAccount = account
             }
         }
