@@ -10,6 +10,7 @@ fallback used by this project during development.
 from __future__ import annotations
 
 import argparse
+import base64
 import http.cookiejar
 import json
 import os
@@ -43,7 +44,6 @@ IPHONE_SAFARI_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) Apple
 OPERATION_NAMES = {
     "activity": "PolarisActivityFeedStoriesViewQuery",
     "stories-tray": "PolarisStoriesV3TrayContainerQuery",
-    "delete-story": "usePolarisStoriesV3DeleteMediaMutation",
     "like-media": "usePolarisLikeMediaXIGLikeMutation",
     "unlike-media": "usePolarisLikeMediaXIGUnlikeMutation",
     "story-seen": "PolarisStoriesV3SeenMutation",
@@ -500,16 +500,28 @@ class InstagramWebClient:
             "configure": configure_response,
         }
 
-    def delete_story(self, media_id: str, username: str | None) -> dict[str, Any]:
-        self._ensure_bootstrapped()
-        if username:
-            self.refresh_story_doc_ids(username)
-        return self.graphql_post(
-            self.doc_id("delete-story"),
-            {"mediaId": media_id},
-            friendly_name=OPERATION_NAMES["delete-story"],
-            root_field_name="xdt_api__v1__create__delete",
-            endpoint="/graphql/query",
+    def delete_story(self, media_id: str, is_video: bool) -> dict[str, Any]:
+        # The web Relay delete mutation returns a "Not Logged In" error payload; the mobile REST
+        # endpoint accepts the session as an IGT bearer token instead of cookies.
+        user_id = cookie_value(self.cookie_jar, "ds_user_id")
+        session_id = cookie_value(self.cookie_jar, "sessionid")
+        if not user_id or not session_id:
+            raise SystemExit("delete-story requires ds_user_id and sessionid credentials")
+        full_media_id = media_id if "_" in media_id else f"{media_id}_{user_id}"
+        token = base64.b64encode(
+            json.dumps({"ds_user_id": user_id, "sessionid": session_id}, separators=(",", ":")).encode()
+        ).decode()
+        media_type = "VIDEO" if is_video else "PHOTO"
+        return self.request_json(
+            "POST",
+            f"https://i.instagram.com/api/v1/media/{full_media_id}/delete/?media_type={media_type}",
+            headers={
+                "Authorization": f"Bearer IGT:2:{token}",
+                "User-Agent": self.user_agent,
+                "X-IG-App-ID": "567067343352427",
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+            body=urllib.parse.urlencode({"media_id": full_media_id}).encode(),
         )
 
     def exported_credentials(self) -> dict[str, str]:
@@ -1030,8 +1042,8 @@ def build_parser() -> argparse.ArgumentParser:
     upload.add_argument("--reel-mentions-json", help="Raw reel_mentions JSON array or @path for endpoint-shape experiments.")
 
     delete = subparsers.add_parser("delete-story", help="Delete an Instagram story by numeric media ID.")
-    delete.add_argument("media_id", help="Numeric story media ID without the owner suffix.")
-    delete.add_argument("--story-username", help="Username whose story page should be loaded to discover the current delete doc ID.")
+    delete.add_argument("media_id", help="Story media ID, with or without the owner suffix.")
+    delete.add_argument("--video", action="store_true", help="Delete a video story (media_type=VIDEO).")
 
     custom = subparsers.add_parser("graphql", help="Call a custom GraphQL doc ID.")
     custom.add_argument("doc_id", help="GraphQL document ID.")
@@ -1144,7 +1156,7 @@ def main() -> None:
         if reel_mentions:
             result["reel_mentions"] = reel_mentions
     elif args.command == "delete-story":
-        result = client.delete_story(args.media_id, args.story_username)
+        result = client.delete_story(args.media_id, args.video)
     elif args.command == "graphql":
         variables = load_variables(args.variables)
         result = client.graphql_post(args.doc_id, variables) if args.post else client.graphql_get(args.doc_id, variables)

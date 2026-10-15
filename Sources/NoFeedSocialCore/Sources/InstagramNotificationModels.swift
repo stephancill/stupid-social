@@ -250,6 +250,16 @@ struct InstagramStatusResponse: Decodable {
     let status: String?
 }
 
+struct InstagramDeleteMediaResponse: Decodable {
+    let status: String?
+    let didDelete: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case status
+        case didDelete = "did_delete"
+    }
+}
+
 struct InstagramErrorResponse: Decodable {
     let message: String?
     let status: String?

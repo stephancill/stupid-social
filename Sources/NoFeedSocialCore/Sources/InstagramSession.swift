@@ -17,7 +17,6 @@ struct InstagramWebState {
 
 let operationNames = [
     "stories-tray": "PolarisStoriesV3TrayContainerQuery",
-    "delete-story": "usePolarisStoriesV3DeleteMediaMutation",
     "story-seen": "PolarisAPIReelSeenMutation",
     "like-story": "usePolarisLikeMediaXIGLikeMutation",
     "unlike-story": "usePolarisLikeMediaXIGUnlikeMutation",

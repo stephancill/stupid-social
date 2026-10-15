@@ -411,19 +411,34 @@ public final class InstagramClient {
         }
     }
 
-    public func deleteStory(mediaId: String, isVideo _: Bool) async throws {
+    public func deleteStory(mediaId: String, isVideo: Bool) async throws {
         guard let credentials = try credentialStore.loadInstagramCredentials() else {
             throw SourceError.notConfigured
         }
-        let docID = try await docId(credentials: credentials, command: "delete-story")
-        _ = try await graphqlPost(
-            credentials: credentials,
-            docID: docID,
-            variables: ["mediaId": mediaId.split(separator: "_").first.map(String.init) ?? mediaId],
-            friendlyName: operationNames["delete-story"],
-            rootFieldName: "xdt_api__v1__create__delete",
-            endpoint: "/graphql/query",
-        )
+        // The web Relay delete mutation returns "Not Logged In"; the mobile REST endpoint accepts an IGT bearer token.
+        let fullMediaId = mediaId.contains("_") ? mediaId : "\(mediaId)_\(credentials.dsUserId)"
+        let mediaType = isVideo ? "VIDEO" : "PHOTO"
+        var request = URLRequest(url: URL(string: "\(Self.uploadBaseURL)/api/v1/media/\(fullMediaId)/delete/?media_type=\(mediaType)")!)
+        request.httpMethod = "POST"
+        request.httpBody = formURLEncoded(["media_id": fullMediaId]).data(using: .utf8)
+        request.allHTTPHeaderFields = [
+            "Authorization": instagramAuthorizationHeader(credentials: credentials),
+            "User-Agent": Self.webUserAgent,
+            "X-IG-App-ID": "567067343352427",
+            "Content-Type": "application/x-www-form-urlencoded",
+        ]
+        configureRequest(&request)
+
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw SourceError.invalidResponse
+        }
+        guard (200 ..< 300).contains(http.statusCode),
+              let result = try? JSONDecoder().decode(InstagramDeleteMediaResponse.self, from: data),
+              result.status == "ok", result.didDelete == true
+        else {
+            throw SourceError.serviceError(instagramPublishError(step: "delete", statusCode: http.statusCode, data: data))
+        }
     }
 
     private func instagramPublishError(step: String, statusCode: Int, data: Data) -> String {
