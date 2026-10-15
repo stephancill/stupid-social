@@ -1129,3 +1129,9 @@
 - Cleanup note: deleting the test story with the probe's `delete-story` command (`usePolarisStoriesV3DeleteMediaMutation`) failed on both `/graphql/query` and `/api/graphql` with a `for (;;);` "Not Logged In" error payload, even though bootstrap state (`fb_dtsg`, `lsd`, CSRF) was present. The REST `POST /api/v1/media/<id>/delete/` returned HTTP 400 `useragent mismatch`. Story deletion therefore needs separate investigation.
 - `InstagramClient.publishPhotoStory` takes `closeFriends`, threaded through `StoryPosting.postPhotoStory`, `StoryBarViewModel.postInstagramStory`, and the composer's `onPost` callback. When `closeFriends` is true it sends `audience=besties`.
 - The story composer replaced the single "Post Story" button with two bottom destinations matching the Instagram client: "Your Story" and "Close Friends" (green star). The tapped destination shows a progress indicator and both buttons are disabled while posting.
+
+### 2026-10-15 — Native external TestFlight build 130
+
+- Prepared version 1.0.1 (130) from native `main`, incrementing `CFBundleVersion` from 129. Includes Instagram Close Friends story posting.
+- Release preflight, signed distribution archive and project-owned signature verification passed. IPA SHA-256: `158aca8a2673155493b3c79f838eb40f6121ee0493a996ca6885475adb4106bd`. Release evidence remains in ignored `logs/testflight-130-*` and `.release/`.
+- Uploaded App Store Connect build `4132a2c1-ee0e-424b-945e-8d413ea58a14`; processing `VALID`, internal `IN_BETA_TESTING`. Added it to the existing External group (`ac67336d-4435-4ad7-9c6d-17ef19701dd1`) with a What to Test note covering Your Story/Close Friends destinations, submitted with `--no-wait`, and `release status --live` confirmed external `IN_BETA_TESTING`.
