@@ -27,6 +27,9 @@ struct UnifiedStoryViewer: View {
     @State private var viewerItems: [StoryBarItem]
     @State private var currentItemIndex: Int
     @State private var currentSlideIndex: Int = 0
+    /// Last slide shown per story item, so returning to a previous user
+    /// resumes where they left off instead of restarting at slide 0.
+    @State private var lastSlideIndexByItemID: [String: Int] = [:]
     @State private var elapsedTime: Double = 0
     @State private var isPaused: Bool = false
     @State private var seenItems: Set<Int>
@@ -166,7 +169,6 @@ struct UnifiedStoryViewer: View {
         }
         .onChange(of: currentItemIndex) { _, _ in
             elapsedTime = 0
-            currentSlideIndex = 0
             audioDuration = 5
             pulsePhase = 0
             rotationPhase = 0
@@ -421,9 +423,12 @@ struct UnifiedStoryViewer: View {
                 Text(userName)
                     .font(.headline)
                     .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
                 Text(subtitleText)
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.7))
+                    .lineLimit(1)
             }
 
             Spacer()
@@ -834,6 +839,7 @@ struct UnifiedStoryViewer: View {
         if currentSlideIndex + 1 < item.slideCount {
             currentSlideIndex += 1
         } else if currentItemIndex + 1 < viewerItems.count {
+            rememberCurrentSlide()
             currentItemIndex += 1
             currentSlideIndex = 0
         } else {
@@ -846,13 +852,16 @@ struct UnifiedStoryViewer: View {
         if currentSlideIndex > 0 {
             currentSlideIndex -= 1
         } else if currentItemIndex > 0 {
+            rememberCurrentSlide()
+            let previousItem = viewerItems[currentItemIndex - 1]
             currentItemIndex -= 1
-            currentSlideIndex = max(0, (viewerItems[currentItemIndex].slideCount) - 1)
+            currentSlideIndex = rememberedSlideIndex(for: previousItem) ?? max(0, previousItem.slideCount - 1)
         }
     }
 
     private func goToNextItem() {
         if currentItemIndex + 1 < viewerItems.count {
+            rememberCurrentSlide()
             currentItemIndex += 1
             currentSlideIndex = 0
         } else {
@@ -863,8 +872,20 @@ struct UnifiedStoryViewer: View {
 
     private func goToPreviousItem() {
         guard currentItemIndex > 0 else { return }
+        rememberCurrentSlide()
+        let previousItem = viewerItems[currentItemIndex - 1]
         currentItemIndex -= 1
-        currentSlideIndex = 0
+        currentSlideIndex = rememberedSlideIndex(for: previousItem) ?? 0
+    }
+
+    private func rememberCurrentSlide() {
+        guard let item = currentItem else { return }
+        lastSlideIndexByItemID[item.id] = currentSlideIndex
+    }
+
+    private func rememberedSlideIndex(for item: StoryBarItem) -> Int? {
+        guard let index = lastSlideIndexByItemID[item.id], index < item.slideCount else { return nil }
+        return index
     }
 
     private func togglePause() {
