@@ -1135,3 +1135,25 @@
 - Prepared version 1.0.1 (130) from native `main`, incrementing `CFBundleVersion` from 129. Includes Instagram Close Friends story posting.
 - Release preflight, signed distribution archive and project-owned signature verification passed. IPA SHA-256: `158aca8a2673155493b3c79f838eb40f6121ee0493a996ca6885475adb4106bd`. Release evidence remains in ignored `logs/testflight-130-*` and `.release/`.
 - Uploaded App Store Connect build `4132a2c1-ee0e-424b-945e-8d413ea58a14`; processing `VALID`, internal `IN_BETA_TESTING`. Added it to the existing External group (`ac67336d-4435-4ad7-9c6d-17ef19701dd1`) with a What to Test note covering Your Story/Close Friends destinations, submitted with `--no-wait`, and `release status --live` confirmed external `IN_BETA_TESTING`.
+
+### 2026-10-15 — Instagram story deletion via mobile REST
+
+- Story deletion was broken: the web Relay `usePolarisStoriesV3DeleteMediaMutation` returned a `for (;;);` error payload (`1357001`, "Not Logged In") on both `/graphql/query` and `/api/graphql` despite valid bootstrap state, and web `POST www.instagram.com/api/v1/media/<id>/delete/` returned HTTP 400 `useragent mismatch`. Mobile `i.instagram.com` endpoints with cookie auth also returned a generic `status=fail`.
+- Probe-validated replacement: `POST https://i.instagram.com/api/v1/media/<pk>_<ds_user_id>/delete/?media_type=PHOTO|VIDEO` with form body `media_id=<pk>_<ds_user_id>`, `Authorization: Bearer IGT:2:<base64({ds_user_id,sessionid})>`, `X-IG-App-ID: 567067343352427` and either the Instagram Android or the iPhone Safari user agent. Returns `{"did_delete":true,"status":"ok"}`; a follow-up `feed/user/<id>/story/` read with the same bearer auth confirmed removal. Validated against three freshly posted test stories, all removed.
+- `scripts/instagram-web-client.py delete-story` now uses this request (accepts bare or owner-suffixed media IDs, `--video` for video stories) and `InstagramClient.deleteStory` mirrors it, failing loudly unless `did_delete` is true. Removed the unused delete mutation operation name from both.
+
+### 2026-10-15 — Story viewer username truncation and per-user slide resume
+
+- The story viewer top bar now limits the username (and timestamp subtitle) to one line with tail truncation so long names no longer wrap and push the bar layout around.
+- `onChange(of: currentItemIndex)` used to reset `currentSlideIndex` to 0, which silently overrode `goBack()`'s jump to the previous user's last slide. Every navigation path already sets the slide index explicitly, so the reset was removed.
+- `UnifiedStoryViewer` keeps an in-memory `lastSlideIndexByItemID` (keyed by `StoryBarItem.id`). Leaving a user records the slide being shown; returning via tap-back or swipe-back resumes that slide. Tap-back into a user not yet visited in this session falls back to their last slide; swipe-back falls back to slide 0.
+
+### 2026-10-15 — Story composer caption scale range
+
+- Caption pinch scaling is now clamped to 0.1–10× (previously 0.45–2.5×) via shared `minimumScale`/`maximumScale` constants. The caption hit-test area expands to at least 140pt around tiny captions so they remain pinchable and can be scaled back up.
+
+### 2026-10-15 — Native external TestFlight build 131
+
+- Prepared version 1.0.1 (131), incrementing `CFBundleVersion` from 130. Includes the mobile REST story deletion fix, story viewer per-user slide resume and username truncation, and the wider caption scale range.
+- Release preflight, signed distribution archive and project-owned signature verification passed. IPA SHA-256: `bb6c91e57cb366cd368403a8a0177dea5ae6848da1faadd65eee524e55ed2ebb`. Release evidence remains in ignored `logs/testflight-131-*` and `.release/`.
+- Uploaded App Store Connect build `0544761a-a201-4c9a-a666-4c7578baeba8`; processing `VALID`, internal `IN_BETA_TESTING`. Added it to the existing External group (`ac67336d-4435-4ad7-9c6d-17ef19701dd1`) with a What to Test note, submitted with `--no-wait`, and `release status --live` confirmed external `IN_BETA_TESTING`.
