@@ -1243,6 +1243,8 @@ private struct BackgroundToolbarIcon: View {
         var maxTextWidth: CGFloat = 420
         var committedOffset = CGSize.zero
         var committedScale: CGFloat = 1
+        static let minimumScale: CGFloat = 0.1
+        static let maximumScale: CGFloat = 10
         var isEditingCentered = false {
             didSet {
                 if oldValue != isEditingCentered, !isInteracting {
@@ -1334,7 +1336,12 @@ private struct BackgroundToolbarIcon: View {
 
         override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
             guard !isHidden, alpha > 0, isUserInteractionEnabled else { return nil }
-            let expandedFrame = textView.frame.insetBy(dx: -20, dy: -20)
+            // Keep a pinchable target around tiny captions so they can be scaled back up.
+            let minimumTarget: CGFloat = 140
+            let expandedFrame = textView.frame.insetBy(
+                dx: -max(20, (minimumTarget - textView.frame.width) / 2),
+                dy: -max(20, (minimumTarget - textView.frame.height) / 2),
+            )
             guard expandedFrame.contains(point) else { return nil }
             return textView.hitTest(convert(point, to: textView), with: event) ?? textView
         }
@@ -1364,7 +1371,7 @@ private struct BackgroundToolbarIcon: View {
         }
 
         private func updateTextMetrics(preserving center: CGPoint) {
-            let clampedScale = min(max(committedScale, 0.45), 2.5)
+            let clampedScale = min(max(committedScale, Self.minimumScale), Self.maximumScale)
             textView.font = fontStyle.uiFont(size: 34 * clampedScale)
             textView.textContainerInset = UIEdgeInsets(top: 12 * clampedScale, left: 18 * clampedScale, bottom: 12 * clampedScale, right: 18 * clampedScale)
             textView.layer.cornerRadius = 16 * clampedScale
@@ -1567,10 +1574,10 @@ private struct BackgroundToolbarIcon: View {
                 textView.resignFirstResponder()
                 onFocusChange?(false)
             case .changed:
-                committedScale = min(max(resizeStartScale * recognizer.scale, 0.45), 2.5)
+                committedScale = min(max(resizeStartScale * recognizer.scale, Self.minimumScale), Self.maximumScale)
                 updateTextMetrics(preserving: textView.center)
             case .ended, .cancelled, .failed:
-                committedScale = min(max(committedScale, 0.45), 2.5)
+                committedScale = min(max(committedScale, Self.minimumScale), Self.maximumScale)
                 isResizing = false
                 updateTextMetrics(preserving: textView.center)
                 onScaleChange?(committedScale)
