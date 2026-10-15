@@ -6,9 +6,40 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
+private enum StoryDestination: CaseIterable, Identifiable {
+    case yourStory
+    case closeFriends
+
+    var id: Self {
+        self
+    }
+
+    var title: String {
+        switch self {
+        case .yourStory: "Your Story"
+        case .closeFriends: "Close Friends"
+        }
+    }
+
+    @ViewBuilder
+    var icon: some View {
+        switch self {
+        case .yourStory:
+            Image(systemName: "plus.circle.fill")
+                .font(.title3)
+        case .closeFriends:
+            Image(systemName: "star.fill")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.white)
+                .frame(width: 22, height: 22)
+                .background(.green, in: Circle())
+        }
+    }
+}
+
 struct StoryComposerView: View {
     @Environment(\.dismiss) private var dismiss
-    let onPost: (Data, Int, Int, String, [InstagramStoryMentionPlacement]) async throws -> Void
+    let onPost: (Data, Int, Int, String, [InstagramStoryMentionPlacement], Bool) async throws -> Void
     let onMentionSearch: (String) async -> [NetworkProfile]
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var selectedImageData: Data?
@@ -18,8 +49,7 @@ struct StoryComposerView: View {
     @State private var focusedCaptionID: UUID?
     @State private var selectionError: String?
     @State private var saveSucceeded = false
-    @State private var postSucceeded = false
-    @State private var isPosting = false
+    @State private var postingDestination: StoryDestination?
     @State private var composerMessage: String?
     @State private var captionTrashVisible = false
     @State private var mentionQuery: MentionQuery?
@@ -32,7 +62,7 @@ struct StoryComposerView: View {
 
     init(
         onMentionSearch: @escaping (String) async -> [NetworkProfile] = { _ in [] },
-        onPost: @escaping (Data, Int, Int, String, [InstagramStoryMentionPlacement]) async throws -> Void = { _, _, _, _, _ in },
+        onPost: @escaping (Data, Int, Int, String, [InstagramStoryMentionPlacement], Bool) async throws -> Void = { _, _, _, _, _, _ in },
     ) {
         self.onMentionSearch = onMentionSearch
         self.onPost = onPost
@@ -191,34 +221,15 @@ struct StoryComposerView: View {
 
                 Spacer()
 
-                VStack(spacing: 12) {
-                    if hasComposerElements, !captionTrashVisible {
-                        Button {
-                            postComposedStoryImage()
-                        } label: {
-                            HStack(spacing: 8) {
-                                if isPosting {
-                                    ProgressView()
-                                        .progressViewStyle(.circular)
-                                        .tint(.white)
-                                } else {
-                                    Image(systemName: postSucceeded ? "checkmark" : "paperplane.fill")
-                                        .font(.title3)
-                                }
-                                Text(isPosting ? "Posting..." : "Post Story")
-                                    .font(.subheadline.weight(.medium))
-                            }
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 22)
-                            .frame(height: 44)
-                            .background(.black.opacity(0.45), in: Capsule())
+                if hasComposerElements, !captionTrashVisible {
+                    HStack(spacing: 12) {
+                        ForEach(StoryDestination.allCases) { destination in
+                            postButton(destination: destination)
                         }
-                        .buttonStyle(.plain)
-                        .disabled(isPosting)
-                        .accessibilityLabel("Post story")
                     }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 28)
                 }
-                .padding(.bottom, 28)
             }
         }
         .task(id: selectedPhoto) {
@@ -438,7 +449,32 @@ struct StoryComposerView: View {
         }
     }
 
-    private func postComposedStoryImage() {
+    private func postButton(destination: StoryDestination) -> some View {
+        Button {
+            postComposedStoryImage(destination: destination)
+        } label: {
+            HStack(spacing: 8) {
+                if postingDestination == destination {
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                        .tint(.white)
+                } else {
+                    destination.icon
+                }
+                Text(destination.title)
+                    .font(.subheadline.weight(.medium))
+            }
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity)
+            .frame(height: 44)
+            .background(.black.opacity(0.45), in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .disabled(postingDestination != nil)
+        .accessibilityLabel("Post to \(destination.title)")
+    }
+
+    private func postComposedStoryImage(destination: StoryDestination) {
         guard let image = renderedStoryImage() else {
             composerMessage = "Add an image or text before posting."
             return
@@ -449,18 +485,17 @@ struct StoryComposerView: View {
             return
         }
 
-        isPosting = true
+        postingDestination = destination
         Task {
             do {
-                try await onPost(encodedStory.data, Int(image.size.width), Int(image.size.height), encodedStory.mimeType, mentionPlacements())
+                try await onPost(encodedStory.data, Int(image.size.width), Int(image.size.height), encodedStory.mimeType, mentionPlacements(), destination == .closeFriends)
                 await MainActor.run {
-                    isPosting = false
-                    showTemporaryPostSuccess()
+                    postingDestination = nil
                     dismiss()
                 }
             } catch {
                 await MainActor.run {
-                    isPosting = false
+                    postingDestination = nil
                     composerMessage = error.localizedDescription
                 }
             }
@@ -618,13 +653,6 @@ struct StoryComposerView: View {
         saveSucceeded = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
             saveSucceeded = false
-        }
-    }
-
-    private func showTemporaryPostSuccess() {
-        postSucceeded = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
-            postSucceeded = false
         }
     }
 }

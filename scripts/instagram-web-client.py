@@ -445,6 +445,7 @@ class InstagramWebClient:
         height: int,
         caption: str,
         reel_mentions: list[dict[str, Any]] | None = None,
+        close_friends: bool = False,
     ) -> dict[str, Any]:
         self._ensure_bootstrapped()
         with open(image_path, "rb") as handle:
@@ -481,6 +482,8 @@ class InstagramWebClient:
         if reel_mentions:
             configure_fields["include_e2ee_mentioned_user_list"] = "1"
             configure_fields["reel_mentions"] = json.dumps(reel_mentions, separators=(",", ":"))
+        if close_friends:
+            configure_fields["audience"] = "besties"
         state = self._state()
         if state.csrf_token:
             configure_fields["jazoest"] = jazoest(state.csrf_token)
@@ -1023,6 +1026,7 @@ def build_parser() -> argparse.ArgumentParser:
     upload.add_argument("--mention-width", type=float, default=0.5, help="Mention sticker normalized width.")
     upload.add_argument("--mention-height", type=float, default=0.12, help="Mention sticker normalized height.")
     upload.add_argument("--mention-rotation", type=float, default=0.0, help="Mention sticker rotation in degrees.")
+    upload.add_argument("--close-friends", action="store_true", help="Share the story to Close Friends only (audience=besties).")
     upload.add_argument("--reel-mentions-json", help="Raw reel_mentions JSON array or @path for endpoint-shape experiments.")
 
     delete = subparsers.add_parser("delete-story", help="Delete an Instagram story by numeric media ID.")
@@ -1136,7 +1140,7 @@ def main() -> None:
             args.mention_height,
             args.mention_rotation,
         )
-        result = client.upload_story_image(args.image, args.width, args.height, args.caption, reel_mentions)
+        result = client.upload_story_image(args.image, args.width, args.height, args.caption, reel_mentions, args.close_friends)
         if reel_mentions:
             result["reel_mentions"] = reel_mentions
     elif args.command == "delete-story":

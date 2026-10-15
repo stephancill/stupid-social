@@ -55,7 +55,7 @@ public protocol StoryFetching: SocialSource {
 }
 
 public protocol StoryPosting: SocialSource {
-    func postPhotoStory(imageData: Data, width: Int, height: Int, mimeType: String, mentions: [InstagramStoryMentionPlacement]) async throws
+    func postPhotoStory(imageData: Data, width: Int, height: Int, mimeType: String, mentions: [InstagramStoryMentionPlacement], closeFriends: Bool) async throws
     func deleteStory(mediaId: String, isVideo: Bool) async throws
     func setStoryLiked(mediaId: String, liked: Bool) async throws
 }

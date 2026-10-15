@@ -331,7 +331,7 @@ public final class InstagramClient {
         )
     }
 
-    public func publishPhotoStory(imageData: Data, width: Int, height: Int, mimeType: String, mentions: [InstagramStoryMentionPlacement] = []) async throws {
+    public func publishPhotoStory(imageData: Data, width: Int, height: Int, mimeType: String, mentions: [InstagramStoryMentionPlacement] = [], closeFriends: Bool = false) async throws {
         guard let credentials = try credentialStore.loadInstagramCredentials() else {
             throw SourceError.notConfigured
         }
@@ -385,6 +385,9 @@ public final class InstagramClient {
         if !mentions.isEmpty {
             configureFields["include_e2ee_mentioned_user_list"] = "1"
             configureFields["reel_mentions"] = reelMentionsJSONString(mentions)
+        }
+        if closeFriends {
+            configureFields["audience"] = "besties"
         }
         let body = formURLEncoded(configureFields)
 

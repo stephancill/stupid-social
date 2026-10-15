@@ -54,8 +54,8 @@ public final class InstagramNotificationSource: NotificationFetching, AccountVal
         }
     }
 
-    public func postPhotoStory(imageData: Data, width: Int, height: Int, mimeType: String, mentions: [InstagramStoryMentionPlacement]) async throws {
-        try await client.publishPhotoStory(imageData: imageData, width: width, height: height, mimeType: mimeType, mentions: mentions)
+    public func postPhotoStory(imageData: Data, width: Int, height: Int, mimeType: String, mentions: [InstagramStoryMentionPlacement], closeFriends: Bool) async throws {
+        try await client.publishPhotoStory(imageData: imageData, width: width, height: height, mimeType: mimeType, mentions: mentions, closeFriends: closeFriends)
     }
 
     public func deleteStory(mediaId: String, isVideo: Bool) async throws {

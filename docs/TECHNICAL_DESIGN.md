@@ -393,7 +393,7 @@ Instagram story posting is current scope and uses the mobile web API path valida
 - Render the composer output to a 1080x1920 WebP before upload when native WebP encoding is available; fall back to JPEG while the app does not bundle a WebP encoder.
 - Use the cookie-authenticated mobile web Instagram client for story photo uploads.
 - Bootstrap `https://www.instagram.com/` with an iPhone Safari user agent, parse web runtime state (`csrf_token`, `lsd`, `fb_dtsg`, revision/session metadata), and dynamically discover Relay document IDs from Instagram web bundles.
-- Upload image bytes to `https://i.instagram.com/rupload_igphoto/fb_uploader_<upload_id>` with web rupload headers and finalize with web `POST https://www.instagram.com/api/v1/media/configure_to_story/` form fields.
+- Upload image bytes to `https://i.instagram.com/rupload_igphoto/fb_uploader_<upload_id>` with web rupload headers and finalize with web `POST https://www.instagram.com/api/v1/media/configure_to_story/` form fields. Close Friends posts add `audience=besties` to the configure form.
 - Do not hardcode Instagram Relay document IDs in source; discover them at runtime from the current web bundles.
 - Keep posting scoped to Instagram photo stories; do not add cross-posting abstractions until another network is implemented.
 - In the combined All Stories context, use a native inline menu from the story `+` affordance to choose the destination. Instagram is currently the only destination. In the Instagram stories context, skip the menu and open the composer directly.
