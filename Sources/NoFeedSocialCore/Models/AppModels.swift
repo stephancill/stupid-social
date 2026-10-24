@@ -217,7 +217,7 @@ public enum NotificationTargetURL {
             guard hash.range(of: #"^0x[0-9a-fA-F]+$"#, options: .regularExpression) != nil else {
                 return nil
             }
-            return URL(string: "https://farcaster.xyz/~/conversations/\(hash)")
+            return URL(string: "https://quilcast.com/c/\(hash)")
         case .x:
             guard target.id.allSatisfy(\.isNumber), !target.id.isEmpty else { return nil }
             return URL(string: "https://x.com/i/status/\(target.id)")

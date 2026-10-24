@@ -419,7 +419,7 @@ struct ProfileDetailView: View {
         guard let username = profile.username else { return nil }
         switch profile.network {
         case .farcaster:
-            return URL(string: "https://farcaster.xyz/\(username)")
+            return URL(string: "https://quilcast.com/u/\(username)")
         case .x:
             return URL(string: "https://x.com/\(username)")
         case .instagram:
