@@ -27,6 +27,7 @@ Sources/
       XConnectionView.swift         # X credential setup
       XLoginWebView.swift           # X WebView login
       FarcasterConnectionView.swift # Farcaster credential setup
+      FarcasterExternalClientView.swift # Farcaster external client picker
       DebugConnectionView.swift     # Debug notifications toggle
       SettingsView.swift            # Settings with connection links
   NoFeedSocialCore/                 # Shared core (models, services, sources)
