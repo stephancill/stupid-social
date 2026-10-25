@@ -1211,4 +1211,5 @@
 
 - Prepared version 1.0.1 (133), incrementing `CFBundleVersion` from 132. Includes the Instagram story seen fix (web actor id `av`, V3 seen mutation, loud failures).
 - Release preflight, signed distribution archive and project-owned signature verification passed. IPA SHA-256: `b7be125fc1218e249e5f09fe88005674536070b418c8d448d5fef60b49cf6a3c`. Release evidence remains in ignored `logs/testflight-133-*` and `.release/`.
-- Uploaded App Store Connect build `e1e009bc-6add-46ae-9158-8b602ff45959`; processing `VALID`, internal `IN_BETA_TESTING`, with a What to Test note. Not submitted to external testing.
+- Uploaded App Store Connect build `e1e009bc-6add-46ae-9158-8b602ff45959`; processing `VALID`, internal `IN_BETA_TESTING`, with a What to Test note.
+- After the story seen fix was confirmed working in the app, added build 133 to the existing External group (`ac67336d-4435-4ad7-9c6d-17ef19701dd1`) and submitted with `--no-wait`, keeping the existing What to Test note; `release status --live` confirmed external `IN_BETA_TESTING`.
