@@ -1,3 +1,4 @@
+import Foundation
 import NoFeedSocialCore
 import SwiftData
 
@@ -8,6 +9,9 @@ final class AppContainer {
     let profileSearchViewModel: ProfileSearchViewModel
     let settingsViewModel: SettingsViewModel
     let spotifyClient: SpotifyClient
+    let apronService: ApronService
+    let apronServersViewModel: ApronServersViewModel
+    let apronLiveFeed: ApronLiveFeed
 
     private let metadataStore: AccountMetadataStore
     private let keychainStore: KeychainCredentialStore
@@ -64,6 +68,8 @@ final class AppContainer {
             client: DebugNotificationsClient(),
             metadataStore: metadataStore,
         )
+        apronService = ApronService(metadataStore: metadataStore, keychainStore: keychainStore)
+        let apronSource = ApronNotificationSource(service: apronService)
         let blueskySource = BlueskyNotificationSource(
             client: BlueskyClient(credentialStore: keychainStore),
             metadataStore: metadataStore,
@@ -75,6 +81,7 @@ final class AppContainer {
             instagramSource,
             blueskySource,
             githubNotificationSource,
+            apronSource,
             debugSource,
         ]
         accountValidators = [
@@ -85,6 +92,7 @@ final class AppContainer {
             blueskySource,
             githubActivitySource,
             githubNotificationSource,
+            apronSource,
             debugSource,
         ]
         profileFetchersByNetwork = [
@@ -134,6 +142,13 @@ final class AppContainer {
             farcasterClient: farcasterClient,
             cacheStore: cacheStore,
         )
+
+        apronServersViewModel = ApronServersViewModel(service: apronService, cacheStore: cacheStore)
+        apronLiveFeed = ApronLiveFeed(service: apronService, source: apronSource, cacheStore: cacheStore)
+        let feedViewModel = feedViewModel
+        NotificationCenter.default.addObserver(forName: ApronLiveFeed.didUpdateNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { feedViewModel.loadCachedFeed() }
+        }
 
         if DemoData.shouldAutoLoad {
             loadDemoData()

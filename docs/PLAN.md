@@ -115,6 +115,13 @@ Reference behavior from `docs/CLI_DOCS.md`:
 - Supported notification reasons include mentions, replies, likes, reposts, quotes, and follows.
 - After a successful notification fetch, mark Bluesky notifications seen through the standard `app.bsky.notification.updateSeen` API.
 
+### Apron
+
+- Users can add any number of [Apron Chat Protocol](https://github.com/shazow/apron) servers by WebSocket URL (for example `wss://server.apron.chat/`), with an optional bearer token and display name.
+- Without a token the app joins as a guest when the server offers it. Tokens are stored in Keychain like other credentials.
+- Each joined room with a message in the last 24 hours appears in the notifications feed as one item showing its latest message.
+- Opening an Apron item shows a live chat for that room, where the user can read recent history and send messages.
+
 ## Combined Feed
 
 - Default layout is a single combined chronological list.

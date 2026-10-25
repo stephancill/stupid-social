@@ -3,6 +3,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject var viewModel: SettingsViewModel
+    @ObservedObject var apronServersViewModel: ApronServersViewModel
     var onLoadDemoData: (() -> Void)?
     var onClearDemoData: (() -> Void)?
     @Environment(\.openURL) private var openURL
@@ -69,6 +70,16 @@ struct SettingsView: View {
                         name: "GitHub",
                         subtitle: viewModel.githubConnectionLabel,
                         isInvalid: viewModel.githubStatus == .invalidCredentials,
+                    )
+                }
+
+                NavigationLink {
+                    ApronServersView(viewModel: apronServersViewModel)
+                } label: {
+                    connectionRow(
+                        name: "Apron",
+                        subtitle: apronServersViewModel.connectionLabel,
+                        isInvalid: apronServersViewModel.hasInvalidCredentials,
                     )
                 }
 
@@ -139,6 +150,7 @@ struct SettingsView: View {
         .navigationTitle("Settings")
         .onAppear {
             viewModel.loadStatuses()
+            apronServersViewModel.reload()
         }
         .onChange(of: devModeEnabled) { _, enabled in
             if !enabled {

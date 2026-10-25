@@ -7,12 +7,27 @@ struct FeedView: View {
     @ObservedObject var storyViewModel: StoryBarViewModel
     let spotifyClient: SpotifyClient
     let settingsViewModel: SettingsViewModel
+    let apronService: ApronService
     let onOpenSettings: () -> Void
     let onRefresh: () async -> Void
     @State private var notificationDetailSelection: DisplayNotificationItem?
     @State private var storyViewerSelection: StoryViewerSelection?
     @State private var showingStoryComposer = false
+    /// Bumped when Apron read cursors change (here or on another device), so unread badges refresh.
+    @State private var readStateVersion = 0
+    @State private var isPullRefreshing = false
     @Environment(\.openURL) private var openURL
+
+    /// The refresh's count for an Apron room, cleared as soon as the room is read past its latest message.
+    private func unreadCount(for item: NotificationItem) -> Int {
+        _ = readStateVersion
+        guard item.network == .apron, let count = item.unreadCount, count > 0,
+              let serverURL = URL(string: item.accountId), let roomId = item.target?.id,
+              let latest = item.sourceId.flatMap(Int64.init)
+        else { return 0 }
+        let cursor = apronService.readStore.cursor(serverURL: serverURL, roomId: roomId) ?? 0
+        return cursor >= latest ? 0 : count
+    }
 
     var body: some View {
         List {
@@ -82,7 +97,7 @@ struct FeedView: View {
                         Button {
                             notificationDetailSelection = displayItem
                         } label: {
-                            NotificationRow(displayItem: displayItem)
+                            NotificationRow(displayItem: displayItem, unreadCount: unreadCount(for: displayItem.item))
                         }
                         .buttonStyle(.plain)
                         .listRowSeparator(index == 0 ? .hidden : .visible, edges: .top)
@@ -108,14 +123,28 @@ struct FeedView: View {
         .toolbarBackground(.hidden, for: .navigationBar)
         #endif
         .refreshable {
+            isPullRefreshing = true
+            defer { isPullRefreshing = false }
             await onRefresh()
         }
+        .onReceive(NotificationCenter.default.publisher(for: ApronReadStore.didChangeNotification)) { _ in
+            readStateVersion += 1
+        }
         .navigationDestination(item: $notificationDetailSelection) { displayItem in
-            NotificationDetailView(displayItem: displayItem, feedService: viewModel.service)
+            if displayItem.item.network == .apron, let serverURL = URL(string: displayItem.item.accountId), let room = displayItem.item.target {
+                ApronChatView(viewModel: ApronChatViewModel(
+                    service: apronService,
+                    serverURL: serverURL,
+                    roomId: room.id,
+                    title: displayItem.item.parentTarget?.text,
+                ))
+            } else {
+                NotificationDetailView(displayItem: displayItem, feedService: viewModel.service)
+            }
         }
         .navigationTitle("Social")
         .toolbar {
-            if viewModel.isRefreshing || viewModel.isForegroundRefreshing {
+            if !isPullRefreshing, viewModel.isRefreshing || viewModel.isForegroundRefreshing {
                 ToolbarItem(placement: .navigation) {
                     ProgressView()
                         .controlSize(.small)
@@ -875,6 +904,7 @@ private struct SpotifyAnimatedStoryThumbnail: View {
 
 private struct NotificationRow: View {
     let displayItem: DisplayNotificationItem
+    var unreadCount = 0
     @AppStorage("redactionEnabled") private var redactionEnabled = false
 
     var body: some View {
@@ -892,7 +922,17 @@ private struct NotificationRow: View {
 
                     Text(displayItem.item.timestamp.compactRelativeTime)
                         .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(unreadCount > 0 ? Color.blue : .secondary)
+
+                    if unreadCount > 0 {
+                        Text(unreadCount >= ApronNotificationSource.unreadCap ? "\(ApronNotificationSource.unreadCap)+" : "\(unreadCount)")
+                            .font(.caption.weight(.semibold).monospacedDigit())
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 7)
+                            .frame(minWidth: 22, minHeight: 22)
+                            .background(Color.blue, in: Capsule())
+                            .accessibilityLabel("\(unreadCount) unread")
+                    }
                 }
 
                 summaryView

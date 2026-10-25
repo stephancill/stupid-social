@@ -25,7 +25,13 @@ public struct ContentView: View {
             }
         }
         .onChange(of: scenePhase) { _, phase in
-            guard phase == .active, let container else { return }
+            guard let container else { return }
+            // Apron servers stream updates only while the app is in the foreground.
+            guard phase == .active else {
+                if phase == .background { container.apronLiveFeed.stop() }
+                return
+            }
+            container.apronLiveFeed.start()
             Task {
                 await foregroundRefreshFeedAndStories(container: container)
             }
@@ -39,6 +45,7 @@ public struct ContentView: View {
                 storyViewModel: container.storyBarViewModel,
                 spotifyClient: container.spotifyClient,
                 settingsViewModel: container.settingsViewModel,
+                apronService: container.apronService,
                 onOpenSettings: { path.append(.settings) },
                 onRefresh: { await refreshFeedAndStories(container: container) },
             )
@@ -49,6 +56,7 @@ public struct ContentView: View {
                 case .settings:
                     SettingsView(
                         viewModel: container.settingsViewModel,
+                        apronServersViewModel: container.apronServersViewModel,
                         onLoadDemoData: { container.loadDemoData() },
                         onClearDemoData: { container.clearDemoData() },
                     )
@@ -60,6 +68,7 @@ public struct ContentView: View {
     private func configureDependencies() {
         let appContainer = AppContainer(modelContext: modelContext)
         container = appContainer
+        appContainer.apronLiveFeed.start()
 
         Task {
             await foregroundRefreshFeedAndStories(container: appContainer)
@@ -76,6 +85,8 @@ public struct ContentView: View {
     }
 
     private func refreshFeedAndStories(container: AppContainer) async {
+        let feedViewModel = container.feedViewModel
+        guard !feedViewModel.isRefreshing, !feedViewModel.isForegroundRefreshing else { return }
         async let feedRefresh = container.feedViewModel.refresh()
         async let storyRefresh: Void = container.storyBarViewModel.fetchStoryBarContent()
         _ = await (feedRefresh, storyRefresh)

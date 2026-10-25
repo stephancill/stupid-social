@@ -41,6 +41,8 @@ extension SocialNetwork {
             "BlueskyBadge"
         case .github:
             "GitHubBadge"
+        case .apron:
+            "ApronBadge"
         case .debug:
             "DebugBadge"
         }
@@ -60,6 +62,8 @@ extension SocialNetwork {
             "B"
         case .github:
             "GH"
+        case .apron:
+            "A"
         case .debug:
             "D"
         }
@@ -78,6 +82,8 @@ extension SocialNetwork {
         case .bluesky:
             .white
         case .github:
+            .white
+        case .apron:
             .white
         case .debug:
             .white
@@ -98,6 +104,8 @@ extension SocialNetwork {
             Color(red: 0.06, green: 0.49, blue: 0.98)
         case .github:
             Color(red: 0.14, green: 0.16, blue: 0.19)
+        case .apron:
+            .orange
         case .debug:
             .orange
         }

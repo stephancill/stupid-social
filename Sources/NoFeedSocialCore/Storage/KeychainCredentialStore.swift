@@ -134,6 +134,23 @@ public final class KeychainCredentialStore {
         try deleteForAccount("github")
     }
 
+    /// Apron bearer tokens are keyed per server URL (§3.2.1); the latest token replaces earlier ones.
+    public func saveApronToken(_ token: String, serverURL: URL) throws -> CredentialSaveResult {
+        try save(data: Data(token.utf8), account: apronAccount(serverURL))
+    }
+
+    public func loadApronToken(serverURL: URL) throws -> String? {
+        try load(account: apronAccount(serverURL)).map { String(decoding: $0, as: UTF8.self) }
+    }
+
+    public func deleteApronToken(serverURL: URL) throws {
+        try deleteForAccount(apronAccount(serverURL))
+    }
+
+    private func apronAccount(_ serverURL: URL) -> String {
+        "apron.\(serverURL.absoluteString)"
+    }
+
     public func xCredentialStorage() throws -> CredentialSaveResult? {
         try storage(account: "x")
     }

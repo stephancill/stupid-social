@@ -13,6 +13,7 @@ public final class CachedNotification {
     public var actorsData: Data
     public var targetData: Data?
     public var parentTargetData: Data?
+    public var unreadCount: Int?
     public var cachedAt: Date
     init(item: NotificationItem, cachedAt: Date = Date()) throws {
         id = item.id
@@ -25,6 +26,7 @@ public final class CachedNotification {
         actorsData = try JSONEncoder().encode(item.actors)
         targetData = try item.target.map { try JSONEncoder().encode($0) }
         parentTargetData = try item.parentTarget.map { try JSONEncoder().encode($0) }
+        unreadCount = item.unreadCount
         self.cachedAt = cachedAt
     }
 
@@ -44,6 +46,7 @@ public final class CachedNotification {
             actors: actors,
             target: target,
             parentTarget: parentTarget,
+            unreadCount: unreadCount,
         )
     }
 }

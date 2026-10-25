@@ -29,6 +29,9 @@ Sources/
       FarcasterConnectionView.swift # Farcaster credential setup
       FarcasterExternalClientView.swift # Farcaster external client picker
       DebugConnectionView.swift     # Debug notifications toggle
+      ApronServersView.swift        # Apron server list, add form, and server detail
+      ApronChatView.swift           # Apron chat screen: title, connection lifecycle
+      ApronChatUIKitView.swift      # Apron chat UIKit view controller: message list, floating composer, attachments
       SettingsView.swift            # Settings with connection links
   NoFeedSocialCore/                 # Shared core (models, services, sources)
     Models/
@@ -36,6 +39,8 @@ Sources/
       CachedNotification.swift      # SwiftData cache model
     Services/
       FeedService.swift             # Central feed orchestration
+      ApronService.swift            # Apron server list, tokens, and signed-in sessions
+      ApronLiveFeed.swift           # Foreground WebSocket per Apron server for realtime feed items
     Sources/                        # Network clients + notification sources
       NotificationSource.swift      # Protocol definition
       InstagramClient.swift / InstagramSession.swift / Instagram*Models.swift / Instagram*Parser.swift / InstagramNotificationSource.swift
@@ -49,6 +54,7 @@ Sources/
       FarcasterClient.swift / FarcasterNotificationSource.swift
       BlueskyClient.swift / BlueskyNotificationSource.swift
       DebugNotificationsClient.swift / DebugNotificationSource.swift
+      ApronModels.swift / ApronClient.swift / ApronNotificationSource.swift  # Apron Chat Protocol WebSocket client
     Storage/
       AccountMetadataStore.swift
       CookieHeaderParser.swift
@@ -57,11 +63,15 @@ Sources/
       SpotifyActivitySeenStore.swift
       GitHubActivitySeenStore.swift
       StorySeenSync.swift             # iCloud KVS seen-state sync (Spotify/GitHub)
+      ApronReadStore.swift            # Apron read cursors (server truth or iCloud KVS)
+      ApronMessageCache.swift         # Recent Apron messages per room for instant chat open
     ViewModels/
       FeedViewModel.swift
       ProfileSearchViewModel.swift
       StoryBarViewModel.swift
       SettingsViewModel.swift
+      ApronServersViewModel.swift
+      ApronChatViewModel.swift
 ```
 
 - Keep `## Project Structure` in sync when files are added, moved, or renamed.
@@ -102,7 +112,7 @@ Sources/
 
 ## Network Integration
 
-- Always diagnose network behavior and validate the fix in the dependency-free Python client first, before implementing or changing the native Swift client. The probes (`scripts/x-web-client.py`, `scripts/instagram-web-client.py`, `scripts/github-web-client.py`, `scripts/spotify-web-client.py`, `scripts/bluesky-web-client.py`) are the source of truth for endpoint behavior, auth/session freshness, redirects, and response shape. Reproduce the issue live with the probe (using simulator credentials where applicable), add or update a probe command that demonstrates the diagnosis, then port the validated behavior into Swift. Do not guess endpoint/auth behavior from Swift alone.
+- Always diagnose network behavior and validate the fix in the dependency-free Python client first, before implementing or changing the native Swift client. The probes (`scripts/x-web-client.py`, `scripts/instagram-web-client.py`, `scripts/github-web-client.py`, `scripts/spotify-web-client.py`, `scripts/bluesky-web-client.py`, `scripts/apron-web-client.py`) are the source of truth for endpoint behavior, auth/session freshness, redirects, and response shape. Reproduce the issue live with the probe (using simulator credentials where applicable), add or update a probe command that demonstrates the diagnosis, then port the validated behavior into Swift. Do not guess endpoint/auth behavior from Swift alone.
 - Implement X as a native Swift client using `docs/CLI_DOCS.md` and the patched `twitter-cli` behavior as references only.
 - Do not shell out to `twitter-cli` for the production app path.
 - X background polling must use count-only behavior to avoid marking notifications read server-side.

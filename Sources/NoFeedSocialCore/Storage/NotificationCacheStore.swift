@@ -71,4 +71,27 @@ public final class NotificationCacheStore {
 
         try context.save()
     }
+
+    /// Replaces one account's items, such as one Apron server's rooms after a live update.
+    func replaceAccount(_ items: [NotificationItem], network: SocialNetwork, accountId: String, now: Date = Date()) throws {
+        let descriptor = FetchDescriptor<CachedNotification>()
+        for existing in try context.fetch(descriptor) where existing.networkRawValue == network.rawValue && existing.accountId == accountId {
+            context.delete(existing)
+        }
+        var seenIds = Set<String>()
+        for item in items where item.network == network && item.accountId == accountId {
+            guard seenIds.insert(item.id).inserted else { continue }
+            try context.insert(CachedNotification(item: item, cachedAt: now))
+        }
+        try context.save()
+    }
+
+    func deleteAccount(network: SocialNetwork, accountId: String) throws {
+        let descriptor = FetchDescriptor<CachedNotification>()
+        for item in try context.fetch(descriptor) where item.networkRawValue == network.rawValue && item.accountId == accountId {
+            context.delete(item)
+        }
+
+        try context.save()
+    }
 }

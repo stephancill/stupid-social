@@ -7,6 +7,7 @@ public enum SocialNetwork: String, Codable, CaseIterable, Identifiable, Sendable
     case spotify
     case bluesky
     case github
+    case apron
     case debug
 
     public var id: String {
@@ -21,6 +22,7 @@ public enum SocialNetwork: String, Codable, CaseIterable, Identifiable, Sendable
         case .spotify: "Spotify"
         case .bluesky: "Bluesky"
         case .github: "GitHub"
+        case .apron: "Apron"
         case .debug: "Debug"
         }
     }
@@ -74,6 +76,8 @@ public struct NotificationItem: Identifiable, Hashable, Codable, Sendable {
     public let actors: [NotificationActor]
     public let target: NotificationTarget?
     public let parentTarget: NotificationTarget?
+    /// Unread messages behind this item, for sources that track read state (Apron rooms).
+    public let unreadCount: Int?
 
     public init(
         id: String,
@@ -86,6 +90,7 @@ public struct NotificationItem: Identifiable, Hashable, Codable, Sendable {
         actors: [NotificationActor],
         target: NotificationTarget?,
         parentTarget: NotificationTarget? = nil,
+        unreadCount: Int? = nil,
     ) {
         self.id = id
         self.network = network
@@ -97,6 +102,7 @@ public struct NotificationItem: Identifiable, Hashable, Codable, Sendable {
         self.actors = actors
         self.target = target
         self.parentTarget = parentTarget
+        self.unreadCount = unreadCount
     }
 }
 
@@ -294,7 +300,7 @@ public enum NotificationTargetURL {
             return target.url
         case .github:
             return target.url
-        case .debug:
+        case .apron, .debug:
             return nil
         }
     }

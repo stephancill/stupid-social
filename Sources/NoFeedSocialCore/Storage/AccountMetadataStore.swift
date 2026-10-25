@@ -136,6 +136,29 @@ public struct DebugAccountMetadata: Codable, Equatable {
     }
 }
 
+public struct ApronServerMetadata: Codable, Equatable, Identifiable {
+    public var serverURL: URL
+    /// Display name requested on sign-in; the server may assign something else.
+    public var requestedName: String?
+    public var user: ApronUser?
+    public var agent: String?
+    public var welcome: String?
+    public var status: AccountStatusSnapshot
+
+    public var id: String {
+        serverURL.absoluteString
+    }
+
+    public init(serverURL: URL, requestedName: String?, user: ApronUser?, agent: String?, welcome: String?, status: AccountStatusSnapshot) {
+        self.serverURL = serverURL
+        self.requestedName = requestedName
+        self.user = user
+        self.agent = agent
+        self.welcome = welcome
+        self.status = status
+    }
+}
+
 public struct SpotifyAccountMetadata: Codable, Equatable {
     public var accountId: String
     public var username: String?
@@ -190,6 +213,7 @@ public final class AccountMetadataStore {
         static let blueskyAccount = "account.bluesky"
         static let githubAccount = "account.github"
         static let debugAccount = "account.debug"
+        static let apronServers = "account.apron.servers"
         static let xFollowsMigrated = "account.x.followsMigrated"
     }
 
@@ -247,6 +271,11 @@ public final class AccountMetadataStore {
     public var debugAccount: DebugAccountMetadata? {
         get { load(DebugAccountMetadata.self, key: Key.debugAccount) }
         set { save(newValue, key: Key.debugAccount) }
+    }
+
+    public var apronServers: [ApronServerMetadata] {
+        get { load([ApronServerMetadata].self, key: Key.apronServers) ?? [] }
+        set { save(newValue.isEmpty ? nil : newValue, key: Key.apronServers) }
     }
 
     private func load<T: Decodable>(_ type: T.Type, key: String) -> T? {
