@@ -150,6 +150,7 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
                         Task { await self.viewModel.jump(to: target) }
                     },
                 ),
+                availableWidth: collectionView.bounds.width > 0 ? collectionView.bounds.width : view.bounds.width,
             )
         }
         let dividerRegistration = UICollectionView.CellRegistration<ApronUnreadDividerCell, Item> { _, _, _ in }
@@ -1121,6 +1122,7 @@ private final class ApronMessageCell: UICollectionViewListCell, UIGestureRecogni
     private var isPastReplyThreshold = false
 
     private var bubbleTop: NSLayoutConstraint!
+    private var bubbleWidth: NSLayoutConstraint!
     private var systemTop: NSLayoutConstraint!
     private var incomingConstraints: [NSLayoutConstraint] = []
     private var ownConstraints: [NSLayoutConstraint] = []
@@ -1195,11 +1197,11 @@ private final class ApronMessageCell: UICollectionViewListCell, UIGestureRecogni
         systemTop = systemLabel.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 10)
         let bubbleBottom = bubble.bottomAnchor.constraint(equalTo: contentView.bottomAnchor)
         bubbleBottom.priority = .defaultHigh
-        // The width constraints are only maximums; this weak pull shrinks the bubble to its content, so
-        // a short message never keeps a wider size from an earlier layout pass.
-        let hugContent = bubble.widthAnchor.constraint(equalToConstant: 0)
-        hugContent.priority = .fittingSizeLevel
-        hugContent.isActive = true
+        // The bubble's width is computed from its content in `configure`; Auto Layout alone kept newly
+        // inserted cells at their estimated (maximum) width.
+        bubbleWidth = bubble.widthAnchor.constraint(equalToConstant: 0)
+        bubbleWidth.priority = UILayoutPriority(999)
+        bubbleWidth.isActive = true
         NSLayoutConstraint.activate([
             bubbleTop,
             bubbleBottom,
@@ -1344,6 +1346,7 @@ private final class ApronMessageCell: UICollectionViewListCell, UIGestureRecogni
         embeds: [ApronEmbedDisplay],
         reactions: [ApronReactionCount],
         actions: Actions,
+        availableWidth: CGFloat,
     ) {
         self.actions = actions
         isOwn = layout.isOwn
@@ -1415,6 +1418,44 @@ private final class ApronMessageCell: UICollectionViewListCell, UIGestureRecogni
         configureReactions(reactions, canReact: actions.canReact)
         // Without text or reactions the time needs its own line under the embeds.
         timeSpacer.isHidden = text != nil || !reactions.isEmpty
+        bubbleWidth.constant = Self.bubbleWidth(
+            availableWidth: availableWidth,
+            isOwn: layout.isOwn,
+            parts: [
+                nameLabel.isHidden ? nil : nameLabel.intrinsicContentSize.width,
+                replyView.isHidden ? nil : replyView.naturalWidth,
+                bodyLabel.attributedText.map { Self.textWidth($0, max: Self.maxContentWidth(availableWidth: availableWidth, isOwn: layout.isOwn)) },
+                embedsStack.isHidden ? nil : embedsStack.arrangedSubviews.map(Self.fittingWidth).max(),
+                reactionsContainer.isHidden ? nil : Self.fittingWidth(reactionsRow) + 40,
+                timeSpacer.isHidden ? nil : timeLabel.intrinsicContentSize.width,
+            ].compactMap(\.self),
+        )
+    }
+
+    // MARK: Width
+
+    /// The widest a bubble may be: 80% of the row, leaving the avatar column (incoming) or a left gutter (own).
+    private static func maxContentWidth(availableWidth: CGFloat, isOwn: Bool) -> CGFloat {
+        let gutter: CGFloat = isOwn ? 70 : 8 + avatarSize + 6 + 40
+        return min(availableWidth * 0.8, availableWidth - gutter) - 24
+    }
+
+    private static func bubbleWidth(availableWidth: CGFloat, isOwn: Bool, parts: [CGFloat]) -> CGFloat {
+        let content = min(parts.max() ?? 0, maxContentWidth(availableWidth: availableWidth, isOwn: isOwn))
+        return ceil(content) + 24
+    }
+
+    private static func textWidth(_ text: NSAttributedString, max: CGFloat) -> CGFloat {
+        let bounds = text.boundingRect(
+            with: CGSize(width: max, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            context: nil,
+        )
+        return ceil(bounds.width)
+    }
+
+    private static func fittingWidth(_ view: UIView) -> CGFloat {
+        view.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize).width
     }
 
     /// Reaction chips inside the bubble: filled when you reacted, tinted otherwise. Tapping toggles yours (§4.7).
@@ -1657,6 +1698,11 @@ private final class ApronReplyQuoteView: UIView {
     @available(*, unavailable)
     required init?(coder _: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    /// One line of the quote, plus the bar and padding; the bubble caps it at its maximum width.
+    var naturalWidth: CGFloat {
+        max(nameLabel.intrinsicContentSize.width, textLabel.intrinsicContentSize.width) + 3 + 8 + 8
     }
 
     func configure(name: String, text: String, accent: UIColor, onBubbleColor: Bool) {
