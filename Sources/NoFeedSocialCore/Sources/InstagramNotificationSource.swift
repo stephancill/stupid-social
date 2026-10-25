@@ -303,11 +303,11 @@ public final class InstagramNotificationSource: NotificationFetching, AccountVal
         metadataStore.instagramAccount = account
     }
 
-    public func markReelAsSeen(slides: [InstagramStorySlide]) async {
+    public func markReelAsSeen(slides: [InstagramStorySlide]) async throws {
         let items = slides.map { slide in
             (mediaId: slide.id, ownerId: slide.ownerId, takenAt: slide.takenAt)
         }
-        try? await client.markStorySeen(mediaItems: items)
+        try await client.markStorySeen(mediaItems: items)
     }
 
     public func setStoryLiked(mediaId: String, liked: Bool) async throws {

@@ -285,7 +285,12 @@ public final class InstagramClient {
                 "viewSeenAt": Int(Date().timeIntervalSince1970),
             ]
             let docID = try await docId(credentials: credentials, command: "story-seen")
-            _ = try await graphqlPost(credentials: credentials, docID: docID, variables: variables, endpoint: "/graphql/query")
+            let data = try await graphqlPost(credentials: credentials, docID: docID, variables: variables, friendlyName: operationNames["story-seen"])
+            // Instagram answers HTTP 200 with a null root field when it ignores the mutation.
+            let response = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            guard (response?["data"] as? [String: Any])?["xdt_mark_story_reel_seen"] is [String: Any] else {
+                throw SourceError.serviceError("Instagram did not mark the story as seen.")
+            }
         }
     }
 

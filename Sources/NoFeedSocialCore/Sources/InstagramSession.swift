@@ -7,6 +7,8 @@ struct InstagramWebState {
     var lsd: String?
     var fbDtsg: String?
     var userID: String?
+    /// Instagram actor FBID (`actorID`), sent as `av`. Relay mutations are rejected without it.
+    var actorID: String?
     var revision: String?
     var hsi: String?
     var hasteSession: String?
@@ -17,7 +19,7 @@ struct InstagramWebState {
 
 let operationNames = [
     "stories-tray": "PolarisStoriesV3TrayContainerQuery",
-    "story-seen": "PolarisAPIReelSeenMutation",
+    "story-seen": "PolarisStoriesV3SeenMutation",
     "like-story": "usePolarisLikeMediaXIGLikeMutation",
     "unlike-story": "usePolarisLikeMediaXIGUnlikeMutation",
     "follow": "usePolarisFollowUserFollowMutation",
@@ -252,6 +254,7 @@ extension InstagramClient {
             ?? firstMatch(html, pattern: #""token"\s*:\s*"([A-Za-z0-9_\-]+)"[^\n]{0,120}"LSD""#)
         state.fbDtsg = firstMatch(html, pattern: #""DTSGInitialData"[^\n]*?"token"\s*:\s*"([^"]*)""#)
         state.userID = firstMatch(html, pattern: #""USER_ID"\s*:\s*"([0-9]+)""#) ?? credentials.dsUserId
+        state.actorID = firstMatch(html, pattern: #""actorID"\s*:\s*"([0-9]+)""#)
         state.revision = firstMatch(html, pattern: #""rev"\s*:\s*(\d+)"#)
         state.hsi = firstMatch(html, pattern: #""hsi"\s*:\s*"?([0-9]+)"?"#)
         state.hasteSession = firstMatch(html, pattern: #""haste_session"\s*:\s*"([^"]+)""#)
@@ -359,6 +362,7 @@ extension InstagramClient {
         if let haste = state?.hasteSession { fields["__hs"] = haste }
         if let lsd = state?.lsd { fields["lsd"] = lsd }
         if let fbDtsg = state?.fbDtsg { fields["fb_dtsg"] = fbDtsg }
+        if let actorID = state?.actorID { fields["av"] = actorID }
         fields["jazoest"] = jazoest(csrfToken: state?.csrfToken ?? credentials.csrfToken)
         if let friendlyName {
             fields["fb_api_caller_class"] = "RelayModern"

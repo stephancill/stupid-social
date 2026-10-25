@@ -279,10 +279,18 @@ public final class StoryBarViewModel: ObservableObject {
         markInstagramReelAsSeen(reelId: reel.id)
     }
 
+    private func markSeenOnInstagram(slides: [InstagramStorySlide]) async {
+        do {
+            try await instagramSource?.markReelAsSeen(slides: slides)
+        } catch {
+            errorMessage = "Could not mark Instagram story as seen: \(error.localizedDescription)"
+        }
+    }
+
     public func markInstagramReelAsSeen(reelId: String) {
         if let reel = ownInstagramStoryReel, reel.id == reelId, !reel.isSeen {
             Task {
-                if !DemoData.isDemoMode { await instagramSource?.markReelAsSeen(slides: reel.slides) }
+                if !DemoData.isDemoMode { await markSeenOnInstagram(slides: reel.slides) }
             }
 
             ownInstagramStoryReel = InstagramStoryReel(id: reel.id, user: reel.user, slides: reel.slides, isSeen: true, seenTimestamp: reel.slides.map(\.takenAt).max() ?? reel.seenTimestamp, hasCloseFriendsMedia: reel.hasCloseFriendsMedia)
@@ -298,7 +306,7 @@ public final class StoryBarViewModel: ObservableObject {
         guard case let .instagram(reel) = storyItem, !reel.isSeen else { return }
 
         Task {
-            if !DemoData.isDemoMode { await instagramSource?.markReelAsSeen(slides: reel.slides) }
+            if !DemoData.isDemoMode { await markSeenOnInstagram(slides: reel.slides) }
         }
 
         let updated = InstagramStoryReel(id: reel.id, user: reel.user, slides: reel.slides, isSeen: true, seenTimestamp: reel.slides.map(\.takenAt).max() ?? reel.seenTimestamp, hasCloseFriendsMedia: reel.hasCloseFriendsMedia)

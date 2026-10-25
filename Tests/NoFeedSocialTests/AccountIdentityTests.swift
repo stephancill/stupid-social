@@ -157,6 +157,37 @@ final class AccountIdentityTests: XCTestCase {
         XCTAssertEqual(try store.loadSpotifyCredentials()?.username, "known-listener")
     }
 
+    @MainActor
+    func testInstagramStorySeenSendsActorAndFailsWhenIgnored() async throws {
+        let (store, suite) = try makeStore()
+        defer { cleanUp(store: store, suite: suite) }
+        _ = try store.saveInstagramCredentials(InstagramCredentials(sessionId: "session", csrfToken: "csrf", dsUserId: "42", mid: nil))
+        let homepage = #"<script>{"USER_ID":"0","actorID":"17841400000000042"}</script><script>__d("PolarisStoriesV3SeenMutation_instagramRelayOperation",[],(function(t,n,r,o,a,i){a.exports="123"}),null);</script>"#
+        let exchange = SeenMutationExchange()
+        IdentityURLProtocol.handler = { @Sendable request in
+            guard request.url?.path == "/api/graphql" else { return (200, homepage) }
+            let body = try XCTUnwrap(request.httpBodyStream.map(readAll))
+            return (200, exchange.record(form: body))
+        }
+        let client = InstagramClient(credentialStore: store, session: makeSession())
+        let item = (mediaId: "4015104032613070661", ownerId: "751322505", takenAt: 1_792_857_720.0)
+
+        try await client.markStorySeen(mediaItems: [item])
+        let form = exchange.form
+        XCTAssertEqual(form["doc_id"], "123")
+        XCTAssertEqual(form["av"], "17841400000000042")
+        XCTAssertEqual(form["__user"], "0")
+        XCTAssertEqual(form["fb_api_req_friendly_name"], "PolarisStoriesV3SeenMutation")
+
+        exchange.result = #"{"data":{"xdt_mark_story_reel_seen":null},"status":"ok"}"#
+        do {
+            try await client.markStorySeen(mediaItems: [item])
+            XCTFail("Expected an ignored seen mutation to throw")
+        } catch {
+            guard case SourceError.serviceError = error else { return XCTFail("Expected a service error, got \(error)") }
+        }
+    }
+
     private func makeStore() throws -> (KeychainCredentialStore, String) {
         let suite = "AccountIdentityTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -230,3 +261,39 @@ private final class IdentityURLProtocol: URLProtocol, @unchecked Sendable {
 }
 
 private let instagramHomepage = #"<script data-sjs>{"require":[["PolarisViewer",[],{"data":{"id":"42","username":"example","full_name":"Example","profile_pic_url":"https://example.org/avatar.jpg"}},1]],"is_logged_out_user":false,"data":{"xdt_api__v1__feed__reels_tray":{"tray":[]}}}</script>"#
+
+private final class SeenMutationExchange: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedResult = #"{"data":{"xdt_mark_story_reel_seen":{"__typename":"XDTMarkSeenResponse"}}}"#
+    private var storedForm: [String: String] = [:]
+
+    var result: String {
+        get { lock.withLock { storedResult } }
+        set { lock.withLock { storedResult = newValue } }
+    }
+
+    var form: [String: String] {
+        lock.withLock { storedForm }
+    }
+
+    func record(form body: String) -> String {
+        let items = URLComponents(string: "?" + body)?.queryItems ?? []
+        return lock.withLock {
+            storedForm = Dictionary(items.map { ($0.name, $0.value ?? "") }, uniquingKeysWith: { _, new in new })
+            return storedResult
+        }
+    }
+}
+
+private func readAll(_ stream: InputStream) -> String {
+    stream.open()
+    defer { stream.close() }
+    var data = Data()
+    var buffer = [UInt8](repeating: 0, count: 4096)
+    while stream.hasBytesAvailable {
+        let count = stream.read(&buffer, maxLength: buffer.count)
+        guard count > 0 else { break }
+        data.append(buffer, count: count)
+    }
+    return String(decoding: data, as: UTF8.self)
+}

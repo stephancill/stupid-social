@@ -87,6 +87,10 @@ class WebState:
     lsd: str | None = None
     fb_dtsg: str | None = None
     user_id: str | None = None
+    # Raw page USER_ID ("0" for Instagram-only accounts), sent as __user like the web client.
+    page_user_id: str | None = None
+    # Instagram actor FBID (`actorID`), sent as `av`; mutations are rejected without it.
+    actor_id: str | None = None
     revision: str | None = None
     hsi: str | None = None
     haste_session: str | None = None
@@ -234,7 +238,7 @@ class InstagramWebClient:
             "doc_id": doc_id,
             "variables": json.dumps(variables, separators=(",", ":")),
             "server_timestamps": "true",
-            "__user": state.user_id or "0",
+            "__user": state.page_user_id or "0",
             "__a": "1",
             "__req": request_id(self.request_count),
         }
@@ -248,6 +252,8 @@ class InstagramWebClient:
             fields["lsd"] = state.lsd
         if state.fb_dtsg:
             fields["fb_dtsg"] = state.fb_dtsg
+        if state.actor_id:
+            fields["av"] = state.actor_id
         if state.csrf_token:
             fields["jazoest"] = jazoest(state.csrf_token)
         if friendly_name:
@@ -367,18 +373,15 @@ class InstagramWebClient:
             "reelMediaTakenAt": taken_at,
             "viewSeenAt": seen_at or int(time.time()),
         }
-        try:
-            return self.graphql_post(
-                self.doc_id("story-seen"),
-                variables,
-                endpoint="/graphql/query",
-            )
-        except SystemExit:
-            return self.graphql_post(
-                self.doc_id("api-reel-seen"),
-                variables,
-                endpoint="/graphql/query",
-            )
+        response = self.graphql_post(
+            self.doc_id("story-seen"),
+            variables,
+            friendly_name=OPERATION_NAMES["story-seen"],
+        )
+        # The server answers HTTP 200 with a null root field when it ignores the mutation.
+        if not (response.get("data") or {}).get("xdt_mark_story_reel_seen"):
+            raise SystemExit(f"story-seen was not applied: {json.dumps(response)[:600]}")
+        return response
 
     def force_story_seen(self, story_owner_id: str, username: str | None) -> dict[str, Any]:
         if username:
@@ -722,6 +725,8 @@ def parse_web_state(html: str) -> WebState:
     state.haste_session = first_match(decoded, r'"haste_session"\s*:\s*"([^"]+)"')
     state.spin_t = first_match(decoded, r'"__spin_t"\s*:\s*(\d+)') or first_match(decoded, r'"spin_t"\s*:\s*(\d+)')
     state.user_id = first_match(decoded, r'"USER_ID"\s*:\s*"([0-9]+)"')
+    state.page_user_id = state.user_id
+    state.actor_id = first_match(decoded, r'"actorID"\s*:\s*"([0-9]+)"')
     state.lsd = first_match(decoded, r'"LSD"[^\n]*?"token"\s*:\s*"([^"]+)"') or first_match(
         decoded, r'"token"\s*:\s*"([A-Za-z0-9_\-]+)"[^\n]{0,120}"LSD"'
     )
@@ -1016,7 +1021,7 @@ def build_parser() -> argparse.ArgumentParser:
     mention_search = subparsers.add_parser("mention-search", help="Search Instagram users for story @mention autocomplete.")
     mention_search.add_argument("query", help="Search text after @.")
 
-    story_seen = subparsers.add_parser("story-seen", help="Mark one story media item seen with PolarisStoriesV3SeenMutation.")
+    story_seen = subparsers.add_parser("story-seen", help="Mark one story media item seen with PolarisStoriesV3SeenMutation (fails unless applied).")
     story_seen.add_argument("--reel-id", required=True, help="Story reel/user ID.")
     story_seen.add_argument("--media-id", required=True, help="Story media ID.")
     story_seen.add_argument("--owner-id", required=True, help="Story media owner ID.")
