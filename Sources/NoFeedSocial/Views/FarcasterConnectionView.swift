@@ -4,6 +4,7 @@ import SwiftUI
 struct FarcasterConnectionView: View {
     @ObservedObject var viewModel: SettingsViewModel
     @FocusState private var isFocused: Bool
+    @AppStorage(FarcasterExternalClient.storageKey) private var externalClient = FarcasterExternalClient.defaultClient
 
     var body: some View {
         Form {
@@ -29,6 +30,14 @@ struct FarcasterConnectionView: View {
                         Toggle(isOn: binding(for: category)) {
                             Text(category.displayLabel)
                         }
+                    }
+                }
+
+                Section {
+                    NavigationLink {
+                        FarcasterExternalClientView()
+                    } label: {
+                        LabeledContent("External Client", value: externalClient.displayName)
                     }
                 }
 

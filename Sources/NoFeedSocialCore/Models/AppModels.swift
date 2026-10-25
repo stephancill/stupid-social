@@ -209,6 +209,71 @@ public struct DisplayNotificationItem: Identifiable, Hashable {
     }
 }
 
+public enum FarcasterExternalClient: String, CaseIterable, Sendable {
+    case farcaster
+    case quilcast
+    case custom
+
+    public static let storageKey = "farcasterExternalClient"
+    public static let customCastURLPatternKey = "farcasterCustomCastURLPattern"
+    public static let customProfileURLPatternKey = "farcasterCustomProfileURLPattern"
+    public static let defaultClient: FarcasterExternalClient = .quilcast
+    public static let hashPlaceholder = "{hash}"
+    public static let usernamePlaceholder = "{username}"
+
+    public var displayName: String {
+        switch self {
+        case .farcaster: "Farcaster"
+        case .quilcast: "Quilcast"
+        case .custom: "Custom"
+        }
+    }
+
+    public var castURLPattern: String? {
+        switch self {
+        case .farcaster: "https://farcaster.xyz/~/conversations/{hash}"
+        case .quilcast: "https://quilcast.com/c/{hash}"
+        case .custom: nil
+        }
+    }
+
+    public var profileURLPattern: String? {
+        switch self {
+        case .farcaster: "https://farcaster.xyz/{username}"
+        case .quilcast: "https://quilcast.com/u/{username}"
+        case .custom: nil
+        }
+    }
+
+    public static func current(defaults: UserDefaults = .standard) -> FarcasterExternalClient {
+        defaults.string(forKey: storageKey).flatMap(FarcasterExternalClient.init(rawValue:)) ?? defaultClient
+    }
+
+    /// `hash` is the `0x`-prefixed cast hash.
+    public static func castURL(hash: String, defaults: UserDefaults = .standard) -> URL? {
+        let client = current(defaults: defaults)
+        let pattern = client.castURLPattern ?? defaults.string(forKey: customCastURLPatternKey)
+        return url(from: pattern, placeholder: hashPlaceholder, value: hash)
+    }
+
+    public static func profileURL(username: String, defaults: UserDefaults = .standard) -> URL? {
+        let client = current(defaults: defaults)
+        let pattern = client.profileURLPattern ?? defaults.string(forKey: customProfileURLPatternKey)
+        return url(from: pattern, placeholder: usernamePlaceholder, value: username)
+    }
+
+    private static func url(from pattern: String?, placeholder: String, value: String) -> URL? {
+        let pattern = pattern?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard pattern.contains(placeholder),
+              let encoded = value.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)
+        else { return nil }
+        guard let url = URL(string: pattern.replacingOccurrences(of: placeholder, with: encoded)),
+              url.scheme != nil
+        else { return nil }
+        return url
+    }
+}
+
 public enum NotificationTargetURL {
     public static func resolve(network: SocialNetwork, target: NotificationTarget) -> URL? {
         switch network {
@@ -217,7 +282,7 @@ public enum NotificationTargetURL {
             guard hash.range(of: #"^0x[0-9a-fA-F]+$"#, options: .regularExpression) != nil else {
                 return nil
             }
-            return URL(string: "https://farcaster.xyz/~/conversations/\(hash)")
+            return FarcasterExternalClient.castURL(hash: hash)
         case .x:
             guard target.id.allSatisfy(\.isNumber), !target.id.isEmpty else { return nil }
             return URL(string: "https://x.com/i/status/\(target.id)")
