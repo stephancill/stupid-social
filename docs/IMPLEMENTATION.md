@@ -1293,3 +1293,9 @@
 - Prepared version 1.0.1 (134) with `stupid-app release bump` (133 → 134). It includes Apron chat servers: feed items, the UIKit chat with bubbles, replies, reactions, attachments, unread state, the realtime feed and the message cache. The own-message rendering fix above came after this archive and is not in 134.
 - Release preflight, signed distribution archive and project-owned signature verification passed. IPA SHA-256: `da5c04999705472abdd272b881f076f9989976c0b375d8a8862c81ab9e4e6e68`. Release evidence is in ignored `logs/testflight-134-*` and `.release/`.
 - Uploaded App Store Connect build `ee939024-f125-4342-b583-b1fde13e783b`; processing `VALID`, internal `IN_BETA_TESTING`. No What to Test note and no external submission.
+
+### 2026-10-26 — Native external TestFlight build 135
+
+- Prepared version 1.0.1 (135) with `stupid-app release bump` (134 → 135). It adds the own-message rendering fix to the Apron chat in 134.
+- Release preflight, signed distribution archive and project-owned signature verification passed. IPA SHA-256: `44f03d278a66ae38e85f4bcbd624945965fbe5e1017626acf95ec6d3ceffad58`. Release evidence is in ignored `logs/testflight-135-*` and `.release/`.
+- Uploaded App Store Connect build `6582c973-6ce7-4e93-8683-aa31481b9d8c`; processing `VALID`, internal `IN_BETA_TESTING`. Added it to the existing External group (`ac67336d-4435-4ad7-9c6d-17ef19701dd1`) with a What to Test note about Apron chat servers, and submitted with `--no-wait`. `release status --live` then reported external `IN_BETA_TESTING`.
