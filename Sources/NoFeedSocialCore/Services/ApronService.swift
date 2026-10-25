@@ -1,6 +1,6 @@
 import Foundation
 
-public struct ApronSession {
+public struct ApronSession: Sendable {
     public let serverURL: URL
     public let connection: ApronConnection
     public let server: ApronServerInfo
@@ -15,6 +15,8 @@ public final class ApronService {
     private let metadataStore: AccountMetadataStore
     private let keychainStore: KeychainCredentialStore
     private let agent: String
+    private var sharedSessions: [URL: ApronSession] = [:]
+    private var pendingSessions: [URL: Task<ApronSession, Error>] = [:]
     public let readStore: ApronReadStore
     public let messageCache = ApronMessageCache()
 
@@ -74,6 +76,8 @@ public final class ApronService {
         let session = try await signIn(serverURL: serverURL, token: token, requestedName: requestedName)
         session.connection.close()
         _ = try saveSignIn(session, token: token, requestedName: requestedName)
+        // Reconnect with the new token on next use.
+        closeSessions(for: serverURL)
     }
 
     /// Whether the server's read cursor is the truth for this session: it relays `activity`, hasn't said it keeps
@@ -83,14 +87,46 @@ public final class ApronService {
     }
 
     public func removeServer(serverURL: URL) {
+        closeSessions(for: serverURL)
         readStore.removeServer(serverURL)
         messageCache.removeServer(serverURL)
         try? keychainStore.deleteApronToken(serverURL: serverURL)
         metadataStore.apronServers.removeAll { $0.serverURL == serverURL }
     }
 
-    /// Opens a signed-in connection to a saved server. The caller closes it.
-    public func open(serverURL: URL) async throws -> ApronSession {
+    /// The app's one signed-in connection to a saved server, opened on first use and shared by the feed,
+    /// live updates and chat. Servers may limit connections per account, so nothing else opens its own.
+    /// Callers observe it and remove their observers when done; only `closeSessions` closes it.
+    public func session(serverURL: URL) async throws -> ApronSession {
+        if let shared = sharedSessions[serverURL], shared.connection.isOpen {
+            return shared
+        }
+        if let pending = pendingSessions[serverURL] {
+            return try await pending.value
+        }
+        let task = Task { try await open(serverURL: serverURL) }
+        pendingSessions[serverURL] = task
+        defer { pendingSessions[serverURL] = nil }
+        let session = try await task.value
+        sharedSessions[serverURL] = session
+        session.connection.observe(notifications: { _, _ in }, onClose: { [weak self] _ in
+            if self?.sharedSessions[serverURL]?.connection === session.connection {
+                self?.sharedSessions[serverURL] = nil
+            }
+        })
+        return session
+    }
+
+    /// Closes shared connections, such as when the app goes to the background; the next use reopens them.
+    public func closeSessions(for serverURL: URL? = nil) {
+        for (url, session) in sharedSessions where serverURL == nil || url == serverURL {
+            sharedSessions[url] = nil
+            session.connection.close()
+        }
+    }
+
+    /// Opens a new signed-in connection to a saved server.
+    private func open(serverURL: URL) async throws -> ApronSession {
         guard let metadata = server(for: serverURL) else { throw SourceError.notConfigured }
         let token = try keychainStore.loadApronToken(serverURL: serverURL)
         do {

@@ -1,5 +1,6 @@
 import NoFeedSocialCore
 import SwiftUI
+import UIKit
 
 /// Chat detail for one Apron room. Owns the connection lifecycle and hosts the UIKit chat,
 /// which outperformed a SwiftUI `ScrollView` on long rooms (see docs/IMPLEMENTATION.md).
@@ -29,6 +30,10 @@ struct ApronChatView: View {
             }
             .onDisappear {
                 viewModel.disconnect()
+            }
+            // The shared connection closes in the background; rejoin it when the app is active again.
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+                Task { await viewModel.connect() }
             }
     }
 }

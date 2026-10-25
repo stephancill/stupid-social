@@ -79,6 +79,8 @@ public final class ApronChatViewModel: ObservableObject {
     private var readSendTask: Task<Void, Never>?
     private var cacheSaveTask: Task<Void, Never>?
     private var ownUserIds: Set<String>
+    private var observerToken: UUID?
+    private var hasLoadedHistory = false
     private var renderedTextCache: [String: AttributedString] = [:]
     private let pageSize = 50
 
@@ -114,7 +116,7 @@ public final class ApronChatViewModel: ObservableObject {
         errorMessage = nil
         showCachedMessages()
         do {
-            let session = try await service.open(serverURL: serverURL)
+            let session = try await service.session(serverURL: serverURL)
             self.session = session
             you = session.you
             ownUserIds.insert(session.you.userId)
@@ -122,14 +124,15 @@ public final class ApronChatViewModel: ObservableObject {
             canReact = session.server.has("reactions")
             tracksCursors = service.serverTracksCursors(session)
             // Replay is order-independent (§2.3), so live frames can be applied while history loads.
-            session.connection.onNotification = { [weak self] method, params in
-                self?.handle(method: method, params: params)
-            }
-            session.connection.onClose = { [weak self] error in
-                guard let self else { return }
-                self.session = nil
-                state = .disconnected(error?.localizedDescription)
-            }
+            observerToken = session.connection.observe(
+                notifications: { [weak self] method, params in self?.handle(method: method, params: params) },
+                onClose: { [weak self] error in
+                    guard let self else { return }
+                    self.session = nil
+                    observerToken = nil
+                    state = .disconnected(error?.localizedDescription)
+                },
+            )
 
             if session.server.has("rooms") {
                 let listing = try await session.connection.joinedRooms(members: true)
@@ -148,20 +151,32 @@ public final class ApronChatViewModel: ObservableObject {
                 let page = try await session.connection.history(roomId: roomId, limit: pageSize)
                 dropCacheBehindGap(newestPage: page)
                 apply(page, publishing: false)
-                try await openAtFirstUnread()
+                // The divider and opening window belong to the first load of a visit; a reconnect (such as
+                // after the app was in the background) only merges what arrived meanwhile.
+                if !hasLoadedHistory {
+                    try await openAtFirstUnread()
+                }
+                hasLoadedHistory = true
                 publish()
             }
             state = .connected
         } catch {
-            session?.connection.close()
-            session = nil
+            stopObserving()
             state = .disconnected(error.localizedDescription)
         }
     }
 
+    /// Leaves the room. The connection is shared with the feed, so only this chat's observer goes away.
     public func disconnect() {
         saveCache()
-        session?.connection.close()
+        stopObserving()
+    }
+
+    private func stopObserving() {
+        if let observerToken {
+            session?.connection.removeObserver(observerToken)
+        }
+        observerToken = nil
         session = nil
     }
 

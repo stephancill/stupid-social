@@ -45,14 +45,14 @@ public final class ApronNotificationSource: NotificationFetching, AccountValidat
     }
 
     private func fetchRooms(serverURL: URL) async throws -> [NotificationItem] {
-        let session = try await service.open(serverURL: serverURL)
-        defer { session.connection.close() }
-        let tracksCursors = service.serverTracksCursors(session)
-        if tracksCursors {
+        // The shared connection stays open for live updates and chat; it isn't closed here.
+        let session = try await service.session(serverURL: serverURL)
+        var token: UUID?
+        if service.serverTracksCursors(session) {
             // The server sends the cursors it keeps after `room_list` (§4.6); they arrive before later results.
             let readStore = service.readStore
             let you = session.you.userId
-            session.connection.onNotification = { method, params in
+            token = session.connection.observe(notifications: { method, params in
                 guard method == "activity",
                       let activity = try? JSONDecoder().decode(ApronActivity.self, from: params),
                       activity.from?.userId == you,
@@ -60,8 +60,9 @@ public final class ApronNotificationSource: NotificationFetching, AccountValidat
                       let cursor = activity.readMessageId.flatMap(Int64.init)
                 else { return }
                 readStore.setServerCursor(cursor, serverURL: serverURL, roomId: roomId)
-            }
+            })
         }
+        defer { token.map(session.connection.removeObserver) }
         return try await items(in: session)
     }
 

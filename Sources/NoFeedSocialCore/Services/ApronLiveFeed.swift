@@ -62,26 +62,32 @@ public final class ApronLiveFeed {
     private func disconnect(_ url: URL) {
         loops.removeValue(forKey: url)?.cancel()
         rebuilds.removeValue(forKey: url)?.cancel()
-        sessions.removeValue(forKey: url)?.connection.close()
+        sessions[url] = nil
+        // In the background the shared connection closes too; chat reopens it on demand.
+        service.closeSessions(for: url)
     }
 
     private func run(_ url: URL) async {
         var delay: Duration = .seconds(1)
         while isRunning, !Task.isCancelled, service.server(for: url) != nil {
             do {
-                let session = try await service.open(serverURL: url)
-                guard isRunning, !Task.isCancelled else {
-                    session.connection.close()
-                    return
-                }
+                let session = try await service.session(serverURL: url)
+                guard isRunning, !Task.isCancelled else { return }
                 sessions[url] = session
                 delay = .seconds(1)
-                session.connection.onNotification = { [weak self] method, params in
-                    self?.handle(method: method, params: params, session: session)
+                // Catch up on anything that arrived while disconnected, then follow live deliveries until
+                // the shared connection closes.
+                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                    guard session.connection.isOpen else {
+                        continuation.resume()
+                        return
+                    }
+                    session.connection.observe(
+                        notifications: { [weak self] method, params in self?.handle(method: method, params: params, session: session) },
+                        onClose: { _ in continuation.resume() },
+                    )
+                    scheduleRebuild(url, immediately: true)
                 }
-                // Catch up on anything that arrived while disconnected, then follow live deliveries.
-                scheduleRebuild(url, immediately: true)
-                await waitUntilClosed(session.connection)
                 sessions[url] = nil
             } catch let error as ApronError where error.isDenied {
                 logger.info("Apron live feed stopped for \(url.host() ?? "server", privacy: .public): sign-in denied")
@@ -92,13 +98,6 @@ public final class ApronLiveFeed {
             guard isRunning, !Task.isCancelled else { return }
             try? await Task.sleep(for: delay)
             delay = min(delay * 2, .seconds(60))
-        }
-    }
-
-    private func waitUntilClosed(_ connection: ApronConnection) async {
-        guard connection.isOpen else { return }
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            connection.onClose = { _ in continuation.resume() }
         }
     }
 

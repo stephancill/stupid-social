@@ -26,12 +26,29 @@ public enum ApronError: LocalizedError, Equatable {
 }
 
 /// One WebSocket connection to an Apron server. Requests are matched to replies by `id`;
-/// every other frame is delivered to `onNotification` as `(method, params JSON)`.
+/// every other frame is delivered to each observer as `(method, params JSON)`. One connection per server is
+/// shared across the app (`ApronService.session(serverURL:)`), so several features observe it at once.
 @MainActor
 public final class ApronConnection {
     public private(set) var server: ApronServerInfo?
-    public var onNotification: ((String, Data) -> Void)?
-    public var onClose: ((Error?) -> Void)?
+    private var notificationObservers: [UUID: (String, Data) -> Void] = [:]
+    private var closeObservers: [UUID: (Error?) -> Void] = [:]
+
+    /// Registers handlers for notifications and for the connection closing; remove them with the returned token.
+    @discardableResult
+    public func observe(notifications: @escaping (String, Data) -> Void, onClose: ((Error?) -> Void)? = nil) -> UUID {
+        let token = UUID()
+        notificationObservers[token] = notifications
+        if let onClose {
+            closeObservers[token] = onClose
+        }
+        return token
+    }
+
+    public func removeObserver(_ token: UUID) {
+        notificationObservers[token] = nil
+        closeObservers[token] = nil
+    }
 
     private let task: URLSessionWebSocketTask
     private let decoder = JSONDecoder()
@@ -159,7 +176,9 @@ public final class ApronConnection {
             serverWaiters = []
             waiters.forEach { $0.resume(returning: info) }
         }
-        onNotification?(method, params)
+        for observer in notificationObservers.values {
+            observer(method, params)
+        }
     }
 
     private func startPinging(every seconds: Double) {
@@ -183,7 +202,12 @@ public final class ApronConnection {
         pending = [:]
         serverWaiters.forEach { $0.resume(throwing: failure) }
         serverWaiters = []
-        onClose?(error)
+        let observers = closeObservers.values
+        notificationObservers = [:]
+        closeObservers = [:]
+        for observer in observers {
+            observer(error)
+        }
     }
 
     private static func json(_ value: Any) -> Data {
