@@ -73,7 +73,7 @@ Build an iOS app with xtool that shows a combined social network notifications f
 ## Credential Storage
 
 - Store credentials in iCloud Keychain so they sync across the user's Apple devices.
-- If iCloud sync is unavailable, fall back to local-only credential storage and show an actionable sync status.
+- If iCloud sync is unavailable, fall back to local-only credential storage silently; Settings does not show a sync status note.
 - Do not log raw credentials, cookie headers, tokens, or derived auth values.
 - Show inline reconnect/update controls when credentials are invalid or expired.
 - Security posture for MVP is pragmatic: correct Keychain usage, no secret logging, and clear account status.

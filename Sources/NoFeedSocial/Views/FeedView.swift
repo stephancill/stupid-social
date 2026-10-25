@@ -6,8 +6,9 @@ struct FeedView: View {
     @ObservedObject var viewModel: FeedViewModel
     @ObservedObject var storyViewModel: StoryBarViewModel
     let spotifyClient: SpotifyClient
-    let settingsNeedsAttention: Bool
+    let settingsViewModel: SettingsViewModel
     let onOpenSettings: () -> Void
+    let onRefresh: () async -> Void
     @State private var notificationDetailSelection: DisplayNotificationItem?
     @State private var storyViewerSelection: StoryViewerSelection?
     @State private var showingStoryComposer = false
@@ -107,7 +108,7 @@ struct FeedView: View {
         .toolbarBackground(.hidden, for: .navigationBar)
         #endif
         .refreshable {
-            await refreshFeedAndStories()
+            await onRefresh()
         }
         .navigationDestination(item: $notificationDetailSelection) { displayItem in
             NotificationDetailView(displayItem: displayItem, feedService: viewModel.service)
@@ -128,14 +129,7 @@ struct FeedView: View {
                 .accessibilityLabel("Search")
 
                 NavigationLink(value: HomeDestination.settings) {
-                    Image(systemName: "gear")
-                }
-                .overlay(alignment: .topTrailing) {
-                    if settingsNeedsAttention {
-                        Circle()
-                            .fill(.red)
-                            .frame(width: 8, height: 8)
-                    }
+                    SettingsToolbarIcon(viewModel: settingsViewModel)
                 }
                 .accessibilityLabel("Settings")
             }
@@ -208,12 +202,6 @@ struct FeedView: View {
 
     private var alertMessage: String {
         viewModel.errorMessage ?? storyViewModel.errorMessage ?? "Refresh failed."
-    }
-
-    private func refreshFeedAndStories() async {
-        async let feedRefresh = viewModel.refresh()
-        async let storyRefresh: Void = storyViewModel.fetchStoryBarContent()
-        _ = await (feedRefresh, storyRefresh)
     }
 
     private func targetPostURL(for displayItem: DisplayNotificationItem) -> URL? {
@@ -1251,5 +1239,21 @@ private struct AvatarFallback: View {
     private var initial: String {
         let value = DebugRedaction.actorName(actor, enabled: redactionEnabled)
         return value.first.map { String($0).uppercased() } ?? "?"
+    }
+}
+
+private struct SettingsToolbarIcon: View {
+    @ObservedObject var viewModel: SettingsViewModel
+
+    var body: some View {
+        Image(systemName: "gear")
+            .overlay(alignment: .topTrailing) {
+                if viewModel.hasInvalidCredentials {
+                    Circle()
+                        .fill(.red)
+                        .frame(width: 8, height: 8)
+                        .offset(x: 2, y: -2)
+                }
+            }
     }
 }

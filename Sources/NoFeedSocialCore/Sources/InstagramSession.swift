@@ -391,8 +391,9 @@ extension InstagramClient {
         request.httpBody = body
         request.allHTTPHeaderFields = webHeaders(credentials: credentials, referer: Self.baseURL + "/").merging(headers) { _, new in new }
         configureRequest(&request)
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await session.data(for: request, delegate: InstagramSessionExpiryRedirectGuard())
         guard let http = response as? HTTPURLResponse else { throw SourceError.invalidResponse }
+        if instagramResponseExpiresSession(http) { throw SourceError.notConfigured }
         if let claim = http.value(forHTTPHeaderField: "x-ig-set-www-claim") ?? http.value(forHTTPHeaderField: "x-ig-www-claim") {
             wwwClaim = claim
         }
@@ -413,8 +414,9 @@ extension InstagramClient {
         request.allHTTPHeaderFields = headers
         request.cachePolicy = .reloadIgnoringLocalCacheData
         configureRequest(&request)
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await session.data(for: request, delegate: InstagramSessionExpiryRedirectGuard())
         guard let http = response as? HTTPURLResponse else { throw SourceError.invalidResponse }
+        if instagramResponseExpiresSession(http) { throw SourceError.notConfigured }
         if let claim = http.value(forHTTPHeaderField: "x-ig-set-www-claim") ?? http.value(forHTTPHeaderField: "x-ig-www-claim") {
             wwwClaim = claim
         }
@@ -623,4 +625,28 @@ private extension CharacterSet {
         allowed.remove(charactersIn: "+&=")
         return allowed
     }()
+}
+
+/// Instagram signals a dead session by expiring `sessionid`, usually on a 302 back to the same page.
+/// Requests send cookies manually, so URLSession would otherwise follow that redirect with the dead
+/// cookie until it fails with too many redirects.
+func instagramResponseExpiresSession(_ response: HTTPURLResponse) -> Bool {
+    guard let url = response.url,
+          let fields = response.allHeaderFields as? [String: String] else { return false }
+    return HTTPCookie.cookies(withResponseHeaderFields: fields, for: url).contains { cookie in
+        guard cookie.name == "sessionid" else { return false }
+        if let expiresDate = cookie.expiresDate, expiresDate <= Date() { return true }
+        return cookie.value.isEmpty || cookie.value == "\"\""
+    }
+}
+
+final class InstagramSessionExpiryRedirectGuard: NSObject, URLSessionTaskDelegate, Sendable {
+    func urlSession(
+        _: URLSession,
+        task _: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+    ) async -> URLRequest? {
+        instagramResponseExpiresSession(response) ? nil : request
+    }
 }

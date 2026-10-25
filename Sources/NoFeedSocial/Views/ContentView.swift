@@ -38,8 +38,9 @@ public struct ContentView: View {
                 viewModel: container.feedViewModel,
                 storyViewModel: container.storyBarViewModel,
                 spotifyClient: container.spotifyClient,
-                settingsNeedsAttention: container.settingsViewModel.hasInvalidCredentials,
+                settingsViewModel: container.settingsViewModel,
                 onOpenSettings: { path.append(.settings) },
+                onRefresh: { await refreshFeedAndStories(container: container) },
             )
             .navigationDestination(for: HomeDestination.self) { destination in
                 switch destination {
@@ -70,12 +71,15 @@ public struct ContentView: View {
         async let feedRefresh = container.feedViewModel.refreshOnForegroundActivation()
         async let storyRefresh: Void = container.storyBarViewModel.fetchStoryBarContent()
         _ = await (feedRefresh, storyRefresh)
+        // Sources mark accounts invalid during refresh; reload so the Settings badge reflects it.
+        container.settingsViewModel.loadStatuses()
     }
 
     private func refreshFeedAndStories(container: AppContainer) async {
         async let feedRefresh = container.feedViewModel.refresh()
         async let storyRefresh: Void = container.storyBarViewModel.fetchStoryBarContent()
         _ = await (feedRefresh, storyRefresh)
+        container.settingsViewModel.loadStatuses()
     }
 
     private var refreshShortcutButton: some View {

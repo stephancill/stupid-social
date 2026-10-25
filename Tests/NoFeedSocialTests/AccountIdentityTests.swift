@@ -56,6 +56,19 @@ final class AccountIdentityTests: XCTestCase {
         XCTAssertThrowsError(try instagramHomepageTray(html: instagramHomepage.replacingOccurrences(of: "xdt_api__v1__feed__reels_tray", with: "unrelated"), accountID: "42"))
     }
 
+    func testInstagramDetectsExpiredSessionCookie() throws {
+        func response(_ setCookie: String?) throws -> HTTPURLResponse {
+            var headers = ["Location": "https://www.instagram.com/"]
+            headers["Set-Cookie"] = setCookie
+            return try XCTUnwrap(try HTTPURLResponse(url: XCTUnwrap(URL(string: "https://www.instagram.com/")), statusCode: 302, httpVersion: "HTTP/1.1", headerFields: headers))
+        }
+        XCTAssertTrue(try instagramResponseExpiresSession(response("sessionid=abc; expires=Thu, 01-Jan-1970 00:00:01 GMT; Max-Age=-1792943606; path=/; domain=.instagram.com; httponly")))
+        XCTAssertTrue(try instagramResponseExpiresSession(response(#"sessionid=""; path=/; domain=.instagram.com"#)))
+        XCTAssertFalse(try instagramResponseExpiresSession(response("sessionid=abc; expires=Thu, 01-Jan-2099 00:00:01 GMT; path=/; domain=.instagram.com")))
+        XCTAssertFalse(try instagramResponseExpiresSession(response("csrftoken=abc; expires=Thu, 01-Jan-1970 00:00:01 GMT; path=/; domain=.instagram.com")))
+        XCTAssertFalse(try instagramResponseExpiresSession(response(nil)))
+    }
+
     @MainActor
     func testInstagramConcurrentIdentityAndTrayShareOnePageAndLaterReadsAreFresh() async throws {
         let (store, suite) = try makeStore()

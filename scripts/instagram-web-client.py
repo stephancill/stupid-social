@@ -114,7 +114,7 @@ class InstagramWebClient:
         self.cache_path = cache_path
         self.cache_ttl_seconds = cache_ttl_seconds
         self.cookie_jar = http.cookiejar.CookieJar()
-        self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.cookie_jar))
+        self.opener = urllib.request.build_opener(SessionExpiryRedirectHandler(), urllib.request.HTTPCookieProcessor(self.cookie_jar))
         self.request_count = 0
         self.web_session_id = random_base36(6)
         self.www_claim: str | None = None
@@ -631,6 +631,8 @@ class InstagramWebClient:
         request = urllib.request.Request(url, data=body, headers=headers, method=method)
         try:
             with self.opener.open(request, timeout=30) as response:
+                if response_expires_session(response.headers):
+                    raise SystemExit(SESSION_EXPIRED_MESSAGE)
                 claim = response.headers.get("x-ig-set-www-claim") or response.headers.get("x-ig-www-claim")
                 if claim:
                     self.www_claim = claim
@@ -777,6 +779,28 @@ def find_story_payload(value: Any) -> dict[str, Any] | None:
             if found is not None:
                 return found
     return None
+
+
+SESSION_EXPIRED_MESSAGE = "Instagram session expired: the server cleared the sessionid cookie. Log in again."
+
+
+def response_expires_session(headers: Any) -> bool:
+    # Instagram signals a dead session by expiring sessionid, usually on a 302 back to the same page.
+    for header in headers.get_all("Set-Cookie") or []:
+        name, _, rest = header.partition("=")
+        if name.strip() != "sessionid":
+            continue
+        attributes = rest.lower()
+        if rest.startswith('""') or rest.startswith(";") or "max-age=-" in attributes or "max-age=0" in attributes or "01-jan-1970" in attributes:
+            return True
+    return False
+
+
+class SessionExpiryRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
+        if response_expires_session(headers):
+            raise SystemExit(SESSION_EXPIRED_MESSAGE)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 class InstagramHTTPError(Exception):

@@ -133,14 +133,6 @@ public final class SettingsViewModel: ObservableObject {
             || githubStatus == .invalidCredentials
     }
 
-    public var hasLocalOnlyCredentials: Bool {
-        xCredentialStorage == .localOnly
-            || instagramCredentialStorage == .localOnly
-            || spotifyCredentialStorage == .localOnly
-            || blueskyCredentialStorage == .localOnly
-            || githubCredentialStorage == .localOnly
-    }
-
     public func beginBlueskyOAuth() async throws -> BlueskyOAuthSession {
         let hint = blueskyLoginHint.trimmingCharacters(in: .whitespacesAndNewlines)
         return try await BlueskyClient(credentialStore: keychainStore).startOAuth(loginHint: hint.isEmpty ? nil : hint)
