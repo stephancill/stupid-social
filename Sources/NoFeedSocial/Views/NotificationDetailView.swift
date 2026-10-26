@@ -1,3 +1,4 @@
+import AVFoundation
 import NoFeedSocialCore
 import SwiftUI
 import UIKit
@@ -5,6 +6,7 @@ import UIKit
 struct NotificationDetailView: View {
     let displayItem: DisplayNotificationItem
     let feedService: FeedService
+    let spotifyClient: SpotifyClient
     @Environment(\.openURL) private var openURL
     @AppStorage("redactionEnabled") private var redactionEnabled = false
     @State private var targetDetails: NotificationTargetDetails?
@@ -96,6 +98,12 @@ struct NotificationDetailView: View {
                 }
             }
 
+            if let spotifyTrackId {
+                Section {
+                    SpotifyTrackPreviewButton(trackId: spotifyTrackId, spotifyClient: spotifyClient)
+                }
+            }
+
             if !displayItem.item.actors.isEmpty {
                 Section("People") {
                     ForEach(displayItem.item.actors, id: \.id) { actor in
@@ -144,6 +152,14 @@ struct NotificationDetailView: View {
         case .unknown:
             return "Notification"
         }
+    }
+
+    /// The track ID of a shared Spotify track (`https://open.spotify.com/track/<id>`).
+    private var spotifyTrackId: String? {
+        guard displayItem.item.network == .spotify, let url = displayItem.item.target?.url,
+              url.host == "open.spotify.com", url.pathComponents.count == 3, url.pathComponents[1] == "track"
+        else { return nil }
+        return url.pathComponents[2]
     }
 
     private var targetSectionTitle: String {
@@ -200,6 +216,85 @@ struct NotificationDetailView: View {
             actors: displayItem.item.actors,
             target: target,
         )
+    }
+}
+
+private struct SpotifyTrackPreviewButton: View {
+    private enum PlaybackState {
+        case idle
+        case loading
+        case playing
+        case paused
+        case unavailable
+    }
+
+    let trackId: String
+    let spotifyClient: SpotifyClient
+
+    @State private var player: AVPlayer?
+    @State private var state: PlaybackState = .idle
+
+    var body: some View {
+        Button {
+            Task { await togglePlayback() }
+        } label: {
+            HStack {
+                Label(title, systemImage: state == .playing ? "pause.fill" : "play.fill")
+                Spacer()
+                if state == .loading {
+                    ProgressView()
+                }
+            }
+        }
+        .disabled(state == .loading || state == .unavailable)
+        .onReceive(NotificationCenter.default.publisher(for: .AVPlayerItemDidPlayToEndTime)) { notification in
+            guard let item = notification.object as? AVPlayerItem, item === player?.currentItem else { return }
+            player?.seek(to: .zero)
+            state = .paused
+        }
+        .onDisappear {
+            player?.pause()
+            player = nil
+            state = .idle
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
+    }
+
+    private var title: String {
+        switch state {
+        case .idle, .paused: "Play Preview"
+        case .loading: "Loading Preview"
+        case .playing: "Pause Preview"
+        case .unavailable: "No Preview Available"
+        }
+    }
+
+    private func togglePlayback() async {
+        switch state {
+        case .playing:
+            player?.pause()
+            state = .paused
+        case .paused:
+            play()
+        case .idle:
+            state = .loading
+            guard let url = await spotifyClient.trackPreviewURL(trackId: trackId) else {
+                state = .unavailable
+                return
+            }
+            player = AVPlayer(url: url)
+            play()
+        case .loading, .unavailable:
+            break
+        }
+    }
+
+    private func play() {
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(.playback, mode: .default)
+        try? session.setActive(true)
+        player?.play()
+        state = .playing
     }
 }
 

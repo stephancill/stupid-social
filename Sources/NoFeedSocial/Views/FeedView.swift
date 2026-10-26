@@ -142,7 +142,7 @@ struct FeedView: View {
                     title: displayItem.item.parentTarget?.text,
                 ))
             } else {
-                NotificationDetailView(displayItem: displayItem, feedService: viewModel.service)
+                NotificationDetailView(displayItem: displayItem, feedService: viewModel.service, spotifyClient: spotifyClient)
             }
         }
         .navigationTitle("Social")
