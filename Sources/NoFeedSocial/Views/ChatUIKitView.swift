@@ -71,6 +71,10 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     private var unreadCount = 0
     private var userHasScrolled = false
     private var reactionTotals: [String: [ChatReaction]] = [:]
+    /// Reaction changes made while a message's context menu is up wait for it to finish dismissing, so the
+    /// bubble doesn't grow under the dismissal preview.
+    private var isShowingContextMenu = false
+    private var pendingReactionTotals: [String: [ChatReaction]]?
     private var avatarPrefetches = Set<URL>()
     private let reactionHaptic = UISelectionFeedbackGenerator()
     private let audioPlayer = ChatAudioPreviewPlayer()
@@ -756,8 +760,20 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
 
     /// Applies a change that can grow cells (reactions, quotes, edits) while keeping the view anchored to the
     /// bottom when it was there, so the growth pushes content up instead of under the input.
-    private func applyKeepingBottom(_ snapshot: NSDiffableDataSourceSnapshot<Section, Item>) {
+    private func applyKeepingBottom(_ snapshot: NSDiffableDataSourceSnapshot<Section, Item>, animated: Bool = false) {
         let wasAtBottom = isPinnedToBottom && hasScrolledInitially && !hasLater
+        if animated, !isAnchoredToDivider {
+            // Grow the cells and follow the bottom in one animation, so the list moves up with the growth.
+            collectionView.layoutIfNeeded()
+            UIView.animate(withDuration: 0.3, delay: 0, options: [.curveEaseOut, .allowUserInteraction, .beginFromCurrentState]) {
+                self.dataSource.apply(snapshot, animatingDifferences: false)
+                self.collectionView.layoutIfNeeded()
+                if wasAtBottom {
+                    self.collectionView.contentOffset.y = self.bottomOffset
+                }
+            }
+            return
+        }
         dataSource.apply(snapshot, animatingDifferences: false)
         if isAnchoredToDivider, hasScrolledInitially {
             scrollToDivider()
@@ -929,6 +945,22 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
 
     func collectionView(_ collectionView: UICollectionView, contextMenuConfiguration _: UIContextMenuConfiguration, dismissalPreviewForItemAt indexPath: IndexPath) -> UITargetedPreview? {
         bubblePreview(at: indexPath, in: collectionView)
+    }
+
+    func collectionView(_: UICollectionView, willDisplayContextMenu _: UIContextMenuConfiguration, animator _: UIContextMenuInteractionAnimating?) {
+        isShowingContextMenu = true
+    }
+
+    func collectionView(_: UICollectionView, willEndContextMenuInteraction _: UIContextMenuConfiguration, animator: UIContextMenuInteractionAnimating?) {
+        let finish = { [weak self] in
+            guard let self else { return }
+            isShowingContextMenu = false
+            if let totals = pendingReactionTotals {
+                pendingReactionTotals = nil
+                applyReactionTotals(totals)
+            }
+        }
+        if let animator { animator.addCompletion(finish) } else { finish() }
     }
 
     private func bubblePreview(at indexPath: IndexPath, in collectionView: UICollectionView) -> UITargetedPreview? {
@@ -1276,6 +1308,10 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
 
     /// Reconfigures only the messages whose totals changed.
     private func applyReactionTotals(_ totals: [String: [ChatReaction]]) {
+        if isShowingContextMenu {
+            pendingReactionTotals = totals
+            return
+        }
         let changedIds = Set(totals.keys).union(reactionTotals.keys).filter { totals[$0] != reactionTotals[$0] }
         reactionTotals = totals
         guard !changedIds.isEmpty else { return }
@@ -1284,7 +1320,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         let changed = changedIds.map(Item.message).filter(present.contains)
         guard !changed.isEmpty else { return }
         snapshot.reconfigureItems(changed)
-        applyKeepingBottom(snapshot)
+        applyKeepingBottom(snapshot, animated: hasScrolledInitially)
     }
 }
 
