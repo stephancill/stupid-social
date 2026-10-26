@@ -23,6 +23,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from dataclasses import dataclass
 from html import unescape
 from http.cookiejar import Cookie
@@ -298,6 +299,69 @@ class InstagramWebClient:
         )
         url = BASE_URL + "/api/v1/direct_v2/inbox/?" + params
         return self.request_json_with_refresh("GET", url, headers=self.web_headers())
+
+    def session_check(self) -> dict[str, Any]:
+        """Whether the session can call the API. The homepage still renders signed in under a checkpoint, so the
+        login WebView checks this endpoint, which answers `checkpoint_required` JSON with the challenge URL."""
+        self._ensure_bootstrapped()
+        url = BASE_URL + "/api/v1/accounts/edit/web_form_data/"
+        try:
+            self.request_json(url=url, method="GET", headers=self.web_headers())
+            return {"status": "ok"}
+        except InstagramHTTPError as exc:
+            return {"status": "fail", "http_status": exc.status_code, "body": exc.body[:300]}
+
+    def rest_direct_thread(self, thread_id: str, cursor: str | None = None, limit: int = 20) -> dict[str, Any]:
+        """One Direct thread's items, newest first. `cursor` is the response's `thread.oldest_cursor`."""
+        self._ensure_bootstrapped()
+        query: dict[str, str] = {"visual_message_return_type": "unseen", "direction": "older", "limit": str(limit)}
+        if cursor:
+            query["cursor"] = cursor
+        url = BASE_URL + f"/api/v1/direct_v2/threads/{urllib.parse.quote(thread_id)}/?" + urllib.parse.urlencode(query)
+        return self.request_json_with_refresh("GET", url, headers=self.web_headers())
+
+    def rest_direct_seen(self, thread_id: str, item_id: str) -> dict[str, Any]:
+        """Marks a Direct thread seen up to `item_id` (fails unless Instagram answers `status: ok`)."""
+        self._ensure_bootstrapped()
+        result = self.request_json_with_refresh(
+            "POST",
+            BASE_URL + f"/api/v1/direct_v2/threads/{urllib.parse.quote(thread_id)}/items/{urllib.parse.quote(item_id)}/seen/",
+            headers={**self.web_headers(), "Content-Type": "application/x-www-form-urlencoded"},
+            body=urllib.parse.urlencode(self._direct_form({})).encode(),
+        )
+        if result.get("status") != "ok":
+            raise SystemExit(f"direct seen was not applied: {json.dumps(result)[:500]}")
+        return result
+
+    def rest_direct_send_text(self, thread_id: str, text: str, replied_to_item_id: str | None = None) -> dict[str, Any]:
+        """Sends a text item to an existing Direct thread through `broadcast/text/`."""
+        self._ensure_bootstrapped()
+        fields = {
+            "action": "send_item",
+            "thread_ids": json.dumps([thread_id]),
+            "text": text,
+            "client_context": str(uuid.uuid4()),
+            "mutation_token": str(uuid.uuid4()),
+            "offline_threading_id": str(random.getrandbits(62)),
+        }
+        if replied_to_item_id:
+            fields["replied_to_item_id"] = replied_to_item_id
+            fields["replied_to_client_context"] = ""
+        result = self.request_json_with_refresh(
+            "POST",
+            BASE_URL + "/api/v1/direct_v2/threads/broadcast/text/",
+            headers={**self.web_headers(), "Content-Type": "application/x-www-form-urlencoded"},
+            body=urllib.parse.urlencode(self._direct_form(fields)).encode(),
+        )
+        if result.get("status") != "ok":
+            raise SystemExit(f"direct send was not applied: {json.dumps(result)[:500]}")
+        return result
+
+    def _direct_form(self, fields: dict[str, str]) -> dict[str, str]:
+        state = self._state()
+        if state.csrf_token:
+            fields = {**fields, "_csrftoken": state.csrf_token, "jazoest": jazoest(state.csrf_token)}
+        return fields
 
     def rest_stories_tray(self) -> dict[str, Any]:
         self._ensure_bootstrapped()
@@ -643,6 +707,8 @@ class InstagramWebClient:
                 return response.read().decode(charset, errors="replace")
         except urllib.error.HTTPError as exc:
             body_text = exc.read().decode("utf-8", errors="replace")
+            if body_requires_login(body_text):
+                raise SystemExit(LOGIN_REQUIRED_MESSAGE) from exc
             raise InstagramHTTPError(exc.code, method, url, body_text) from exc
 
     def _base_page_headers(self) -> dict[str, str]:
@@ -787,6 +853,21 @@ def find_story_payload(value: Any) -> dict[str, Any] | None:
 
 
 SESSION_EXPIRED_MESSAGE = "Instagram session expired: the server cleared the sessionid cookie. Log in again."
+LOGIN_REQUIRED_MESSAGE = "Instagram requires login: the session hit a checkpoint or was logged out. Log in again."
+LOGIN_REQUIRED_API_MESSAGES = {"checkpoint_required", "challenge_required", "login_required"}
+
+
+def body_requires_login(body: str) -> bool:
+    # A session under a security checkpoint answers API calls with `checkpoint_required` JSON (HTTP 400), and
+    # some endpoints (such as direct_v2) with a 404 page rendered for a logged-out visitor.
+    try:
+        decoded = json.loads(body)
+    except json.JSONDecodeError:
+        decoded = None
+    if isinstance(decoded, dict):
+        return decoded.get("message") in LOGIN_REQUIRED_API_MESSAGES
+    match = re.search(r"<html[^>]*\bclass=\"([^\"]*)\"", body[:4096])
+    return bool(match and "not-logged-in" in match.group(1).split())
 
 
 def response_expires_session(headers: Any) -> bool:
@@ -1011,6 +1092,18 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("current-user", help="Resolve signed-in username and avatar from Direct inbox viewer, without a profile lookup.")
     subparsers.add_parser("news-inbox", help="Call web-visible REST /api/v1/news/inbox/.")
     subparsers.add_parser("direct-inbox", help="Call web-visible REST /api/v1/direct_v2/inbox/.")
+    subparsers.add_parser("session-check", help="Check the session can call the API (detects checkpoints the homepage hides).")
+    direct_thread = subparsers.add_parser("direct-thread", help="Fetch one Direct thread's items (REST /api/v1/direct_v2/threads/<id>/).")
+    direct_thread.add_argument("thread_id")
+    direct_thread.add_argument("--cursor", help="Page older items from a previous response's thread.oldest_cursor.")
+    direct_thread.add_argument("--limit", type=int, default=20)
+    direct_seen = subparsers.add_parser("direct-seen", help="Mark a Direct thread seen up to an item (POST .../items/<item_id>/seen/).")
+    direct_seen.add_argument("thread_id")
+    direct_seen.add_argument("item_id")
+    direct_send = subparsers.add_parser("direct-send-text", help="Send a text message to a Direct thread (POST broadcast/text/). Sends a real DM.")
+    direct_send.add_argument("thread_id")
+    direct_send.add_argument("text")
+    direct_send.add_argument("--reply-to", help="Item id to reply to.")
 
     username_profile = subparsers.add_parser("profile-username", help="Call web-visible /api/v1/users/web_profile_info/.")
     username_profile.add_argument("username", help="Instagram username.")
@@ -1149,6 +1242,14 @@ def main() -> None:
         result = client.rest_news_inbox()
     elif args.command == "direct-inbox":
         result = client.rest_direct_inbox()
+    elif args.command == "session-check":
+        result = client.session_check()
+    elif args.command == "direct-thread":
+        result = client.rest_direct_thread(args.thread_id, args.cursor, args.limit)
+    elif args.command == "direct-seen":
+        result = client.rest_direct_seen(args.thread_id, args.item_id)
+    elif args.command == "direct-send-text":
+        result = client.rest_direct_send_text(args.thread_id, args.text, args.reply_to)
     elif args.command == "profile-username":
         result = client.rest_profile_by_username(args.username)
     elif args.command == "search-users":

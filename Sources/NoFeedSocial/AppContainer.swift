@@ -12,6 +12,7 @@ final class AppContainer {
     let apronService: ApronService
     let apronServersViewModel: ApronServersViewModel
     let apronLiveFeed: ApronLiveFeed
+    let chatListViewModel: ChatListViewModel
 
     private let metadataStore: AccountMetadataStore
     private let keychainStore: KeychainCredentialStore
@@ -88,8 +89,6 @@ final class AppContainer {
             instagramSource,
             blueskySource,
             githubNotificationSource,
-            spotifyMessagesSource,
-            apronSource,
             debugSource,
         ]
         accountValidators = [
@@ -151,16 +150,20 @@ final class AppContainer {
             cacheStore: cacheStore,
         )
 
-        apronServersViewModel = ApronServersViewModel(service: apronService, cacheStore: cacheStore)
-        apronLiveFeed = ApronLiveFeed(service: apronService, source: apronSource, cacheStore: cacheStore)
-        let feedViewModel = feedViewModel
-        NotificationCenter.default.addObserver(forName: ApronLiveFeed.didUpdateNotification, object: nil, queue: .main) { _ in
-            MainActor.assumeIsolated { feedViewModel.loadCachedFeed() }
-        }
+        chatListViewModel = ChatListViewModel(apronSource: apronSource, spotifySource: spotifyMessagesSource)
+        apronServersViewModel = ApronServersViewModel(service: apronService, chatList: chatListViewModel)
+        apronLiveFeed = ApronLiveFeed(service: apronService, source: apronSource, chatList: chatListViewModel)
 
         if DemoData.shouldAutoLoad {
             loadDemoData()
         }
+    }
+
+    /// `nil` when Spotify isn't connected, since the chat needs the viewer's username.
+    func spotifyChatFactory(chatId: String, title: String) -> (() -> ChatViewModel)? {
+        guard let viewer = metadataStore.spotifyAccount?.username else { return nil }
+        let client = spotifyClient
+        return { SpotifyChatViewModel(client: client, chatId: chatId, title: title, viewerUsername: viewer) }
     }
 
     func loadDemoData() {

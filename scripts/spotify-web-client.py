@@ -335,12 +335,43 @@ class SpotifyWebClient:
             "decoded": decoded,
         }
 
+    def chat_submit(self, request: bytes) -> dict[str, Any]:
+        """Send a `ClientNodeRequest` to speechless submit/request. This mutates the chat."""
+        decoded = pb_decode(
+            self.speechless_post(SPEECHLESS_SUBMIT_PATH, request),
+            "ClientNodeResponse",
+        )
+        return {
+            "status": "ok",
+            "chat": summarize_speechless_chat(decoded.get("hierarchy", {}), None),
+            "nodes": [summarize_speechless_node(node) for node in decoded.get("client_node", [])],
+            "decoded": decoded,
+        }
+
     def share_metadata(self, uri: str) -> dict[str, Any]:
         """Title and artwork for a shared URI through the public oEmbed endpoint (no auth)."""
         kind, _, entity_id = uri.split("?", 1)[0].removeprefix("spotify:").partition(":")
         open_url = f"{OPEN_SPOTIFY_BASE_URL}/{kind}/{entity_id}"
         query = urllib.parse.urlencode({"url": open_url})
         return self.request_json("GET", f"{OPEN_SPOTIFY_BASE_URL}/oembed?{query}", headers={"Accept": "application/json"})
+
+    def track_metadata(self, track: str) -> dict[str, Any]:
+        """Track metadata as the Spotify apps load it: spclient `metadata/4/track/<gid>` with the WebPlayer bearer.
+        The gid is the base62 track id as 16 bytes of hex. The response carries no preview; see `track-preview`."""
+        track_id = track.split("?", 1)[0].removeprefix("spotify:track:")
+        raw = self.spclient_get(f"metadata/4/track/{spotify_gid(track_id)}?market=from_token")
+        album = raw.get("album") or {}
+        covers = sorted((album.get("cover_group") or {}).get("image") or [], key=lambda image: image.get("width") or 0)
+        return {
+            "track_id": track_id,
+            "name": raw.get("name"),
+            "artists": [artist.get("name") for artist in raw.get("artist") or []],
+            "album": album.get("name"),
+            "release_year": (album.get("date") or {}).get("year"),
+            "duration_ms": raw.get("duration"),
+            "cover_url": f"https://i.scdn.co/image/{covers[-1]['file_id']}" if covers else None,
+            "raw": raw,
+        }
 
     def profile_attributes(self) -> dict[str, Any]:
         return self.pathfinder_query("profile-attributes", variables={}, use_initial_token=False)
@@ -810,6 +841,48 @@ def summarize_spotify_pathfinder_users(response: dict[str, Any]) -> list[dict[st
 # classes. Each field is `number: (name, type, repeated)`; types are "string", "varint",
 # "bool", "enum:<Name>", or a message name. Unknown fields decode generically as "#<n>".
 SPEECHLESS_SCHEMA: dict[str, dict[int, tuple[str, str, bool]]] = {
+    # Submit (`speechless/v1/submit/request`) request and response.
+    "ClientNodeRequest": {
+        1: ("node_request", "NodeRequest", True),
+        2: ("omit_pusher_events", "bool", False),
+        3: ("omit_pubsub_events", "bool", False),
+        4: ("omit_latest_node_updates", "bool", False),
+    },
+    "NodeRequest": {
+        1: ("hierarchy_request", "HierarchyRequest", False),
+        2: ("message_request", "MessageRequest", False),
+        3: ("bulk_message_request", "BulkMessageRequest", False),
+        4: ("occurred_at", "Timestamp", False),
+        5: ("replay", "bool", False),
+        6: ("digest", "string", False),
+    },
+    "MessageRequest": {
+        1: ("add_contribution", "AddContribution", False),
+        2: ("modify_contribution", "ModifyContribution", False),
+        3: ("delete_contribution", "DeleteContribution", False),
+        4: ("add_activity", "AddActivity", False),
+        5: ("delete_activity", "DeleteActivity", False),
+        6: ("add_contribution_for_group", "AddContributionForGroup", False),
+    },
+    "AddContribution": {1: ("parent_node_path_id", "string", False), 2: ("payload", "ContributionPayload", False)},
+    "ModifyContribution": {1: ("node_path_id", "string", False), 2: ("payload", "ContributionPayload", False)},
+    "DeleteContribution": {1: ("node_path_id", "string", False), 2: ("delete_for_all", "bool", False)},
+    "AddActivity": {1: ("parent_node_path_id", "string", False), 2: ("request", "ActivityRequest", False)},
+    "BulkMessageRequest": {
+        1: ("add_node_activity", "AddNodeActivity", False),
+        2: ("add_hierarchy_activity", "AddHierarchyActivity", False),
+    },
+    "AddNodeActivity": {1: ("node_path_id", "string", True), 2: ("request", "ActivityRequest", False)},
+    "AddHierarchyActivity": {1: ("hierarchy_id", "string", False), 2: ("request", "ActivityRequest", False)},
+    "ActivityRequest": {
+        1: ("reaction_emoti", "enum:ReactionEmoti", False),
+        2: ("receipt_type", "enum:ReceiptType", False),
+        3: ("ack_type", "enum:AckType", False),
+        4: ("emoji_reaction", "EmojiReaction", False),
+    },
+    "EmojiReaction": {1: ("emoji_utf8", "string", False)},
+    "ContributionMetadata": {1: ("message_envelope", "string", False)},
+    "ClientNodeResponse": {1: ("hierarchy", "Hierarchy", False), 2: ("client_node", "ClientNode", True)},
     "RetrieveLatestNodeResponse": {1: ("latest_node_response", "LatestNodeResponse", True)},
     "LatestNodeResponse": {1: ("hierarchy", "Hierarchy", False), 2: ("client_node", "ClientNode", False)},
     "RetrieveNodeResponse": {
@@ -890,6 +963,7 @@ SPEECHLESS_SCHEMA: dict[str, dict[int, tuple[str, str, bool]]] = {
         2: ("tracked_share", "TrackedShare", False),
         3: ("op_tracked_share", "OffplatformTrackedShare", False),
         4: ("chat_invite", "ChatInvite", False),
+        7: ("metadata", "ContributionMetadata", False),
     },
     "FreeText": {1: ("message_text", "string", False)},
     "TrackedShare": {
@@ -929,9 +1003,11 @@ SPEECHLESS_ENUMS: dict[str, dict[int, str]] = {
     "EventType": {1: "add", 2: "bulk_add", 3: "delete", 4: "modify"},
     "ReactionEmoti": {1: "thumbs_up", 2: "heart", 3: "laugh", 7: "pleading_face", 8: "thumbs_down", 9: "fire", 10: "headphone"},
     "ReceiptType": {1: "played", 2: "saved", 3: "seen"},
+    "AckType": {1: "user_seen", 3: "system_processed"},
 }
 
 SORT_ORDER_DESCENDING = 2
+ACK_TYPE_USER_SEEN = 1
 
 
 def pb_varint(value: int) -> bytes:
@@ -952,6 +1028,10 @@ def pb_varint_field(number: int, value: int) -> bytes:
 
 def pb_string_field(number: int, value: str) -> bytes:
     data = value.encode()
+    return pb_varint(number << 3 | 2) + pb_varint(len(data)) + data
+
+
+def pb_message_field(number: int, data: bytes) -> bytes:
     return pb_varint(number << 3 | 2) + pb_varint(len(data)) + data
 
 
@@ -1046,6 +1126,58 @@ def pb_decode(data: bytes, message: str | None) -> dict[str, Any]:
         else:
             result[name] = decoded
     return result
+
+
+SPEECHLESS_SUBMIT_PATH = "speechless/v1/submit/request"
+
+
+def speechless_chat_id(value: str) -> str:
+    return value.strip().removeprefix("spotify:chat:")
+
+
+def spotify_gid(base62_id: str) -> str:
+    """Base62 entity id → the 32-hex-digit gid that spclient metadata paths take."""
+    alphabet = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    value = 0
+    for character in base62_id:
+        value = value * 62 + alphabet.index(character)
+    return f"{value:032x}"
+
+
+def speechless_send_text_request(chat_id: str, text: str) -> bytes:
+    """ClientNodeRequest{node_request: [NodeRequest{message_request: MessageRequest{add_contribution:
+    AddContribution{parent_node_path_id: <chat id>, payload: ContributionPayload{free_text: {message_text}}}}}]}.
+
+    Mirrors the Android app: no client node id, occurred_at, or digest is sent; the server assigns them.
+    """
+    free_text = pb_string_field(1, text)
+    payload = pb_message_field(1, free_text)
+    add_contribution = pb_string_field(1, speechless_chat_id(chat_id)) + pb_message_field(2, payload)
+    message_request = pb_message_field(1, add_contribution)
+    node_request = pb_message_field(2, message_request)
+    return pb_message_field(1, node_request)
+
+
+def speechless_mark_seen_request(chat_id: str) -> bytes:
+    """ClientNodeRequest{node_request: [NodeRequest{bulk_message_request: BulkMessageRequest{add_hierarchy_activity:
+    AddHierarchyActivity{hierarchy_id: <chat id>, request: ActivityRequest{ack_type: USER_SEEN}}}}]}.
+    """
+    activity = pb_varint_field(3, ACK_TYPE_USER_SEEN)
+    hierarchy_activity = pb_string_field(1, speechless_chat_id(chat_id)) + pb_message_field(2, activity)
+    bulk_request = pb_message_field(2, hierarchy_activity)
+    node_request = pb_message_field(3, bulk_request)
+    return pb_message_field(1, node_request)
+
+
+def speechless_dry_run(request: bytes) -> dict[str, Any]:
+    return {
+        "status": "dry-run",
+        "method": "POST",
+        "url": SPCLIENT_BASE_URL + "/" + SPEECHLESS_SUBMIT_PATH,
+        "content_type": "application/x-protobuf",
+        "body_hex": request.hex(),
+        "decoded": pb_decode(request, "ClientNodeRequest"),
+    }
 
 
 def summarize_speechless_node(node: dict[str, Any]) -> dict[str, Any]:
@@ -1150,6 +1282,16 @@ def build_parser() -> argparse.ArgumentParser:
     chat.add_argument("chat_id", help="Chat ID or spotify:chat URI.")
     chat.add_argument("--page-size", type=int, default=20, help="Messages per page.")
     chat.add_argument("--page-token", help="next_page_token from a previous page.")
+    chat_send = subparsers.add_parser("chat-send", help="Send a free-text message to a Spotify Messages chat (speechless submit/request). Mutates the chat unless --dry-run.")
+    chat_send.add_argument("chat_id", help="Chat ID or spotify:chat URI.")
+    chat_send.add_argument("text", help="Message text.")
+    chat_send.add_argument("--dry-run", action="store_true", help="Print the encoded request without sending it.")
+    chat_seen = subparsers.add_parser("chat-seen", help="Mark a Spotify Messages chat as seen (ack USER_SEEN via speechless submit/request). Mutates read state unless --dry-run.")
+    chat_seen.add_argument("chat_id", help="Chat ID or spotify:chat URI.")
+    chat_seen.add_argument("--dry-run", action="store_true", help="Print the encoded request without sending it.")
+
+    track_metadata = subparsers.add_parser("track-metadata", help="Fetch track name, artists, album, year, duration and cover via spclient metadata/4/track.")
+    track_metadata.add_argument("track", help="Bare track ID or spotify:track URI.")
 
     share = subparsers.add_parser("share-metadata", help="Fetch title/artwork for a shared spotify: URI via the public oEmbed endpoint.")
     share.add_argument("uri", help="spotify:<type>:<id> URI, optionally with a ?si= suffix.")
@@ -1164,6 +1306,8 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
     credentialless_commands = {"server-time", "totp", "track-preview", "share-metadata"}
+    if getattr(args, "dry_run", False):
+        credentialless_commands.add(args.command)
     has_credential_source = bool(args.simulator or args.credentials_file or args.credentials_json)
     credentials = {} if args.command in credentialless_commands and not has_credential_source else load_credentials(args)
     client = SpotifyWebClient(credentials, args.accept_language)
@@ -1223,6 +1367,14 @@ def main() -> None:
         result = client.chats(args.limit)
     elif args.command == "chat":
         result = client.chat(args.chat_id, args.page_size, args.page_token)
+    elif args.command in {"chat-send", "chat-seen"}:
+        if args.command == "chat-send":
+            request = speechless_send_text_request(args.chat_id, args.text)
+        else:
+            request = speechless_mark_seen_request(args.chat_id)
+        result = speechless_dry_run(request) if args.dry_run else client.chat_submit(request)
+    elif args.command == "track-metadata":
+        result = client.track_metadata(args.track)
     elif args.command == "share-metadata":
         result = client.share_metadata(args.uri)
     elif args.command == "get":

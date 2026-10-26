@@ -1,9 +1,9 @@
 import Photos
 import UIKit
 
-/// Full-screen viewer for an image in an Apron chat: pinch or double-tap to zoom, swipe up or down to dismiss,
+/// Full-screen viewer for an image in a chat: pinch or double-tap to zoom, swipe up or down to dismiss,
 /// tap to show or hide the buttons, and save the original file to Photos.
-final class ApronImageViewerController: UIViewController, UIScrollViewDelegate, UIGestureRecognizerDelegate {
+final class ChatImageViewerController: UIViewController, UIScrollViewDelegate, UIGestureRecognizerDelegate {
     private let url: URL
     private let alt: String?
     private let backdrop = UIView()

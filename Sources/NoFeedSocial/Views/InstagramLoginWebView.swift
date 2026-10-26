@@ -128,6 +128,8 @@ private struct InstagramLoginWKWebView: UIViewRepresentable {
     class Coordinator: NSObject, WKNavigationDelegate {
         let onCookiesFound: ([HTTPCookie]) -> Void
         private var hasNotified = false
+        /// The challenge opens once; reopening it from every page it passes through would loop.
+        private var hasOpenedChallenge = false
 
         init(onCookiesFound: @escaping ([HTTPCookie]) -> Void) {
             self.onCookiesFound = onCookiesFound
@@ -141,17 +143,53 @@ private struct InstagramLoginWKWebView: UIViewRepresentable {
 
         private func isLoginOrChallengePage(url: URL?) -> Bool {
             guard let path = url?.path else { return false }
-            return path.contains("login") || path.contains("challenge") || path.contains("emailsignup")
+            // `/challenge/` hands off to Meta's `/auth_platform/` pages, which run the checkpoint.
+            return path.contains("login") || path.contains("challenge") || path.contains("emailsignup") || path.hasPrefix("/auth_platform/")
         }
 
         private func checkForAuthCookies(webView: WKWebView) {
             webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
                 guard hasRequiredInstagramCookies(cookies) else { return }
-                self.hasNotified = true
-                DispatchQueue.main.async {
+                Task { @MainActor in
+                    // The homepage still renders signed in for a session under a security checkpoint, so its
+                    // cookies would be saved again and fail every API call. Resolve the checkpoint here first.
+                    if let challenge = await self.pendingChallengeURL(webView: webView) {
+                        // Still locked after the challenge ran: stay put rather than save cookies that can't work.
+                        guard !self.hasOpenedChallenge else { return }
+                        self.hasOpenedChallenge = true
+                        webView.load(URLRequest(url: challenge))
+                        return
+                    }
+                    guard !self.hasNotified else { return }
+                    self.hasNotified = true
                     self.onCookiesFound(cookies)
                 }
             }
+        }
+
+        /// Calls the API from the page, which answers `checkpoint_required` with the challenge URL for a session
+        /// Instagram has locked, or a logged-out page (validated with `instagram-web-client.py session-check`).
+        @MainActor private func pendingChallengeURL(webView: WKWebView) async -> URL? {
+            let script = """
+            const response = await fetch('/api/v1/accounts/edit/web_form_data/', {
+                credentials: 'include',
+                headers: { 'X-IG-App-ID': '\(InstagramClient.webAppID)', 'X-Requested-With': 'XMLHttpRequest' },
+            });
+            const text = await response.text();
+            try {
+                const body = JSON.parse(text);
+                return [body.message || '', body.checkpoint || ''];
+            } catch {
+                return [/class="[^"]*\\bnot-logged-in\\b/.test(text.slice(0, 4096)) ? 'login_required' : '', ''];
+            }
+            """
+            guard let result = try? await webView.callAsyncJavaScript(script, contentWorld: .defaultClient) as? [String],
+                  result.count == 2, ["checkpoint_required", "challenge_required", "login_required"].contains(result[0])
+            else { return nil }
+            if let url = URL(string: result[1]), url.host()?.hasSuffix("instagram.com") == true {
+                return url
+            }
+            return URL(string: "https://www.instagram.com/accounts/login/")
         }
     }
 }

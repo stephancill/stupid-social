@@ -1,13 +1,9 @@
 import Foundation
 
-/// Shows each Spotify Messages chat's latest incoming share or text from the last week in the
-/// notifications feed, whether or not it has been seen in Spotify.
+/// Lists Spotify Messages chats for the Chats screen, each with its latest message.
 @MainActor
-public final class SpotifyMessagesSource: NotificationFetching {
-    public let network: SocialNetwork = .spotify
-
-    nonisolated static let recentWindow: TimeInterval = 7 * 24 * 60 * 60
-    private static let chatLimit = 20
+public final class SpotifyMessagesSource {
+    private static let chatListLimit = 50
 
     private let client: SpotifyClient
     private let metadataStore: AccountMetadataStore
@@ -19,45 +15,56 @@ public final class SpotifyMessagesSource: NotificationFetching {
         self.metadataStore = metadataStore
     }
 
-    public func fetchNotifications(reason _: RefreshReason) async throws -> [NotificationItem] {
-        let chats: [SpotifyChat]
-        do {
-            chats = try await RefreshTiming.measure("spotify-chats") {
-                try await client.latestChats(limit: Self.chatLimit)
-            }
-        } catch SourceError.notConfigured {
-            return []
-        }
+    /// Every chat with its latest message, for the Chats list. DMs are titled with the other member.
+    public func chatSummaries() async throws -> [ChatSummary] {
+        let chats = try await client.latestChats(limit: Self.chatListLimit)
         guard let viewer = metadataStore.spotifyAccount?.username else {
             throw SourceError.serviceError("Spotify username unavailable")
         }
-
-        var items: [NotificationItem] = []
-        for (chat, message) in Self.recentIncomingMessages(in: chats, viewer: viewer, now: Date()) {
-            guard let sender = message.sender, let sentAt = message.sentAt else { continue }
-            let actor = await senderActor(username: sender)
-            switch message.content {
-            case let .share(uri):
-                await items.append(shareItem(chat: chat, message: message, uri: uri, actor: actor, sentAt: sentAt))
-            case let .text(text):
-                items.append(textItem(chat: chat, message: message, text: text, actor: actor, sentAt: sentAt))
-            case .other:
-                continue
+        var summaries: [ChatSummary] = []
+        for chat in chats {
+            let partner = chat.isGroup ? nil : chat.members.first { $0 != viewer }
+            var partnerActor: NotificationActor?
+            if let partner {
+                partnerActor = await senderActor(username: partner)
             }
+            var preview: String?
+            if let latest = chat.latestMessage {
+                preview = await self.preview(of: latest, in: chat, viewer: viewer)
+            }
+            let title = chat.isGroup ? chat.name ?? "Group" : partnerActor.map { $0.displayName ?? $0.id } ?? "Chat"
+            summaries.append(ChatSummary(
+                id: "spotify:chat:\(chat.id)",
+                network: .spotify,
+                title: title,
+                avatarURL: partnerActor?.avatarURL,
+                preview: preview,
+                timestamp: chat.latestMessage?.sentAt,
+                unreadCount: chat.unseenCount,
+                destination: .spotify(chatId: chat.id),
+                namesSenderInPreview: chat.isGroup,
+            ))
         }
-        return items
+        return summaries
     }
 
-    /// Each chat's latest message when someone else sent it within `recentWindow` and the feed can show it.
-    nonisolated static func recentIncomingMessages(in chats: [SpotifyChat], viewer: String, now: Date) -> [(SpotifyChat, SpotifyChatMessage)] {
-        chats.compactMap { chat in
-            guard let message = chat.latestMessage,
-                  let sender = message.sender, sender != viewer,
-                  let sentAt = message.sentAt, now.timeIntervalSince(sentAt) <= recentWindow,
-                  message.content != .other
-            else { return nil }
-            return (chat, message)
+    private func preview(of message: SpotifyChatMessage, in chat: SpotifyChat, viewer: String) async -> String {
+        let body: String
+        switch message.content {
+        case let .text(text):
+            body = text.replacingOccurrences(of: "\n", with: " ")
+        case let .share(uri):
+            let url = Self.openURL(forShareURI: uri)
+            let kind = url?.pathComponents.dropFirst().first ?? "something"
+            body = await shareMetadata(url: url)?.title.map { "Shared “\($0)”" } ?? "Shared a \(kind)"
+        case .other:
+            body = "Message"
         }
+        guard let sender = message.sender else { return body }
+        if sender == viewer { return "You: \(body)" }
+        guard chat.isGroup else { return body }
+        let actor = await senderActor(username: sender)
+        return "\(actor.displayName ?? actor.id): \(body)"
     }
 
     /// `spotify:track:<id>?si=...` → `https://open.spotify.com/track/<id>`.
@@ -68,52 +75,7 @@ public final class SpotifyMessagesSource: NotificationFetching {
         return URL(string: "https://open.spotify.com/\(parts[1])/\(parts[2])")
     }
 
-    private func shareItem(chat: SpotifyChat, message: SpotifyChatMessage, uri: String, actor: NotificationActor, sentAt: Date) async -> NotificationItem {
-        let url = Self.openURL(forShareURI: uri)
-        let metadata = await shareMetadata(url: url)
-        let name = actor.displayName ?? actor.id
-        let kind = url?.pathComponents.dropFirst().first ?? "something"
-        let text = if let title = metadata?.title, !title.isEmpty {
-            "\(name) shared “\(title)”"
-        } else {
-            "\(name) shared a \(kind)"
-        }
-        return NotificationItem(
-            id: "spotify:chat:\(chat.id):\(message.id)",
-            network: .spotify,
-            accountId: "spotify",
-            sourceId: message.id,
-            type: .message,
-            timestamp: sentAt,
-            text: text,
-            actors: [actor],
-            target: NotificationTarget(
-                id: url?.absoluteString ?? uri,
-                text: nil,
-                url: url,
-                imageURL: metadata?.thumbnailURL.flatMap(URL.init(string:)),
-                author: actor,
-                postedAt: sentAt,
-            ),
-        )
-    }
-
-    private func textItem(chat: SpotifyChat, message: SpotifyChatMessage, text: String, actor: NotificationActor, sentAt: Date) -> NotificationItem {
-        NotificationItem(
-            id: "spotify:chat:\(chat.id):\(message.id)",
-            network: .spotify,
-            accountId: "spotify",
-            sourceId: message.id,
-            type: .message,
-            timestamp: sentAt,
-            text: "\(actor.displayName ?? actor.id) sent a message",
-            actors: [actor],
-            target: NotificationTarget(id: message.id, text: text, url: nil, author: actor, postedAt: sentAt),
-        )
-    }
-
-    /// Spotify usernames are often random IDs, so the actor carries the profile name as its
-    /// display name and leaves `username` empty; the feed shows `username` first when present.
+    /// Spotify usernames are often random IDs, so the actor carries the profile name as its display name.
     private func senderActor(username: String) async -> NotificationActor {
         if let cached = senderCache[username] { return cached }
         let profile = try? await client.userProfile(username: username)

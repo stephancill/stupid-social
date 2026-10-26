@@ -7,6 +7,10 @@ public struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var container: AppContainer?
     @State private var path: [HomeDestination] = []
+    /// Kept across launches, so the app reopens on the side it was left on.
+    @AppStorage("homePage") private var page = HomePage.social
+    @State private var isShowingChat = false
+    @State private var isShowingFeedDetail = false
 
     public init() {}
 
@@ -38,16 +42,40 @@ public struct ContentView: View {
         }
     }
 
+    /// Chats sits to the left of the feed: swipe right from the feed to reach it.
     private func home(container: AppContainer) -> some View {
+        HomePager(
+            page: $page,
+            isPagingEnabled: isPagingEnabled,
+            chats: NavigationStack {
+                ChatsView(
+                    viewModel: container.chatListViewModel,
+                    apronService: container.apronService,
+                    spotifyChat: { container.spotifyChatFactory(chatId: $0, title: $1) },
+                    isShowingChat: $isShowingChat,
+                )
+            },
+            social: socialStack(container: container),
+        )
+        .ignoresSafeArea()
+    }
+
+    /// Paging stops while the visible side has a screen pushed, so back swipes and swipe-to-reply aren't taken
+    /// over. Tracked from navigation state: a page's `onDisappear` also fires as a swipe starts.
+    private var isPagingEnabled: Bool {
+        page == .chats ? !isShowingChat : !isShowingFeedDetail && path.isEmpty
+    }
+
+    private func socialStack(container: AppContainer) -> some View {
         NavigationStack(path: $path) {
             FeedView(
                 viewModel: container.feedViewModel,
                 storyViewModel: container.storyBarViewModel,
                 spotifyClient: container.spotifyClient,
                 settingsViewModel: container.settingsViewModel,
-                apronService: container.apronService,
                 onOpenSettings: { path.append(.settings) },
                 onRefresh: { await refreshFeedAndStories(container: container) },
+                isShowingDetail: $isShowingFeedDetail,
             )
             .navigationDestination(for: HomeDestination.self) { destination in
                 switch destination {

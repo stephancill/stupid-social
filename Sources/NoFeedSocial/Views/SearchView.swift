@@ -35,7 +35,7 @@ struct SearchView: View {
         .listStyle(.insetGrouped)
         #endif
         .navigationTitle("Search")
-        .searchable(text: $viewModel.query, placement: .automatic, prompt: "Search")
+        .searchBar(text: $viewModel.query)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 filterMenu

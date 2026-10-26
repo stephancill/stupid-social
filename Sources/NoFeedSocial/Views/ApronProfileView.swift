@@ -127,7 +127,7 @@ struct ApronUserAvatar: View {
 
     private var initials: some View {
         ZStack {
-            Color(uiColor: ApronUserColor.color(for: user.userId))
+            Color(uiColor: ChatUserColor.color(for: user.userId))
             Text(user.displayName.split(separator: " ").prefix(2).compactMap(\.first).map(String.init).joined().uppercased())
                 .font(.system(size: size * 0.39, weight: .semibold))
                 .foregroundStyle(.white)

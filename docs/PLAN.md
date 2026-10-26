@@ -119,8 +119,8 @@ Reference behavior from `docs/CLI_DOCS.md`:
 
 - Users can add any number of [Apron Chat Protocol](https://github.com/shazow/apron) servers by WebSocket URL (for example `wss://server.apron.chat/`), with an optional bearer token and display name.
 - Without a token the app joins as a guest when the server offers it. Tokens are stored in Keychain like other credentials.
-- Each joined room with a message in the last 24 hours appears in the notifications feed as one item showing its latest message.
-- Opening an Apron item shows a live chat for that room, where the user can read recent history and send messages.
+- Apron rooms appear on the Chats screen, not in the notifications feed: every joined room, with its latest message and unread count, updated live while the app is open.
+- Opening an Apron room shows a live chat for that room, where the user can read recent history and send messages.
 - The chat opens at the first unread message when there is one, shows who is typing (and shares the user's own typing) on servers with `activity`, and opens links in messages.
 
 ## Combined Feed
@@ -132,7 +132,10 @@ Reference behavior from `docs/CLI_DOCS.md`:
 - Instagram story likes remain in the main notifications feed.
 - Unread Instagram DMs remain in the main notifications feed.
 - Spotify listening activity is not shown in the main notifications list.
-- Spotify Messages chats appear in the main notifications feed: each chat's latest incoming shared item or text from the last 7 days, whether or not it was seen in Spotify. Shares show the item's title and artwork and open in Spotify.
+- Spotify Messages chats appear on the Chats screen, not in the notifications feed.
+- Opening a Spotify Messages chat shows the full chat in the same chat screen as Apron: paged history, new messages polled while open, sending text, and the chat marked seen in Spotify once its newest incoming message is shown. Shared tracks show their artwork, artists, album, year and length, and play their 30-second preview inline; other shares open in Spotify.
+- Swiping right from the feed shows a Chats screen to the left of the feed listing every chat: all joined Apron rooms on every server and the latest 50 Spotify Messages chats, newest first, each with its latest message, time and unread count. Small page dots at the bottom centre show which side is visible. The app reopens on whichever side it was left on. A search bar under the Chats title filters chats by name and latest message. Swiping between them is disabled while a screen is pushed on either side, and the dots are hidden then.
+- Instagram DM chats are planned to use the same chat screen.
 - GitHub For You activity is not shown in the main notifications list, except "starred your repository" events, which route to the notifications feed.
 - GitHub story tiles group stars, follows, created repositories, and repository forks by actor, with each activity represented as a slide.
 - Spotify listening story tiles show the album/track artwork as the thumbnail with the listener's avatar overlaid in the bottom-right corner.

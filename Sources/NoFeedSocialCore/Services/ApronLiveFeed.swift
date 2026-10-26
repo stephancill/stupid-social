@@ -1,22 +1,20 @@
 import Foundation
 import OSLog
 
-/// Keeps one WebSocket open to each saved Apron server while the app is in the foreground, so feed items
-/// (latest message, unread count) update in realtime instead of on the next refresh.
+/// Keeps one WebSocket open to each saved Apron server while the app is in the foreground, so the Chats list
+/// (latest message, unread count) updates in realtime instead of on the next reload.
 ///
-/// New messages and room changes rebuild that server's items on the already-open connection, debounced so
+/// New messages and room changes rebuild that server's rows on the already-open connection, debounced so
 /// a burst of messages costs one rebuild. Read cursors the server sends for the user update unread badges
 /// directly. Dropped connections reconnect with backoff; a `denied` sign-in stops until the user acts (§1.1).
 @MainActor
 public final class ApronLiveFeed {
-    /// Posted after the cached Apron items changed; observers reload the feed from the cache.
-    public static let didUpdateNotification = Notification.Name("ApronLiveFeed.didUpdate")
     /// Posted by settings after a server is added or removed.
     public static let serversDidChangeNotification = Notification.Name("ApronLiveFeed.serversDidChange")
 
     private let service: ApronService
     private let source: ApronNotificationSource
-    private let cacheStore: NotificationCacheStore
+    private let chatList: ChatListViewModel
     private let logger = Logger(subsystem: "tech.stupid.StupidSocial", category: "ApronLiveFeed")
     private let rebuildDelay: Duration = .milliseconds(800)
 
@@ -25,10 +23,10 @@ public final class ApronLiveFeed {
     private var sessions: [URL: ApronSession] = [:]
     private var rebuilds: [URL: Task<Void, Never>] = [:]
 
-    public init(service: ApronService, source: ApronNotificationSource, cacheStore: NotificationCacheStore) {
+    public init(service: ApronService, source: ApronNotificationSource, chatList: ChatListViewModel) {
         self.service = service
         self.source = source
-        self.cacheStore = cacheStore
+        self.chatList = chatList
         NotificationCenter.default.addObserver(forName: Self.serversDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.sync() }
         }
@@ -129,9 +127,7 @@ public final class ApronLiveFeed {
             try? await Task.sleep(for: delay)
             guard let self, !Task.isCancelled, let session = sessions[url] else { return }
             do {
-                let items = try await source.items(in: session)
-                try cacheStore.replaceAccount(items, network: .apron, accountId: url.absoluteString)
-                NotificationCenter.default.post(name: Self.didUpdateNotification, object: nil)
+                try await chatList.replaceApronChats(serverURL: url, with: source.chatSummaries(in: session))
             } catch {
                 logger.info("Apron live rebuild failed for \(url.host() ?? "server", privacy: .public): \(error.localizedDescription, privacy: .public)")
             }

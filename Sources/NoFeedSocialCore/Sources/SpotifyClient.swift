@@ -386,6 +386,59 @@ public struct SpotifyClient {
         return try SpotifyMessagesParser.parseLatestChats(data)
     }
 
+    /// One page of a Spotify Messages chat, newest first.
+    func chatHistory(chatId: String, pageSize: Int, pageToken: String?) async throws -> SpotifyChatPage {
+        let request = SpotifyMessagesParser.chatHistoryRequest(chatId: chatId, pageSize: pageSize, pageToken: pageToken)
+        let (data, _) = try await makeRequest("speechless/v1/retrieve/hierarchy", protobufBody: request)
+        return try SpotifyMessagesParser.parseChatHistory(data)
+    }
+
+    /// Sends a text message and returns the message the server created.
+    func sendChatText(chatId: String, text: String) async throws -> SpotifyChatMessage? {
+        let request = SpotifyMessagesParser.sendTextRequest(chatId: chatId, text: text)
+        let (data, _) = try await makeRequest("speechless/v1/submit/request", protobufBody: request)
+        return try SpotifyMessagesParser.parseSubmitResponse(data).first
+    }
+
+    /// Marks every message in a chat seen, as opening it in Spotify does.
+    func markChatSeen(chatId: String) async throws {
+        _ = try await makeRequest("speechless/v1/submit/request", protobufBody: SpotifyMessagesParser.markSeenRequest(chatId: chatId))
+    }
+
+    /// Track details as the Spotify apps load them, from spclient `metadata/4/track/<gid>` (validated with
+    /// `spotify-web-client.py track-metadata`). The response has no preview; see `trackPreviewURL`.
+    func trackMetadata(trackId: String) async throws -> SpotifyTrackMetadata {
+        guard let gid = Self.gid(fromBase62: trackId) else { throw SourceError.invalidResponse }
+        let (data, _) = try await makeRequest("metadata/4/track/\(gid)?market=from_token")
+        let raw = try JSONDecoder().decode(SpotifyTrackMetadataJSON.self, from: data)
+        let cover = raw.album?.coverGroup?.image?.max { ($0.width ?? 0) < ($1.width ?? 0) }
+        return SpotifyTrackMetadata(
+            name: raw.name,
+            artists: raw.artist?.compactMap(\.name) ?? [],
+            album: raw.album?.name,
+            releaseYear: raw.album?.date?.year,
+            durationMs: raw.duration,
+            coverURL: cover.flatMap { URL(string: "https://i.scdn.co/image/\($0.fileId)") },
+        )
+    }
+
+    /// A base62 entity id as the 32-hex-digit gid that spclient metadata paths take.
+    static func gid(fromBase62 id: String) -> String? {
+        let alphabet = Array("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+        var bytes = [UInt8](repeating: 0, count: 16)
+        for character in id {
+            guard let digit = alphabet.firstIndex(of: character) else { return nil }
+            var carry = digit
+            for index in bytes.indices.reversed() {
+                let value = Int(bytes[index]) * 62 + carry
+                bytes[index] = UInt8(value & 0xFF)
+                carry = value >> 8
+            }
+            guard carry == 0 else { return nil }
+        }
+        return bytes.map { String(format: "%02x", $0) }.joined()
+    }
+
     /// Title and artwork for a shared Spotify URL through the public oEmbed endpoint (no auth).
     func shareMetadata(url: URL) async throws -> SpotifyShareMetadata {
         var components = URLComponents(string: "https://open.spotify.com/oembed")!
@@ -773,6 +826,56 @@ struct SpotifyProfileList: Decodable {
 
 struct SpotifyProfileEntry: Decodable {
     let uri: String
+}
+
+struct SpotifyTrackMetadata: Equatable {
+    let name: String?
+    let artists: [String]
+    let album: String?
+    let releaseYear: Int?
+    let durationMs: Int?
+    let coverURL: URL?
+}
+
+struct SpotifyTrackMetadataJSON: Decodable {
+    struct Artist: Decodable {
+        let name: String?
+    }
+
+    struct Album: Decodable {
+        struct ReleaseDate: Decodable {
+            let year: Int?
+        }
+
+        struct CoverGroup: Decodable {
+            let image: [Image]?
+        }
+
+        struct Image: Decodable {
+            let fileId: String
+            let width: Int?
+
+            enum CodingKeys: String, CodingKey {
+                case fileId = "file_id"
+                case width
+            }
+        }
+
+        let name: String?
+        let date: ReleaseDate?
+        let coverGroup: CoverGroup?
+
+        enum CodingKeys: String, CodingKey {
+            case name
+            case date
+            case coverGroup = "cover_group"
+        }
+    }
+
+    let name: String?
+    let artist: [Artist]?
+    let album: Album?
+    let duration: Int?
 }
 
 struct SpotifyShareMetadata: Decodable {

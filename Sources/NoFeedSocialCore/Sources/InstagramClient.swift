@@ -41,7 +41,7 @@ public final class InstagramClient {
     static let baseURL = "https://www.instagram.com"
     private static let uploadBaseURL = "https://i.instagram.com"
     static let webUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1"
-    static let webAppID = "1217981644879628"
+    public static let webAppID = "1217981644879628"
     static let asbdID = "359341"
     var webState: InstagramWebState?
     var docIds: [String: String] = [:]

@@ -2,70 +2,12 @@ import Foundation
 
 /// Live chat for one Apron room: loads recent history, applies live snapshots, and posts messages.
 @MainActor
-public final class ApronChatViewModel: ObservableObject {
-    /// A file staged in the composer, sent as an `upload` embed (§4.8.4).
-    public struct Attachment: Equatable {
-        public let data: Data
-        public let mimeType: String
-        public let filename: String
-        public let isImage: Bool
-
-        public init(data: Data, mimeType: String, filename: String, isImage: Bool) {
-            self.data = data
-            self.mimeType = mimeType
-            self.filename = filename
-            self.isImage = isImage
-        }
-    }
-
-    public enum ConnectionState: Equatable {
-        case connecting
-        case connected
-        case disconnected(String?)
-    }
-
-    @Published public private(set) var messages: [ApronMessage] = []
-    @Published public private(set) var state: ConnectionState = .connecting
-    @Published public private(set) var title: String
+public final class ApronChatViewModel: ChatViewModel {
     @Published public private(set) var you: ApronUser?
-    @Published public private(set) var hasEarlierMessages = false
-    @Published public private(set) var isLoadingEarlier = false
-    @Published public private(set) var isSending = false
-    @Published public private(set) var canAttach = false
-    @Published public private(set) var canReact = false
-    /// Per-message totals; tombstones show none (§4.4).
-    @Published public private(set) var reactions: [String: [ApronReactionCount]] = [:]
-    /// Kept per room across visits.
-    @Published public var draft: String {
-        didSet { service.draftStore.setDraft(draft, serverURL: serverURL, roomId: roomId) }
-    }
-
-    @Published public var attachment: Attachment?
-    @Published public private(set) var replyingTo: ApronMessage?
-    /// True while showing a window of older history that doesn't reach the newest message.
-    @Published public private(set) var hasLaterMessages = false
-    @Published public private(set) var isLoadingLater = false
-    /// A message the view should scroll to and highlight, set by `jump(to:)`.
-    @Published public private(set) var jumpTarget: String?
-    /// Incremented when the view should scroll to the newest message.
-    @Published public private(set) var scrollToLatestRequest = 0
-    /// Reply targets outside the loaded window, fetched one by one (§4.3.1).
-    @Published public private(set) var referencedMessages: [String: ApronMessage] = [:]
-    @Published public private(set) var unavailableReferences: Set<String> = []
-    /// The first message from someone else after the read cursor at the time the room opened; the
-    /// "New Messages" divider sits above it for the whole visit.
-    @Published public private(set) var firstUnreadMessageId: String?
-    /// Messages from others after the current cursor among those loaded, for the jump-to-latest badge.
-    @Published public private(set) var unreadCount = 0
-    /// Display names of the other users typing in this room, in the order they started (§4.6).
-    @Published public private(set) var typingNames: [String] = []
     /// The room's members, you first, then by name; `nil` until the server has listed them (§4.2.1).
     @Published public private(set) var members: [ApronUser]?
     /// The total when the server listed only some members.
     @Published public private(set) var memberCount: Int?
-
-    public static let quickReactions = ["👍", "❤️", "😂", "🔥", "😮", "🙏"]
-    @Published public var errorMessage: String?
 
     public let serverURL: URL
     public let roomId: String
@@ -74,13 +16,12 @@ public final class ApronChatViewModel: ObservableObject {
     private var session: ApronSession?
     private var snapshots: [String: ApronMessage] = [:]
     /// Kept current user objects (§3.3.1); messages carry recorded `from` objects that often omit avatars.
+    /// Mentions show these names; a name another known user shares is left out, so those mentions keep their
+    /// `@user_id` (§3.3.1).
     private var users: [String: ApronUser] = [:] {
         didSet { updateMentionNames() }
     }
 
-    /// `user_id` → name, for showing `@` mentions by name. A name another known user shares is left out, so
-    /// those mentions keep their `@user_id` (§3.3.1).
-    @Published public private(set) var mentionNames: [String: String] = [:]
     /// messageId → userId → that user's newest set; the record with the greatest `log_id` wins (§4.7).
     private var reactionEntries: [String: [String: (logId: Int64, emojis: [String])]] = [:]
     private var reactionAuthors: [String: ApronUser] = [:]
@@ -99,7 +40,6 @@ public final class ApronChatViewModel: ObservableObject {
     private var ownUserIds: Set<String>
     private var observerToken: UUID?
     private var hasLoadedHistory = false
-    private var renderedTextCache: [String: AttributedString] = [:]
     private let pageSize = 50
     /// userId → (name, when the typing indication expires), from other users' `activity.typing`.
     private var typingUsers: [(userId: String, name: String, expires: Date)] = []
@@ -122,20 +62,17 @@ public final class ApronChatViewModel: ObservableObject {
         self.service = service
         self.serverURL = serverURL
         self.roomId = roomId
-        self.title = title ?? roomId
+        super.init(title: title ?? roomId, subtitle: serverURL.host() ?? serverURL.absoluteString, canReply: true, offersAttachments: true, mentionPattern: ApronMention.pattern)
         draft = service.draftStore.draft(serverURL: serverURL, roomId: roomId)
     }
 
-    public var serverHost: String {
-        serverURL.host() ?? serverURL.absoluteString
-    }
-
-    public var canSend: Bool {
-        state == .connected && !isSending && (attachment != nil || !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    /// Kept per room across visits.
+    override func draftWasSet() {
+        service.draftStore.setDraft(draft, serverURL: serverURL, roomId: roomId)
     }
 
     /// Embed media loads only from the chat server or the origins it lists in `ext.media` (§4.8.1, §5.5).
-    public func allowedMediaURL(_ string: String?) -> URL? {
+    private func allowedMediaURL(_ string: String?) -> URL? {
         guard let string, let url = URL(string: string), let host = url.host() else { return nil }
         let secure = url.scheme == "https"
         let localPlain = url.scheme == "http" && serverURL.scheme == "ws"
@@ -144,7 +81,7 @@ public final class ApronChatViewModel: ObservableObject {
         return origins.contains(host) ? url : nil
     }
 
-    public func connect() async {
+    override public func connect() async {
         guard session == nil else { return }
         state = .connecting
         errorMessage = nil
@@ -212,7 +149,7 @@ public final class ApronChatViewModel: ObservableObject {
     }
 
     /// Leaves the room. The connection is shared with the feed, so only this chat's observer goes away.
-    public func disconnect() {
+    override public func disconnect() {
         saveCache()
         stopTyping()
         stopObserving()
@@ -281,7 +218,7 @@ public final class ApronChatViewModel: ObservableObject {
         )
     }
 
-    public func loadEarlier() async {
+    override public func loadEarlier() async {
         guard let session, let firstLogId, let first = Int64(firstLogId), !isLoadingEarlier else { return }
         isLoadingEarlier = true
         defer { isLoadingEarlier = false }
@@ -293,7 +230,7 @@ public final class ApronChatViewModel: ObservableObject {
         }
     }
 
-    public func send() async {
+    override public func send() async {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let attachment = attachment
         guard let session, !text.isEmpty || attachment != nil else { return }
@@ -325,7 +262,7 @@ public final class ApronChatViewModel: ObservableObject {
                 method: isCommand ? "command" : "message",
                 roomId: roomId,
                 body: body,
-                replyTo: replyingTo?.messageId,
+                replyTo: replyingTo?.id,
             )
             // The message is broadcast with a pending upload; clear the composer before writing the file.
             draft = ""
@@ -342,22 +279,13 @@ public final class ApronChatViewModel: ObservableObject {
         }
     }
 
-    public func startReply(to message: ApronMessage) {
-        guard message.messageId != nil, !message.isDeleted, !message.from.isSystem else { return }
-        replyingTo = message
-    }
-
-    public func cancelReply() {
-        replyingTo = nil
-    }
-
-    public func yourEmojis(on messageId: String) -> [String] {
+    override public func yourEmojis(on messageId: String) -> [String] {
         guard let you else { return [] }
         return reactionEntries[messageId]?[you.userId]?.emojis ?? []
     }
 
     /// Sends your complete new set: adds the emoji, or removes it when you already reacted with it (§4.7).
-    public func toggleReaction(_ emoji: String, on messageId: String) async {
+    override public func toggleReaction(_ emoji: String, on messageId: String) async {
         guard let session, canReact else { return }
         var emojis = yourEmojis(on: messageId)
         if let index = emojis.firstIndex(of: emoji) {
@@ -374,13 +302,13 @@ public final class ApronChatViewModel: ObservableObject {
 
     /// Who reacted with `emoji` on a message, oldest first, for the reaction chip's long-press list. The date is
     /// when the user last set their reactions there: a user's set is logged as one record (§4.7).
-    public func reactors(of emoji: String, on messageId: String) -> [(user: ApronUser, date: Date?)] {
+    override public func reactors(of emoji: String, on messageId: String) -> [ChatReactor] {
         (reactionEntries[messageId] ?? [:])
             .filter { $0.value.emojis.contains(emoji) }
             .sorted { ($0.value.logId, $0.key) < ($1.value.logId, $1.key) }
             .map { userId, entry in
                 let user = users[userId] ?? reactionAuthors[userId] ?? ApronUser(userId: userId, name: nil, avatar: nil, roles: nil)
-                return (user, entry.logId > 0 ? ApronLogId.date(String(entry.logId)) : nil)
+                return ChatReactor(user: chatUser(user), date: entry.logId > 0 ? ApronLogId.date(String(entry.logId)) : nil, isYou: isOwnUserId(userId))
             }
     }
 
@@ -472,7 +400,7 @@ public final class ApronChatViewModel: ObservableObject {
         // reactions are highlighted from the first frame instead of once the connection is up.
         let mine = Set((reactionEntries[messageId] ?? [:]).filter { isOwnUserId($0.key) }.flatMap(\.value.emojis))
         let totals = counts
-            .map { ApronReactionCount(emoji: $0.key, count: $0.value, includesYou: mine.contains($0.key)) }
+            .map { ChatReaction(emoji: $0.key, count: $0.value, includesYou: mine.contains($0.key)) }
             .sorted { ($0.count, -(firstSeen[$0.emoji] ?? 0)) > ($1.count, -(firstSeen[$1.emoji] ?? 0)) }
         if reactions[messageId] != totals {
             reactions[messageId] = totals.isEmpty ? nil : totals
@@ -576,7 +504,7 @@ public final class ApronChatViewModel: ObservableObject {
 
     /// Scrolls to a message. One outside the loaded history is shown in a window around it,
     /// without loading everything in between (§4.3.2).
-    public func jump(to messageId: String) async {
+    override public func jump(to messageId: String) async {
         if snapshots[messageId] != nil {
             jumpTarget = messageId
             return
@@ -602,11 +530,7 @@ public final class ApronChatViewModel: ObservableObject {
         }
     }
 
-    public func clearJumpTarget() {
-        jumpTarget = nil
-    }
-
-    public func loadLater() async {
+    override public func loadLater() async {
         guard let session, hasLaterMessages, !isLoadingLater, let last = lastLogId.flatMap(Int64.init) else { return }
         isLoadingLater = true
         defer { isLoadingLater = false }
@@ -626,7 +550,7 @@ public final class ApronChatViewModel: ObservableObject {
     }
 
     /// Leaves an older window and shows the newest messages again.
-    public func jumpToLatest() async {
+    override public func jumpToLatest() async {
         guard hasLaterMessages else {
             scrollToLatestRequest += 1
             return
@@ -646,10 +570,6 @@ public final class ApronChatViewModel: ObservableObject {
         }
     }
 
-    public func isUnavailableReference(_ messageId: String) -> Bool {
-        unavailableReferences.contains(messageId)
-    }
-
     /// Fetches reply targets that aren't loaded with `after` and `before` both at their id (§4.3.1).
     private func fetchMissingReferences() {
         guard let session, session.server.has("history") else { return }
@@ -662,7 +582,7 @@ public final class ApronChatViewModel: ObservableObject {
                 defer { pendingReferences.remove(messageId) }
                 let page = try? await session.connection.history(roomId: roomId, after: messageId, before: messageId, limit: 1)
                 if let message = page?.messages?.first(where: { $0.messageId == messageId }) {
-                    referencedMessages[messageId] = message
+                    referencedMessages[messageId] = chatMessage(message)
                 } else {
                     unavailableReferences.insert(messageId)
                 }
@@ -688,7 +608,7 @@ public final class ApronChatViewModel: ObservableObject {
 
     private func publish() {
         updateUnreadCount()
-        messages = sortedSnapshots() + notices
+        messages = (sortedSnapshots() + notices).map(chatMessage)
         fetchMissingReferences()
         scheduleCacheSave()
     }
@@ -733,7 +653,7 @@ public final class ApronChatViewModel: ObservableObject {
     }
 
     /// Call as the draft changes: announces typing, refreshed while typing continues, and stops it after a pause.
-    public func draftDidChange() {
+    override public func draftDidChange() {
         guard let session, session.server.has("activity") else { return }
         restartTypingPause()
         if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -828,8 +748,13 @@ public final class ApronChatViewModel: ObservableObject {
         }
     }
 
+    override public func markRead(upTo message: ChatMessage) {
+        guard !message.isNotice, let id = Int64(message.id) else { return }
+        markRead(upTo: id)
+    }
+
     /// Advances the read cursor to a message the user has seen, and tells the server shortly after (§4.6).
-    public func markRead(upTo messageId: Int64) {
+    private func markRead(upTo messageId: Int64) {
         guard (readCursor ?? 0) < messageId else { return }
         service.readStore.markRead(messageId, serverURL: serverURL, roomId: roomId, serverTracksCursors: tracksCursors)
         updateUnreadCount()
@@ -862,7 +787,8 @@ public final class ApronChatViewModel: ObservableObject {
 
     /// Members to offer while typing `@query`: names or `user_id`s that start with it, then names with a word
     /// that does. Online members come first for an empty query. You aren't offered.
-    public func mentionSuggestions(for query: String, limit: Int = 5) -> [ApronUser] {
+    override public func mentionSuggestions(for query: String) -> [ChatUser] {
+        let limit = 5
         let candidates = (members ?? Array(users.values)).filter { !isOwnUser($0) && !$0.isSystem }
         let query = query.lowercased()
         func rank(_ user: ApronUser) -> Int? {
@@ -876,7 +802,7 @@ public final class ApronChatViewModel: ObservableObject {
             .compactMap { user in rank(user).map { (user, $0) } }
             .sorted { ($0.1, $0.0.displayName.lowercased()) < ($1.1, $1.0.displayName.lowercased()) }
             .prefix(limit)
-            .map(\.0)
+            .map { chatUser($0.0) }
     }
 
     /// Known users written as `@user_id` in outgoing text. Only users in `mentions` count as mentioned (§3.5.5).
@@ -893,20 +819,15 @@ public final class ApronChatViewModel: ObservableObject {
         return ids
     }
 
-    /// Plain text with `@user_id` mentions shown by name, for previews such as reply quotes.
-    public func showingMentionNames(_ text: String) -> String {
-        let pattern = ApronMention.pattern
-        var result = text
-        for match in pattern.matches(in: text, range: NSRange(text.startIndex..., in: text)).reversed() {
-            guard let range = Range(match.range, in: text), let name = mentionNames[String(text[range].dropFirst())] else { continue }
-            result.replaceSubrange(range, with: "@\(name)")
-        }
-        return result
-    }
-
     /// The kept current object, falling back to a recorded one such as a message's `from` (§3.3.1).
     public func currentUser(_ user: ApronUser) -> ApronUser {
         users[user.userId] ?? reactionAuthors[user.userId] ?? user
+    }
+
+    /// The kept or recorded user behind a chat user, such as a tapped avatar, for the profile screen.
+    public func apronUser(for user: ChatUser) -> ApronUser {
+        users[user.id] ?? reactionAuthors[user.id]
+            ?? ApronUser(userId: user.id, name: user.name == user.id ? nil : user.name, avatar: user.avatarURL?.absoluteString, roles: nil)
     }
 
     /// The kept user object's avatar, falling back to the recorded `from` (§3.3.1).
@@ -914,20 +835,51 @@ public final class ApronChatViewModel: ObservableObject {
         users[user.userId]?.avatarURL ?? user.avatarURL
     }
 
-    public func message(withId id: String) -> ApronMessage? {
-        snapshots[id] ?? referencedMessages[id]
+    override public func avatarURL(for user: ChatUser) -> URL? {
+        users[user.id]?.avatarURL ?? user.avatarURL
     }
 
-    /// Markdown messages render as inline CommonMark; parsing is cached per snapshot. Raw HTML is never rendered (§3.5.2).
-    public func renderedText(for message: ApronMessage) -> AttributedString {
-        let text = message.body?.text ?? ""
-        guard message.isMarkdown else { return AttributedString(text) }
-        let key = "\(message.id)|\(message.logId ?? "")"
-        if let cached = renderedTextCache[key] {
-            return cached
+    // MARK: Display mapping
+
+    private func chatUser(_ user: ApronUser) -> ChatUser {
+        ChatUser(id: user.userId, name: user.displayName, avatarURL: user.avatarURL, isSystem: user.isSystem)
+    }
+
+    private func chatMessage(_ message: ApronMessage) -> ChatMessage {
+        ChatMessage(
+            id: message.id,
+            sender: chatUser(message.from),
+            timestamp: message.timestamp,
+            text: message.body?.text,
+            isMarkdown: message.isMarkdown,
+            embeds: message.isDeleted ? [] : (message.body?.embeds ?? []).map(chatEmbed),
+            replyToId: message.replyTo?.messageId,
+            isDeleted: message.isDeleted,
+            isOwn: !message.from.isSystem && isOwn(message),
+            isNotice: message.messageId == nil,
+        )
+    }
+
+    /// Image previews come only from allowed media origins; everything else renders as a card (§3.5.2, §4.8).
+    private func chatEmbed(_ embed: ApronEmbed) -> ChatEmbed {
+        let link = embed.url.flatMap(URL.init(string:)).flatMap { ["http", "https"].contains($0.scheme) ? $0 : nil }
+        if let image = embed.og?.image, let imageURL = allowedMediaURL(image.url) {
+            // Uploaded images open in the viewer; a link preview's image opens its page.
+            let isUpload = embed.kind == "upload"
+            return .image(url: imageURL, aspectRatio: image.aspectRatio, alt: image.alt ?? embed.title, link: isUpload ? nil : link, opensViewer: isUpload)
         }
-        let rendered = (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
-        renderedTextCache[key] = rendered
-        return rendered
+        if embed.isPendingUpload {
+            return .pending(title: embed.title ?? "Attachment")
+        }
+        let title = embed.og?.title ?? embed.title ?? embed.kind
+        let subtitle = embed.og?.description ?? embed.text ?? link?.host() ?? (embed.kind == "upload" ? nil : embed.kind)
+        return .card(title: title, subtitle: subtitle, systemImage: embed.kind == "upload" ? "doc" : "link", imageURL: nil, link: link)
+    }
+}
+
+private extension ApronOpenGraphMedia {
+    var aspectRatio: Double? {
+        guard let width, let height, width > 0, height > 0 else { return nil }
+        return Double(width) / Double(height)
     }
 }

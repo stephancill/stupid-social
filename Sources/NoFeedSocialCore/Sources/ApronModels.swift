@@ -455,13 +455,6 @@ public struct ApronReactionRecord: Codable, Sendable {
     }
 }
 
-/// A display total for one emoji on one message.
-public struct ApronReactionCount: Hashable, Sendable {
-    public let emoji: String
-    public let count: Int
-    public let includesYou: Bool
-}
-
 struct ApronReactionsParams: Encodable {
     let messageId: String
     let emojis: [String]

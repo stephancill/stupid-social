@@ -1,10 +1,10 @@
 import Foundation
 import OSLog
 
-/// Surfaces each joined room's latest message from every saved Apron server as one feed item.
-/// Items keep the server URL in `accountId`, the room in `target.id`, and the room title in `parentTarget`.
+/// Lists the joined rooms of every saved Apron server for the Chats screen, each with its latest message and
+/// unread count, and reports whether any server is configured.
 @MainActor
-public final class ApronNotificationSource: NotificationFetching, AccountValidating {
+public final class ApronNotificationSource: AccountValidating {
     public let network: SocialNetwork = .apron
 
     private let service: ApronService
@@ -12,7 +12,6 @@ public final class ApronNotificationSource: NotificationFetching, AccountValidat
     /// Enough to count unread messages up to "50+" without paging further.
     private let historyLimit = 50
     public static let unreadCap = 50
-    private let maxAge: TimeInterval = 86400
 
     public init(service: ApronService) {
         self.service = service
@@ -22,36 +21,39 @@ public final class ApronNotificationSource: NotificationFetching, AccountValidat
         service.servers.isEmpty ? .notConfigured : .valid
     }
 
-    public func fetchNotifications(reason _: RefreshReason) async throws -> [NotificationItem] {
+    /// Every joined room on every server with its latest message, for the Chats list. Unlike the feed, rooms
+    /// stay listed however old their latest message is.
+    public func chatSummaries() async throws -> [ChatSummary] {
         let servers = service.servers
         guard !servers.isEmpty else { throw SourceError.notConfigured }
-
-        var items: [NotificationItem] = []
+        var summaries: [ChatSummary] = []
         var firstError: Error?
         var succeeded = false
         for server in servers {
             do {
-                try await items.append(contentsOf: fetchRooms(serverURL: server.serverURL))
+                // The shared connection stays open for live updates and chat; it isn't closed here.
+                let session = try await service.session(serverURL: server.serverURL)
+                try await summaries.append(contentsOf: chatSummariesTrackingCursors(in: session))
                 succeeded = true
             } catch {
-                logger.error("Apron refresh failed for \(server.serverURL.host() ?? "server", privacy: .public): \(error.localizedDescription, privacy: .public)")
+                logger.error("Apron chat list failed for \(server.serverURL.host() ?? "server", privacy: .public): \(error.localizedDescription, privacy: .public)")
                 firstError = firstError ?? error
             }
         }
         if !succeeded, let firstError {
             throw firstError
         }
-        return items
+        return summaries
     }
 
-    private func fetchRooms(serverURL: URL) async throws -> [NotificationItem] {
-        // The shared connection stays open for live updates and chat; it isn't closed here.
-        let session = try await service.session(serverURL: serverURL)
+    /// On a short-lived read, also stores the read cursors the server sends after `room_list` (§4.6); they
+    /// arrive before later results, so the unread counts use them.
+    private func chatSummariesTrackingCursors(in session: ApronSession) async throws -> [ChatSummary] {
         var token: UUID?
         if service.serverTracksCursors(session) {
-            // The server sends the cursors it keeps after `room_list` (§4.6); they arrive before later results.
             let readStore = service.readStore
             let you = session.you.userId
+            let serverURL = session.serverURL
             token = session.connection.observe(notifications: { method, params in
                 guard method == "activity",
                       let activity = try? JSONDecoder().decode(ApronActivity.self, from: params),
@@ -63,33 +65,50 @@ public final class ApronNotificationSource: NotificationFetching, AccountValidat
             })
         }
         defer { token.map(session.connection.removeObserver) }
-        return try await items(in: session)
+        return try await chatSummaries(in: session)
     }
 
-    /// Builds the feed items for a signed-in session; the live feed calls this on its open connection.
-    public func items(in session: ApronSession) async throws -> [NotificationItem] {
+    /// One server's rooms; the live connection calls this on its open session when rooms change.
+    public func chatSummaries(in session: ApronSession) async throws -> [ChatSummary] {
         // Without `history` the latest message can't be read on a short-lived connection.
         guard session.server.has("history") else { return [] }
-
-        guard session.server.has("rooms") else {
+        let rooms: [ApronRoom]
+        var firstPage: ApronHistoryResult?
+        if session.server.has("rooms") {
+            rooms = try await session.connection.joinedRooms(members: false).rooms
+        } else {
             // A server without `rooms` may have only its default room; learn it from the messages (§3.4).
             let page = try await session.connection.history(roomId: nil, limit: historyLimit)
-            guard let latest = latestMessage(in: page), let roomId = latest.roomId else { return [] }
-            let room = page.rooms?.first { $0.roomId == roomId } ?? ApronRoom(roomId: roomId)
-            return item(for: latest, room: room, page: page, session: session, users: [:]).map { [$0] } ?? []
+            guard let roomId = latestMessage(in: page)?.roomId else { return [] }
+            rooms = [page.rooms?.first { $0.roomId == roomId } ?? ApronRoom(roomId: roomId)]
+            firstPage = page
         }
-
-        var items: [NotificationItem] = []
-        let joined = try await session.connection.joinedRooms(members: true)
-        // A message's `from` is a recorded object that may omit the avatar; prefer the member's current object (§3.3.1).
-        let users = Dictionary(joined.users.map { ($0.userId, $0) }, uniquingKeysWith: { _, latest in latest })
-        for room in joined.rooms {
-            let page = try await session.connection.history(roomId: room.roomId, limit: historyLimit)
-            if let latest = latestMessage(in: page), let item = item(for: latest, room: room, page: page, session: session, users: users) {
-                items.append(item)
+        let own = service.readStore.ownUserIds(serverURL: session.serverURL).union([session.you.userId])
+        let host = session.serverURL.host() ?? session.serverURL.absoluteString
+        var summaries: [ChatSummary] = []
+        for room in rooms {
+            let page = if let firstPage { firstPage } else { try await session.connection.history(roomId: room.roomId, limit: historyLimit) }
+            let latest = latestMessage(in: page)
+            let preview = latest.map { message in
+                let text = (message.body?.text ?? "").replacingOccurrences(of: "\n", with: " ")
+                return own.contains(message.from.userId) ? "You: \(text)" : "\(message.from.displayName): \(text)"
             }
+            let unread = latest.flatMap { message in
+                message.messageId.flatMap(Int64.init).map { unreadCount(in: page, roomId: room.roomId, latest: $0, session: session) }
+            } ?? 0
+            summaries.append(ChatSummary(
+                id: "apron:\(session.serverURL.absoluteString)|\(room.roomId)",
+                network: .apron,
+                title: room.displayTitle,
+                subtitle: host,
+                avatarURL: nil,
+                preview: preview,
+                timestamp: latest?.timestamp,
+                unreadCount: unread,
+                destination: .apron(serverURL: session.serverURL, roomId: room.roomId),
+            ))
         }
-        return items
+        return summaries
     }
 
     private func latestMessage(in page: ApronHistoryResult) -> ApronMessage? {
@@ -101,7 +120,7 @@ public final class ApronNotificationSource: NotificationFetching, AccountValidat
     /// Messages from others after the read cursor, capped at the page size (§4.6).
     private func unreadCount(in page: ApronHistoryResult, roomId: String, latest: Int64, session: ApronSession) -> Int {
         let readStore = service.readStore
-        // A room never read before starts at its latest message, so adding a server doesn't flood the feed.
+        // A room never read before starts at its latest message, so adding a server doesn't mark everything unread.
         let newest = (page.messages ?? []).compactMap { $0.messageId.flatMap(Int64.init) }.max() ?? latest
         readStore.setBaselineIfNeeded(newest, serverURL: session.serverURL, roomId: roomId)
         let cursor = readStore.cursor(serverURL: session.serverURL, roomId: roomId) ?? latest
@@ -111,36 +130,5 @@ public final class ApronNotificationSource: NotificationFetching, AccountValidat
             return !message.isDeleted && !message.from.isSystem && !own.contains(message.from.userId)
         }
         return min(unread.count, Self.unreadCap)
-    }
-
-    private func item(for message: ApronMessage, room: ApronRoom, page: ApronHistoryResult, session: ApronSession, users: [String: ApronUser]) -> NotificationItem? {
-        guard let messageId = message.messageId, let latestId = Int64(messageId), let timestamp = message.timestamp,
-              timestamp > Date().addingTimeInterval(-maxAge)
-        else { return nil }
-        let unread = unreadCount(in: page, roomId: room.roomId, latest: latestId, session: session)
-        let author = users[message.from.userId]
-        let actor = NotificationActor(
-            id: message.from.userId,
-            network: .apron,
-            // Feed rows bold `username`; Apron has no profile handle beyond the opaque `user_id`.
-            username: message.from.displayName,
-            displayName: message.from.displayName,
-            avatarURL: author?.avatarURL ?? message.from.avatarURL,
-        )
-        let mentioned = message.body?.mentions?.contains(session.you.userId) ?? false
-        let verb = mentioned ? "mentioned you in" : "in"
-        return NotificationItem(
-            id: "apron:\(session.serverURL.absoluteString)|\(room.roomId)",
-            network: .apron,
-            accountId: session.serverURL.absoluteString,
-            sourceId: messageId,
-            type: .message,
-            timestamp: timestamp,
-            text: "\(message.from.displayName) \(verb) \(room.displayTitle)",
-            actors: [actor],
-            target: NotificationTarget(id: room.roomId, text: message.body?.text, url: nil, author: actor, postedAt: timestamp),
-            parentTarget: NotificationTarget(id: room.roomId, text: room.displayTitle, url: session.serverURL),
-            unreadCount: unread,
-        )
     }
 }

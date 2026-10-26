@@ -69,6 +69,14 @@ final class AccountIdentityTests: XCTestCase {
         XCTAssertFalse(try instagramResponseExpiresSession(response(nil)))
     }
 
+    func testInstagramDetectsLoginRequiredBodies() {
+        XCTAssertTrue(instagramBodyRequiresLogin(Data(#"{"message":"checkpoint_required","checkpoint":"https://www.instagram.com/challenge/","status":"fail"}"#.utf8)))
+        XCTAssertTrue(instagramBodyRequiresLogin(Data(#"{"message":"login_required","status":"fail"}"#.utf8)))
+        XCTAssertTrue(instagramBodyRequiresLogin(Data(#"<!DOCTYPE html><html lang="None" class="no-js not-logged-in "><head></head></html>"#.utf8)))
+        XCTAssertFalse(instagramBodyRequiresLogin(Data(#"{"message":"Please wait a few minutes","status":"fail"}"#.utf8)))
+        XCTAssertFalse(instagramBodyRequiresLogin(Data(#"<!DOCTYPE html><html class="_9dls touch" lang="en"><body>login</body></html>"#.utf8)))
+    }
+
     @MainActor
     func testInstagramConcurrentIdentityAndTrayShareOnePageAndLaterReadsAreFresh() async throws {
         let (store, suite) = try makeStore()

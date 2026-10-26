@@ -5,24 +5,24 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
-/// UIKit Apron chat: a diffable list of self-sizing cells under a floating composer.
-struct ApronChatUIKitView: UIViewControllerRepresentable {
-    let viewModel: ApronChatViewModel
-    /// A sender's avatar was tapped.
-    var showProfile: (ApronUser) -> Void = { _ in }
+/// UIKit chat shared by every network: a diffable list of self-sizing cells under a floating composer.
+struct ChatUIKitView: UIViewControllerRepresentable {
+    let viewModel: ChatViewModel
+    /// A sender's avatar or a mention was tapped.
+    var showProfile: (ChatUser) -> Void = { _ in }
 
-    func makeUIViewController(context _: Context) -> ApronChatViewController {
-        let controller = ApronChatViewController(viewModel: viewModel)
+    func makeUIViewController(context _: Context) -> ChatViewController {
+        let controller = ChatViewController(viewModel: viewModel)
         controller.showProfile = showProfile
         return controller
     }
 
-    func updateUIViewController(_ controller: ApronChatViewController, context _: Context) {
+    func updateUIViewController(_ controller: ChatViewController, context _: Context) {
         controller.showProfile = showProfile
     }
 }
 
-final class ApronChatViewController: UIViewController, UICollectionViewDelegate, UITextViewDelegate,
+final class ChatViewController: UIViewController, UICollectionViewDelegate, UITextViewDelegate,
     PHPickerViewControllerDelegate, UIDocumentPickerDelegate
 {
     private enum Section {
@@ -34,16 +34,16 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
         case unreadDivider
     }
 
-    private let viewModel: ApronChatViewModel
-    var showProfile: (ApronUser) -> Void = { _ in }
+    private let viewModel: ChatViewModel
+    var showProfile: (ChatUser) -> Void = { _ in }
     private var cancellables = Set<AnyCancellable>()
     private var collectionView: UICollectionView!
     private var dataSource: UICollectionViewDiffableDataSource<Section, Item>!
-    private var messagesById: [String: ApronMessage] = [:]
-    private var orderedMessages: [ApronMessage] = []
+    private var messagesById: [String: ChatMessage] = [:]
+    private var orderedMessages: [ChatMessage] = []
     private var indexById: [String: Int] = [:]
-    /// What each visible cell was configured from: its snapshot and its place in a sender group.
-    private var renderedKeys: [String: String] = [:]
+    /// What each cell was configured from: its message and its place in a sender group.
+    private var renderedMessages: [String: (message: ChatMessage, layout: ChatBubbleLayout)] = [:]
     private var attributedCache: [String: NSAttributedString] = [:]
     private var isNearBottom = true
     /// Follows the newest message: set when the room opens at the bottom or the user scrolls back down,
@@ -55,38 +55,39 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
     private var hasScrolledInitially = false
 
     // Latest published composer state; @Published emits in willSet, so the view model still holds old values.
-    private var state: ApronChatViewModel.ConnectionState = .connecting
+    private var state: ChatConnectionState = .connecting
     private var isSending = false
     private var draft = ""
-    private var attachment: ApronChatViewModel.Attachment?
-    private var replyingTo: ApronMessage?
+    private var attachment: ChatAttachment?
+    private var replyingTo: ChatMessage?
     private var hasLater = false
     private var hasEarlier = false
     private let historySpinner = UIActivityIndicatorView(style: .medium)
     private var pendingJumpTarget: String?
     private let jumpToLatestButton = UIButton(type: .system)
-    private let jumpToLatestGlass = ApronGlass.make(cornerRadius: 20)
+    private let jumpToLatestGlass = ChatGlass.make(cornerRadius: 20)
     private let unreadBadge = UIView()
     private let unreadBadgeLabel = UILabel()
     private var unreadCount = 0
     private var userHasScrolled = false
-    private var reactionTotals: [String: [ApronReactionCount]] = [:]
+    private var reactionTotals: [String: [ChatReaction]] = [:]
     private var avatarPrefetches = Set<URL>()
     private let reactionHaptic = UISelectionFeedbackGenerator()
+    private let audioPlayer = ChatAudioPreviewPlayer()
 
     private let composer = UIStackView()
-    private let typingView = ApronGlass.make(cornerRadius: 14)
-    private let mentionGlass = ApronGlass.make(cornerRadius: 18)
+    private let typingView = ChatGlass.make(cornerRadius: 14)
+    private let mentionGlass = ChatGlass.make(cornerRadius: 18)
     private let mentionStack = UIStackView()
     /// The `@query` word being completed, in the text view's text, and the suggestions shown for it.
     private var mentionRange: NSRange?
     private var shownSuggestionIds: [String] = []
     private let typingLabel = UILabel()
-    private let noticeView = ApronGlass.make(cornerRadius: 16)
+    private let noticeView = ChatGlass.make(cornerRadius: 16)
     private let noticeLabel = UILabel()
     private let reconnectButton = UIButton(type: .system)
     private let attachButton = UIButton(type: .system)
-    private let inputPill = ApronGlass.make(cornerRadius: 22)
+    private let inputPill = ChatGlass.make(cornerRadius: 22)
     private let attachmentPreview = UIStackView()
     private let replyPreview = UIStackView()
     private let replyPreviewName = UILabel()
@@ -101,7 +102,7 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
     private let maxComposerLines: CGFloat = 5
     private let minimumTextHeight: CGFloat = 36
 
-    init(viewModel: ApronChatViewModel) {
+    init(viewModel: ChatViewModel) {
         self.viewModel = viewModel
         super.init(nibName: nil, bundle: nil)
     }
@@ -122,6 +123,11 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
         bind()
     }
 
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        audioPlayer.stop()
+    }
+
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         performInitialScrollIfNeeded()
@@ -139,6 +145,10 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
         collectionView = UICollectionView(frame: .zero, collectionViewLayout: UICollectionViewCompositionalLayout.list(using: configuration))
         collectionView.delegate = self
         collectionView.keyboardDismissMode = .interactive
+        // Tapping the messages dismisses the keyboard; touches still reach links, images and reactions.
+        let dismissTap = UITapGestureRecognizer(target: self, action: #selector(dismissKeyboard))
+        dismissTap.cancelsTouchesInView = false
+        collectionView.addGestureRecognizer(dismissTap)
         collectionView.showsVerticalScrollIndicator = false
         if #available(iOS 26.0, *) {
             // UIKit's equivalent of `.scrollEdgeEffectStyle(.soft, for: .top)`: messages soften under the bar.
@@ -147,43 +157,45 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
         collectionView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(collectionView)
 
-        let messageRegistration = UICollectionView.CellRegistration<ApronMessageCell, String> { [weak self] cell, _, id in
+        let messageRegistration = UICollectionView.CellRegistration<ChatMessageCell, String> { [weak self] cell, _, id in
             guard let self, let message = messagesById[id], let index = indexById[id] else { return }
             let layout = bubbleLayout(at: index)
-            let reply = message.replyTo.map { replyQuote(for: $0.messageId) }
+            let reply = message.replyToId.map(replyQuote(for:))
             prefetchReactorAvatars(on: message)
             cell.configure(
                 message: message,
                 layout: layout,
                 reply: reply,
-                avatarURL: layout.showsAvatar ? viewModel.avatarURL(for: message.from) : nil,
+                avatarURL: layout.showsAvatar ? viewModel.avatarURL(for: message.sender) : nil,
                 body: attributedBody(for: message, isOwn: layout.isOwn),
-                embeds: embedDisplays(for: message),
+                embeds: message.isDeleted ? [] : message.embeds,
                 reactions: message.isDeleted ? [] : reactionTotals[id] ?? [],
-                actions: ApronMessageCell.Actions(
-                    canReply: message.messageId != nil && !message.isDeleted && !layout.isSystem,
-                    canReact: viewModel.canReact && message.messageId != nil && !message.isDeleted,
+                actions: ChatMessageCell.Actions(
+                    canReply: viewModel.canReply && message.isUserMessage && !message.isDeleted,
+                    canReact: viewModel.canReact && !message.isNotice && !message.isDeleted,
                     reply: { [weak self] in self?.beginReply(to: id) },
                     toggleReaction: { [weak self] emoji in self?.toggleReaction(emoji, on: id) },
                     showReplyTarget: { [weak self] in
                         // A quote whose original the server no longer keeps has nowhere to go.
-                        guard let self, let target = message.replyTo?.messageId, !viewModel.isUnavailableReference(target) else { return }
+                        guard let self, let target = message.replyToId, !viewModel.isUnavailableReference(target) else { return }
                         Task { await self.viewModel.jump(to: target) }
                     },
                     reactionMenu: { [weak self] emoji in self?.reactionMenu(pressed: emoji, on: id) },
-                    showProfile: { [weak self] in self?.showProfile(message.from) },
+                    showProfile: { [weak self] in self?.showProfile(message.sender) },
                     showImage: { [weak self] url, alt, image in
-                        self?.present(ApronImageViewerController(url: url, image: image, alt: alt), animated: true)
+                        self?.present(ChatImageViewerController(url: url, image: image, alt: alt), animated: true)
                     },
+                    audioPlayer: audioPlayer,
+                    previewURL: { [weak self] id in await self?.viewModel.audioPreviewURL(for: id) },
                     showMentionedUser: { [weak self] userId in
-                        // The profile fills in the kept user object, if any (§3.3.1).
-                        self?.showProfile(ApronUser(userId: userId, name: nil, avatar: nil, roles: nil))
+                        // The profile fills in what the network knows about the user.
+                        self?.showProfile(ChatUser(id: userId, name: nil, avatarURL: nil))
                     },
                 ),
                 availableWidth: collectionView.bounds.width > 0 ? collectionView.bounds.width : view.bounds.width,
             )
         }
-        let dividerRegistration = UICollectionView.CellRegistration<ApronUnreadDividerCell, Item> { _, _, _ in }
+        let dividerRegistration = UICollectionView.CellRegistration<ChatUnreadDividerCell, Item> { _, _, _ in }
         dataSource = UICollectionViewDiffableDataSource(collectionView: collectionView) { collectionView, indexPath, item in
             switch item {
             case let .message(id):
@@ -231,7 +243,7 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
             UIAction(title: "Photo Library", image: UIImage(systemName: "photo.on.rectangle")) { [weak self] _ in self?.presentPhotoPicker() },
             UIAction(title: "Files", image: UIImage(systemName: "folder")) { [weak self] _ in self?.presentDocumentPicker() },
         ])
-        let attachGlass = ApronGlass.make(cornerRadius: 22)
+        let attachGlass = ChatGlass.make(cornerRadius: 22)
         attachGlass.contentView.addSubview(attachButton)
         attachButton.pinToEdges(of: attachGlass.contentView)
         NSLayoutConstraint.activate([
@@ -239,6 +251,7 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
             attachGlass.heightAnchor.constraint(equalToConstant: 44),
         ])
         attachGlass.setContentHuggingPriority(.required, for: .horizontal)
+        attachGlass.isHidden = !viewModel.offersAttachments
 
         // Staged attachment shown inside the input pill, above the text.
         attachmentThumbnail.contentMode = .scaleAspectFill
@@ -402,7 +415,7 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
         viewModel.$unreadCount.sink { [weak self] count in
             guard let self else { return }
             unreadCount = count
-            unreadBadgeLabel.text = count > ApronNotificationSource.unreadCap ? "\(ApronNotificationSource.unreadCap)+" : "\(count)"
+            unreadBadgeLabel.text = count > ChatViewModel.unreadBadgeCap ? "\(ChatViewModel.unreadBadgeCap)+" : "\(count)"
             updateJumpToLatestButton()
         }.store(in: &cancellables)
         NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)
@@ -438,7 +451,7 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
         }.store(in: &cancellables)
     }
 
-    private func applySnapshot(messages: [ApronMessage], hasEarlier _: Bool, hasLater: Bool) {
+    private func applySnapshot(messages: [ChatMessage], hasEarlier _: Bool, hasLater: Bool) {
         let previousIds = items(in: .messages, of: dataSource.snapshot()).filter { $0 != .unreadDivider }
         let wasEmpty = previousIds.isEmpty
         let previousFirst = previousIds.first
@@ -456,15 +469,15 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
         }
         snapshot.appendItems(rows, toSection: .messages)
 
-        // Edits, tombstones and finished uploads keep their id (§2.3), and a new message can end the previous
-        // one's group, so re-render items whose snapshot or group position changed.
+        // Edits, tombstones and finished uploads keep their id, and a new message can end the previous one's
+        // group, so re-render items whose message or group position changed.
         var changed: [Item] = []
         for (index, message) in messages.enumerated() {
-            let key = "\(message.logId ?? "")|\(bubbleLayout(at: index))"
-            if let rendered = renderedKeys[message.id], rendered != key {
+            let layout = bubbleLayout(at: index)
+            if let rendered = renderedMessages[message.id], rendered.message != message || rendered.layout != layout {
                 changed.append(.message(message.id))
             }
-            renderedKeys[message.id] = key
+            renderedMessages[message.id] = (message, layout)
         }
         snapshot.reconfigureItems(changed)
 
@@ -494,21 +507,13 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
     }
 
     /// The quote shown in a reply, including targets outside the loaded window while they load.
-    private func replyQuote(for targetId: String) -> ApronReplyQuote {
+    private func replyQuote(for targetId: String) -> ChatReplyQuote {
         if let target = viewModel.message(withId: targetId) {
-            let text: String = if target.isDeleted {
-                "Message deleted"
-            } else if let body = target.body?.text, !body.isEmpty {
-                viewModel.showingMentionNames(body)
-            } else if target.body?.embeds?.contains(where: { $0.og?.image != nil }) == true {
-                "Photo"
-            } else {
-                "Attachment"
-            }
-            return ApronReplyQuote(name: target.from.displayName, text: text, accentUserId: target.from.userId)
+            let text = target.isDeleted ? target.previewText : viewModel.showingMentionNames(target.previewText)
+            return ChatReplyQuote(name: target.sender.name, text: text, accentUserId: target.sender.id)
         }
         let unavailable = viewModel.isUnavailableReference(targetId)
-        return ApronReplyQuote(name: "Reply", text: unavailable ? "Message unavailable" : "Loading…", accentUserId: nil)
+        return ChatReplyQuote(name: "Reply", text: unavailable ? "Message unavailable" : "Loading…", accentUserId: nil)
     }
 
     /// Mentions show names, so messages and quotes with any `@` render again when the known names change.
@@ -517,8 +522,8 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
         var snapshot = dataSource.snapshot()
         let changed = items(in: .messages, of: snapshot).filter { item in
             guard case let .message(id) = item, let message = messagesById[id] else { return false }
-            let quoted = message.replyTo.flatMap { viewModel.message(withId: $0.messageId)?.body?.text } ?? ""
-            return (message.body?.text ?? "").contains("@") || quoted.contains("@")
+            let quoted = message.replyToId.flatMap { viewModel.message(withId: $0)?.text } ?? ""
+            return (message.text ?? "").contains("@") || quoted.contains("@")
         }
         guard !changed.isEmpty else { return }
         snapshot.reconfigureItems(changed)
@@ -529,7 +534,7 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
         var snapshot = dataSource.snapshot()
         let replies = items(in: .messages, of: snapshot).filter { item in
             guard case let .message(id) = item else { return false }
-            return messagesById[id]?.replyTo != nil
+            return messagesById[id]?.replyToId != nil
         }
         guard !replies.isEmpty else { return }
         snapshot.reconfigureItems(replies)
@@ -546,7 +551,7 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
         collectionView.layoutIfNeeded()
         collectionView.scrollToItem(at: indexPath, at: .centeredVertically, animated: true)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
-            (self?.collectionView.cellForItem(at: indexPath) as? ApronMessageCell)?.flash()
+            (self?.collectionView.cellForItem(at: indexPath) as? ChatMessageCell)?.flash()
         }
     }
 
@@ -595,9 +600,8 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
 
         if let replyingTo {
             replyPreview.isHidden = false
-            replyPreviewName.text = "Reply to \(replyingTo.from.displayName)"
-            replyPreviewText.text = (replyingTo.body?.text?.isEmpty == false ? replyingTo.body?.text : "Attachment")?
-                .replacingOccurrences(of: "\n", with: " ")
+            replyPreviewName.text = "Reply to \(replyingTo.sender.name)"
+            replyPreviewText.text = viewModel.showingMentionNames(replyingTo.previewText).replacingOccurrences(of: "\n", with: " ")
         } else {
             replyPreview.isHidden = true
         }
@@ -634,67 +638,50 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
     }
 
     /// Consecutive messages from one sender within 10 minutes form a group: the name heads it and the avatar ends it.
-    private func bubbleLayout(at index: Int) -> ApronBubbleLayout {
+    private func bubbleLayout(at index: Int) -> ChatBubbleLayout {
         let message = orderedMessages[index]
         let previous = index > 0 ? orderedMessages[index - 1] : nil
         let next = index + 1 < orderedMessages.count ? orderedMessages[index + 1] : nil
-        func grouped(_ earlier: ApronMessage?, _ later: ApronMessage?) -> Bool {
-            guard let earlier, let later, !earlier.from.isSystem, !later.from.isSystem,
-                  earlier.from.userId == later.from.userId,
+        func grouped(_ earlier: ChatMessage?, _ later: ChatMessage?) -> Bool {
+            guard let earlier, let later, !earlier.sender.isSystem, !later.sender.isSystem,
+                  earlier.sender.id == later.sender.id,
                   let start = earlier.timestamp, let end = later.timestamp
             else { return false }
             return end.timeIntervalSince(start) < 600
         }
-        let isSystem = message.from.isSystem
-        let isOwn = !isSystem && viewModel.isOwn(message)
+        let isSystem = message.sender.isSystem
+        let isOwn = !isSystem && message.isOwn
         let startsGroup = !grouped(previous, message)
         let endsGroup = !grouped(message, next)
-        return ApronBubbleLayout(
+        return ChatBubbleLayout(
             isOwn: isOwn,
             isSystem: isSystem,
-            showsName: startsGroup && !isOwn && !isSystem,
+            showsName: startsGroup && !isOwn && !isSystem && viewModel.showsSenderNames,
             showsAvatar: endsGroup && !isOwn && !isSystem,
             startsGroup: startsGroup,
         )
     }
 
-    private func attributedBody(for message: ApronMessage, isOwn: Bool) -> NSAttributedString? {
-        guard !message.isDeleted, let text = message.body?.text, !text.isEmpty else { return nil }
-        let key = "\(message.id)|\(message.logId ?? "")|\(isOwn)"
+    private func attributedBody(for message: ChatMessage, isOwn: Bool) -> NSAttributedString? {
+        guard !message.isDeleted, let text = message.text, !text.isEmpty else { return nil }
+        let key = "\(message.id)|\(isOwn)|\(text)"
         if let cached = attributedCache[key] {
             return cached
         }
-        let rendered = ApronAttributedText.make(
+        let isSystem = message.sender.isSystem
+        let rendered = ChatAttributedText.make(
             viewModel.renderedText(for: message),
-            color: message.from.isSystem ? .secondaryLabel : isOwn ? .white : .label,
+            color: isSystem ? .secondaryLabel : isOwn ? .white : .label,
             linkColor: isOwn ? .white : .link,
             codeBackground: isOwn ? UIColor.white.withAlphaComponent(0.22) : UIColor.label.withAlphaComponent(0.08),
             // White text on the blue bubble can't use the link color, so mentions there are underlined instead.
             underlinesMentions: isOwn,
+            mentionPattern: viewModel.mentionPattern,
             mentionNames: viewModel.mentionNames,
-            font: message.from.isSystem ? .preferredFont(forTextStyle: .footnote) : .preferredFont(forTextStyle: .body),
+            font: isSystem ? .preferredFont(forTextStyle: .footnote) : .preferredFont(forTextStyle: .body),
         )
         attributedCache[key] = rendered
         return rendered
-    }
-
-    /// Image previews come only from allowed media origins; everything else renders as a card (§3.5.2, §4.8).
-    private func embedDisplays(for message: ApronMessage) -> [ApronEmbedDisplay] {
-        guard !message.isDeleted else { return [] }
-        return (message.body?.embeds ?? []).map { embed in
-            let link = embed.url.flatMap(URL.init(string:)).flatMap { ["http", "https"].contains($0.scheme) ? $0 : nil }
-            if let image = embed.og?.image, let imageURL = viewModel.allowedMediaURL(image.url) {
-                // Uploaded images open in the viewer; a link preview's image opens its page.
-                let isUpload = embed.kind == "upload"
-                return .image(url: imageURL, aspectRatio: image.aspectRatio, alt: image.alt ?? embed.title, link: isUpload ? nil : link, opensViewer: isUpload)
-            }
-            if embed.isPendingUpload {
-                return .pending(title: embed.title ?? "Attachment")
-            }
-            let title = embed.og?.title ?? embed.title ?? embed.kind
-            let subtitle = embed.og?.description ?? embed.text ?? link?.host() ?? (embed.kind == "upload" ? nil : embed.kind)
-            return .card(title: title, subtitle: subtitle, systemImage: embed.kind == "upload" ? "doc" : "link", link: link)
-        }
     }
 
     /// Opens at the "New Messages" divider when there is one, like Telegram, otherwise at the newest message.
@@ -834,7 +821,7 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
             return
         }
         provider.loadObject(ofClass: UIImage.self) { [weak self] object, _ in
-            guard let image = object as? UIImage, let data = ApronImageEncoding.jpeg(from: image) else { return }
+            guard let image = object as? UIImage, let data = ChatImageEncoding.jpeg(from: image) else { return }
             Task { @MainActor in
                 self?.viewModel.attachment = .init(data: data, mimeType: "image/jpeg", filename: "\(baseName).jpg", isImage: true)
             }
@@ -855,6 +842,11 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
         } catch {
             viewModel.errorMessage = error.localizedDescription
         }
+    }
+
+    @objc private func dismissKeyboard() {
+        guard textView.isFirstResponder else { return }
+        textView.resignFirstResponder()
     }
 
     // MARK: - UITextViewDelegate
@@ -897,17 +889,17 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
     private func reportVisibleRead() {
         guard hasScrolledInitially, view.window != nil, UIApplication.shared.applicationState == .active else { return }
         let visibleBottom = collectionView.contentOffset.y + collectionView.bounds.height - collectionView.adjustedContentInset.bottom
-        var newest: Int64?
+        var newest: Int?
         for indexPath in collectionView.indexPathsForVisibleItems {
             guard case let .message(id) = dataSource.itemIdentifier(for: indexPath),
-                  let messageId = messagesById[id]?.messageId.flatMap(Int64.init),
+                  let index = indexById[id], !orderedMessages[index].isNotice,
                   let frame = collectionView.layoutAttributesForItem(at: indexPath)?.frame,
                   frame.maxY <= visibleBottom + 1
             else { continue }
-            newest = max(newest ?? messageId, messageId)
+            newest = max(newest ?? index, index)
         }
         if let newest {
-            viewModel.markRead(upTo: newest)
+            viewModel.markRead(upTo: orderedMessages[newest])
         }
     }
 
@@ -940,7 +932,7 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
     }
 
     private func bubblePreview(at indexPath: IndexPath, in collectionView: UICollectionView) -> UITargetedPreview? {
-        guard let cell = collectionView.cellForItem(at: indexPath) as? ApronMessageCell else { return nil }
+        guard let cell = collectionView.cellForItem(at: indexPath) as? ChatMessageCell else { return nil }
         let bubble = cell.bubbleView
         let parameters = UIPreviewParameters()
         parameters.backgroundColor = .clear
@@ -952,22 +944,24 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
     func collectionView(_: UICollectionView, contextMenuConfigurationForItemsAt indexPaths: [IndexPath], point _: CGPoint) -> UIContextMenuConfiguration? {
         guard let indexPath = indexPaths.first,
               case let .message(id) = dataSource.itemIdentifier(for: indexPath),
-              let message = messagesById[id], message.messageId != nil, !message.from.isSystem
+              let message = messagesById[id], message.isUserMessage
         else { return nil }
         let canReact = viewModel.canReact && !message.isDeleted
-        let text = message.body?.text ?? ""
+        let canReply = viewModel.canReply && !message.isDeleted
+        let text = message.isDeleted ? "" : message.text ?? ""
+        guard canReact || canReply || !text.isEmpty else { return nil }
         return UIContextMenuConfiguration(actionProvider: { [weak self] _ in
             guard let self else { return nil }
             var children: [UIMenuElement] = []
             if canReact {
                 let mine = Set(viewModel.yourEmojis(on: id))
-                let quick = UIMenu(options: .displayInline, preferredElementSize: .small, children: ApronChatViewModel.quickReactions.prefix(4).map { emoji in
+                let quick = UIMenu(options: .displayInline, preferredElementSize: .small, children: ChatViewModel.quickReactions.prefix(4).map { emoji in
                     UIAction(title: emoji, state: mine.contains(emoji) ? .on : .off) { [weak self] _ in self?.toggleReaction(emoji, on: id) }
                 })
                 children.append(quick)
             }
             var actions: [UIMenuElement] = []
-            if !message.isDeleted {
+            if canReply {
                 actions.append(UIAction(title: "Reply", image: UIImage(systemName: "arrowshape.turn.up.left")) { [weak self] _ in
                     self?.beginReply(to: id)
                 })
@@ -1095,7 +1089,7 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
         let match = mentionQuery()
         let suggestions = match.map { viewModel.mentionSuggestions(for: $0.query) } ?? []
         mentionRange = suggestions.isEmpty ? nil : match?.range
-        let ids = suggestions.map(\.userId)
+        let ids = suggestions.map(\.id)
         guard ids != shownSuggestionIds else { return }
         shownSuggestionIds = ids
         mentionStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
@@ -1112,20 +1106,20 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
         }
     }
 
-    private func mentionRow(for user: ApronUser) -> UIView {
-        let avatar = ApronAvatarView()
-        avatar.configure(name: user.displayName, color: ApronUserColor.color(for: user.userId), url: viewModel.avatarURL(for: user))
+    private func mentionRow(for user: ChatUser) -> UIView {
+        let avatar = ChatAvatarView()
+        avatar.configure(name: user.name, color: ChatUserColor.color(for: user.id), url: viewModel.avatarURL(for: user))
         avatar.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             avatar.widthAnchor.constraint(equalToConstant: 28),
             avatar.heightAnchor.constraint(equalToConstant: 28),
         ])
         let name = UILabel()
-        name.text = user.displayName
+        name.text = user.name
         name.font = .preferredFont(forTextStyle: .subheadline)
         name.setContentHuggingPriority(.required, for: .horizontal)
         let userId = UILabel()
-        userId.text = "@\(user.userId)"
+        userId.text = "@\(user.id)"
         userId.font = .preferredFont(forTextStyle: .footnote)
         userId.textColor = .secondaryLabel
         userId.lineBreakMode = .byTruncatingMiddle
@@ -1135,16 +1129,16 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
         row.isLayoutMarginsRelativeArrangement = true
         row.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12)
         row.isAccessibilityElement = true
-        row.accessibilityLabel = "\(user.displayName), @\(user.userId)"
+        row.accessibilityLabel = "\(user.name), @\(user.id)"
         row.accessibilityTraits = .button
-        row.addGestureRecognizer(ApronImageTapGesture { [weak self] in self?.insertMention(of: user) })
+        row.addGestureRecognizer(ChatActionTapGesture { [weak self] in self?.insertMention(of: user) })
         return row
     }
 
     /// Replaces the `@` word with the user's `@user_id` and a space; messages then show it by name.
-    private func insertMention(of user: ApronUser) {
+    private func insertMention(of user: ChatUser) {
         guard let range = mentionRange else { return }
-        let replacement = "@\(user.userId) "
+        let replacement = "@\(user.id) "
         textView.text = (textView.text as NSString).replacingCharacters(in: range, with: replacement)
         textView.selectedRange = NSRange(location: range.location + (replacement as NSString).length, length: 0)
         textViewDidChange(textView)
@@ -1206,13 +1200,13 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
     }
 
     private func toggleReaction(_ emoji: String, on id: String) {
-        guard let messageId = messagesById[id]?.messageId else { return }
+        guard messagesById[id]?.isNotice == false else { return }
         reactionHaptic.selectionChanged()
-        Task { await viewModel.toggleReaction(emoji, on: messageId) }
+        Task { await viewModel.toggleReaction(emoji, on: id) }
     }
 
     private func presentReactionPicker(for id: String) {
-        let picker = ApronReactionPickerViewController(selected: Set(viewModel.yourEmojis(on: id))) { [weak self] emoji in
+        let picker = ChatReactionPickerViewController(selected: Set(viewModel.yourEmojis(on: id))) { [weak self] emoji in
             self?.toggleReaction(emoji, on: id)
         }
         if let sheet = picker.sheetPresentationController {
@@ -1232,9 +1226,9 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
 
     /// Long press on a reaction chip: who reacted with that emoji, oldest first, each with when.
     private func reactionMenu(pressed emoji: String, on id: String) -> UIMenu? {
-        guard let messageId = messagesById[id]?.messageId else { return nil }
-        let rows = viewModel.reactors(of: emoji, on: messageId).map { reactor in
-            let action = UIAction(title: viewModel.isOwnUser(reactor.user) ? "You" : reactor.user.displayName, image: reactorImage(for: reactor.user)) { _ in }
+        guard messagesById[id]?.isNotice == false else { return nil }
+        let rows = viewModel.reactors(of: emoji, on: id).map { reactor in
+            let action = UIAction(title: reactor.isYou ? "You" : reactor.user.name, image: reactorImage(for: reactor.user)) { _ in }
             action.subtitle = reactor.date.map(Self.reactionTimeFormatter.string(from:))
             return action
         }
@@ -1243,9 +1237,9 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
 
     /// Loads the avatars of a shown message's reactors, so the chip's long-press list has them. The chat itself
     /// only loads avatars beside incoming bubbles, which never includes your own.
-    private func prefetchReactorAvatars(on message: ApronMessage) {
-        guard let messageId = message.messageId, let totals = reactionTotals[message.id] else { return }
-        let urls = totals.flatMap { viewModel.reactors(of: $0.emoji, on: messageId) }.compactMap { viewModel.avatarURL(for: $0.user) }
+    private func prefetchReactorAvatars(on message: ChatMessage) {
+        guard let totals = reactionTotals[message.id] else { return }
+        let urls = totals.flatMap { viewModel.reactors(of: $0.emoji, on: message.id) }.compactMap { viewModel.avatarURL(for: $0.user) }
         for url in urls where StoryImageCache.shared.image(for: url) == nil && avatarPrefetches.insert(url).inserted {
             Task {
                 guard let (data, _) = try? await URLSession.shared.data(from: url), let image = UIImage(data: data) else {
@@ -1258,7 +1252,7 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
     }
 
     /// The reactor's avatar when it is already loaded, otherwise initials on their color, like the chat's avatars.
-    private func reactorImage(for user: ApronUser) -> UIImage {
+    private func reactorImage(for user: ChatUser) -> UIImage {
         let size = CGSize(width: 28, height: 28)
         let photo = viewModel.avatarURL(for: user).flatMap { StoryImageCache.shared.image(for: $0) }
         let image = UIGraphicsImageRenderer(size: size).image { _ in
@@ -1270,9 +1264,9 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
                 photo.draw(in: CGRect(x: (size.width - drawn.width) / 2, y: (size.height - drawn.height) / 2, width: drawn.width, height: drawn.height))
                 return
             }
-            ApronUserColor.color(for: user.userId).setFill()
+            ChatUserColor.color(for: user.id).setFill()
             UIRectFill(rect)
-            let initials = user.displayName.split(separator: " ").prefix(2).compactMap(\.first).map(String.init).joined().uppercased() as NSString
+            let initials = user.name.split(separator: " ").prefix(2).compactMap(\.first).map(String.init).joined().uppercased() as NSString
             let attributes: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: 11, weight: .semibold), .foregroundColor: UIColor.white]
             let textSize = initials.size(withAttributes: attributes)
             initials.draw(at: CGPoint(x: (size.width - textSize.width) / 2, y: (size.height - textSize.height) / 2), withAttributes: attributes)
@@ -1281,7 +1275,7 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
     }
 
     /// Reconfigures only the messages whose totals changed.
-    private func applyReactionTotals(_ totals: [String: [ApronReactionCount]]) {
+    private func applyReactionTotals(_ totals: [String: [ChatReaction]]) {
         let changedIds = Set(totals.keys).union(reactionTotals.keys).filter { totals[$0] != reactionTotals[$0] }
         reactionTotals = totals
         guard !changedIds.isEmpty else { return }
@@ -1294,14 +1288,8 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
     }
 }
 
-private enum ApronEmbedDisplay {
-    case image(url: URL, aspectRatio: CGFloat?, alt: String?, link: URL?, opensViewer: Bool)
-    case pending(title: String)
-    case card(title: String, subtitle: String?, systemImage: String, link: URL?)
-}
-
 /// The boundary above the first unread message: a hairline either side of a "New Messages" label.
-private final class ApronUnreadDividerCell: UICollectionViewListCell {
+private final class ChatUnreadDividerCell: UICollectionViewListCell {
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundConfiguration = .clear()
@@ -1343,13 +1331,13 @@ private final class ApronUnreadDividerCell: UICollectionViewListCell {
 }
 
 /// What a reply quote shows: the target when loaded, otherwise a loading or unavailable placeholder.
-private struct ApronReplyQuote {
+private struct ChatReplyQuote {
     let name: String
     let text: String
     let accentUserId: String?
 }
 
-private struct ApronBubbleLayout: Hashable, CustomStringConvertible {
+private struct ChatBubbleLayout: Hashable, CustomStringConvertible {
     let isOwn: Bool
     let isSystem: Bool
     let showsName: Bool
@@ -1362,7 +1350,7 @@ private struct ApronBubbleLayout: Hashable, CustomStringConvertible {
 }
 
 /// Stable per-user accent, like Telegram's name colors. `hashValue` is seeded per launch, so sum the scalars.
-enum ApronUserColor {
+enum ChatUserColor {
     private static let palette: [UIColor] = [.systemRed, .systemOrange, .systemPurple, .systemGreen, .systemTeal, .systemBlue, .systemPink]
 
     static func color(for userId: String) -> UIColor {
@@ -1372,7 +1360,7 @@ enum ApronUserColor {
 
 /// Telegram-style message: a bubble with the sender's avatar beside the last message of a group,
 /// the name atop the first, the time inline at the bottom-right, and system notices as centered captions.
-private final class ApronMessageCell: UICollectionViewListCell, UIGestureRecognizerDelegate, UIContextMenuInteractionDelegate {
+private final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelegate, UIContextMenuInteractionDelegate {
     struct Actions {
         var canReply = false
         var canReact = false
@@ -1384,6 +1372,9 @@ private final class ApronMessageCell: UICollectionViewListCell, UIGestureRecogni
         var showProfile: () -> Void = {}
         /// An uploaded image was tapped: its URL, alt text, and the image if it has loaded.
         var showImage: (URL, String?, UIImage?) -> Void = { _, _, _ in }
+        /// Plays `.audio` previews; the chat owns it so only one plays at a time.
+        var audioPlayer: ChatAudioPreviewPlayer?
+        var previewURL: (String) async -> URL? = { _ in nil }
         var showMentionedUser: (String) -> Void = { _ in }
     }
 
@@ -1396,7 +1387,7 @@ private final class ApronMessageCell: UICollectionViewListCell, UIGestureRecogni
     private static let avatarSize: CGFloat = 34
     private static let timeFont = UIFont.preferredFont(forTextStyle: .caption2)
 
-    private let avatarView = ApronAvatarView()
+    private let avatarView = ChatAvatarView()
     private let bubble = UIView()
 
     /// The bubble alone, for the context menu's targeted preview.
@@ -1405,8 +1396,8 @@ private final class ApronMessageCell: UICollectionViewListCell, UIGestureRecogni
     }
 
     private let nameLabel = UILabel()
-    private let replyView = ApronReplyQuoteView()
-    private let bodyLabel = ApronLinkLabel()
+    private let replyView = ChatReplyQuoteView()
+    private let bodyLabel = ChatLinkLabel()
     private let embedsStack = UIStackView()
     /// Uploaded images, edge to edge at the bubble's top like Telegram, between the header and the caption.
     private let mediaStack = UIStackView()
@@ -1676,13 +1667,13 @@ private final class ApronMessageCell: UICollectionViewListCell, UIGestureRecogni
     }
 
     func configure(
-        message: ApronMessage,
-        layout: ApronBubbleLayout,
-        reply: ApronReplyQuote?,
+        message: ChatMessage,
+        layout: ChatBubbleLayout,
+        reply: ChatReplyQuote?,
         avatarURL: URL?,
         body: NSAttributedString?,
-        embeds: [ApronEmbedDisplay],
-        reactions: [ApronReactionCount],
+        embeds: [ChatEmbed],
+        reactions: [ChatReaction],
         actions: Actions,
         availableWidth: CGFloat,
     ) {
@@ -1707,16 +1698,16 @@ private final class ApronMessageCell: UICollectionViewListCell, UIGestureRecogni
         NSLayoutConstraint.deactivate(layout.isOwn ? incomingConstraints : ownConstraints)
         NSLayoutConstraint.activate(layout.isOwn ? ownConstraints : incomingConstraints)
         bubble.backgroundColor = layout.isOwn ? .systemBlue : .secondarySystemBackground
-        let accent = ApronUserColor.color(for: message.from.userId)
+        let accent = ChatUserColor.color(for: message.sender.id)
 
         // Incoming messages keep the avatar column so a group's bubbles line up.
         avatarView.isHidden = layout.isOwn || !layout.showsAvatar
         if layout.showsAvatar {
-            avatarView.configure(name: message.from.displayName, color: accent, url: avatarURL)
+            avatarView.configure(name: message.sender.name, color: accent, url: avatarURL)
         }
 
         nameLabel.isHidden = !layout.showsName
-        nameLabel.text = message.from.displayName
+        nameLabel.text = message.sender.name
         nameLabel.textColor = accent
 
         if let reply {
@@ -1724,7 +1715,7 @@ private final class ApronMessageCell: UICollectionViewListCell, UIGestureRecogni
             replyView.configure(
                 name: reply.name,
                 text: reply.text,
-                accent: layout.isOwn ? .white : reply.accentUserId.map(ApronUserColor.color(for:)) ?? .secondaryLabel,
+                accent: layout.isOwn ? .white : reply.accentUserId.map(ChatUserColor.color(for:)) ?? .secondaryLabel,
                 onBubbleColor: layout.isOwn,
             )
         } else {
@@ -1843,7 +1834,7 @@ private final class ApronMessageCell: UICollectionViewListCell, UIGestureRecogni
     }
 
     /// Reaction chips inside the bubble: filled when you reacted, tinted otherwise. Tapping toggles yours (§4.7).
-    private func configureReactions(_ reactions: [ApronReactionCount], canReact: Bool) {
+    private func configureReactions(_ reactions: [ChatReaction], canReact: Bool) {
         reactionsRow.arrangedSubviews.forEach { $0.removeFromSuperview() }
         chipEmojis = [:]
         reactionsContainer.isHidden = reactions.isEmpty
@@ -1915,7 +1906,7 @@ private final class ApronMessageCell: UICollectionViewListCell, UIGestureRecogni
         return UITargetedPreview(view: chip, parameters: parameters)
     }
 
-    private func configureSystem(message: ApronMessage, body: NSAttributedString?, startsGroup: Bool) {
+    private func configureSystem(message: ChatMessage, body: NSAttributedString?, startsGroup: Bool) {
         bubble.isHidden = true
         avatarView.isHidden = true
         bubbleTop.isActive = false
@@ -1923,7 +1914,7 @@ private final class ApronMessageCell: UICollectionViewListCell, UIGestureRecogni
         systemLabel.isHidden = false
         systemTop.isActive = true
         systemTop.constant = startsGroup ? 10 : 4
-        systemLabel.attributedText = body ?? NSAttributedString(string: message.from.displayName, attributes: [
+        systemLabel.attributedText = body ?? NSAttributedString(string: message.sender.name, attributes: [
             .font: UIFont.preferredFont(forTextStyle: .footnote),
             .foregroundColor: UIColor.secondaryLabel,
         ])
@@ -1937,7 +1928,7 @@ private final class ApronMessageCell: UICollectionViewListCell, UIGestureRecogni
         return result
     }
 
-    private func makeView(for embed: ApronEmbedDisplay) -> UIView {
+    private func makeView(for embed: ChatEmbed) -> UIView {
         switch embed {
         case let .image(url, aspectRatio, alt, link, opensViewer):
             let imageView = UIImageView()
@@ -1949,7 +1940,7 @@ private final class ApronMessageCell: UICollectionViewListCell, UIGestureRecogni
             imageView.accessibilityLabel = alt
             imageView.isAccessibilityElement = alt != nil
             // Sizing from the server's `og` dimensions keeps the cell height stable while the image loads.
-            let ratio = min(max(aspectRatio ?? 4 / 3, 0.5), 2)
+            let ratio = CGFloat(min(max(aspectRatio ?? 4 / 3, 0.5), 2))
             // Uploads fill the bubble, so they get Telegram's larger size; previews sit inside the padding.
             // Portrait uploads are sized by height, like Telegram, so they don't squeeze a caption.
             let base: CGFloat = opensViewer ? 264 : 240
@@ -1958,37 +1949,67 @@ private final class ApronMessageCell: UICollectionViewListCell, UIGestureRecogni
                 imageView.widthAnchor.constraint(equalToConstant: width),
                 imageView.heightAnchor.constraint(equalTo: imageView.widthAnchor, multiplier: 1 / ratio),
             ])
-            if let cached = StoryImageCache.shared.image(for: url) {
-                imageView.image = cached
-            } else {
-                imageTasks.append(Task { [weak imageView] in
-                    guard let (data, _) = try? await URLSession.shared.data(from: url),
-                          let image = UIImage(data: data), !Task.isCancelled
-                    else { return }
-                    StoryImageCache.shared.setImage(image, for: url)
-                    imageView?.image = image
-                })
-            }
+            loadImage(url, into: imageView)
             if opensViewer {
                 imageView.isUserInteractionEnabled = true
-                imageView.addGestureRecognizer(ApronImageTapGesture { [weak self, weak imageView] in
+                imageView.addGestureRecognizer(ChatActionTapGesture { [weak self, weak imageView] in
                     self?.actions.showImage(url, alt, imageView?.image)
                 })
             } else if let link {
                 imageView.isUserInteractionEnabled = true
-                imageView.addGestureRecognizer(ApronTapGesture(link: link))
+                imageView.addGestureRecognizer(ChatLinkTapGesture(link: link))
             }
             return imageView
         case let .pending(title):
             let spinner = UIActivityIndicatorView(style: .medium)
             spinner.startAnimating()
             return card(leading: spinner, title: "Uploading \(title)…", subtitle: nil, link: nil)
-        case let .card(title, subtitle, systemImage, link):
+        case let .audio(previewId, title, subtitle, detail, imageURL, link):
+            let card = ChatAudioCardView(
+                previewId: previewId,
+                title: title,
+                subtitle: subtitle,
+                detail: detail,
+                link: link,
+                player: actions.audioPlayer ?? ChatAudioPreviewPlayer(),
+                resolveURL: actions.previewURL,
+            )
+            if let imageURL {
+                loadImage(imageURL, into: card.artworkView)
+            }
+            return card
+        case let .card(title, subtitle, systemImage, imageURL, link):
             let icon = UIImageView(image: UIImage(systemName: systemImage))
             icon.tintColor = .secondaryLabel
             icon.setContentHuggingPriority(.required, for: .horizontal)
+            if let imageURL {
+                // A thumbnail, such as album artwork, replaces the symbol once it loads.
+                icon.contentMode = .scaleAspectFill
+                icon.clipsToBounds = true
+                icon.layer.cornerRadius = 6
+                icon.layer.cornerCurve = .continuous
+                NSLayoutConstraint.activate([
+                    icon.widthAnchor.constraint(equalToConstant: 48),
+                    icon.heightAnchor.constraint(equalToConstant: 48),
+                ])
+                loadImage(imageURL, into: icon)
+            }
             return card(leading: icon, title: title, subtitle: subtitle, link: link)
         }
+    }
+
+    private func loadImage(_ url: URL, into imageView: UIImageView) {
+        if let cached = StoryImageCache.shared.image(for: url) {
+            imageView.image = cached
+            return
+        }
+        imageTasks.append(Task { [weak imageView] in
+            guard let (data, _) = try? await URLSession.shared.data(from: url),
+                  let image = UIImage(data: data), !Task.isCancelled
+            else { return }
+            StoryImageCache.shared.setImage(image, for: url)
+            imageView?.image = image
+        })
     }
 
     private func card(leading: UIView, title: String, subtitle: String?, link: URL?) -> UIView {
@@ -2016,14 +2037,14 @@ private final class ApronMessageCell: UICollectionViewListCell, UIGestureRecogni
         row.layer.cornerCurve = .continuous
         row.widthAnchor.constraint(lessThanOrEqualToConstant: 260).isActive = true
         if let link {
-            row.addGestureRecognizer(ApronTapGesture(link: link))
+            row.addGestureRecognizer(ChatLinkTapGesture(link: link))
         }
         return row
     }
 }
 
 /// Circular avatar that falls back to initials on the user's accent color (§4.8.6).
-private final class ApronAvatarView: UIView {
+private final class ChatAvatarView: UIView {
     private let imageView = UIImageView()
     private let initialsLabel = UILabel()
     private var task: Task<Void, Never>?
@@ -2089,7 +2110,7 @@ private final class ApronAvatarView: UIView {
 }
 
 /// The quoted message inside a reply bubble: an accent bar, the author, and one line of text.
-private final class ApronReplyQuoteView: UIView {
+private final class ChatReplyQuoteView: UIView {
     private let bar = UIView()
     private let nameLabel = UILabel()
     private let textLabel = UILabel()
@@ -2141,7 +2162,7 @@ private final class ApronReplyQuoteView: UIView {
 }
 
 /// The "More Reactions" sheet: a grid of common emoji; picking one toggles it on the message.
-private final class ApronReactionPickerViewController: UIViewController, UICollectionViewDelegate {
+private final class ChatReactionPickerViewController: UIViewController, UICollectionViewDelegate {
     private static let emojis = [
         "👍", "👎", "❤️", "🔥", "😂", "🤣", "😮", "😢", "😡", "🙏", "👏", "🎉",
         "🤔", "😍", "🥲", "😅", "😎", "🤯", "💯", "✅", "❌", "👀", "🚀", "🙌",
@@ -2205,7 +2226,7 @@ private final class ApronReactionPickerViewController: UIViewController, UIColle
     }
 }
 
-private final class ApronImageTapGesture: UITapGestureRecognizer {
+private final class ChatActionTapGesture: UITapGestureRecognizer {
     private let handler: () -> Void
 
     init(handler: @escaping () -> Void) {
@@ -2219,7 +2240,7 @@ private final class ApronImageTapGesture: UITapGestureRecognizer {
     }
 }
 
-private final class ApronTapGesture: UITapGestureRecognizer {
+final class ChatLinkTapGesture: UITapGestureRecognizer {
     let link: URL
 
     init(link: URL) {
@@ -2234,7 +2255,7 @@ private final class ApronTapGesture: UITapGestureRecognizer {
 }
 
 /// Floating glass backgrounds: Liquid Glass on iOS 26, a thin material before it.
-private enum ApronGlass {
+private enum ChatGlass {
     static func make(cornerRadius: CGFloat) -> UIVisualEffectView {
         let view: UIVisualEffectView
         if #available(iOS 26.0, *) {
@@ -2252,7 +2273,7 @@ private enum ApronGlass {
     }
 }
 
-private enum ApronImageEncoding {
+private enum ChatImageEncoding {
     /// Downscales to at most 2048pt on the long edge and encodes as JPEG, which every upload server accepts.
     static func jpeg(from image: UIImage, maxDimension: CGFloat = 2048) -> Data? {
         let longest = max(image.size.width, image.size.height)
@@ -2268,21 +2289,15 @@ private enum ApronImageEncoding {
     }
 }
 
-private extension ApronOpenGraphMedia {
-    var aspectRatio: CGFloat? {
-        guard let width, let height, width > 0, height > 0 else { return nil }
-        return width / height
-    }
-}
-
 /// Converts parsed inline Markdown into UIKit attributes; `AttributedString`'s presentation intents carry no fonts.
-private enum ApronAttributedText {
+private enum ChatAttributedText {
     static func make(
         _ text: AttributedString,
         color: UIColor,
         linkColor: UIColor,
         codeBackground: UIColor,
         underlinesMentions: Bool,
+        mentionPattern: NSRegularExpression?,
         mentionNames: [String: String],
         font base: UIFont,
     ) -> NSAttributedString {
@@ -2310,7 +2325,7 @@ private enum ApronAttributedText {
             if let link = run.link {
                 attributes[.foregroundColor] = linkColor
                 attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
-                attributes[.apronLink] = link
+                attributes[.chatLink] = link
             }
             attributes[.font] = font
             let segment = NSMutableAttributedString(string: String(text[run.range].characters), attributes: attributes)
@@ -2318,7 +2333,9 @@ private enum ApronAttributedText {
                 if run.link == nil {
                     detectLinks(in: segment, color: linkColor)
                 }
-                highlightMentions(in: segment, color: linkColor, underline: underlinesMentions, names: mentionNames)
+                if let mentionPattern {
+                    highlightMentions(in: segment, pattern: mentionPattern, color: linkColor, underline: underlinesMentions, names: mentionNames)
+                }
             }
             result.append(segment)
         }
@@ -2335,24 +2352,24 @@ private enum ApronAttributedText {
             segment.addAttributes([
                 .foregroundColor: color,
                 .underlineStyle: NSUnderlineStyle.single.rawValue,
-                .apronLink: url,
+                .chatLink: url,
             ], range: match.range)
         }
     }
 
     /// Mentions render in the link color, or underlined where that color isn't available, and show the user's
     /// name where it is known; code spans hold no mentions. A mention inside a link keeps its text.
-    private static func highlightMentions(in segment: NSMutableAttributedString, color: UIColor, underline: Bool, names: [String: String]) {
+    private static func highlightMentions(in segment: NSMutableAttributedString, pattern: NSRegularExpression, color: UIColor, underline: Bool, names: [String: String]) {
         let range = NSRange(location: 0, length: segment.length)
         // Back to front, so replacing a mention's text doesn't move the ones before it.
-        for match in ApronMention.pattern.matches(in: segment.string, range: range).reversed() {
+        for match in pattern.matches(in: segment.string, range: range).reversed() {
             let userId = String((segment.string as NSString).substring(with: match.range).dropFirst())
             segment.addAttribute(.foregroundColor, value: color, range: match.range)
-            segment.addAttribute(.apronMention, value: userId, range: match.range)
+            segment.addAttribute(.chatMention, value: userId, range: match.range)
             if underline {
                 segment.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: match.range)
             }
-            if let name = names[userId], segment.attribute(.apronLink, at: match.range.location, effectiveRange: nil) == nil {
+            if let name = names[userId], segment.attribute(.chatLink, at: match.range.location, effectiveRange: nil) == nil {
                 segment.replaceCharacters(in: match.range, with: "@\(name)")
             }
         }
@@ -2360,15 +2377,15 @@ private enum ApronAttributedText {
 }
 
 private extension NSAttributedString.Key {
-    /// A link's URL. Not `.link`, which `UILabel` would restyle; `ApronLinkLabel` opens it on tap.
-    static let apronLink = NSAttributedString.Key("ApronLink")
+    /// A link's URL. Not `.link`, which `UILabel` would restyle; `ChatLinkLabel` opens it on tap.
+    static let chatLink = NSAttributedString.Key("ChatLink")
     /// The `user_id` of an `@` mention, which opens their profile on tap.
-    static let apronMention = NSAttributedString.Key("ApronMention")
+    static let chatMention = NSAttributedString.Key("ChatMention")
 }
 
-/// A label whose `.apronLink` runs open on tap and whose `.apronMention` runs show the user. Taps elsewhere
+/// A label whose `.chatLink` runs open on tap and whose `.chatMention` runs show the user. Taps elsewhere
 /// pass through, so long-press menus and swipe-to-reply on the bubble still work.
-private final class ApronLinkLabel: UILabel {
+private final class ChatLinkLabel: UILabel {
     private enum Target {
         case link(URL)
         case mention(String)
@@ -2426,10 +2443,10 @@ private final class ApronLinkLabel: UILabel {
         guard glyphRect.insetBy(dx: -6, dy: -4).contains(location) else { return nil }
         let index = layoutManager.characterIndexForGlyph(at: glyph)
         // A link wins over a mention inside it, such as `https://example.com/@bob`.
-        if let url = text.attribute(.apronLink, at: index, effectiveRange: nil) as? URL {
+        if let url = text.attribute(.chatLink, at: index, effectiveRange: nil) as? URL {
             return .link(url)
         }
-        return (text.attribute(.apronMention, at: index, effectiveRange: nil) as? String).map(Target.mention)
+        return (text.attribute(.chatMention, at: index, effectiveRange: nil) as? String).map(Target.mention)
     }
 }
 
@@ -2445,7 +2462,7 @@ private extension UIView {
     }
 }
 
-private extension UIFont {
+extension UIFont {
     func withTraits(_ traits: UIFontDescriptor.SymbolicTraits) -> UIFont {
         guard let descriptor = fontDescriptor.withSymbolicTraits(fontDescriptor.symbolicTraits.union(traits)) else { return self }
         return UIFont(descriptor: descriptor, size: 0)

@@ -10,7 +10,11 @@ Sources/
     Views/
       ContentView.swift             # Root view, container wiring
       FeedView.swift                # Main list + StoriesBar + story viewer triggers
+      HomePager.swift               # UIPageViewController pager: Chats to the left of the feed
+      ChatsView.swift               # Chats list across Apron rooms and Spotify chats
       SearchView.swift              # Cross-network profile search
+      SearchBar.swift               # Shared search field modifier (Search, Chats)
+      CompactListRow.swift          # Shared row insets for the feed and Chats lists
       StoryComposerView.swift       # Full-screen story composer scaffold
       NotificationDetailView.swift  # Standard form-based notification detail
       ProfileDetailView.swift       # Actor profile detail
@@ -30,11 +34,13 @@ Sources/
       FarcasterExternalClientView.swift # Farcaster external client picker
       DebugConnectionView.swift     # Debug notifications toggle
       ApronServersView.swift        # Apron server list, add form, and server detail
-      ApronChatView.swift           # Apron chat screen: title, connection lifecycle
-      ApronChatUIKitView.swift      # Apron chat UIKit view controller: message list, floating composer, attachments
+      ChatView.swift                # Shared chat screen: title pill, connection lifecycle; NetworkChatView for Spotify
+      ChatUIKitView.swift           # Shared chat UIKit view controller: message list, floating composer, attachments
+      ChatAudioPreview.swift        # Inline audio preview player and track card for chat messages
+      ChatImageViewer.swift         # Full-screen chat image viewer: zoom, swipe to dismiss, save to Photos
+      ApronChatView.swift           # Apron chat: the shared chat plus members and profiles
       ApronMembersView.swift        # Apron room member list, opened from the chat title
       ApronProfileView.swift        # Apron user profile and shared avatar with presence dot
-      ApronImageViewer.swift        # Full-screen Apron image viewer: zoom, swipe to dismiss, save to Photos
       SettingsView.swift            # Settings with connection links
   NoFeedSocialCore/                 # Shared core (models, services, sources)
     Models/
@@ -76,7 +82,10 @@ Sources/
       StoryBarViewModel.swift
       SettingsViewModel.swift
       ApronServersViewModel.swift
+      ChatViewModel.swift            # Shared chat models (ChatMessage, ChatUser, ChatEmbed) and base view model
+      ChatListViewModel.swift        # Chats list: ChatSummary, merged from Apron and Spotify
       ApronChatViewModel.swift
+      SpotifyChatViewModel.swift     # Spotify Messages chat: history, polling, send, seen, track metadata
 ```
 
 - Keep `## Project Structure` in sync when files are added, moved, or renamed.

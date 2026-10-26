@@ -36,34 +36,59 @@ final class SpotifyMessagesParserTests: XCTestCase {
         XCTAssertThrowsError(try SpotifyMessagesParser.parseLatestChats(Data([0x0A, 0x05, 0x01])))
     }
 
-    func testSelectsRecentIncomingShowableMessages() {
-        let now = Date(timeIntervalSince1970: 1_800_000_000)
-        func chat(_ id: String, sender: String, age: TimeInterval, content: SpotifyChatMessage.Content) -> SpotifyChat {
-            SpotifyChat(id: id, isGroup: false, name: nil, members: ["me", sender], latestMessage: SpotifyChatMessage(
-                id: "\(id)-message",
-                sender: sender,
-                sentAt: now.addingTimeInterval(-age),
-                content: content,
-            ))
-        }
-        let chats = [
-            chat("share", sender: "friend", age: 60, content: .share(uri: "spotify:track:abc")),
-            chat("text", sender: "friend", age: SpotifyMessagesSource.recentWindow, content: .text("hi")),
-            chat("own", sender: "me", age: 60, content: .share(uri: "spotify:track:abc")),
-            chat("old", sender: "friend", age: SpotifyMessagesSource.recentWindow + 1, content: .share(uri: "spotify:track:abc")),
-            chat("gif", sender: "friend", age: 60, content: .other),
-            SpotifyChat(id: "empty", isGroup: false, name: nil, members: [], latestMessage: nil),
-        ]
-
-        let selected = SpotifyMessagesSource.recentIncomingMessages(in: chats, viewer: "me", now: now)
-
-        XCTAssertEqual(selected.map(\.0.id), ["share", "text"])
-    }
-
     func testBuildsOpenURLFromShareURI() {
         XCTAssertEqual(SpotifyMessagesSource.openURL(forShareURI: "spotify:track:abc?si=xyz"), URL(string: "https://open.spotify.com/track/abc"))
         XCTAssertEqual(SpotifyMessagesSource.openURL(forShareURI: "spotify:playlist:def"), URL(string: "https://open.spotify.com/playlist/def"))
         XCTAssertNil(SpotifyMessagesSource.openURL(forShareURI: "https://example.com"))
+    }
+
+    func testChatRequestsMatchProbe() {
+        // `spotify-web-client.py chat-seen exampleChatId0000000001 --dry-run`.
+        let seen = "0a211a1f121d0a176578616d706c654368617449643030303030303030303112021801"
+        XCTAssertEqual(SpotifyMessagesParser.markSeenRequest(chatId: "exampleChatId0000000001").map { String(format: "%02x", $0) }.joined(), seen)
+
+        let freeText = Proto().message(1, Proto().string(1, "hi there"))
+        let send = Proto().message(1, Proto().message(2, Proto().message(1, Proto().string(1, "chatA").message(2, freeText))))
+        XCTAssertEqual(SpotifyMessagesParser.sendTextRequest(chatId: "chatA", text: "hi there"), send.data)
+
+        let history = Proto().string(1, "chatA").varint(5, 2).string(8, "token").varint(9, 30)
+        XCTAssertEqual(SpotifyMessagesParser.chatHistoryRequest(chatId: "chatA", pageSize: 30, pageToken: "token"), history.data)
+    }
+
+    func testParsesChatHistoryWithReactionsAndPageToken() throws {
+        let hierarchy = Proto()
+            .message(1, Proto().string(1, "chatB"))
+            .message(4, Proto().varint(5, 2))
+            .message(5, Proto().string(1, "Crew").message(2, Proto().string(1, "me")).message(2, Proto().string(1, "a")))
+        let reaction = Proto()
+            .message(1, Proto().string(1, "r1"))
+            .message(6, Proto().string(1, "me").message(2, Proto().message(1, Proto().varint(1, 1_800_000_050))))
+            .message(8, Proto().message(2, Proto().message(1, Proto().string(2, "me").string(3, "🔥"))))
+        let receipt = Proto()
+            .message(1, Proto().string(1, "r2"))
+            .message(8, Proto().message(2, Proto().message(2, Proto().varint(1, 1).string(2, "b"))))
+        let node = Proto()
+            .message(1, Proto().string(1, "m1"))
+            .message(3, reaction)
+            .message(3, receipt)
+            .message(6, Proto().string(1, "a").message(2, Proto().message(1, Proto().varint(1, 1_800_000_000))))
+            .message(8, Proto().message(1, Proto().message(1, Proto().string(1, "Fire"))))
+        let response = Proto().message(1, hierarchy).message(2, node).string(3, "next")
+
+        let page = try SpotifyMessagesParser.parseChatHistory(response.data)
+
+        XCTAssertEqual(page.chat?.name, "Crew")
+        XCTAssertEqual(page.chat?.isGroup, true)
+        XCTAssertEqual(page.nextPageToken, "next")
+        XCTAssertEqual(page.messages.map(\.content), [.text("Fire")])
+        XCTAssertEqual(page.messages.first?.reactions, [SpotifyChatReaction(username: "me", emoji: "🔥", sentAt: Date(timeIntervalSince1970: 1_800_000_050))])
+    }
+
+    @MainActor
+    func testConvertsBase62IdToMetadataGid() {
+        // `spotify-web-client.py track-metadata 6cEX8cGCDhORY2dGLpd1jx` requests this gid.
+        XCTAssertEqual(SpotifyClient.gid(fromBase62: "6cEX8cGCDhORY2dGLpd1jx"), "cbd9bfa17aaf43d79654ef6d7b3c0c07")
+        XCTAssertNil(SpotifyClient.gid(fromBase62: "not-base62"))
     }
 
     private func latestNode(

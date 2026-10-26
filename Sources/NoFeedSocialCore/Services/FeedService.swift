@@ -27,6 +27,10 @@ public final class FeedService {
         self.targetDetailFetchersByNetwork = targetDetailFetchersByNetwork
         self.relationshipMutatorsByNetwork = relationshipMutatorsByNetwork
         self.cacheStore = cacheStore
+        // Apron rooms and Spotify Messages chats moved from the feed to the Chats screen; drop the feed items
+        // cached before, which would otherwise linger for the 24-hour retention.
+        try? cacheStore.deleteNetwork(.apron)
+        try? cacheStore.deleteNetwork(.spotify)
     }
 
     public func loadCachedFeed() throws -> [DisplayNotificationItem] {

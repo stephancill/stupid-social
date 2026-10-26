@@ -12,11 +12,11 @@ public final class ApronServersViewModel: ObservableObject {
     public static let exampleServer = "wss://server.apron.chat/"
 
     private let service: ApronService
-    private let cacheStore: NotificationCacheStore
+    private let chatList: ChatListViewModel
 
-    public init(service: ApronService, cacheStore: NotificationCacheStore) {
+    public init(service: ApronService, chatList: ChatListViewModel) {
         self.service = service
-        self.cacheStore = cacheStore
+        self.chatList = chatList
         reload()
     }
 
@@ -75,7 +75,7 @@ public final class ApronServersViewModel: ObservableObject {
 
     public func remove(_ server: ApronServerMetadata) {
         service.removeServer(serverURL: server.serverURL)
-        try? cacheStore.deleteAccount(network: .apron, accountId: server.serverURL.absoluteString)
+        chatList.replaceApronChats(serverURL: server.serverURL, with: [])
         reload()
         NotificationCenter.default.post(name: ApronLiveFeed.serversDidChangeNotification, object: nil)
     }

@@ -403,6 +403,7 @@ extension InstagramClient {
         }
         if http.statusCode == 401 || http.statusCode == 403 { throw SourceError.notConfigured }
         guard (200 ..< 300).contains(http.statusCode) else {
+            if instagramBodyRequiresLogin(data) { throw SourceError.notConfigured }
             throw SourceError.serviceError(instagramRequestError(statusCode: http.statusCode, data: data))
         }
         if isInstagramLoginOrChallengeHTML(data: data, response: http) {
@@ -429,6 +430,7 @@ extension InstagramClient {
             throw SourceError.notConfigured
         }
         guard (200 ..< 300).contains(http.statusCode) else {
+            if instagramBodyRequiresLogin(data) { throw SourceError.notConfigured }
             throw SourceError.serviceError(instagramRequestError(statusCode: http.statusCode, data: data))
         }
         return String(data: data, encoding: .utf8) ?? ""
@@ -642,6 +644,19 @@ func instagramResponseExpiresSession(_ response: HTTPURLResponse) -> Bool {
         if let expiresDate = cookie.expiresDate, expiresDate <= Date() { return true }
         return cookie.value.isEmpty || cookie.value == "\"\""
     }
+}
+
+/// A failed response that means the user must log in again: a session under a security checkpoint answers API
+/// calls with `checkpoint_required` JSON (HTTP 400), and some endpoints (such as `direct_v2`) with a 404 page
+/// rendered for a logged-out visitor (`<html class="… not-logged-in …">`).
+func instagramBodyRequiresLogin(_ data: Data) -> Bool {
+    if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+        return ["checkpoint_required", "challenge_required", "login_required"].contains(object["message"] as? String)
+    }
+    guard let head = String(data: data.prefix(4096), encoding: .utf8),
+          let match = head.firstMatch(of: /<html[^>]*\bclass="([^"]*)"/)
+    else { return false }
+    return match.1.split(separator: " ").contains("not-logged-in")
 }
 
 final class InstagramSessionExpiryRedirectGuard: NSObject, URLSessionTaskDelegate, Sendable {
