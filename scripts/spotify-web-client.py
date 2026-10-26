@@ -275,6 +275,66 @@ class SpotifyWebClient:
             headers=self.spclient_headers(accept_language=accept_language),
         )
 
+    def speechless_post(self, path: str, body: bytes) -> bytes:
+        """POST a protobuf request to the Spotify Messages ("speechless") service.
+
+        Only `application/x-protobuf` is accepted; `application/protobuf` returns 400.
+        """
+        url = SPCLIENT_BASE_URL + "/" + path.lstrip("/")
+
+        def headers() -> dict[str, str]:
+            return {
+                **self.spclient_headers(),
+                "Content-Type": "application/x-protobuf",
+                "Accept": "application/x-protobuf",
+            }
+
+        try:
+            return self.request_bytes("POST", url, headers(), body)
+        except SpotifyHTTPError as exc:
+            if exc.status_code not in {401, 403} or not self.sp_dc():
+                raise SystemExit(str(exc)) from exc
+            self.refresh_web_player_token(reason="transport")
+            try:
+                return self.request_bytes("POST", url, headers(), body)
+            except SpotifyHTTPError as retry_exc:
+                raise SystemExit(str(retry_exc)) from retry_exc
+
+    def chats(self, limit: int) -> dict[str, Any]:
+        request = pb_varint_field(1, SORT_ORDER_DESCENDING) + pb_varint_field(2, limit)
+        decoded = pb_decode(
+            self.speechless_post("speechless/v1/retrieve/chats-share-set/latest", request),
+            "RetrieveLatestNodeResponse",
+        )
+        entries = decoded.get("latest_node_response", [])
+        return {
+            "status": "ok",
+            "chats": [
+                summarize_speechless_chat(entry.get("hierarchy", {}), entry.get("client_node"))
+                for entry in entries
+            ],
+            "decoded": decoded,
+        }
+
+    def chat(self, chat_id: str, page_size: int, page_token: str | None) -> dict[str, Any]:
+        chat_id = chat_id.strip().removeprefix("spotify:chat:")
+        request = pb_string_field(1, chat_id) + pb_varint_field(5, SORT_ORDER_DESCENDING)
+        request += pb_varint_field(9, page_size)
+        if page_token:
+            request += pb_string_field(8, page_token)
+        decoded = pb_decode(
+            self.speechless_post("speechless/v1/retrieve/hierarchy", request),
+            "RetrieveNodeResponse",
+        )
+        return {
+            "status": "ok",
+            "chat": summarize_speechless_chat(decoded.get("hierarchy", {}), None),
+            "messages": [summarize_speechless_node(node) for node in decoded.get("client_node", [])],
+            "next_page_token": decoded.get("next_page_token"),
+            "previous_page_token": decoded.get("previous_page_token"),
+            "decoded": decoded,
+        }
+
     def profile_attributes(self) -> dict[str, Any]:
         return self.pathfinder_query("profile-attributes", variables={}, use_initial_token=False)
 
@@ -475,6 +535,21 @@ class SpotifyWebClient:
             with self.opener.open(request, timeout=30) as response:
                 charset = response.headers.get_content_charset() or "utf-8"
                 return response.read().decode(charset, errors="replace")
+        except urllib.error.HTTPError as exc:
+            body_text = exc.read().decode("utf-8", errors="replace")
+            raise SpotifyHTTPError(exc.code, method, url, body_text) from exc
+
+    def request_bytes(
+        self,
+        method: str,
+        url: str,
+        headers: dict[str, str],
+        body: bytes | None = None,
+    ) -> bytes:
+        request = urllib.request.Request(url, data=body, headers=headers, method=method)
+        try:
+            with self.opener.open(request, timeout=30) as response:
+                return response.read()
         except urllib.error.HTTPError as exc:
             body_text = exc.read().decode("utf-8", errors="replace")
             raise SpotifyHTTPError(exc.code, method, url, body_text) from exc
@@ -723,6 +798,300 @@ def summarize_spotify_pathfinder_users(response: dict[str, Any]) -> list[dict[st
     return users
 
 
+# Spotify Messages ("speechless", client codename "campfire") protobuf schema subset,
+# reconstructed from the Android app's `com.spotify.campfire.datasource.impl.proto`
+# classes. Each field is `number: (name, type, repeated)`; types are "string", "varint",
+# "bool", "enum:<Name>", or a message name. Unknown fields decode generically as "#<n>".
+SPEECHLESS_SCHEMA: dict[str, dict[int, tuple[str, str, bool]]] = {
+    "RetrieveLatestNodeResponse": {1: ("latest_node_response", "LatestNodeResponse", True)},
+    "LatestNodeResponse": {1: ("hierarchy", "Hierarchy", False), 2: ("client_node", "ClientNode", False)},
+    "RetrieveNodeResponse": {
+        1: ("hierarchy", "Hierarchy", False),
+        2: ("client_node", "ClientNode", True),
+        3: ("next_page_token", "string", False),
+        4: ("previous_page_token", "string", False),
+    },
+    "Hierarchy": {
+        1: ("hierarchy_identifier", "HierarchyIdentifier", False),
+        3: ("hierarchy_statistic", "HierarchyStatistic", False),
+        4: ("hierarchy_metadata", "HierarchyMetadata", False),
+        5: ("group", "Group", False),
+    },
+    "HierarchyIdentifier": {
+        1: ("hierarchy_id", "string", False),
+        2: ("hierarchy_class", "enum:HierarchyClass", False),
+        3: ("uri", "string", False),
+    },
+    "HierarchyStatistic": {
+        1: ("total_user_unseen_events", "varint", False),
+        2: ("all_events_seen", "bool", False),
+        3: ("total_user_unseen_activity_events", "varint", False),
+        4: ("total_user_unseen_contribution_events", "varint", False),
+        5: ("revision", "string", False),
+    },
+    "HierarchyMetadata": {
+        1: ("initiator_username", "string", False),
+        2: ("hierarchy_status", "enum:HierarchyStatus", False),
+        3: ("current_user_participation_status", "varint", False),
+        5: ("hierarchy_type", "enum:HierarchyType", False),
+        6: ("created_at", "Timestamp", False),
+        7: ("current_user_channel_muted", "bool", False),
+        8: ("agents", "HierarchyAgent", True),
+    },
+    "HierarchyAgent": {1: ("username", "string", False), 2: ("agent_uri", "string", False)},
+    "Group": {1: ("name", "string", False), 2: ("group_member", "GroupMember", True)},
+    "GroupMember": {
+        1: ("member_username", "string", False),
+        2: ("group_member_status", "varint", False),
+        3: ("user_role", "varint", False),
+        4: ("invited_by_username", "string", False),
+    },
+    "ClientNode": {
+        1: ("node_identifier", "NodeIdentifier", False),
+        2: ("hierarchy_identifier", "HierarchyIdentifier", False),
+        3: ("child_node", "ClientNode", True),
+        4: ("node_statistic", "NodeStatistic", False),
+        6: ("event_capture", "ClientEventCapture", False),
+        8: ("message_payload", "MessagePayload", False),
+    },
+    "NodeIdentifier": {
+        1: ("node_path_id", "string", False),
+        2: ("node_class", "varint", False),
+        3: ("uri", "string", False),
+    },
+    "NodeStatistic": {
+        1: ("user_seen", "bool", False),
+        2: ("total_unseen_event_count", "varint", False),
+        3: ("total_user_unseen_activity_events", "varint", False),
+        4: ("total_user_unseen_contribution_events", "varint", False),
+    },
+    "ClientEventCapture": {
+        1: ("init_username", "string", False),
+        2: ("event_capture", "EventCapture", False),
+    },
+    "EventCapture": {
+        1: ("occurred_at", "Timestamp", False),
+        2: ("event_id", "string", False),
+        3: ("event_type", "enum:EventType", False),
+    },
+    "MessagePayload": {
+        1: ("contribution_payload", "ContributionPayload", False),
+        2: ("activity_payload", "ActivityPayload", False),
+    },
+    "ContributionPayload": {
+        1: ("free_text", "FreeText", False),
+        2: ("tracked_share", "TrackedShare", False),
+        3: ("op_tracked_share", "OffplatformTrackedShare", False),
+        4: ("chat_invite", "ChatInvite", False),
+    },
+    "FreeText": {1: ("message_text", "string", False)},
+    "TrackedShare": {
+        1: ("uri", "string", False),
+        2: ("preview_id", "string", False),
+        3: ("context", "TrackedShareContext", False),
+        4: ("share_card_config_id", "string", False),
+    },
+    "OffplatformTrackedShare": {
+        1: ("uri", "string", False),
+        2: ("op_share_id", "string", False),
+        3: ("destination", "string", False),
+        4: ("sharing_user_id", "string", False),
+        5: ("opening_user_id", "string", False),
+    },
+    "TrackedShareContext": {1: ("listening_activity", "ListeningActivity", False)},
+    "ListeningActivity": {1: ("reaction", "string", False), 2: ("listening_username", "string", False)},
+    "ChatInvite": {
+        1: ("uri", "string", False),
+        2: ("share_id", "string", False),
+        3: ("destination", "string", False),
+        4: ("inviting_user_id", "string", False),
+    },
+    "ActivityPayload": {1: ("reaction", "Reaction", False), 2: ("receipt", "Receipt", False)},
+    "Reaction": {
+        1: ("reaction_emoti", "enum:ReactionEmoti", False),
+        2: ("initiator_username", "string", False),
+        3: ("emoji_utf8", "string", False),
+    },
+    "Receipt": {1: ("receipt_type", "enum:ReceiptType", False), 2: ("initiator_username", "string", False)},
+}
+
+SPEECHLESS_ENUMS: dict[str, dict[int, str]] = {
+    "HierarchyClass": {1: "channel", 2: "member", 3: "annotation", 4: "agent"},
+    "HierarchyStatus": {1: "draft", 2: "active", 3: "canceled", 4: "deleted", 5: "rejected", 6: "blocked", 7: "inactive"},
+    "HierarchyType": {1: "dm", 2: "group"},
+    "EventType": {1: "add", 2: "bulk_add", 3: "delete", 4: "modify"},
+    "ReactionEmoti": {1: "thumbs_up", 2: "heart", 3: "laugh", 7: "pleading_face", 8: "thumbs_down", 9: "fire", 10: "headphone"},
+    "ReceiptType": {1: "played", 2: "saved", 3: "seen"},
+}
+
+SORT_ORDER_DESCENDING = 2
+
+
+def pb_varint(value: int) -> bytes:
+    out = bytearray()
+    while True:
+        byte = value & 0x7F
+        value >>= 7
+        if value:
+            out.append(byte | 0x80)
+        else:
+            out.append(byte)
+            return bytes(out)
+
+
+def pb_varint_field(number: int, value: int) -> bytes:
+    return pb_varint(number << 3) + pb_varint(value)
+
+
+def pb_string_field(number: int, value: str) -> bytes:
+    data = value.encode()
+    return pb_varint(number << 3 | 2) + pb_varint(len(data)) + data
+
+
+def pb_read_varint(data: bytes, index: int) -> tuple[int, int]:
+    result = shift = 0
+    while True:
+        if index >= len(data) or shift > 63:
+            raise ValueError("truncated varint")
+        byte = data[index]
+        index += 1
+        result |= (byte & 0x7F) << shift
+        shift += 7
+        if byte < 0x80:
+            return result, index
+
+
+def pb_fields(data: bytes) -> list[tuple[int, int, Any]]:
+    """Split a protobuf message into (field number, wire type, raw value) tuples."""
+    fields: list[tuple[int, int, Any]] = []
+    index = 0
+    while index < len(data):
+        key, index = pb_read_varint(data, index)
+        number, wire_type = key >> 3, key & 7
+        if number == 0:
+            raise ValueError("field number 0")
+        if wire_type == 0:
+            value, index = pb_read_varint(data, index)
+        elif wire_type == 1:
+            value, index = data[index:index + 8], index + 8
+        elif wire_type == 2:
+            length, index = pb_read_varint(data, index)
+            if index + length > len(data):
+                raise ValueError("truncated length-delimited field")
+            value, index = data[index:index + length], index + length
+        elif wire_type == 5:
+            value, index = data[index:index + 4], index + 4
+        else:
+            raise ValueError(f"unsupported wire type {wire_type}")
+        fields.append((number, wire_type, value))
+    return fields
+
+
+def pb_decode_unknown(wire_type: int, value: Any) -> Any:
+    if wire_type == 0:
+        return value
+    if wire_type != 2:
+        return value.hex()
+    try:
+        text = value.decode()
+        if text.isprintable():
+            return text
+    except UnicodeDecodeError:
+        pass
+    try:
+        return pb_decode(value, None)
+    except ValueError:
+        return base64.b64encode(value).decode()
+
+
+def pb_decode(data: bytes, message: str | None) -> dict[str, Any]:
+    schema = SPEECHLESS_SCHEMA.get(message or "", {})
+    result: dict[str, Any] = {}
+    for number, wire_type, value in pb_fields(data):
+        kind = schema[number][1] if number in schema else ""
+        expects_varint = kind in {"varint", "bool"} or kind.startswith("enum:")
+        # Fall back to generic decoding when the wire type contradicts the reconstructed schema.
+        if number in schema and (wire_type == 0) == expects_varint:
+            name, kind, repeated = schema[number]
+            if kind == "string":
+                decoded: Any = value.decode(errors="replace")
+            elif kind == "varint":
+                decoded = value
+            elif kind == "bool":
+                decoded = bool(value)
+            elif kind.startswith("enum:"):
+                decoded = SPEECHLESS_ENUMS[kind[5:]].get(value, value)
+            elif kind == "Timestamp":
+                parts = {n: v for n, _, v in pb_fields(value)}
+                seconds = parts.get(1, 0) + parts.get(2, 0) / 1_000_000_000
+                decoded = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(seconds))
+            else:
+                decoded = pb_decode(value, kind)
+        else:
+            name, repeated = f"#{number}", False
+            decoded = pb_decode_unknown(wire_type, value)
+            if name in result:
+                existing = result[name]
+                result[name] = (existing if isinstance(existing, list) else [existing]) + [decoded]
+                continue
+        if repeated:
+            result.setdefault(name, []).append(decoded)
+        else:
+            result[name] = decoded
+    return result
+
+
+def summarize_speechless_node(node: dict[str, Any]) -> dict[str, Any]:
+    identifier = node.get("node_identifier", {})
+    capture = node.get("event_capture", {})
+    payload = node.get("message_payload", {})
+    contribution = payload.get("contribution_payload", {})
+    activity = payload.get("activity_payload", {})
+    summary: dict[str, Any] = {
+        "id": identifier.get("node_path_id"),
+        "uri": identifier.get("uri"),
+        "sender": capture.get("init_username"),
+        "sent_at": capture.get("event_capture", {}).get("occurred_at"),
+        "seen": node.get("node_statistic", {}).get("user_seen"),
+    }
+    if share := contribution.get("tracked_share"):
+        summary.update(kind="tracked_share", shared_uri=share.get("uri"))
+    elif share := contribution.get("op_tracked_share"):
+        summary.update(kind="op_tracked_share", shared_uri=share.get("uri"))
+    elif text := contribution.get("free_text"):
+        summary.update(kind="free_text", text=text.get("message_text"))
+    elif contribution:
+        summary["kind"] = next((key for key in contribution if not key.startswith("#")), "contribution")
+    elif reaction := activity.get("reaction"):
+        summary.update(kind="reaction", reaction=reaction.get("emoji_utf8") or reaction.get("reaction_emoti"))
+    elif receipt := activity.get("receipt"):
+        summary.update(kind="receipt", receipt=receipt.get("receipt_type"))
+    else:
+        summary["kind"] = "unknown"
+    if children := node.get("child_node"):
+        summary["children"] = [summarize_speechless_node(child) for child in children]
+    return summary
+
+
+def summarize_speechless_chat(hierarchy: dict[str, Any], latest_node: dict[str, Any] | None) -> dict[str, Any]:
+    identifier = hierarchy.get("hierarchy_identifier", {})
+    metadata = hierarchy.get("hierarchy_metadata", {})
+    statistic = hierarchy.get("hierarchy_statistic", {})
+    group = hierarchy.get("group", {})
+    summary: dict[str, Any] = {
+        "id": identifier.get("hierarchy_id"),
+        "uri": identifier.get("uri"),
+        "type": metadata.get("hierarchy_type"),
+        "name": group.get("name"),
+        "members": [member.get("member_username") for member in group.get("group_member", [])],
+        "unseen_events": statistic.get("total_user_unseen_events", 0),
+        "muted": metadata.get("current_user_channel_muted", False),
+    }
+    if latest_node:
+        summary["latest"] = summarize_speechless_node(latest_node)
+    return summary
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Validate Spotify WebPlayer API calls using captured app credentials.")
     parser.add_argument("--simulator", action="store_true", help="Read Spotify credentials from the booted simulator fallback store.")
@@ -768,7 +1137,14 @@ def build_parser() -> argparse.ArgumentParser:
     remove = subparsers.add_parser("remove-track", help="Remove a track from the current user's library.")
     remove.add_argument("track_id", help="Spotify track ID, URI, or open.spotify.com track URL.")
 
-    custom = subparsers.add_parser("get", help="GET a custom spclient path or absolute HTTPS URL with WebPlayer headers.")
+    chats = subparsers.add_parser("chats", help="List Spotify Messages chats with their latest message (speechless chats-share-set/latest).")
+    chats.add_argument("--limit", type=int, default=20, help="Maximum chats to return.")
+    chat = subparsers.add_parser("chat", help="Fetch messages in one Spotify Messages chat (speechless retrieve/hierarchy).")
+    chat.add_argument("chat_id", help="Chat ID or spotify:chat URI.")
+    chat.add_argument("--page-size", type=int, default=20, help="Messages per page.")
+    chat.add_argument("--page-token", help="next_page_token from a previous page.")
+
+    custom = subparsers.add_parser("get",help="GET a custom spclient path or absolute HTTPS URL with WebPlayer headers.")
     custom.add_argument("url_or_path", help="spclient path or absolute HTTPS URL.")
 
     return parser
@@ -833,6 +1209,10 @@ def main() -> None:
         result = client.save_track(args.track_id)
     elif args.command == "remove-track":
         result = client.remove_track(args.track_id)
+    elif args.command == "chats":
+        result = client.chats(args.limit)
+    elif args.command == "chat":
+        result = client.chat(args.chat_id, args.page_size, args.page_token)
     elif args.command == "get":
         result = client.custom_get(args.url_or_path)
     else:
