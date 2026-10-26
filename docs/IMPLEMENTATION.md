@@ -1485,3 +1485,16 @@
 - Version 1.0.1 (143), built from `69fe1cc3`. It adds to 142: chats moved out of the feed, the saved Chats list, rows following the open chat, keyboard dismissal on tapping messages, continuous page dots, tighter feed rows, the restored last page, and Chats row times and separators.
 - Release preflight, signed distribution archive and project-owned signature verification passed. IPA SHA-256: `fc8db6f2c41989db70b62e095c9fc0953e31998de75fe6e795d089a1d9ccd413`. Logs are in ignored `logs/testflight-143-*` and `.release/`.
 - Uploaded App Store Connect build `53fd38a7-8a1e-4bf5-af41-69a76d8e8ba8`; processing `VALID`, internal `IN_BETA_TESTING`. No What to Test note and no external submission.
+
+### 2026-10-26 — Apron "Room listing limited"
+
+- Returning to Chats after sending a message in an Apron room showed "Apron: Room listing limited". That is the reference server's `retry_after` for `room_list` (`apron-server-cloudflare`, `handleRoomList`): its free plan allows `roomListRequestsPerUserMinute: 6`, and only the first `filter: "joined"` listing after authentication is exempt. The app listed rooms on every chat open, on every live message rebuild, and on every return to the Chats list.
+- `ApronConnection` now keeps the last joined-rooms listing (`joinedRooms()`, always with `members: true`, so the chat and the Chats list share it), coalesces concurrent requests, and drops the listing when a `room_update` arrives (bumping a generation so a listing requested before it isn't kept). Rooms are therefore listed about once per connection and again after rooms or memberships change.
+- The server also caps frames per connection (60 a minute on the free plan), so a live `message` now rebuilds only its room's row (`chatSummaries(in:roomIds:)` and `ChatListViewModel.updateChats`); `room_update` and the initial connect still rebuild every room on the server.
+- Verified on the simulator by opening an Apron room and returning to Chats eight times within a minute with no error (previously the seventh listing in a minute was refused).
+
+### 2026-10-26 — Native internal TestFlight build 144
+
+- Version 1.0.1 (144). It adds to 143 the Apron room-listing fix (one shared joined-rooms listing per connection, single-room rebuilds on new messages).
+- Release preflight, signed distribution archive and project-owned signature verification passed. IPA SHA-256: `bacfdf47c23118e2648eddfc5943302c93ccc31b02008295afc9dad5052a1b11`. Logs are in ignored `logs/testflight-144-*` and `.release/`.
+- Uploaded App Store Connect build `9a9730df-2f2a-42ca-b121-cc92de7c1aed`; processing `VALID`, internal `IN_BETA_TESTING`. No What to Test note and no external submission.
