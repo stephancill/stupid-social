@@ -127,13 +127,19 @@ public final class ChatListViewModel: ObservableObject {
         setChats(updated)
     }
 
-    /// One Apron server's rooms, rebuilt by the live connection when its messages or rooms change.
+    /// One Apron server's rooms, rebuilt by the live connection when its rooms change.
     public func replaceApronChats(serverURL: URL, with summaries: [ChatSummary]) {
         let others = chats.filter { chat in
             guard case let .apron(chatServerURL, _) = chat.destination else { return true }
             return chatServerURL != serverURL
         }
         setChats(others + summaries)
+    }
+
+    /// Rows rebuilt for rooms with new messages, replacing those rooms' rows.
+    public func updateChats(_ summaries: [ChatSummary]) {
+        let ids = Set(summaries.map(\.id))
+        setChats(chats.filter { !ids.contains($0.id) } + summaries)
     }
 
     private func setChats(_ summaries: [ChatSummary]) {

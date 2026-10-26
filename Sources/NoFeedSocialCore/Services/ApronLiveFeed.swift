@@ -22,6 +22,8 @@ public final class ApronLiveFeed {
     private var loops: [URL: Task<Void, Never>] = [:]
     private var sessions: [URL: ApronSession] = [:]
     private var rebuilds: [URL: Task<Void, Never>] = [:]
+    /// Rooms with new messages since the last rebuild; `nil` rebuilds every room, as after `room_update`.
+    private var pendingRooms: [URL: Set<String>?] = [:]
 
     public init(service: ApronService, source: ApronNotificationSource, chatList: ChatListViewModel) {
         self.service = service
@@ -60,6 +62,7 @@ public final class ApronLiveFeed {
     private func disconnect(_ url: URL) {
         loops.removeValue(forKey: url)?.cancel()
         rebuilds.removeValue(forKey: url)?.cancel()
+        pendingRooms[url] = nil
         sessions[url] = nil
         // In the background the shared connection closes too; chat reopens it on demand.
         service.closeSessions(for: url)
@@ -104,7 +107,8 @@ public final class ApronLiveFeed {
         case "message":
             // Only logged messages change a room's latest message; transient notices don't (§3.5.3).
             guard let message = try? JSONDecoder().decode(ApronMessage.self, from: params), message.messageId != nil else { return }
-            scheduleRebuild(session.serverURL)
+            // Only that room changed; rebuilding just it keeps within the server's frame budget.
+            scheduleRebuild(session.serverURL, roomId: message.roomId)
         case "room_update":
             scheduleRebuild(session.serverURL)
         case "activity":
@@ -120,14 +124,22 @@ public final class ApronLiveFeed {
         }
     }
 
-    private func scheduleRebuild(_ url: URL, immediately: Bool = false) {
+    /// Without a `roomId`, rebuilds every room on the server.
+    private func scheduleRebuild(_ url: URL, roomId: String? = nil, immediately: Bool = false) {
+        let pending = pendingRooms[url] ?? Set<String>()
+        pendingRooms[url] = if let roomId, let pending { pending.union([roomId]) } else { Set<String>?.none }
         rebuilds[url]?.cancel()
         let delay = immediately ? .zero : rebuildDelay
         rebuilds[url] = Task { [weak self] in
             try? await Task.sleep(for: delay)
             guard let self, !Task.isCancelled, let session = sessions[url] else { return }
+            let roomIds = pendingRooms.removeValue(forKey: url) ?? nil
             do {
-                try await chatList.replaceApronChats(serverURL: url, with: source.chatSummaries(in: session))
+                if let roomIds {
+                    try await chatList.updateChats(source.chatSummaries(in: session, roomIds: roomIds))
+                } else {
+                    try await chatList.replaceApronChats(serverURL: url, with: source.chatSummaries(in: session))
+                }
             } catch {
                 logger.info("Apron live rebuild failed for \(url.host() ?? "server", privacy: .public): \(error.localizedDescription, privacy: .public)")
             }

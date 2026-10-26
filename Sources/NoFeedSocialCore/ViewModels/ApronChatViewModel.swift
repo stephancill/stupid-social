@@ -111,7 +111,7 @@ public final class ApronChatViewModel: ChatViewModel {
             )
 
             if session.server.has("rooms") {
-                let listing = try await session.connection.joinedRooms(members: true)
+                let listing = try await session.connection.joinedRooms()
                 for user in listing.users {
                     users[user.userId] = user
                 }

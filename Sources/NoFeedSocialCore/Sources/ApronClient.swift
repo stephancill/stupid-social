@@ -50,6 +50,14 @@ public final class ApronConnection {
         closeObservers[token] = nil
     }
 
+    /// The last joined-rooms listing, shared by everything on this connection (chat, Chats list, live
+    /// updates) and dropped when a `room_update` changes rooms or memberships. Servers rate-limit `room_list`;
+    /// the reference server allows 6 a minute per user, besides the first joined listing after sign-in.
+    var joinedRoomsListing: (rooms: [ApronRoom], users: [ApronUser])?
+    var joinedRoomsRequest: Task<(rooms: [ApronRoom], users: [ApronUser]), Error>?
+    /// Bumped by each `room_update`, so a listing requested before one isn't kept.
+    var roomsGeneration = 0
+
     private let task: URLSessionWebSocketTask
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
@@ -175,6 +183,10 @@ public final class ApronConnection {
             let waiters = serverWaiters
             serverWaiters = []
             waiters.forEach { $0.resume(returning: info) }
+        }
+        if method == "room_update" {
+            joinedRoomsListing = nil
+            roomsGeneration += 1
         }
         for observer in notificationObservers.values {
             observer(method, params)

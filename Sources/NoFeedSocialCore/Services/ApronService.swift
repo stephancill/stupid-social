@@ -202,10 +202,27 @@ public final class ApronService {
 }
 
 public extension ApronConnection {
-    /// Joined rooms, and with `members` the complete user objects of their members, which carry avatars (§4.2.1).
-    internal func joinedRooms(members: Bool = false) async throws -> (rooms: [ApronRoom], users: [ApronUser]) {
-        let result = try await request("room_list", params: ApronRoomListParams(filter: "joined", members: members), as: ApronRoomListResult.self)
-        return (result.joined ?? [], result.users ?? [])
+    /// Joined rooms with their members, and the members' complete user objects, which carry avatars (§4.2.1).
+    /// Listed once per connection and again after rooms change; concurrent callers share one request.
+    internal func joinedRooms() async throws -> (rooms: [ApronRoom], users: [ApronUser]) {
+        if let joinedRoomsListing {
+            return joinedRoomsListing
+        }
+        if let joinedRoomsRequest {
+            return try await joinedRoomsRequest.value
+        }
+        let generation = roomsGeneration
+        let listing = Task { [self] in
+            let result = try await request("room_list", params: ApronRoomListParams(filter: "joined", members: true), as: ApronRoomListResult.self)
+            return (rooms: result.joined ?? [], users: result.users ?? [])
+        }
+        joinedRoomsRequest = listing
+        defer { joinedRoomsRequest = nil }
+        let rooms = try await listing.value
+        if roomsGeneration == generation {
+            joinedRoomsListing = rooms
+        }
+        return rooms
     }
 
     /// A window of a room's log with inclusive bounds: the oldest matches with `after`, otherwise the newest (§4.3.2).
