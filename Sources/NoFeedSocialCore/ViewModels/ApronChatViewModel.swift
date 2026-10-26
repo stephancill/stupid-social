@@ -360,7 +360,9 @@ public final class ApronChatViewModel: ObservableObject {
                 firstSeen[emoji] = min(firstSeen[emoji] ?? .max, entry.logId)
             }
         }
-        let mine = Set(yourEmojis(on: messageId))
+        // Decided from every identity the user has had here, which is known before sign-in, so cached
+        // reactions are highlighted from the first frame instead of once the connection is up.
+        let mine = Set((reactionEntries[messageId] ?? [:]).filter { isOwnUserId($0.key) }.flatMap(\.value.emojis))
         let totals = counts
             .map { ApronReactionCount(emoji: $0.key, count: $0.value, includesYou: mine.contains($0.key)) }
             .sorted { ($0.count, -(firstSeen[$0.emoji] ?? 0)) > ($1.count, -(firstSeen[$1.emoji] ?? 0)) }
@@ -637,7 +639,11 @@ public final class ApronChatViewModel: ObservableObject {
     /// Whether the user sent this message, from any identity they have had on the server. Known before the
     /// connection signs in, so cached messages render on the right side from the first frame.
     public func isOwn(_ message: ApronMessage) -> Bool {
-        message.from.userId == you?.userId || ownUserIds.contains(message.from.userId)
+        isOwnUserId(message.from.userId)
+    }
+
+    private func isOwnUserId(_ userId: String) -> Bool {
+        userId == you?.userId || ownUserIds.contains(userId)
     }
 
     private func countsAsUnread(_ message: ApronMessage, after cursor: Int64) -> Bool {
