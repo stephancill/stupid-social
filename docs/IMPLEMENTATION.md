@@ -1337,3 +1337,9 @@
 ### 2026-10-26 — Apron own reactions highlighted from the cache
 
 - On a cold load, chips with your reactions first rendered neutral and turned blue once the connection signed in. "Includes you" came from `yourEmojis`, which needs `you`. Logging reaction updates on a cold open showed the cached reactions applied before the first render, plus three updates after it, two of them on visible messages, which were exactly the chips with your reaction. `includesYou` is now decided from every identity the user has had on the server (`ApronReadStore.ownUserIds`, plus `you`), the rule `isOwn` already uses for messages, so it is known from the first frame. Toggling still sends the set of the current identity. Afterwards only one update arrived after the first render, on an off-screen message whose reactions weren't cached. A room's first open after upgrading from a build before 138 has no cached reactions, and neither does a room that has only been opened on an older window (the cache only saves the newest messages), so those can still fill in once.
+
+### 2026-10-26 — Native internal TestFlight build 139
+
+- Prepared version 1.0.1 (139) with `stupid-app release bump` (138 → 139). It adds two fixes to 138: drags that start on Apron message text scroll again, and your own reactions are highlighted before sign-in.
+- Release preflight, signed distribution archive and project-owned signature verification passed. IPA SHA-256: `7f9ea0318cfac7d88e32e70a0e540ad88219b1cfa2bfd3df4e0fc5a05d4b697d`. Release evidence is in ignored `logs/testflight-139-*` and `.release/`.
+- Uploaded App Store Connect build `2aa204a0-1ebf-4d5e-b32b-4e1d9e786170`; processing `VALID`, internal `IN_BETA_TESTING`. No What to Test note and no external submission.
