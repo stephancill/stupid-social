@@ -10,6 +10,9 @@ public final class ApronMessageCache {
         public let users: [ApronUser]
         /// Reactions on the cached messages, so they render with the first frame. Optional for caches written before.
         public let reactions: [ApronReactionRecord]?
+        /// The server's `ext.media` origins, so cached image embeds render as images before the connection is
+        /// up instead of growing from cards once it is. Optional for caches written before.
+        public let mediaOrigins: [URL]?
     }
 
     public static let messageLimit = 50
@@ -24,8 +27,8 @@ public final class ApronMessageCache {
         return try? JSONDecoder().decode(Entry.self, from: data)
     }
 
-    public func save(messages: [ApronMessage], users: [ApronUser], reactions: [ApronReactionRecord], serverURL: URL, roomId: String) {
-        let entry = Entry(messages: Array(messages.suffix(Self.messageLimit)), users: users, reactions: reactions)
+    public func save(messages: [ApronMessage], users: [ApronUser], reactions: [ApronReactionRecord], mediaOrigins: [URL], serverURL: URL, roomId: String) {
+        let entry = Entry(messages: Array(messages.suffix(Self.messageLimit)), users: users, reactions: reactions, mediaOrigins: mediaOrigins)
         guard let data = try? JSONEncoder().encode(entry) else { return }
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try? data.write(to: fileURL(serverURL: serverURL, roomId: roomId), options: .atomic)

@@ -52,6 +52,7 @@ public struct ContentView: View {
                     viewModel: container.chatListViewModel,
                     apronService: container.apronService,
                     spotifyChat: { container.spotifyChatFactory(chatId: $0, title: $1) },
+                    instagramChat: { container.instagramChatFactory(threadFbid: $0, title: $1) },
                     isShowingChat: $isShowingChat,
                 )
             },

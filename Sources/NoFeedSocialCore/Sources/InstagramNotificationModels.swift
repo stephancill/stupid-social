@@ -73,12 +73,6 @@ struct InstagramMediaThumbnail: Decodable {
     let image: String
 }
 
-struct InstagramDirectInboxResponse: Decodable {
-    let inbox: InstagramDirectInbox
-    let viewer: InstagramDirectViewer?
-    let status: String?
-}
-
 struct InstagramDirectViewer: Decodable {
     let pk: String
     let username: String
@@ -103,146 +97,6 @@ struct InstagramDirectViewer: Decodable {
         username = try container.decode(String.self, forKey: .username)
         fullName = try container.decodeIfPresent(String.self, forKey: .fullName)
         profilePicUrl = try container.decodeIfPresent(String.self, forKey: .profilePicUrl)
-    }
-}
-
-struct InstagramDirectInbox: Decodable {
-    let threads: [InstagramDirectThread]
-    let unseenCount: Int?
-
-    enum CodingKeys: String, CodingKey {
-        case threads
-        case unseenCount = "unseen_count"
-    }
-}
-
-struct InstagramDirectThread: Decodable {
-    let threadId: String
-    let threadV2Id: String?
-    let threadTitle: String?
-    let users: [InstagramDirectUser]
-    let lastActivityAt: Int64?
-    let markedAsUnread: Bool?
-    let viewerId: String?
-    let lastSeenAt: [String: InstagramDirectSeen]?
-    let lastPermanentItem: InstagramDirectItem?
-
-    enum CodingKeys: String, CodingKey {
-        case threadId = "thread_id"
-        case threadV2Id = "thread_v2_id"
-        case threadTitle = "thread_title"
-        case users
-        case lastActivityAt = "last_activity_at"
-        case markedAsUnread = "marked_as_unread"
-        case viewerId = "viewer_id"
-        case lastSeenAt = "last_seen_at"
-        case lastPermanentItem = "last_permanent_item"
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        threadId = try container.decodeFlexibleString(forKey: .threadId)
-        threadV2Id = try container.decodeFlexibleStringIfPresent(forKey: .threadV2Id)
-        threadTitle = try container.decodeIfPresent(String.self, forKey: .threadTitle)
-        users = try container.decodeIfPresent([InstagramDirectUser].self, forKey: .users) ?? []
-        lastActivityAt = try container.decodeFlexibleInt64IfPresent(forKey: .lastActivityAt)
-        markedAsUnread = try container.decodeIfPresent(Bool.self, forKey: .markedAsUnread)
-        viewerId = try container.decodeFlexibleStringIfPresent(forKey: .viewerId)
-        lastSeenAt = try container.decodeIfPresent([String: InstagramDirectSeen].self, forKey: .lastSeenAt)
-        lastPermanentItem = try container.decodeIfPresent(InstagramDirectItem.self, forKey: .lastPermanentItem)
-    }
-}
-
-struct InstagramDirectUser: Decodable {
-    let pk: String
-    let username: String?
-    let fullName: String?
-    let profilePicURL: String?
-
-    enum CodingKeys: String, CodingKey {
-        case pk
-        case username
-        case fullName = "full_name"
-        case profilePicURL = "profile_pic_url"
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        pk = try container.decodeFlexibleString(forKey: .pk)
-        username = try container.decodeIfPresent(String.self, forKey: .username)
-        fullName = try container.decodeIfPresent(String.self, forKey: .fullName)
-        profilePicURL = try container.decodeIfPresent(String.self, forKey: .profilePicURL)
-    }
-}
-
-struct InstagramDirectSeen: Decodable {
-    let timestamp: Int64?
-
-    enum CodingKeys: String, CodingKey {
-        case timestamp
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        timestamp = try container.decodeFlexibleInt64IfPresent(forKey: .timestamp)
-    }
-}
-
-struct InstagramDirectItem: Decodable {
-    let itemId: String
-    let userId: String?
-    let timestamp: Int64?
-    let itemType: String?
-    let text: String?
-    let auxiliaryText: String?
-    let xmaReelShare: [InstagramDirectXMA]?
-    let xmaReelMention: [InstagramDirectXMA]?
-    let xmaClip: [InstagramDirectXMA]?
-    let xmaMediaShare: [InstagramDirectXMA]?
-
-    enum CodingKeys: String, CodingKey {
-        case itemId = "item_id"
-        case userId = "user_id"
-        case timestamp
-        case itemType = "item_type"
-        case text
-        case auxiliaryText = "auxiliary_text"
-        case xmaReelShare = "xma_reel_share"
-        case xmaReelMention = "xma_reel_mention"
-        case xmaClip = "xma_clip"
-        case xmaMediaShare = "xma_media_share"
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        itemId = try container.decodeFlexibleString(forKey: .itemId)
-        userId = try container.decodeFlexibleStringIfPresent(forKey: .userId)
-        timestamp = try container.decodeFlexibleInt64IfPresent(forKey: .timestamp)
-        itemType = try container.decodeIfPresent(String.self, forKey: .itemType)
-        text = try container.decodeIfPresent(String.self, forKey: .text)
-        auxiliaryText = try container.decodeIfPresent(String.self, forKey: .auxiliaryText)
-        xmaReelShare = try container.decodeIfPresent([InstagramDirectXMA].self, forKey: .xmaReelShare)
-        xmaReelMention = try container.decodeIfPresent([InstagramDirectXMA].self, forKey: .xmaReelMention)
-        xmaClip = try container.decodeIfPresent([InstagramDirectXMA].self, forKey: .xmaClip)
-        xmaMediaShare = try container.decodeIfPresent([InstagramDirectXMA].self, forKey: .xmaMediaShare)
-    }
-}
-
-struct InstagramDirectXMA: Decodable {
-    let previewURL: String?
-    let targetURL: String?
-    let titleText: String?
-    let subtitleText: String?
-    let headerTitleText: String?
-    let captionBodyText: String?
-
-    enum CodingKeys: String, CodingKey {
-        case previewURL = "preview_url"
-        case targetURL = "target_url"
-        case titleText = "title_text"
-        case subtitleText = "subtitle_text"
-        case headerTitleText = "header_title_text"
-        case captionBodyText = "caption_body_text"
     }
 }
 
@@ -283,11 +137,5 @@ extension KeyedDecodingContainer {
         if let int = try? decode(Int64.self, forKey: key) { return int }
         if let string = try? decode(String.self, forKey: key) { return Int64(string) }
         return nil
-    }
-}
-
-extension InstagramDirectItem {
-    var isMediaShare: Bool {
-        itemType == "xma_clip" || itemType == "xma_media_share"
     }
 }

@@ -50,6 +50,9 @@ public final class InstagramClient {
     let webSessionID = InstagramClient.randomBase36(length: 6)
     var wwwClaim: String?
     var inFlightBootstrap: Task<InstagramWebState, Error>?
+    /// The MQTT web device id the Direct inbox query is scoped to.
+    var directDeviceID: String?
+    var directPageLoads: [String: Task<Void, Error>] = [:]
 
     public init(credentialStore: KeychainCredentialStore, session: URLSession = defaultSession) {
         self.credentialStore = credentialStore
@@ -143,17 +146,7 @@ public final class InstagramClient {
     }
 
     private func directMessages(credentials: InstagramCredentials, includeMediaShares: Bool) async throws -> [NotificationItem] {
-        var components = URLComponents(string: "\(Self.baseURL)/api/v1/direct_v2/inbox/")!
-        components.queryItems = [
-            URLQueryItem(name: "visual_message_return_type", value: "unseen"),
-            URLQueryItem(name: "thread_message_limit", value: "10"),
-            URLQueryItem(name: "persistentBadging", value: "true"),
-            URLQueryItem(name: "limit", value: "20"),
-        ]
-
-        let data = try await webJSONRequest(credentials: credentials, method: "GET", url: components.url!)
-        let decoded = try JSONDecoder().decode(InstagramDirectInboxResponse.self, from: data)
-        return InstagramDirectMessageParser.parse(response: decoded, accountId: credentials.dsUserId, includeMediaShares: includeMediaShares)
+        try await InstagramDirectMessageParser.parse(threads: directInbox(), accountId: credentials.dsUserId, includeMediaShares: includeMediaShares)
     }
 
     func reelsTray() async throws -> [InstagramTrayItem] {

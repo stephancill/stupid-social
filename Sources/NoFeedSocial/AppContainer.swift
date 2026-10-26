@@ -18,6 +18,7 @@ final class AppContainer {
     private let keychainStore: KeychainCredentialStore
     private let farcasterClient: FarcasterClient
     private let cacheStore: NotificationCacheStore
+    private let instagramClient: InstagramClient
     private let instagramSource: InstagramNotificationSource
     private let spotifyActivitySource: SpotifyActivitySource
     private let githubActivitySource: GitHubActivitySource
@@ -35,8 +36,9 @@ final class AppContainer {
         farcasterClient = FarcasterClient()
         cacheStore = NotificationCacheStore(context: modelContext)
 
+        instagramClient = InstagramClient(credentialStore: keychainStore)
         instagramSource = InstagramNotificationSource(
-            client: InstagramClient(credentialStore: keychainStore),
+            client: instagramClient,
             metadataStore: metadataStore,
         )
 
@@ -150,7 +152,7 @@ final class AppContainer {
             cacheStore: cacheStore,
         )
 
-        chatListViewModel = ChatListViewModel(apronSource: apronSource, spotifySource: spotifyMessagesSource)
+        chatListViewModel = ChatListViewModel(apronSource: apronSource, spotifySource: spotifyMessagesSource, instagramClient: instagramClient)
         apronServersViewModel = ApronServersViewModel(service: apronService, chatList: chatListViewModel)
         apronLiveFeed = ApronLiveFeed(service: apronService, source: apronSource, chatList: chatListViewModel)
 
@@ -164,6 +166,13 @@ final class AppContainer {
         guard let viewer = metadataStore.spotifyAccount?.username else { return nil }
         let client = spotifyClient
         return { SpotifyChatViewModel(client: client, chatId: chatId, title: title, viewerUsername: viewer) }
+    }
+
+    /// `nil` when Instagram isn't connected.
+    func instagramChatFactory(threadFbid: String, title: String) -> (() -> ChatViewModel)? {
+        guard (try? keychainStore.loadInstagramCredentials()) != nil else { return nil }
+        let client = instagramClient
+        return { InstagramChatViewModel(client: client, threadFbid: threadFbid, title: title) }
     }
 
     func loadDemoData() {

@@ -828,7 +828,7 @@ struct SpotifyProfileEntry: Decodable {
     let uri: String
 }
 
-struct SpotifyTrackMetadata: Equatable {
+struct SpotifyTrackMetadata: Equatable, Codable {
     let name: String?
     let artists: [String]
     let album: String?
@@ -878,7 +878,7 @@ struct SpotifyTrackMetadataJSON: Decodable {
     let duration: Int?
 }
 
-struct SpotifyShareMetadata: Decodable {
+struct SpotifyShareMetadata: Codable {
     let title: String?
     let thumbnailURL: String?
 

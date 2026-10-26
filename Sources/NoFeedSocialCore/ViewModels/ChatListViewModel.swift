@@ -6,6 +6,8 @@ public struct ChatSummary: Identifiable, Hashable, Codable, Sendable {
         case apron(serverURL: URL, roomId: String)
         /// The base62 id from `spotify:chat:<id>`.
         case spotify(chatId: String)
+        /// The id in `/direct/t/<thread_fbid>/`.
+        case instagram(threadFbid: String)
     }
 
     public let id: String
@@ -47,7 +49,7 @@ public struct ChatSummary: Identifiable, Hashable, Codable, Sendable {
     }
 }
 
-/// Every chat across Apron servers and Spotify Messages, newest first.
+/// Every chat across Apron servers, Spotify Messages and Instagram Direct, newest first.
 @MainActor
 public final class ChatListViewModel: ObservableObject {
     @Published public private(set) var chats: [ChatSummary] = []
@@ -58,12 +60,14 @@ public final class ChatListViewModel: ObservableObject {
 
     private let apronSource: ApronNotificationSource
     private let spotifySource: SpotifyMessagesSource
+    private let instagramClient: InstagramClient
     /// The last loaded list, shown at launch while it refreshes, so only the very first load waits.
     private let cacheURL: URL
 
-    public init(apronSource: ApronNotificationSource, spotifySource: SpotifyMessagesSource, fileManager: FileManager = .default) {
+    public init(apronSource: ApronNotificationSource, spotifySource: SpotifyMessagesSource, instagramClient: InstagramClient, fileManager: FileManager = .default) {
         self.apronSource = apronSource
         self.spotifySource = spotifySource
+        self.instagramClient = instagramClient
         cacheURL = fileManager.urls(for: .cachesDirectory, in: .userDomainMask)[0].appending(path: "chat-list.json")
         if let data = try? Data(contentsOf: cacheURL), let cached = try? JSONDecoder().decode([ChatSummary].self, from: data) {
             chats = cached
@@ -71,14 +75,15 @@ public final class ChatListViewModel: ObservableObject {
         }
     }
 
-    /// Reloads both networks; each keeps its previous chats when it fails.
+    /// Reloads every network; each keeps its previous chats when it fails.
     public func load() async {
         guard !isLoading else { return }
         isLoading = true
         defer { isLoading = false }
         async let apron = Self.result { try await self.apronSource.chatSummaries() }
         async let spotify = Self.result { try await self.spotifySource.chatSummaries() }
-        let results: [(SocialNetwork, Result<[ChatSummary], Error>)] = await [(.apron, apron), (.spotify, spotify)]
+        async let instagram = Self.result { try await self.instagramClient.directChatSummaries() }
+        let results: [(SocialNetwork, Result<[ChatSummary], Error>)] = await [(.apron, apron), (.spotify, spotify), (.instagram, instagram)]
 
         var merged: [ChatSummary] = []
         var failures: [String] = []

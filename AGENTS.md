@@ -11,7 +11,7 @@ Sources/
       ContentView.swift             # Root view, container wiring
       FeedView.swift                # Main list + StoriesBar + story viewer triggers
       HomePager.swift               # UIPageViewController pager: Chats to the left of the feed
-      ChatsView.swift               # Chats list across Apron rooms and Spotify chats
+      ChatsView.swift               # Chats list across Apron rooms, Spotify chats and Instagram threads
       SearchView.swift              # Cross-network profile search
       SearchBar.swift               # Shared search field modifier (Search, Chats)
       CompactListRow.swift          # Shared row insets for the feed and Chats lists
@@ -55,6 +55,7 @@ Sources/
       InstagramClient.swift / InstagramSession.swift / Instagram*Models.swift / Instagram*Parser.swift / InstagramNotificationSource.swift
       InstagramProfile.swift       # Current web profile/posts queries and runtime configuration
       InstagramHomepage.swift      # Authenticated viewer and preloaded stories tray parsing
+      InstagramDirect.swift        # Direct inbox/thread/send/read via web GraphQL, Chats list rows
       GitHubClient.swift
       GitHubActivitySource.swift
       GitHubNotificationSource.swift
@@ -76,6 +77,7 @@ Sources/
       ApronReadStore.swift            # Apron read cursors (server truth or iCloud KVS)
       ApronMessageCache.swift         # Recent Apron messages per room for instant chat open
       ApronDraftStore.swift           # Unsent Apron composer text per room
+      ChatSnapshotCache.swift         # Last messages and metadata per Spotify/Instagram chat for instant open
     ViewModels/
       FeedViewModel.swift
       ProfileSearchViewModel.swift
@@ -86,6 +88,7 @@ Sources/
       ChatListViewModel.swift        # Chats list: ChatSummary, merged from Apron and Spotify
       ApronChatViewModel.swift
       SpotifyChatViewModel.swift     # Spotify Messages chat: history, polling, send, seen, track metadata
+      InstagramChatViewModel.swift   # Instagram Direct chat: history, polling, send, replies, read receipt
 ```
 
 - Keep `## Project Structure` in sync when files are added, moved, or renamed.

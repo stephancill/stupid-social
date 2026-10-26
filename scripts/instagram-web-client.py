@@ -126,6 +126,7 @@ class InstagramWebClient:
         self.state: WebState | None = None
         self.doc_ids: dict[str, str] = {}
         self.cached_csrf_token: str | None = None
+        self.direct_device_id: str | None = None
         self._seed_cookies(credentials)
         self._load_cache()
 
@@ -311,57 +312,167 @@ class InstagramWebClient:
         except InstagramHTTPError as exc:
             return {"status": "fail", "http_status": exc.status_code, "body": exc.body[:300]}
 
-    def rest_direct_thread(self, thread_id: str, cursor: str | None = None, limit: int = 20) -> dict[str, Any]:
-        """One Direct thread's items, newest first. `cursor` is the response's `thread.oldest_cursor`."""
-        self._ensure_bootstrapped()
-        query: dict[str, str] = {"visual_message_return_type": "unseen", "direction": "older", "limit": str(limit)}
-        if cursor:
-            query["cursor"] = cursor
-        url = BASE_URL + f"/api/v1/direct_v2/threads/{urllib.parse.quote(thread_id)}/?" + urllib.parse.urlencode(query)
-        return self.request_json_with_refresh("GET", url, headers=self.web_headers())
+    # Direct moved off `direct_v2` REST for accounts on the new web inbox ("IGD Off-Msys"): `direct_v2/inbox/`
+    # answers 404 with a logged-out page while the GraphQL operations below work. Their doc IDs are only in the
+    # scripts of a real thread page (`/direct/t/<thread_fbid>/`); the inbox page carries the inbox and thread
+    # detail queries only. Both pages carry the MQTT web device id the inbox query needs.
+    DIRECT_PROVIDED_VARIABLES = {
+        "__relay_internal__pv__IGDIsProfessionalAccountGKrelayprovider": False,
+        "__relay_internal__pv__IGDPinnedThreadsRenderEnabledGKrelayprovider": True,
+        "__relay_internal__pv__IGDMaxUnreadMessagesCountrelayprovider": 5,
+        "__relay_internal__pv__IGDThreadListActionsEnabledGKrelayprovider": True,
+        "__relay_internal__pv__IGDEnableOffMsysChatThemesQErelayprovider": False,
+        "__relay_internal__pv__IGDInitialMessagePageCountrelayprovider": 20,
+    }
 
-    def rest_direct_seen(self, thread_id: str, item_id: str) -> dict[str, Any]:
-        """Marks a Direct thread seen up to `item_id` (fails unless Instagram answers `status: ok`)."""
+    def direct_page(self, path: str) -> str:
+        """Loads a Direct page, records its scripts' doc IDs, and returns the MQTT web device id."""
         self._ensure_bootstrapped()
-        result = self.request_json_with_refresh(
-            "POST",
-            BASE_URL + f"/api/v1/direct_v2/threads/{urllib.parse.quote(thread_id)}/items/{urllib.parse.quote(item_id)}/seen/",
-            headers={**self.web_headers(), "Content-Type": "application/x-www-form-urlencoded"},
-            body=urllib.parse.urlencode(self._direct_form({})).encode(),
+        html = self.request_text("GET", BASE_URL + path, headers=self._base_page_headers())
+        doc_ids = parse_doc_ids(html)
+        for script_url in script_urls(html):
+            try:
+                doc_ids.update(parse_doc_ids(self.request_text("GET", script_url, headers=self._base_asset_headers())))
+            except InstagramHTTPError:
+                continue
+        self.doc_ids.update(doc_ids)
+        self._save_cache()
+        match = re.search(r'"IGDMqttWebDeviceID",\[\],\{"clientId":"([^"]+)"', html)
+        if not match:
+            raise SystemExit(f"{path} did not include IGDMqttWebDeviceID")
+        self.direct_device_id = match.group(1)
+        return match.group(1)
+
+    def direct_doc_id(self, operation: str, page_path: str) -> str:
+        if operation not in self.doc_ids:
+            self.direct_page(page_path)
+        if doc_id := self.doc_ids.get(operation):
+            return doc_id
+        raise SystemExit(f"Could not discover doc ID for {operation} from {page_path}")
+
+    def direct_graphql(self, operation: str, page_path: str, root_field: str, variables: dict[str, Any]) -> dict[str, Any]:
+        doc_id = self.direct_doc_id(operation, page_path)
+        result = self.graphql_post(doc_id, variables, friendly_name=operation, root_field_name=root_field)
+        if result.get("errors"):
+            raise SystemExit(f"{operation} failed: {json.dumps(result['errors'])[:800]}")
+        return result
+
+    def direct_inbox(self, pages: int = 1) -> dict[str, Any]:
+        """The primary inbox's newest threads (15 on the first page, then 20 per extra page), with each
+        thread's latest message and read receipts."""
+        device_id = self.direct_device_id or self.direct_page("/direct/inbox/")
+        variables = {"device_id_for_iris_subscription": device_id, **self.DIRECT_PROVIDED_VARIABLES}
+        result = self.direct_graphql("PolarisDirectInboxMobileQuery", "/direct/inbox/", "get_slide_mailbox_for_iris_subscription", variables)
+        mailbox = result["data"]["get_slide_mailbox_for_iris_subscription"]
+        if mailbox is None:
+            raise SystemExit("Direct inbox returned no mailbox (wrong device id?)")
+        connection = mailbox["threads_by_folder"]
+        for _ in range(pages - 1):
+            if not connection["page_info"]["has_next_page"]:
+                break
+            page = self.direct_graphql(
+                "IGDThreadListOffMsysPaginationQuery",
+                "/direct/inbox/",
+                "fetch__SlideMailbox",
+                {
+                    "id": mailbox["id"],
+                    "count": 20,
+                    "cursor": connection["page_info"]["end_cursor"],
+                    "folder": "INBOX",
+                    "newer_than_timestamp_ms": None,
+                    **self.DIRECT_PROVIDED_VARIABLES,
+                },
+            )["data"]["fetch__SlideMailbox"]["threads_by_folder"]
+            connection = {"edges": connection["edges"] + page["edges"], "page_info": page["page_info"]}
+        mailbox["threads_by_folder"] = connection
+        return result
+
+    def direct_thread(self, thread_fbid: str, cursor: str | None = None) -> dict[str, Any]:
+        """One thread with its newest 20 messages (newest first), or the 20 before `cursor`, which is
+        `slide_messages.page_info.end_cursor` of the previous page."""
+        page_path = f"/direct/t/{urllib.parse.quote(thread_fbid)}/"
+        if cursor is None:
+            return self.direct_graphql(
+                "IGDThreadDetailQuery",
+                page_path,
+                "get_slide_thread_nullable",
+                {"thread_fbid": thread_fbid, "min_uq_seq_id": None, **self.DIRECT_PROVIDED_VARIABLES},
+            )
+        return self.direct_graphql(
+            "IGDMessageListOffMsysQuery",
+            page_path,
+            "fetch__SlideThread",
+            {
+                "id": thread_fbid,
+                "after": cursor,
+                "before": None,
+                "first": 20,
+                "last": None,
+                "newer_than_message_id": None,
+                "older_than_message_id": None,
+                **self.DIRECT_PROVIDED_VARIABLES,
+            },
         )
-        if result.get("status") != "ok":
+
+    def direct_seen(self, thread_fbid: str, message_id: str) -> dict[str, Any]:
+        """Marks the viewer's read receipt at `message_id`. The mutation takes the legacy `thread_id`
+        (`340282366841710...`), so the thread is loaded first to find it."""
+        thread = self.direct_thread(thread_fbid)["data"]["get_slide_thread_nullable"]["as_ig_direct_thread"]
+        result = self.direct_graphql(
+            "useIGDMarkThreadAsReadMutation",
+            f"/direct/t/{urllib.parse.quote(thread_fbid)}/",
+            "xig_direct_item_seen_mutation_with_slide_messaging_response",
+            {"data": {"item_id": "", "message_id": message_id}, "metadata": {"ig_thread_igid": thread["thread_id"]}},
+        )
+        if not (result.get("data") or {}).get("xig_direct_item_seen_mutation_with_slide_messaging_response"):
             raise SystemExit(f"direct seen was not applied: {json.dumps(result)[:500]}")
         return result
 
-    def rest_direct_send_text(self, thread_id: str, text: str, replied_to_item_id: str | None = None) -> dict[str, Any]:
-        """Sends a text item to an existing Direct thread through `broadcast/text/`."""
-        self._ensure_bootstrapped()
-        fields = {
-            "action": "send_item",
-            "thread_ids": json.dumps([thread_id]),
-            "text": text,
-            "client_context": str(uuid.uuid4()),
-            "mutation_token": str(uuid.uuid4()),
-            "offline_threading_id": str(random.getrandbits(62)),
-        }
-        if replied_to_item_id:
-            fields["replied_to_item_id"] = replied_to_item_id
-            fields["replied_to_client_context"] = ""
-        result = self.request_json_with_refresh(
-            "POST",
-            BASE_URL + "/api/v1/direct_v2/threads/broadcast/text/",
-            headers={**self.web_headers(), "Content-Type": "application/x-www-form-urlencoded"},
-            body=urllib.parse.urlencode(self._direct_form(fields)).encode(),
+    def direct_react(self, thread_fbid: str, message_id: str, emoji: str, remove: bool = False) -> dict[str, Any]:
+        """Sets (or with `remove`, deletes) the viewer's reaction on a message. Instagram keeps one reaction per
+        person per message, so a new emoji replaces the previous one. Notifies the message's sender."""
+        result = self.direct_graphql(
+            "IGDirectReactionSendMutation",
+            f"/direct/t/{urllib.parse.quote(thread_fbid)}/",
+            "xig_direct_reaction_send_with_slide_messaging_response",
+            {
+                "input": {
+                    "emoji": emoji,
+                    "item_id": "",
+                    "message_id": message_id,
+                    "reaction_status": "deleted" if remove else "created",
+                    "thread_id": thread_fbid,
+                }
+            },
         )
-        if result.get("status") != "ok":
-            raise SystemExit(f"direct send was not applied: {json.dumps(result)[:500]}")
+        if not (result.get("data") or {}).get("xig_direct_reaction_send_with_slide_messaging_response"):
+            raise SystemExit(f"direct reaction was not applied: {json.dumps(result)[:500]}")
         return result
 
-    def _direct_form(self, fields: dict[str, str]) -> dict[str, str]:
-        state = self._state()
-        if state.csrf_token:
-            fields = {**fields, "_csrftoken": state.csrf_token, "jazoest": jazoest(state.csrf_token)}
-        return fields
+    def direct_send_text(self, thread_fbid: str, text: str, reply_to_message_id: str | None = None) -> dict[str, Any]:
+        """Sends a text message to an existing thread. Sends a real DM."""
+        result = self.direct_graphql(
+            "IGDirectTextSendMutation",
+            f"/direct/t/{urllib.parse.quote(thread_fbid)}/",
+            "xig_direct_text_send_with_slide_messaging_response",
+            {
+                "commands": None,
+                "forwarded_from_thread_id": None,
+                "ig_thread_igid": thread_fbid,
+                "is_forwarded_from_own_message": None,
+                "mentioned_user_ids": None,
+                "mentions": None,
+                "offline_threading_id": offline_threading_id(),
+                "recipient_igids": None,
+                "replied_to_item_id": None,
+                "reply_to_message_id": reply_to_message_id,
+                "send_attribution": None,
+                "text": {"sensitive_string_value": text},
+            },
+        )
+        if not (result.get("data") or {}).get("xig_direct_text_send_with_slide_messaging_response"):
+            raise SystemExit(f"direct send was not applied: {json.dumps(result)[:500]}")
+        return result
 
     def rest_stories_tray(self) -> dict[str, Any]:
         self._ensure_bootstrapped()
@@ -805,6 +916,11 @@ def parse_web_state(html: str) -> WebState:
     return state
 
 
+def offline_threading_id() -> str:
+    """Messenger's client message id: milliseconds since the epoch shifted left 22 bits, plus 22 random bits."""
+    return str((int(time.time() * 1000) << 22) | random.getrandbits(22))
+
+
 def parse_doc_ids(source: str) -> dict[str, str]:
     return {name: doc_id for name, doc_id in OPERATION_RE.findall(source)}
 
@@ -1091,20 +1207,24 @@ def build_parser() -> argparse.ArgumentParser:
     story_page.add_argument("username", help="Instagram username with an active story.")
     subparsers.add_parser("current-user", help="Resolve signed-in username and avatar from Direct inbox viewer, without a profile lookup.")
     subparsers.add_parser("news-inbox", help="Call web-visible REST /api/v1/news/inbox/.")
-    subparsers.add_parser("direct-inbox", help="Call web-visible REST /api/v1/direct_v2/inbox/.")
+    direct_inbox = subparsers.add_parser("direct-inbox", help="Primary Direct inbox threads (GraphQL PolarisDirectInboxMobileQuery).")
+    direct_inbox.add_argument("--pages", type=int, default=1, help="Extra pages add 20 threads each.")
     subparsers.add_parser("session-check", help="Check the session can call the API (detects checkpoints the homepage hides).")
-    direct_thread = subparsers.add_parser("direct-thread", help="Fetch one Direct thread's items (REST /api/v1/direct_v2/threads/<id>/).")
-    direct_thread.add_argument("thread_id")
-    direct_thread.add_argument("--cursor", help="Page older items from a previous response's thread.oldest_cursor.")
-    direct_thread.add_argument("--limit", type=int, default=20)
-    direct_seen = subparsers.add_parser("direct-seen", help="Mark a Direct thread seen up to an item (POST .../items/<item_id>/seen/).")
-    direct_seen.add_argument("thread_id")
-    direct_seen.add_argument("item_id")
-    direct_send = subparsers.add_parser("direct-send-text", help="Send a text message to a Direct thread (POST broadcast/text/). Sends a real DM.")
-    direct_send.add_argument("thread_id")
+    direct_thread = subparsers.add_parser("direct-thread", help="One Direct thread's newest messages (GraphQL IGDThreadDetailQuery).")
+    direct_thread.add_argument("thread_fbid")
+    direct_thread.add_argument("--cursor", help="Page older messages from slide_messages.page_info.end_cursor (IGDMessageListOffMsysQuery).")
+    direct_seen = subparsers.add_parser("direct-seen", help="Mark a Direct thread read up to a message (useIGDMarkThreadAsReadMutation).")
+    direct_seen.add_argument("thread_fbid")
+    direct_seen.add_argument("message_id")
+    direct_react = subparsers.add_parser("direct-react", help="React to a Direct message (IGDirectReactionSendMutation). Notifies the sender.")
+    direct_react.add_argument("thread_fbid")
+    direct_react.add_argument("message_id")
+    direct_react.add_argument("emoji")
+    direct_react.add_argument("--remove", action="store_true", help="Delete the viewer's reaction instead.")
+    direct_send = subparsers.add_parser("direct-send-text", help="Send a text message to a Direct thread (IGDirectTextSendMutation). Sends a real DM.")
+    direct_send.add_argument("thread_fbid")
     direct_send.add_argument("text")
-    direct_send.add_argument("--reply-to", help="Item id to reply to.")
-
+    direct_send.add_argument("--reply-to", help="Message id (mid.$...) to reply to.")
     username_profile = subparsers.add_parser("profile-username", help="Call web-visible /api/v1/users/web_profile_info/.")
     username_profile.add_argument("username", help="Instagram username.")
 
@@ -1241,15 +1361,17 @@ def main() -> None:
     elif args.command == "news-inbox":
         result = client.rest_news_inbox()
     elif args.command == "direct-inbox":
-        result = client.rest_direct_inbox()
+        result = client.direct_inbox(args.pages)
     elif args.command == "session-check":
         result = client.session_check()
     elif args.command == "direct-thread":
-        result = client.rest_direct_thread(args.thread_id, args.cursor, args.limit)
+        result = client.direct_thread(args.thread_fbid, args.cursor)
     elif args.command == "direct-seen":
-        result = client.rest_direct_seen(args.thread_id, args.item_id)
+        result = client.direct_seen(args.thread_fbid, args.message_id)
+    elif args.command == "direct-react":
+        result = client.direct_react(args.thread_fbid, args.message_id, args.emoji, args.remove)
     elif args.command == "direct-send-text":
-        result = client.rest_direct_send_text(args.thread_id, args.text, args.reply_to)
+        result = client.direct_send_text(args.thread_fbid, args.text, args.reply_to)
     elif args.command == "profile-username":
         result = client.rest_profile_by_username(args.username)
     elif args.command == "search-users":

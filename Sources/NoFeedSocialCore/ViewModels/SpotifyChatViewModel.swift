@@ -16,6 +16,9 @@ public final class SpotifyChatViewModel: ChatViewModel {
     private var pendingShares: Set<String> = []
     private var previewURLs: [String: URL] = [:]
     private var pollTask: Task<Void, Never>?
+    private let snapshotCache: ChatSnapshotCache
+    /// Whether the first page came from Spotify this visit; until then the messages are the cached snapshot.
+    private var hasLoadedHistory = false
     /// The other member of a one-to-one chat, whose name titles it.
     private var partner: String?
     /// The newest incoming message the chat was marked seen at.
@@ -24,11 +27,52 @@ public final class SpotifyChatViewModel: ChatViewModel {
     private let pollInterval: Duration = .seconds(10)
 
     /// `chatId` is the base62 id from `spotify:chat:<id>`.
-    public init(client: SpotifyClient, chatId: String, title: String, viewerUsername: String) {
+    public init(client: SpotifyClient, chatId: String, title: String, viewerUsername: String, snapshotCache: ChatSnapshotCache = ChatSnapshotCache()) {
         self.client = client
         self.chatId = chatId
         self.viewerUsername = viewerUsername
+        self.snapshotCache = snapshotCache
         super.init(title: title, subtitle: "Spotify", canReply: false)
+        restoreSnapshot()
+    }
+
+    /// What the chat showed last time, so it opens with its messages, names and track details in place.
+    private struct Snapshot: Codable {
+        let messages: [SpotifyChatMessage]
+        let profiles: [String: ChatUser]
+        let tracks: [String: SpotifyTrackMetadata]
+        let shares: [String: SpotifyShareMetadata]
+        let partner: String?
+        let title: String
+        let subtitle: String
+        let showsSenderNames: Bool
+    }
+
+    private var snapshotKey: String {
+        "spotify:\(chatId)"
+    }
+
+    private func restoreSnapshot() {
+        guard let snapshot = snapshotCache.load(Snapshot.self, key: snapshotKey) else { return }
+        for message in snapshot.messages {
+            loaded[message.id] = message
+        }
+        profiles = snapshot.profiles
+        tracks = snapshot.tracks
+        shares = snapshot.shares
+        partner = snapshot.partner
+        title = snapshot.title
+        subtitle = snapshot.subtitle
+        showsSenderNames = snapshot.showsSenderNames
+        publish()
+    }
+
+    private func saveSnapshot() {
+        let newest = loaded.values.sorted { ($0.sentAt ?? .distantPast, $0.id) < ($1.sentAt ?? .distantPast, $1.id) }.suffix(ChatSnapshotCache.messageLimit)
+        snapshotCache.save(
+            Snapshot(messages: Array(newest), profiles: profiles, tracks: tracks, shares: shares, partner: partner, title: title, subtitle: subtitle, showsSenderNames: showsSenderNames),
+            key: snapshotKey,
+        )
     }
 
     override public func connect() async {
@@ -45,13 +89,24 @@ public final class SpotifyChatViewModel: ChatViewModel {
             } else if let chat = page.chat, let other = chat.members.first(where: { $0 != viewerUsername }) {
                 partner = other
                 showsSenderNames = false
-                title = user(username: other).name
+                // Keeps the title it opened with (the profile name from the Chats list) rather than flashing
+                // the username, which is often a random ID, until the profile loads.
+                if let profile = profiles[other] {
+                    title = profile.name
+                }
+                loadProfile(username: other)
             }
-            if loaded.isEmpty {
+            if !hasLoadedHistory {
+                hasLoadedHistory = true
                 nextPageToken = page.nextPageToken
                 hasEarlierMessages = page.nextPageToken != nil
+                // Cached profiles refresh once per visit, quietly, since they render already.
+                for username in profiles.keys {
+                    loadProfile(username: username)
+                }
             }
             merge(page.messages)
+            saveSnapshot()
             state = .connected
             startPolling()
         } catch {
@@ -62,6 +117,7 @@ public final class SpotifyChatViewModel: ChatViewModel {
     override public func disconnect() {
         pollTask?.cancel()
         pollTask = nil
+        saveSnapshot()
     }
 
     private func startPolling() {

@@ -7,6 +7,8 @@ struct ChatsView: View {
     let apronService: ApronService
     /// The chat for a Spotify chat id and title; `nil` when Spotify isn't connected.
     let spotifyChat: (_ chatId: String, _ title: String) -> (() -> ChatViewModel)?
+    /// The chat for an Instagram thread and title; `nil` when Instagram isn't connected.
+    let instagramChat: (_ threadFbid: String, _ title: String) -> (() -> ChatViewModel)?
     /// Whether a chat is pushed, so the home pager can stop paging.
     @Binding var isShowingChat: Bool
     @State private var selection: ChatSummary?
@@ -33,7 +35,7 @@ struct ChatsView: View {
                 ContentUnavailableView.search(text: query)
             } else if viewModel.chats.isEmpty {
                 if viewModel.hasLoaded {
-                    ContentUnavailableView("No Chats", systemImage: "bubble.left.and.bubble.right", description: Text(viewModel.errorMessage ?? "Chats from Apron servers and Spotify appear here."))
+                    ContentUnavailableView("No Chats", systemImage: "bubble.left.and.bubble.right", description: Text(viewModel.errorMessage ?? "Chats from Apron servers, Spotify and Instagram appear here."))
                 } else {
                     ProgressView()
                 }
@@ -93,6 +95,12 @@ struct ChatsView: View {
                 NetworkChatView(viewModel: viewModel.follow(makeChat(), chatId: chat.id))
             } else {
                 ContentUnavailableView("Spotify Not Connected", systemImage: "music.note")
+            }
+        case let .instagram(threadFbid):
+            if let makeChat = instagramChat(threadFbid, chat.title) {
+                NetworkChatView(viewModel: viewModel.follow(makeChat(), chatId: chat.id))
+            } else {
+                ContentUnavailableView("Instagram Not Connected", systemImage: "camera")
             }
         }
     }

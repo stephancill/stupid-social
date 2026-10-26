@@ -14,6 +14,7 @@ public final class ApronChatViewModel: ChatViewModel {
 
     private let service: ApronService
     private var session: ApronSession?
+    private var cachedMediaOrigins: [URL] = []
     private var snapshots: [String: ApronMessage] = [:]
     /// Kept current user objects (§3.3.1); messages carry recorded `from` objects that often omit avatars.
     /// Mentions show these names; a name another known user shares is left out, so those mentions keep their
@@ -71,13 +72,18 @@ public final class ApronChatViewModel: ChatViewModel {
         service.draftStore.setDraft(draft, serverURL: serverURL, roomId: roomId)
     }
 
+    /// The live session's media origins, or the cached ones until it is up.
+    private var mediaOrigins: [URL] {
+        session?.server.ext?.mediaOrigins ?? cachedMediaOrigins
+    }
+
     /// Embed media loads only from the chat server or the origins it lists in `ext.media` (§4.8.1, §5.5).
     private func allowedMediaURL(_ string: String?) -> URL? {
         guard let string, let url = URL(string: string), let host = url.host() else { return nil }
         let secure = url.scheme == "https"
         let localPlain = url.scheme == "http" && serverURL.scheme == "ws"
         guard secure || localPlain else { return nil }
-        let origins = [serverURL.host()] + (session?.server.ext?.mediaOrigins ?? []).map { $0.host() }
+        let origins = [serverURL.host()] + mediaOrigins.map { $0.host() }
         return origins.contains(host) ? url : nil
     }
 
@@ -167,6 +173,7 @@ public final class ApronChatViewModel: ChatViewModel {
     /// the locally known cursor. History then merges in by `log_id` (§2.3).
     private func showCachedMessages() {
         guard snapshots.isEmpty, let entry = service.messageCache.load(serverURL: serverURL, roomId: roomId) else { return }
+        cachedMediaOrigins = entry.mediaOrigins ?? []
         for user in entry.users where users[user.userId] == nil {
             users[user.userId] = user
         }
@@ -213,6 +220,7 @@ public final class ApronChatViewModel: ChatViewModel {
             messages: Array(recent),
             users: users.values.filter { authors.contains($0.userId) },
             reactions: reactions,
+            mediaOrigins: mediaOrigins,
             serverURL: serverURL,
             roomId: roomId,
         )

@@ -1,7 +1,7 @@
 import Foundation
 
 /// Someone shown in a chat: a message sender, reactor, or mention suggestion.
-public struct ChatUser: Hashable, Identifiable, Sendable {
+public struct ChatUser: Hashable, Identifiable, Codable, Sendable {
     public let id: String
     public let name: String
     public let avatarURL: URL?

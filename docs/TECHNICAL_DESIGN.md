@@ -402,9 +402,9 @@ Instagram story posting is current scope and uses the mobile web API path valida
 
 Unread Instagram DM support uses the same cookie-authenticated mobile web request stack as the rest of the Instagram integration.
 
-- Fetch direct inbox threads with `GET /api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=20`.
+- Fetch direct inbox threads with the web inbox GraphQL query `PolarisDirectInboxMobileQuery` (see `docs/IMPLEMENTATION.md`); `direct_v2` REST no longer serves accounts on the new web inbox.
 - Include mobile web headers (`X-IG-App-ID: 1217981644879628`, `X-ASBD-ID`, CSRF, LSD when present, web session/device IDs, and explicit selected-cookie header).
-- Derive unread DM threads locally by comparing `last_permanent_item.timestamp` against `last_seen_at[viewer_id].timestamp`, ignoring latest messages sent by the viewer.
+- Derive unread DM threads locally by comparing the newest message's `timestamp_ms` against the viewer's `slide_read_receipts` watermark, ignoring latest messages sent by the viewer.
 - Normalize unread threads as `.message` `NotificationItem`s in the Instagram feed.
-- Messaging settings expose a Direct Messages toggle and a Posts and Reels toggle. When Posts and Reels is disabled, Direct threads whose latest item is `xma_clip` or `xma_media_share` are filtered out while text/story-reply messages can still appear.
+- Messaging settings expose a Direct Messages toggle and a Posts and Reels toggle. When Posts and Reels is disabled, Direct threads whose latest message is `MESSAGE_INLINE_SHARE` are filtered out while text/story-reply messages can still appear.
 - Direct inbox failures are isolated from `news/inbox` notification failures so regular Instagram notifications continue to show if Direct is gated by a server prompt or transient response.

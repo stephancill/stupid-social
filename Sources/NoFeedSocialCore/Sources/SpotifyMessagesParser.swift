@@ -11,8 +11,8 @@ struct SpotifyChat: Equatable {
     var unseenCount = 0
 }
 
-struct SpotifyChatMessage: Equatable {
-    enum Content: Equatable {
+struct SpotifyChatMessage: Equatable, Codable {
+    enum Content: Equatable, Codable {
         /// A shared Spotify entity URI, for in-app shares and shares sent through a link.
         case share(uri: String)
         case text(String)
@@ -28,7 +28,7 @@ struct SpotifyChatMessage: Equatable {
     var reactions: [SpotifyChatReaction] = []
 }
 
-struct SpotifyChatReaction: Equatable {
+struct SpotifyChatReaction: Equatable, Codable {
     let username: String
     let emoji: String
     let sentAt: Date?
