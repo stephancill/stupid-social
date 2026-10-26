@@ -121,6 +121,7 @@ Reference behavior from `docs/CLI_DOCS.md`:
 - Without a token the app joins as a guest when the server offers it. Tokens are stored in Keychain like other credentials.
 - Each joined room with a message in the last 24 hours appears in the notifications feed as one item showing its latest message.
 - Opening an Apron item shows a live chat for that room, where the user can read recent history and send messages.
+- The chat opens at the first unread message when there is one, shows who is typing (and shares the user's own typing) on servers with `activity`, and opens links in messages.
 
 ## Combined Feed
 

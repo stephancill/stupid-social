@@ -229,6 +229,11 @@ public extension ApronConnection {
     func markRead(roomId: String, messageId: String) async throws {
         try await notify("activity", params: ApronActivityParams(roomId: roomId, readMessageId: messageId))
     }
+
+    /// Shows this user as typing for `seconds`, or stops it with `0` (§4.6).
+    func setTyping(roomId: String, seconds: Int) async throws {
+        try await notify("activity", params: ApronTypingParams(roomId: roomId, typing: seconds))
+    }
 }
 
 public enum ApronUploader {

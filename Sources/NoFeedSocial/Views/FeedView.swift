@@ -98,6 +98,9 @@ struct FeedView: View {
                             notificationDetailSelection = displayItem
                         } label: {
                             NotificationRow(displayItem: displayItem, unreadCount: unreadCount(for: displayItem.item))
+                                // A plain button only hit-tests drawn content; make the whole row tappable.
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .listRowSeparator(index == 0 ? .hidden : .visible, edges: .top)

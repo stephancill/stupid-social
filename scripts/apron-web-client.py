@@ -310,6 +310,16 @@ def cmd_upload(session: Session, args: argparse.Namespace) -> None:
     print_json({"message_id": result.get("message_id"), "put_status": status, "notifications": session.notifications})
 
 
+def cmd_typing(session: Session, args: argparse.Namespace) -> None:
+    """Sends `activity.typing` (seconds), then `typing: 0` after --hold seconds, and prints any activity frames (§4.6)."""
+    authenticate(session, args)
+    session.ws.send_text(json.dumps({"method": "activity", "params": {"room_id": args.room, "typing": args.seconds}}))
+    session.drain(args.hold)
+    session.ws.send_text(json.dumps({"method": "activity", "params": {"room_id": args.room, "typing": 0}}))
+    session.drain(args.wait)
+    print_json({"notifications": [n for n in session.notifications if n.get("method") == "activity"]})
+
+
 def cmd_listen(session: Session, args: argparse.Namespace) -> None:
     authenticate(session, args)
     deadline = time.time() + args.wait
@@ -360,6 +370,10 @@ def main() -> None:
     upload.add_argument("--room")
     upload.add_argument("--file", required=True)
     upload.add_argument("--text", default="")
+    typing = add("typing", cmd_typing)
+    typing.add_argument("--room", required=True)
+    typing.add_argument("--seconds", type=int, default=8)
+    typing.add_argument("--hold", type=float, default=3)
     add("listen", cmd_listen)
 
     args = parser.parse_args()

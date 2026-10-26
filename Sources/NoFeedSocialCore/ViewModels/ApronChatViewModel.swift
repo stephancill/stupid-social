@@ -53,6 +53,8 @@ public final class ApronChatViewModel: ObservableObject {
     @Published public private(set) var firstUnreadMessageId: String?
     /// Messages from others after the current cursor among those loaded, for the jump-to-latest badge.
     @Published public private(set) var unreadCount = 0
+    /// Display names of the other users typing in this room, in the order they started (§4.6).
+    @Published public private(set) var typingNames: [String] = []
 
     public static let quickReactions = ["👍", "❤️", "😂", "🔥", "😮", "🙏"]
     @Published public var errorMessage: String?
@@ -83,6 +85,12 @@ public final class ApronChatViewModel: ObservableObject {
     private var hasLoadedHistory = false
     private var renderedTextCache: [String: AttributedString] = [:]
     private let pageSize = 50
+    /// userId → (name, when the typing indication expires), from other users' `activity.typing`.
+    private var typingUsers: [(userId: String, name: String, expires: Date)] = []
+    private var typingExpiryTask: Task<Void, Never>?
+    /// When `typing` was last sent, so it is refreshed before it expires rather than on every keystroke.
+    private var typingSentAt: Date?
+    private let typingSeconds = 8
 
     public init(service: ApronService, serverURL: URL, roomId: String, title: String?) {
         ownUserIds = service.readStore.ownUserIds(serverURL: serverURL)
@@ -130,7 +138,12 @@ public final class ApronChatViewModel: ObservableObject {
                     guard let self else { return }
                     self.session = nil
                     observerToken = nil
-                    state = .disconnected(error?.localizedDescription)
+                    typingSentAt = nil
+                    typingUsers = []
+                    publishTyping()
+                    // Without an error the app closed the connection itself (it went to the background) and
+                    // rejoins when active again, so there is nothing to report; a notice would resize the composer.
+                    state = error == nil ? .connecting : .disconnected(error?.localizedDescription)
                 },
             )
 
@@ -147,13 +160,18 @@ public final class ApronChatViewModel: ObservableObject {
                 }
             }
             if session.server.has("history") {
-                // Any cursor the server keeps arrived after `room_list`, before this result (§1, §4.6).
-                let page = try await session.connection.history(roomId: roomId, limit: pageSize)
-                dropCacheBehindGap(newestPage: page)
-                apply(page, publishing: false)
-                // The divider and opening window belong to the first load of a visit; a reconnect (such as
-                // after the app was in the background) only merges what arrived meanwhile.
-                if !hasLoadedHistory {
+                if hasLoadedHistory, let last = lastLogId.flatMap(Int64.init) {
+                    // A reconnect (such as after the app was in the background) keeps what the user is reading,
+                    // including the divider, and catches up from the last loaded message so nothing between is
+                    // skipped. With `more`, the rest loads by paging forward, like an older window.
+                    let page = try await session.connection.history(roomId: roomId, after: String(last + 1), limit: pageSize)
+                    apply(page, direction: .forward, publishing: false)
+                } else {
+                    // Any cursor the server keeps arrived after `room_list`, before this result (§1, §4.6).
+                    let page = try await session.connection.history(roomId: roomId, limit: pageSize)
+                    dropCacheBehindGap(newestPage: page)
+                    apply(page, publishing: false)
+                    // The divider and opening window belong to the first load of a visit.
                     try await openAtFirstUnread()
                 }
                 hasLoadedHistory = true
@@ -169,6 +187,7 @@ public final class ApronChatViewModel: ObservableObject {
     /// Leaves the room. The connection is shared with the feed, so only this chat's observer goes away.
     public func disconnect() {
         saveCache()
+        stopTyping()
         stopObserving()
     }
 
@@ -190,6 +209,10 @@ public final class ApronChatViewModel: ObservableObject {
         for message in entry.messages {
             install(message)
         }
+        // Reactions come with the cache so bubbles don't grow once history arrives.
+        for record in entry.reactions ?? [] {
+            applyReactions(record)
+        }
         if let cursor = readCursor {
             firstUnreadMessageId = sortedSnapshots().first { countsAsUnread($0, after: cursor) }?.id
         }
@@ -210,9 +233,21 @@ public final class ApronChatViewModel: ObservableObject {
         guard !hasLaterMessages, !snapshots.isEmpty else { return }
         let recent = sortedSnapshots().suffix(ApronMessageCache.messageLimit)
         let authors = Set(recent.map(\.from.userId))
+        // One record per user and message, keeping each set's own `log_id` so merging stays correct (§4.7).
+        let reactions = recent.compactMap(\.messageId).flatMap { messageId in
+            (reactionEntries[messageId] ?? [:]).map { userId, entry in
+                ApronReactionRecord(
+                    logId: String(entry.logId),
+                    messageId: messageId,
+                    roomId: roomId,
+                    reactions: [ApronReactionSet(from: users[userId] ?? ApronUser(userId: userId, name: nil, avatar: nil, roles: nil), emojis: entry.emojis)],
+                )
+            }
+        }
         service.messageCache.save(
             messages: Array(recent),
             users: users.values.filter { authors.contains($0.userId) },
+            reactions: reactions,
             serverURL: serverURL,
             roomId: roomId,
         )
@@ -241,6 +276,7 @@ public final class ApronChatViewModel: ObservableObject {
         isSending = true
         errorMessage = nil
         defer { isSending = false }
+        stopTyping()
         do {
             // `/` sends a command, and `//` escapes a message that starts with `/` (§4.1).
             let isCommand = text.hasPrefix("/") && !text.hasPrefix("//") && session.server.has("command")
@@ -335,8 +371,13 @@ public final class ApronChatViewModel: ObservableObject {
 
     private func handle(method: String, params: Data) {
         if method == "activity" {
-            if tracksCursors, let activity = try? JSONDecoder().decode(ApronActivity.self, from: params),
-               activity.from?.userId == you?.userId, activity.roomId == nil || activity.roomId == roomId,
+            guard let activity = try? JSONDecoder().decode(ApronActivity.self, from: params),
+                  activity.roomId == nil || activity.roomId == roomId
+            else { return }
+            if let typing = activity.typing, let from = activity.from, from.userId != you?.userId {
+                setTyping(from, seconds: typing)
+            }
+            if tracksCursors, activity.from?.userId == you?.userId,
                let cursor = activity.readMessageId.flatMap(Int64.init)
             {
                 // Read on another device: the server's cursor is the truth.
@@ -350,6 +391,11 @@ public final class ApronChatViewModel: ObservableObject {
             return
         }
         guard method == "message", let message = try? JSONDecoder().decode(ApronMessage.self, from: params) else { return }
+        // A new message from a user ends their typing indication (§4.6).
+        if message.roomId == roomId, typingUsers.contains(where: { $0.userId == message.from.userId }) {
+            typingUsers.removeAll { $0.userId == message.from.userId }
+            publishTyping()
+        }
         if message.messageId == nil {
             // Transient notices without a room (such as sign-in welcomes) are shown in the open room.
             guard message.roomId == nil || message.roomId == roomId, !notices.contains(where: { $0.id == message.id }) else { return }
@@ -530,6 +576,56 @@ public final class ApronChatViewModel: ObservableObject {
             guard !Task.isCancelled else { return }
             self?.saveCache()
         }
+    }
+
+    // MARK: Typing
+
+    private func setTyping(_ user: ApronUser, seconds: Double) {
+        typingUsers.removeAll { $0.userId == user.userId }
+        if seconds > 0 {
+            let name = users[user.userId]?.displayName ?? user.displayName
+            typingUsers.append((user.userId, name, Date().addingTimeInterval(seconds)))
+        }
+        publishTyping()
+    }
+
+    /// Drops expired indications and wakes again at the next expiry.
+    private func publishTyping() {
+        let now = Date()
+        typingUsers.removeAll { $0.expires <= now }
+        let names = typingUsers.map(\.name)
+        if typingNames != names {
+            typingNames = names
+        }
+        typingExpiryTask?.cancel()
+        guard let next = typingUsers.map(\.expires).min() else { return }
+        typingExpiryTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(next.timeIntervalSinceNow + 0.05))
+            guard !Task.isCancelled else { return }
+            self?.publishTyping()
+        }
+    }
+
+    /// Call as the draft changes: announces typing, refreshed before it lapses, and stops when the draft empties.
+    public func draftDidChange() {
+        guard let session, session.server.has("activity") else { return }
+        if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            stopTyping()
+            return
+        }
+        // Commands aren't messages others wait on.
+        guard !draft.hasPrefix("/") || draft.hasPrefix("//") else { return }
+        if let typingSentAt, Date().timeIntervalSince(typingSentAt) < Double(typingSeconds) - 3 { return }
+        typingSentAt = Date()
+        let seconds = typingSeconds
+        Task { try? await session.connection.setTyping(roomId: roomId, seconds: seconds) }
+    }
+
+    private func stopTyping() {
+        guard typingSentAt != nil else { return }
+        typingSentAt = nil
+        guard let session, session.server.has("activity") else { return }
+        Task { try? await session.connection.setTyping(roomId: roomId, seconds: 0) }
     }
 
     // MARK: Read state

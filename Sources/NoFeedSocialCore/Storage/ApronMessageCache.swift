@@ -8,6 +8,8 @@ public final class ApronMessageCache {
     public struct Entry: Codable {
         public let messages: [ApronMessage]
         public let users: [ApronUser]
+        /// Reactions on the cached messages, so they render with the first frame. Optional for caches written before.
+        public let reactions: [ApronReactionRecord]?
     }
 
     public static let messageLimit = 50
@@ -22,8 +24,8 @@ public final class ApronMessageCache {
         return try? JSONDecoder().decode(Entry.self, from: data)
     }
 
-    public func save(messages: [ApronMessage], users: [ApronUser], serverURL: URL, roomId: String) {
-        let entry = Entry(messages: Array(messages.suffix(Self.messageLimit)), users: users)
+    public func save(messages: [ApronMessage], users: [ApronUser], reactions: [ApronReactionRecord], serverURL: URL, roomId: String) {
+        let entry = Entry(messages: Array(messages.suffix(Self.messageLimit)), users: users, reactions: reactions)
         guard let data = try? JSONEncoder().encode(entry) else { return }
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try? data.write(to: fileURL(serverURL: serverURL, roomId: roomId), options: .atomic)

@@ -336,13 +336,13 @@ struct ApronSendParams: Encodable {
 }
 
 /// One user's complete emoji set on one message, logged per user (§4.7).
-public struct ApronReactionSet: Decodable, Sendable {
+public struct ApronReactionSet: Codable, Sendable {
     public let from: ApronUser
     public let emojis: [String]
 }
 
 /// A logged reactions record. Live broadcasts carry one set; compacted history may carry several.
-public struct ApronReactionRecord: Decodable, Sendable {
+public struct ApronReactionRecord: Codable, Sendable {
     public let logId: String?
     public let messageId: String
     public let roomId: String?
@@ -414,15 +414,28 @@ struct ApronActivityParams: Encodable {
 
 struct ApronEmptyResult: Decodable {}
 
-/// An `activity` frame; the parts this app reads are read cursors (§4.6).
+/// An `activity` frame: typing and read cursors (§4.6).
 struct ApronActivity: Decodable {
     let roomId: String?
     let from: ApronUser?
     let readMessageId: String?
+    /// Seconds to show the user as typing; `0` stops it.
+    let typing: Double?
 
     enum CodingKeys: String, CodingKey {
         case roomId = "room_id"
         case from
         case readMessageId = "read_message_id"
+        case typing
+    }
+}
+
+struct ApronTypingParams: Encodable {
+    let roomId: String
+    let typing: Int
+
+    enum CodingKeys: String, CodingKey {
+        case roomId = "room_id"
+        case typing
     }
 }

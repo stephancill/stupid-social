@@ -42,6 +42,9 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
     /// Follows the newest message: set when the room opens at the bottom or the user scrolls back down,
     /// cleared when the user scrolls away. Layout changes while pinned re-anchor to the bottom.
     private var isPinnedToBottom = false
+    /// Keeps the "New Messages" divider at the top while the room opens: history, reactions and quotes that
+    /// arrive after the cached first frame change cell heights above it. Cleared once the user scrolls.
+    private var isAnchoredToDivider = false
     private var hasScrolledInitially = false
 
     // Latest published composer state; @Published emits in willSet, so the view model still holds old values.
@@ -64,6 +67,8 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
     private let reactionHaptic = UISelectionFeedbackGenerator()
 
     private let composer = UIStackView()
+    private let typingView = ApronGlass.make(cornerRadius: 14)
+    private let typingLabel = UILabel()
     private let noticeView = ApronGlass.make(cornerRadius: 16)
     private let noticeLabel = UILabel()
     private let reconnectButton = UIButton(type: .system)
@@ -99,6 +104,7 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
         configureCollectionView()
         configureComposer()
         configureJumpToLatestButton()
+        configureTypingIndicator()
         bind()
     }
 
@@ -315,9 +321,14 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
         collectionView.verticalScrollIndicatorInsets.bottom = inset
     }
 
-    /// Keeps a pinned list at the bottom through bounds, inset and cell-size changes.
+    /// Keeps a pinned list at the bottom, or an opening room at its divider, through bounds, inset and cell-size changes.
     private func reanchorIfPinned() {
-        guard isPinnedToBottom, hasScrolledInitially, !hasLater, !collectionView.isDragging, !collectionView.isDecelerating else { return }
+        guard hasScrolledInitially, !collectionView.isDragging, !collectionView.isDecelerating else { return }
+        if isAnchoredToDivider {
+            scrollToDivider()
+            return
+        }
+        guard isPinnedToBottom, !hasLater else { return }
         collectionView.layoutIfNeeded()
         if abs(collectionView.contentOffset.y - bottomOffset) > 0.5 {
             scrollToBottom(animated: false)
@@ -349,9 +360,11 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
         viewModel.$firstUnreadMessageId.dropFirst().compactMap(\.self).sink { [weak self] _ in
             DispatchQueue.main.async { [weak self] in
                 guard let self, hasScrolledInitially, !self.userHasScrolled, pendingJumpTarget == nil,
-                      let divider = dataSource.indexPath(for: .unreadDivider)
+                      dataSource.indexPath(for: .unreadDivider) != nil
                 else { return }
-                collectionView.scrollToItem(at: divider, at: .top, animated: false)
+                isPinnedToBottom = false
+                isAnchoredToDivider = true
+                scrollToDivider()
             }
         }.store(in: &cancellables)
         viewModel.$unreadCount.sink { [weak self] count in
@@ -363,8 +376,10 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
         NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)
             .sink { [weak self] _ in self?.reportVisibleRead() }
             .store(in: &cancellables)
+        viewModel.$typingNames.sink { [weak self] names in self?.updateTypingIndicator(names) }.store(in: &cancellables)
         viewModel.$scrollToLatestRequest.dropFirst().sink { [weak self] _ in
             DispatchQueue.main.async {
+                self?.isAnchoredToDivider = false
                 self?.isPinnedToBottom = true
                 self?.scrollToBottom(animated: true)
             }
@@ -433,6 +448,8 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
             // Keep the visible messages in place when earlier history is inserted above them.
             collectionView.layoutIfNeeded()
             collectionView.contentOffset.y = collectionView.contentSize.height - distanceFromBottom
+        } else if isAnchoredToDivider {
+            scrollToDivider()
         } else if wasAtBottom, !hasLater {
             // At the bottom, new messages and cells that grew push the list up rather than under the input.
             scrollToBottom(animated: true)
@@ -475,6 +492,7 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
         viewModel.clearJumpTarget()
         guard let message = viewModel.message(withId: target), let indexPath = dataSource.indexPath(for: .message(message.id)) else { return }
         isPinnedToBottom = false
+        isAnchoredToDivider = false
         collectionView.layoutIfNeeded()
         collectionView.scrollToItem(at: indexPath, at: .centeredVertically, animated: true)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
@@ -634,16 +652,32 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
         hasScrolledInitially = true
         collectionView.layoutIfNeeded()
         isPinnedToBottom = dataSource.indexPath(for: .unreadDivider) == nil
-        if let divider = dataSource.indexPath(for: .unreadDivider) {
-            // Two passes: the first lays out the cells around the divider, the second lands on it exactly.
-            for _ in 0 ..< 2 {
-                collectionView.scrollToItem(at: divider, at: .top, animated: false)
-                collectionView.layoutIfNeeded()
-            }
-            // When everything fits on screen the divider view is also the bottom; keep following then.
-            isPinnedToBottom = collectionView.contentOffset.y >= bottomOffset - 1
+        if dataSource.indexPath(for: .unreadDivider) != nil {
+            isAnchoredToDivider = true
+            scrollToDivider()
         } else {
             scrollToBottom(animated: false)
+        }
+    }
+
+    /// Puts the divider at the top. Two passes: the first lays out the cells around it, the second lands on it
+    /// exactly. When everything fits on screen the divider is also the bottom, so the list follows the bottom instead.
+    private func scrollToDivider() {
+        guard let divider = dataSource.indexPath(for: .unreadDivider) else {
+            isAnchoredToDivider = false
+            return
+        }
+        for _ in 0 ..< 2 {
+            collectionView.layoutIfNeeded()
+            guard let frame = collectionView.layoutAttributesForItem(at: divider)?.frame else { break }
+            let target = min(frame.minY - collectionView.adjustedContentInset.top, bottomOffset)
+            guard abs(collectionView.contentOffset.y - target) > 0.5 else { break }
+            collectionView.scrollToItem(at: divider, at: .top, animated: false)
+        }
+        collectionView.layoutIfNeeded()
+        if collectionView.contentOffset.y >= bottomOffset - 1 {
+            isAnchoredToDivider = false
+            isPinnedToBottom = true
         }
     }
 
@@ -684,7 +718,9 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
     private func applyKeepingBottom(_ snapshot: NSDiffableDataSourceSnapshot<Section, Item>) {
         let wasAtBottom = isPinnedToBottom && hasScrolledInitially && !hasLater
         dataSource.apply(snapshot, animatingDifferences: false)
-        if wasAtBottom {
+        if isAnchoredToDivider, hasScrolledInitially {
+            scrollToDivider()
+        } else if wasAtBottom {
             scrollToBottom(animated: true)
         }
     }
@@ -692,6 +728,10 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
     private func send() {
         Task {
             await viewModel.send()
+            // Like Messages, sending shows your message at the bottom.
+            if viewModel.errorMessage == nil {
+                await viewModel.jumpToLatest()
+            }
         }
     }
 
@@ -767,6 +807,7 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
 
     func textViewDidChange(_ textView: UITextView) {
         viewModel.draft = textView.text
+        viewModel.draftDidChange()
         updateTextViewHeight()
     }
 
@@ -774,6 +815,7 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
 
     func scrollViewWillBeginDragging(_: UIScrollView) {
         userHasScrolled = true
+        isAnchoredToDivider = false
     }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
@@ -927,6 +969,48 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
         ])
         glass.isHidden = true
         glass.alpha = 0
+    }
+
+    /// "Name is typing…" in a small glass capsule over the list above the composer. It floats, so showing
+    /// it never changes the list's insets.
+    private func configureTypingIndicator() {
+        typingLabel.font = .preferredFont(forTextStyle: .footnote)
+        typingLabel.textColor = .secondaryLabel
+        typingLabel.lineBreakMode = .byTruncatingTail
+        let row = UIStackView(arrangedSubviews: [typingLabel])
+        row.isLayoutMarginsRelativeArrangement = true
+        row.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12)
+        typingView.contentView.addSubview(row)
+        row.pinToEdges(of: typingView.contentView)
+        typingView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(typingView)
+        NSLayoutConstraint.activate([
+            typingView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 14),
+            typingView.trailingAnchor.constraint(lessThanOrEqualTo: jumpToLatestGlass.leadingAnchor, constant: -10),
+            typingView.bottomAnchor.constraint(equalTo: composer.topAnchor, constant: -10),
+        ])
+        typingView.isHidden = true
+        typingView.alpha = 0
+    }
+
+    private func updateTypingIndicator(_ names: [String]) {
+        let text: String? = switch names.count {
+        case 0: nil
+        case 1: "\(names[0]) is typing…"
+        case 2: "\(names[0]) and \(names[1]) are typing…"
+        default: "\(names[0]) and \(names.count - 1) others are typing…"
+        }
+        if let text {
+            typingLabel.text = text
+        }
+        let visible = text != nil
+        guard typingView.isHidden == visible else { return }
+        if visible { typingView.isHidden = false }
+        UIView.animate(withDuration: 0.2, animations: {
+            self.typingView.alpha = visible ? 1 : 0
+        }, completion: { _ in
+            self.typingView.isHidden = self.typingView.alpha == 0
+        })
     }
 
     private func configureReplyPreview() {
@@ -1100,7 +1184,7 @@ private final class ApronMessageCell: UICollectionViewListCell, UIGestureRecogni
 
     private let nameLabel = UILabel()
     private let replyView = ApronReplyQuoteView()
-    private let bodyLabel = UILabel()
+    private let bodyLabel = ApronLinkLabel()
     private let embedsStack = UIStackView()
     private let timeSpacer = UIView()
     private let timeLabel = UILabel()
@@ -1426,7 +1510,7 @@ private final class ApronMessageCell: UICollectionViewListCell, UIGestureRecogni
                 replyView.isHidden ? nil : replyView.naturalWidth,
                 bodyLabel.attributedText.map { Self.textWidth($0, max: Self.maxContentWidth(availableWidth: availableWidth, isOwn: layout.isOwn)) },
                 embedsStack.isHidden ? nil : embedsStack.arrangedSubviews.map(Self.fittingWidth).max(),
-                reactionsContainer.isHidden ? nil : Self.fittingWidth(reactionsRow) + 40,
+                reactionsContainer.isHidden ? nil : reactionsRowWidth + 40,
                 timeSpacer.isHidden ? nil : timeLabel.intrinsicContentSize.width,
             ].compactMap(\.self),
         )
@@ -1452,6 +1536,14 @@ private final class ApronMessageCell: UICollectionViewListCell, UIGestureRecogni
             context: nil,
         )
         return ceil(bounds.width)
+    }
+
+    /// The chips' natural single-line widths. A compressed fitting size let a chip's title wrap, so the
+    /// bubble could come out narrower than its chips (seen after toggling a reaction).
+    private var reactionsRowWidth: CGFloat {
+        let views = reactionsRow.arrangedSubviews
+        let widths = views.map(\.intrinsicContentSize.width).reduce(0, +)
+        return ceil(widths + reactionsRow.spacing * CGFloat(max(0, views.count - 1)))
     }
 
     private static func fittingWidth(_ view: UIView) -> CGFloat {
@@ -1482,7 +1574,11 @@ private final class ApronMessageCell: UICollectionViewListCell, UIGestureRecogni
                 configuration.baseBackgroundColor = isOwn ? UIColor.white.withAlphaComponent(0.22) : UIColor.label.withAlphaComponent(0.08)
                 configuration.baseForegroundColor = isOwn ? .white : .label
             }
+            // One line always: the count never wraps under the emoji in a narrow bubble.
+            configuration.titleLineBreakMode = .byClipping
             let chip = UIButton(configuration: configuration)
+            chip.titleLabel?.numberOfLines = 1
+            chip.setContentCompressionResistancePriority(.required, for: .horizontal)
             chip.accessibilityLabel = "\(reaction.emoji), \(reaction.count)\(reaction.includesYou ? ", including you" : "")"
             chip.isUserInteractionEnabled = canReact
             let emoji = reaction.emoji
@@ -1871,18 +1967,37 @@ private enum ApronAttributedText {
                     attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
                 }
             }
-            if run.link != nil {
+            if let link = run.link {
                 attributes[.foregroundColor] = linkColor
                 attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
+                attributes[.apronLink] = link
             }
             attributes[.font] = font
             let segment = NSMutableAttributedString(string: String(text[run.range].characters), attributes: attributes)
             if !isCode {
+                if run.link == nil {
+                    detectLinks(in: segment, color: linkColor)
+                }
                 highlightMentions(in: segment, color: linkColor, underline: underlinesMentions)
             }
             result.append(segment)
         }
         return result
+    }
+
+    private static let linkDetector = try! NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+
+    /// Bare URLs in plain text (and any Markdown left unlinked) become tappable links too.
+    private static func detectLinks(in segment: NSMutableAttributedString, color: UIColor) {
+        let range = NSRange(location: 0, length: segment.length)
+        for match in linkDetector.matches(in: segment.string, range: range) {
+            guard let url = match.url, ["http", "https"].contains(url.scheme?.lowercased()) else { continue }
+            segment.addAttributes([
+                .foregroundColor: color,
+                .underlineStyle: NSUnderlineStyle.single.rawValue,
+                .apronLink: url,
+            ], range: match.range)
+        }
     }
 
     /// Mentions render in the link color, or underlined where that color isn't available; code spans hold no mentions.
@@ -1894,6 +2009,58 @@ private enum ApronAttributedText {
                 segment.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: match.range)
             }
         }
+    }
+}
+
+private extension NSAttributedString.Key {
+    /// A link's URL. Not `.link`, which `UILabel` would restyle; `ApronLinkLabel` opens it on tap.
+    static let apronLink = NSAttributedString.Key("ApronLink")
+}
+
+/// A label whose `.apronLink` runs open on tap. Taps elsewhere pass through, so long-press menus and
+/// swipe-to-reply on the bubble still work.
+private final class ApronLinkLabel: UILabel {
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isUserInteractionEnabled = true
+        addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(tapped(_:))))
+    }
+
+    @available(*, unavailable)
+    required init?(coder _: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func gestureRecognizerShouldBegin(_ gesture: UIGestureRecognizer) -> Bool {
+        link(at: gesture.location(in: self)) != nil
+    }
+
+    @objc private func tapped(_ gesture: UITapGestureRecognizer) {
+        // Message text is untrusted; only web and mail links open.
+        guard let url = link(at: gesture.location(in: self)),
+              ["http", "https", "mailto"].contains(url.scheme?.lowercased())
+        else { return }
+        UIApplication.shared.open(url)
+    }
+
+    /// Lays the text out with TextKit at the label's size to find the character under the point.
+    private func link(at point: CGPoint) -> URL? {
+        guard let text = attributedText, text.length > 0, bounds.width > 0 else { return nil }
+        let storage = NSTextStorage(attributedString: text)
+        let layoutManager = NSLayoutManager()
+        let container = NSTextContainer(size: CGSize(width: bounds.width, height: .greatestFiniteMagnitude))
+        container.lineFragmentPadding = 0
+        container.maximumNumberOfLines = numberOfLines
+        layoutManager.addTextContainer(container)
+        storage.addLayoutManager(layoutManager)
+        // UILabel centers its text vertically.
+        let used = layoutManager.usedRect(for: container)
+        let location = CGPoint(x: point.x, y: point.y - max(0, (bounds.height - used.height) / 2))
+        let glyph = layoutManager.glyphIndex(for: location, in: container)
+        let glyphRect = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: container)
+        guard glyphRect.insetBy(dx: -6, dy: -4).contains(location) else { return nil }
+        let index = layoutManager.characterIndexForGlyph(at: glyph)
+        return text.attribute(.apronLink, at: index, effectiveRange: nil) as? URL
     }
 }
 
