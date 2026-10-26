@@ -1498,3 +1498,8 @@
 - Version 1.0.1 (144). It adds to 143 the Apron room-listing fix (one shared joined-rooms listing per connection, single-room rebuilds on new messages).
 - Release preflight, signed distribution archive and project-owned signature verification passed. IPA SHA-256: `bacfdf47c23118e2648eddfc5943302c93ccc31b02008295afc9dad5052a1b11`. Logs are in ignored `logs/testflight-144-*` and `.release/`.
 - Uploaded App Store Connect build `9a9730df-2f2a-42ca-b121-cc92de7c1aed`; processing `VALID`, internal `IN_BETA_TESTING`. No What to Test note and no external submission.
+
+### 2026-10-26 — Smoother story row pager
+
+- The story row pager's wrap-around used to put a copy of the last row before the first and a copy of the first after the last. Landing on a copy fired a jump without animation to the real row, so the pager snapped visibly and sometimes fought the paging deceleration. Now the modes repeat 200 times in a `LazyVStack`, and the pager starts in the middle at a multiple of the mode count. Page `i` shows mode `i % count`, so wrapping around is plain scrolling, with no sentinels and no programmatic jumps. When the set of modes changes, the pager goes back to the middle and keeps the current mode if it still exists.
+- The per-frame scroll offset for the dots used to live in `StoriesBar`'s `@State`. Each frame then rebuilt every row, filtering and sorting the items once per page. The offset now lives in a small `@Observable` object that only `StoryPagerDots` reads, so scrolling re-renders only the dots. Rows are filtered and sorted once per body evaluation.

@@ -308,93 +308,83 @@ private struct StoriesBar: View {
     let onOwnStoryTap: () -> Void
     let onItemTap: (StoryBarItem, [StoryBarItem]) -> Void
     let onItemAppear: (StoryBarItem) -> Void
-    @State private var visibleModeID: String?
-    @State private var pagerOffset: CGFloat = 0
+    @State private var pageIndex: Int?
+    @State private var pagerOffset = StoryPagerOffset()
     @ScaledMetric(relativeTo: .caption2) private var rowHeight: CGFloat = 112
+
+    /// The modes repeat this many times and the pager starts in the middle, so
+    /// wrapping around is plain scrolling and never reaches an edge.
+    private static let cycles = 200
 
     var body: some View {
         let modes = availableFeedModes
-        let pages = pagerModes(for: modes)
+        let rows = modes.map { StoryRowContent(mode: $0, items: filteredItems(for: $0)) }
+        let pageCount = modes.count > 1 ? modes.count * Self.cycles : modes.count
 
-        ScrollViewReader { proxy in
-            ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(pages) { page in
-                        storyRow(mode: page.mode)
-                            .frame(height: rowHeight, alignment: .top)
-                            .containerRelativeFrame(.vertical, count: 1, spacing: 0)
-                            .id(page.id)
-                    }
-                }
-                .scrollTargetLayout()
-            }
-            .scrollPosition(id: $visibleModeID, anchor: .top)
-            .scrollTargetBehavior(.paging)
-            .scrollBounceBehavior(.basedOnSize)
-            .onScrollGeometryChange(for: CGFloat.self) { geometry in
-                geometry.contentOffset.y
-            } action: { _, newValue in
-                pagerOffset = newValue
-            }
-            .frame(height: rowHeight)
-            .clipped()
-            .overlay(alignment: .leading) {
-                if modes.count > 1 {
-                    storyPagerDots(modes: modes)
+        ScrollView(.vertical, showsIndicators: false) {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(0 ..< pageCount, id: \.self) { index in
+                    storyRow(rows[index % rows.count])
+                        .frame(height: rowHeight, alignment: .top)
                 }
             }
-            .onAppear {
-                visibleModeID = modes.first?.pageID
+            .scrollTargetLayout()
+        }
+        .scrollPosition(id: $pageIndex, anchor: .top)
+        .scrollTargetBehavior(.paging)
+        .scrollBounceBehavior(.basedOnSize)
+        .onScrollGeometryChange(for: CGFloat.self) { geometry in
+            geometry.contentOffset.y
+        } action: { _, newValue in
+            pagerOffset.value = newValue
+        }
+        .frame(height: rowHeight)
+        .clipped()
+        .overlay(alignment: .leading) {
+            if modes.count > 1 {
+                StoryPagerDots(modeCount: modes.count, rowHeight: rowHeight, offset: pagerOffset)
             }
-            .onChange(of: modes) { _, newModes in
-                visibleModeID = normalizedModeID(for: visibleModeID, modes: newModes)
-            }
-            .onChange(of: visibleModeID) { _, id in
-                guard modes.count > 1 else { return }
-                if id == StoryBarFeedPage.trailingSentinelID, let first = modes.first {
-                    Task { @MainActor in
-                        jumpToMode(first, proxy: proxy)
-                    }
-                } else if id == StoryBarFeedPage.leadingSentinelID, let last = modes.last {
-                    Task { @MainActor in
-                        jumpToMode(last, proxy: proxy)
-                    }
-                }
-            }
+        }
+        .onAppear {
+            pageIndex = startPageIndex(modeIndex: 0, modeCount: modes.count)
+        }
+        .onChange(of: modes) { oldModes, newModes in
+            let currentMode = pageIndex.flatMap { oldModes.isEmpty ? nil : oldModes[$0 % oldModes.count] }
+            let modeIndex = currentMode.flatMap(newModes.firstIndex(of:)) ?? 0
+            pageIndex = startPageIndex(modeIndex: modeIndex, modeCount: newModes.count)
         }
         .padding(.vertical, 8)
         .listRowInsets(EdgeInsets())
         .listRowSeparator(.hidden)
     }
 
-    private func storyRow(mode: StoryBarFeedMode) -> some View {
+    private func storyRow(_ row: StoryRowContent) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(mode.label)
+            Text(row.mode.label)
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 16)
 
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(alignment: .top, spacing: 12) {
-                    if showsOwnInstagramBubble(in: mode) {
+                    if showsOwnInstagramBubble(in: row.mode) {
                         StoryComposerBubble(actor: ownInstagramActor, reel: ownInstagramReel)
                             .contentShape(Rectangle())
                             .onTapGesture { onOwnStoryTap() }
                             .overlay(alignment: .topLeading) {
-                                CreateStoryDestinationButton(mode: mode, onComposeTap: onComposeTap)
+                                CreateStoryDestinationButton(mode: row.mode, onComposeTap: onComposeTap)
                                     .offset(x: 49, y: 49)
                             }
                     }
 
-                    let rowItems = filteredItems(for: mode)
-                    ForEach(rowItems) { item in
+                    ForEach(row.items) { item in
                         storyBubble(for: item)
                             .contentShape(Rectangle())
                             .onAppear {
                                 onItemAppear(item)
                             }
                             .onTapGesture {
-                                let viewerItems = rowItems.filter { $0.isSeen == item.isSeen }
+                                let viewerItems = row.items.filter { $0.isSeen == item.isSeen }
                                 onItemTap(item, viewerItems)
                             }
                     }
@@ -439,37 +429,35 @@ private struct StoriesBar: View {
         ownInstagramActor != nil && (mode == .general || mode == .instagram)
     }
 
-    private func pagerModes(for modes: [StoryBarFeedMode]) -> [StoryBarFeedPage] {
-        guard modes.count > 1, let first = modes.first, let last = modes.last else {
-            return modes.map { StoryBarFeedPage(id: $0.pageID, mode: $0) }
-        }
-        return [StoryBarFeedPage(id: StoryBarFeedPage.leadingSentinelID, mode: last)]
-            + modes.map { StoryBarFeedPage(id: $0.pageID, mode: $0) }
-            + [StoryBarFeedPage(id: StoryBarFeedPage.trailingSentinelID, mode: first)]
+    private func startPageIndex(modeIndex: Int, modeCount: Int) -> Int? {
+        guard modeCount > 0 else { return nil }
+        guard modeCount > 1 else { return 0 }
+        return (Self.cycles / 2) * modeCount + modeIndex
     }
+}
 
-    private func normalizedModeID(for id: String?, modes: [StoryBarFeedMode]) -> String? {
-        guard !modes.isEmpty else { return nil }
-        if let id, modes.contains(where: { $0.pageID == id }) {
-            return id
-        }
-        return modes.first?.pageID
-    }
+private struct StoryRowContent {
+    let mode: StoryBarFeedMode
+    let items: [StoryBarItem]
+}
 
-    private func jumpToMode(_ mode: StoryBarFeedMode, proxy: ScrollViewProxy) {
-        var transaction = Transaction()
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            visibleModeID = mode.pageID
-            proxy.scrollTo(mode.pageID, anchor: .top)
-        }
-    }
+/// Holds the pager's scroll offset outside `StoriesBar`'s state, so per-frame
+/// updates only re-render the dots rather than every story row.
+@Observable
+private final class StoryPagerOffset {
+    var value: CGFloat = 0
+}
 
-    private func storyPagerDots(modes: [StoryBarFeedMode]) -> some View {
+private struct StoryPagerDots: View {
+    let modeCount: Int
+    let rowHeight: CGFloat
+    let offset: StoryPagerOffset
+
+    var body: some View {
+        let progress = pagerProgress
         VStack(spacing: 5) {
-            ForEach(Array(modes.enumerated()), id: \.element) { index, _ in
-                let progress = circularPagerProgress(modeCount: modes.count)
-                let intensity = dotIntensity(index: index, progress: progress, modeCount: modes.count)
+            ForEach(0 ..< modeCount, id: \.self) { index in
+                let intensity = dotIntensity(index: index, progress: progress)
                 Circle()
                     .fill(Color.secondary.opacity(0.25 + (0.75 * intensity)))
                     .frame(width: 5 + (2 * intensity), height: 5 + (2 * intensity))
@@ -479,21 +467,13 @@ private struct StoriesBar: View {
         .allowsHitTesting(false)
     }
 
-    private func circularPagerProgress(modeCount: Int) -> CGFloat {
-        guard modeCount > 0 else { return 0 }
-        let rawPosition = pagerOffset / rowHeight
-        var progress = rawPosition - (modeCount > 1 ? 1 : 0)
-        while progress < 0 {
-            progress += CGFloat(modeCount)
-        }
-        while progress >= CGFloat(modeCount) {
-            progress -= CGFloat(modeCount)
-        }
-        return progress
+    private var pagerProgress: CGFloat {
+        let count = CGFloat(modeCount)
+        let position = (offset.value / rowHeight).truncatingRemainder(dividingBy: count)
+        return position < 0 ? position + count : position
     }
 
-    private func dotIntensity(index: Int, progress: CGFloat, modeCount: Int) -> CGFloat {
-        guard modeCount > 0 else { return 0 }
+    private func dotIntensity(index: Int, progress: CGFloat) -> CGFloat {
         let distance = abs(progress - CGFloat(index))
         let wrappedDistance = min(distance, CGFloat(modeCount) - distance)
         return max(0, 1 - wrappedDistance)
@@ -568,10 +548,6 @@ private enum StoryBarFeedMode: CaseIterable {
         }
     }
 
-    var pageID: String {
-        "story-feed-\(label)"
-    }
-
     func includes(_ item: StoryBarItem) -> Bool {
         switch self {
         case .general:
@@ -584,14 +560,6 @@ private enum StoryBarFeedMode: CaseIterable {
             item.network == .github
         }
     }
-}
-
-private struct StoryBarFeedPage: Identifiable {
-    static let leadingSentinelID = "story-feed-leading-sentinel"
-    static let trailingSentinelID = "story-feed-trailing-sentinel"
-
-    let id: String
-    let mode: StoryBarFeedMode
 }
 
 private struct StoryComposerBubble: View {
