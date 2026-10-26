@@ -233,7 +233,8 @@ public final class ApronChatViewModel: ObservableObject {
     private func saveCache() {
         guard !hasLaterMessages, !snapshots.isEmpty else { return }
         let recent = sortedSnapshots().suffix(ApronMessageCache.messageLimit)
-        let authors = Set(recent.map(\.from.userId))
+        // Reactors too, so the reaction list has their avatars before the connection is up.
+        let authors = Set(recent.map(\.from.userId)).union(recent.compactMap(\.messageId).flatMap { (reactionEntries[$0] ?? [:]).keys })
         // One record per user and message, keeping each set's own `log_id` so merging stays correct (§4.7).
         let reactions = recent.compactMap(\.messageId).flatMap { messageId in
             (reactionEntries[messageId] ?? [:]).map { userId, entry in

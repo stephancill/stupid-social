@@ -64,6 +64,7 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
     private var unreadCount = 0
     private var userHasScrolled = false
     private var reactionTotals: [String: [ApronReactionCount]] = [:]
+    private var avatarPrefetches = Set<URL>()
     private let reactionHaptic = UISelectionFeedbackGenerator()
 
     private let composer = UIStackView()
@@ -137,6 +138,7 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
             guard let self, let message = messagesById[id], let index = indexById[id] else { return }
             let layout = bubbleLayout(at: index)
             let reply = message.replyTo.map { replyQuote(for: $0.messageId) }
+            prefetchReactorAvatars(on: message)
             cell.configure(
                 message: message,
                 layout: layout,
@@ -1082,6 +1084,22 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
             return action
         }
         return rows.isEmpty ? nil : UIMenu(children: rows)
+    }
+
+    /// Loads the avatars of a shown message's reactors, so the chip's long-press list has them. The chat itself
+    /// only loads avatars beside incoming bubbles, which never includes your own.
+    private func prefetchReactorAvatars(on message: ApronMessage) {
+        guard let messageId = message.messageId, let totals = reactionTotals[message.id] else { return }
+        let urls = totals.flatMap { viewModel.reactors(of: $0.emoji, on: messageId) }.compactMap { viewModel.avatarURL(for: $0.user) }
+        for url in urls where StoryImageCache.shared.image(for: url) == nil && avatarPrefetches.insert(url).inserted {
+            Task {
+                guard let (data, _) = try? await URLSession.shared.data(from: url), let image = UIImage(data: data) else {
+                    avatarPrefetches.remove(url)
+                    return
+                }
+                StoryImageCache.shared.setImage(image, for: url)
+            }
+        }
     }
 
     /// The reactor's avatar when it is already loaded, otherwise initials on their color, like the chat's avatars.
