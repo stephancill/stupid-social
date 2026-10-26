@@ -190,6 +190,14 @@ public class ChatViewModel: ObservableObject {
 
     /// Names head each sender's group of bubbles; one-to-one chats turn them off.
     public internal(set) var showsSenderNames = true
+    /// Set when the title is made of member names, such as an untitled Apron private room.
+    var titleIsMemberNames = false
+    /// Whether the title names people (a one-to-one chat, or a room named for its members), so name
+    /// redaction applies to it.
+    public var titleNamesPeople: Bool {
+        !showsSenderNames || titleIsMemberNames
+    }
+
     /// Whether swipe-to-reply and the Reply action are offered.
     public let canReply: Bool
     /// Whether the composer has an attachments button; `canAttach` enables it once the network allows uploads.

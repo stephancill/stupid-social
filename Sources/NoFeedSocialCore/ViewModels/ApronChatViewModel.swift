@@ -58,8 +58,12 @@ public final class ApronChatViewModel: ChatViewModel {
     private let typingFrameBudget = 7
     private var typingStopTask: Task<Void, Never>?
 
-    public init(service: ApronService, serverURL: URL, roomId: String, title: String?) {
+    /// Set when the Chats list knows of unread messages, which may all be newer than the cache.
+    private let expectsUnread: Bool
+
+    public init(service: ApronService, serverURL: URL, roomId: String, title: String?, expectsUnread: Bool = false) {
         ownUserIds = service.readStore.ownUserIds(serverURL: serverURL)
+        self.expectsUnread = expectsUnread
         self.service = service
         self.serverURL = serverURL
         self.roomId = roomId
@@ -122,7 +126,8 @@ public final class ApronChatViewModel: ChatViewModel {
                     users[user.userId] = user
                 }
                 if let room = listing.rooms.first(where: { $0.roomId == roomId }) {
-                    title = room.displayTitle
+                    titleIsMemberNames = room.isNamedForMembers
+                    title = room.displayTitle(users: users, you: session.you.userId)
                     setMembers(of: room)
                 } else {
                     // Live deliveries only reach joined rooms (§3.4).
@@ -187,12 +192,25 @@ public final class ApronChatViewModel: ChatViewModel {
         if let cursor = readCursor {
             firstUnreadMessageId = sortedSnapshots().first { countsAsUnread($0, after: cursor) }?.id
         }
+        if expectsUnread, firstUnreadMessageId == nil {
+            // The unread messages are newer than the cache. Showing it would open at its bottom and then jump to
+            // the divider once history arrives, so wait briefly for history, which publishes the cache with it.
+            Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(1500))
+                guard let self, !hasLoadedHistory else { return }
+                publish()
+            }
+            return
+        }
         publish()
     }
 
-    /// Cached messages older than a full newest page would sit next to it with a hole between; drop them.
+    /// Cached messages older than a full newest page would sit next to it with a hole between; drop them. A cache
+    /// that reaches the page has no hole, so it stays, with the divider it may already show.
     private func dropCacheBehindGap(newestPage page: ApronHistoryResult) {
-        guard page.more == true, let pageFirst = page.firstLogId.flatMap(Int64.init) else { return }
+        guard page.more == true, let pageFirst = page.firstLogId.flatMap(Int64.init),
+              let cachedNewest = snapshots.keys.compactMap(Int64.init).max(), cachedNewest < pageFirst
+        else { return }
         snapshots = snapshots.filter { (Int64($0.key) ?? 0) >= pageFirst }
         if let divider = firstUnreadMessageId, snapshots[divider] == nil {
             firstUnreadMessageId = nil

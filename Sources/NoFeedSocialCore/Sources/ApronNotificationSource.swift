@@ -74,9 +74,12 @@ public final class ApronNotificationSource: AccountValidating {
         // Without `history` the latest message can't be read on a short-lived connection.
         guard session.server.has("history") else { return [] }
         let rooms: [ApronRoom]
+        var users: [String: ApronUser] = [:]
         var firstPage: ApronHistoryResult?
         if session.server.has("rooms") {
-            rooms = try await session.connection.joinedRooms().rooms
+            let listing = try await session.connection.joinedRooms()
+            rooms = listing.rooms
+            users = Dictionary(listing.users.map { ($0.userId, $0) }, uniquingKeysWith: { _, last in last })
         } else {
             // A server without `rooms` may have only its default room; learn it from the messages (§3.4).
             let page = try await session.connection.history(roomId: nil, limit: historyLimit)
@@ -97,12 +100,15 @@ public final class ApronNotificationSource: AccountValidating {
             let unread = latest.flatMap { message in
                 message.messageId.flatMap(Int64.init).map { unreadCount(in: page, roomId: room.roomId, latest: $0, session: session) }
             } ?? 0
+            // A DM shows the other person's avatar, as apron-web does.
+            let others = room.isNamedForMembers ? room.otherMembers(you: session.you.userId) : []
+            let avatarURL = others.count == 1 ? (users[others[0].userId] ?? others[0]).avatarURL : nil
             summaries.append(ChatSummary(
                 id: "apron:\(session.serverURL.absoluteString)|\(room.roomId)",
                 network: .apron,
-                title: room.displayTitle,
+                title: room.displayTitle(users: users, you: session.you.userId),
                 subtitle: host,
-                avatarURL: nil,
+                avatarURL: avatarURL,
                 preview: preview,
                 timestamp: latest?.timestamp,
                 unreadCount: unread,

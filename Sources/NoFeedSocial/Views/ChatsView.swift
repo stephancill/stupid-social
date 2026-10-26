@@ -87,7 +87,7 @@ struct ChatsView: View {
         switch chat.destination {
         case let .apron(serverURL, roomId):
             ApronChatView(viewModel: viewModel.follow(
-                ApronChatViewModel(service: apronService, serverURL: serverURL, roomId: roomId, title: chat.title),
+                ApronChatViewModel(service: apronService, serverURL: serverURL, roomId: roomId, title: chat.title, expectsUnread: chat.unreadCount > 0),
                 chatId: chat.id,
             ))
         case let .spotify(chatId):

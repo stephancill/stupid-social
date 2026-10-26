@@ -405,17 +405,6 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
             self?.pendingJumpTarget = target
             DispatchQueue.main.async { self?.performPendingJump() }
         }.store(in: &cancellables)
-        // The divider can appear after the cached messages first render, once history shows newer unread.
-        viewModel.$firstUnreadMessageId.dropFirst().compactMap(\.self).sink { [weak self] _ in
-            DispatchQueue.main.async { [weak self] in
-                guard let self, hasScrolledInitially, !self.userHasScrolled, pendingJumpTarget == nil,
-                      dataSource.indexPath(for: .unreadDivider) != nil
-                else { return }
-                isPinnedToBottom = false
-                isAnchoredToDivider = true
-                scrollToDivider()
-            }
-        }.store(in: &cancellables)
         viewModel.$unreadCount.sink { [weak self] count in
             guard let self else { return }
             unreadCount = count
@@ -438,7 +427,13 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
             .sink { [weak self] _, _ in DispatchQueue.main.async { self?.reconfigureReplies() } }
             .store(in: &cancellables)
 
-        viewModel.$state.sink { [weak self] in self?.state = $0; self?.refreshComposer() }.store(in: &cancellables)
+        viewModel.$state.sink { [weak self] state in
+            self?.state = state
+            self?.refreshComposer()
+            if state == .connected {
+                DispatchQueue.main.async { self?.reportVisibleRead() }
+            }
+        }.store(in: &cancellables)
         viewModel.$isSending.sink { [weak self] in self?.isSending = $0; self?.refreshComposer() }.store(in: &cancellables)
         viewModel.$draft.sink { [weak self] in self?.draft = $0; self?.refreshComposer() }.store(in: &cancellables)
         viewModel.$attachment.sink { [weak self] in self?.attachment = $0; self?.refreshComposer() }.store(in: &cancellables)
@@ -456,7 +451,8 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     }
 
     private func applySnapshot(messages: [ChatMessage], hasEarlier _: Bool, hasLater: Bool) {
-        let previousIds = items(in: .messages, of: dataSource.snapshot()).filter { $0 != .unreadDivider }
+        let previousItems = items(in: .messages, of: dataSource.snapshot())
+        let previousIds = previousItems.filter { $0 != .unreadDivider }
         let wasEmpty = previousIds.isEmpty
         let previousFirst = previousIds.first
         let previousLast = previousIds.last
@@ -489,6 +485,8 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         let prepended = !wasEmpty && newFirst != previousFirst && previousLast == items.last
         let distanceFromBottom = collectionView.contentSize.height - collectionView.contentOffset.y
         let wasAtBottom = isPinnedToBottom
+        // The divider can appear after the cached messages first render, once history shows newer unread.
+        let dividerAppeared = rows.contains(.unreadDivider) && !previousItems.contains(.unreadDivider)
 
         dataSource.apply(snapshot, animatingDifferences: false)
 
@@ -503,6 +501,11 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
             collectionView.contentOffset.y = collectionView.contentSize.height - distanceFromBottom
         } else if isAnchoredToDivider {
             scrollToDivider()
+        } else if dividerAppeared, !userHasScrolled {
+            // Move to it in the same pass. Following the bottom first would animate past the new messages.
+            isPinnedToBottom = false
+            isAnchoredToDivider = true
+            scrollToDivider()
         } else if wasAtBottom, !hasLater {
             // At the bottom, new messages and cells that grew push the list up rather than under the input.
             scrollToBottom(animated: true)
@@ -513,11 +516,16 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     /// The quote shown in a reply, including targets outside the loaded window while they load.
     private func replyQuote(for targetId: String) -> ChatReplyQuote {
         if let target = viewModel.message(withId: targetId) {
-            let text = target.isDeleted ? target.previewText : viewModel.showingMentionNames(target.previewText)
-            return ChatReplyQuote(name: target.sender.name, text: text, accentUserId: target.sender.id)
+            let text = target.isDeleted ? target.previewText : mentionText(target.previewText)
+            return ChatReplyQuote(name: DebugRedaction.name(target.sender.name), text: text, accentUserId: target.sender.id)
         }
         let unavailable = viewModel.isUnavailableReference(targetId)
         return ChatReplyQuote(name: "Reply", text: unavailable ? "Message unavailable" : "Loading…", accentUserId: nil)
+    }
+
+    /// Quote and reply-preview text with mentions by name, or redacted.
+    private func mentionText(_ text: String) -> String {
+        DebugRedaction.isEnabled ? DebugRedaction.mentions(in: text, pattern: viewModel.mentionPattern) : viewModel.showingMentionNames(text)
     }
 
     /// Mentions show names, so messages and quotes with any `@` render again when the known names change.
@@ -604,8 +612,8 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
 
         if let replyingTo {
             replyPreview.isHidden = false
-            replyPreviewName.text = "Reply to \(replyingTo.sender.name)"
-            replyPreviewText.text = viewModel.showingMentionNames(replyingTo.previewText).replacingOccurrences(of: "\n", with: " ")
+            replyPreviewName.text = "Reply to \(DebugRedaction.name(replyingTo.sender.name))"
+            replyPreviewText.text = mentionText(replyingTo.previewText).replacingOccurrences(of: "\n", with: " ")
         } else {
             replyPreview.isHidden = true
         }
@@ -682,7 +690,9 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
             underlinesMentions: isOwn,
             mentionPattern: viewModel.mentionPattern,
             mentionNames: viewModel.mentionNames,
+            redactsMentions: DebugRedaction.isEnabled,
             font: isSystem ? .preferredFont(forTextStyle: .footnote) : .preferredFont(forTextStyle: .body),
+            formatsQuotes: message.isMarkdown,
         )
         attributedCache[key] = rendered
         return rendered
@@ -737,7 +747,8 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
             UIView.animate(withDuration: 0.3, delay: 0, options: [.curveEaseOut, .allowUserInteraction, .beginFromCurrentState]) {
                 self.collectionView.contentOffset.y = target
             } completion: { _ in
-                if !self.collectionView.isDragging {
+                // The list may have stopped following the bottom meanwhile, such as for a new divider.
+                if !self.collectionView.isDragging, self.isPinnedToBottom, !self.isAnchoredToDivider {
                     self.scrollToBottom(animated: false)
                 }
             }
@@ -902,8 +913,10 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     }
 
     /// Marks read up to the newest message fully on screen, only while the chat is visible and the app active (§4.6).
+    /// Cached messages shown before the chat connects don't count: reading them would move the cursor, and with it
+    /// the divider that history places once it arrives.
     private func reportVisibleRead() {
-        guard hasScrolledInitially, view.window != nil, UIApplication.shared.applicationState == .active else { return }
+        guard hasScrolledInitially, state == .connected, view.window != nil, UIApplication.shared.applicationState == .active else { return }
         let visibleBottom = collectionView.contentOffset.y + collectionView.bounds.height - collectionView.adjustedContentInset.bottom
         var newest: Int?
         for indexPath in collectionView.indexPathsForVisibleItems {
@@ -1140,18 +1153,19 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
 
     private func mentionRow(for user: ChatUser) -> UIView {
         let avatar = ChatAvatarView()
-        avatar.configure(name: user.name, color: ChatUserColor.color(for: user.id), url: viewModel.avatarURL(for: user))
+        let userName = DebugRedaction.name(user.name)
+        avatar.configure(name: userName, color: ChatUserColor.color(for: user.id), url: viewModel.avatarURL(for: user))
         avatar.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             avatar.widthAnchor.constraint(equalToConstant: 28),
             avatar.heightAnchor.constraint(equalToConstant: 28),
         ])
         let name = UILabel()
-        name.text = user.name
+        name.text = userName
         name.font = .preferredFont(forTextStyle: .subheadline)
         name.setContentHuggingPriority(.required, for: .horizontal)
         let userId = UILabel()
-        userId.text = "@\(user.id)"
+        userId.text = DebugRedaction.isEnabled ? "@Redacted" : "@\(user.id)"
         userId.font = .preferredFont(forTextStyle: .footnote)
         userId.textColor = .secondaryLabel
         userId.lineBreakMode = .byTruncatingMiddle
@@ -1161,7 +1175,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         row.isLayoutMarginsRelativeArrangement = true
         row.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12)
         row.isAccessibilityElement = true
-        row.accessibilityLabel = "\(user.name), @\(user.id)"
+        row.accessibilityLabel = "\(userName), \(userId.text ?? "")"
         row.accessibilityTraits = .button
         row.addGestureRecognizer(ChatActionTapGesture { [weak self] in self?.insertMention(of: user) })
         return row
@@ -1177,6 +1191,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     }
 
     private func updateTypingIndicator(_ names: [String]) {
+        let names = names.map { DebugRedaction.name($0) }
         let text: String? = switch names.count {
         case 0: nil
         case 1: "\(names[0]) is typing…"
@@ -1260,7 +1275,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     private func reactionMenu(pressed emoji: String, on id: String) -> UIMenu? {
         guard messagesById[id]?.isNotice == false else { return nil }
         let rows = viewModel.reactors(of: emoji, on: id).map { reactor in
-            let action = UIAction(title: reactor.isYou ? "You" : reactor.user.name, image: reactorImage(for: reactor.user)) { _ in }
+            let action = UIAction(title: reactor.isYou ? "You" : DebugRedaction.name(reactor.user.name), image: reactorImage(for: reactor.user)) { _ in }
             action.subtitle = reactor.date.map(Self.reactionTimeFormatter.string(from:))
             return action
         }
@@ -1298,7 +1313,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
             }
             ChatUserColor.color(for: user.id).setFill()
             UIRectFill(rect)
-            let initials = user.name.split(separator: " ").prefix(2).compactMap(\.first).map(String.init).joined().uppercased() as NSString
+            let initials = DebugRedaction.name(user.name).split(separator: " ").prefix(2).compactMap(\.first).map(String.init).joined().uppercased() as NSString
             let attributes: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: 11, weight: .semibold), .foregroundColor: UIColor.white]
             let textSize = initials.size(withAttributes: attributes)
             initials.draw(at: CGPoint(x: (size.width - textSize.width) / 2, y: (size.height - textSize.height) / 2), withAttributes: attributes)
@@ -1483,7 +1498,8 @@ private final class ChatMessageCell: UICollectionViewListCell, UIGestureRecogniz
         nameLabel.font = UIFont.preferredFont(forTextStyle: .subheadline).withWeight(.semibold)
         bodyLabel.numberOfLines = 0
         embedsStack.axis = .vertical
-        embedsStack.alignment = .leading
+        // Embeds always span the bubble, which takes its full width when it has any.
+        embedsStack.alignment = .fill
         embedsStack.spacing = 6
         timeSpacer.heightAnchor.constraint(equalToConstant: 12).isActive = true
 
@@ -1739,11 +1755,11 @@ private final class ChatMessageCell: UICollectionViewListCell, UIGestureRecogniz
         // Incoming messages keep the avatar column so a group's bubbles line up.
         avatarView.isHidden = layout.isOwn || !layout.showsAvatar
         if layout.showsAvatar {
-            avatarView.configure(name: message.sender.name, color: accent, url: avatarURL)
+            avatarView.configure(name: DebugRedaction.name(message.sender.name), color: accent, url: avatarURL)
         }
 
         nameLabel.isHidden = !layout.showsName
-        nameLabel.text = message.sender.name
+        nameLabel.text = DebugRedaction.name(message.sender.name)
         nameLabel.textColor = accent
 
         if let reply {
@@ -1828,7 +1844,7 @@ private final class ChatMessageCell: UICollectionViewListCell, UIGestureRecogniz
                 nameLabel.isHidden ? nil : nameLabel.intrinsicContentSize.width,
                 replyView.isHidden ? nil : replyView.naturalWidth,
                 bodyLabel.attributedText.map { Self.textWidth($0, max: Self.maxContentWidth(availableWidth: availableWidth, isOwn: layout.isOwn)) },
-                embedsStack.isHidden ? nil : embedsStack.arrangedSubviews.map(Self.fittingWidth).max(),
+                embedsStack.isHidden ? nil : Self.maxContentWidth(availableWidth: availableWidth, isOwn: layout.isOwn),
                 reactionsContainer.isHidden ? nil : reactionsRowWidth + 40,
                 timeSpacer.isHidden ? nil : timeLabel.intrinsicContentSize.width,
             ].compactMap(\.self),
@@ -1977,14 +1993,18 @@ private final class ChatMessageCell: UICollectionViewListCell, UIGestureRecogniz
             imageView.isAccessibilityElement = alt != nil
             // Sizing from the server's `og` dimensions keeps the cell height stable while the image loads.
             let ratio = CGFloat(min(max(aspectRatio ?? 4 / 3, 0.5), 2))
-            // Uploads fill the bubble, so they get Telegram's larger size; previews sit inside the padding.
-            // Portrait uploads are sized by height, like Telegram, so they don't squeeze a caption.
-            let base: CGFloat = opensViewer ? 264 : 240
-            let width: CGFloat = ratio >= 1 ? base : opensViewer ? max(200, min(base, 340 * ratio)) : base * ratio
-            NSLayoutConstraint.activate([
-                imageView.widthAnchor.constraint(equalToConstant: width),
-                imageView.heightAnchor.constraint(equalTo: imageView.widthAnchor, multiplier: 1 / ratio),
-            ])
+            if opensViewer {
+                // Uploads fill the bubble, so they get Telegram's larger size. Portrait uploads are sized by
+                // height, like Telegram, so they don't squeeze a caption.
+                let width: CGFloat = ratio >= 1 ? 264 : max(200, min(264, 340 * ratio))
+                NSLayoutConstraint.activate([
+                    imageView.widthAnchor.constraint(equalToConstant: width),
+                    imageView.heightAnchor.constraint(equalTo: imageView.widthAnchor, multiplier: 1 / ratio),
+                ])
+            } else {
+                // A preview spans the bubble; a tall one is cropped so it doesn't take over the screen.
+                imageView.heightAnchor.constraint(equalTo: imageView.widthAnchor, multiplier: 1 / max(ratio, 0.75)).isActive = true
+            }
             loadImage(url, into: imageView)
             if opensViewer {
                 imageView.isUserInteractionEnabled = true
@@ -2017,7 +2037,11 @@ private final class ChatMessageCell: UICollectionViewListCell, UIGestureRecogniz
         case let .card(title, subtitle, systemImage, imageURL, link):
             let icon = UIImageView(image: UIImage(systemName: systemImage))
             icon.tintColor = .secondaryLabel
+            icon.contentMode = .scaleAspectFit
             icon.setContentHuggingPriority(.required, for: .horizontal)
+            // A long title truncates instead; without this it squeezed the symbol to a sliver.
+            icon.setContentCompressionResistancePriority(.required, for: .horizontal)
+            icon.translatesAutoresizingMaskIntoConstraints = false
             if let imageURL {
                 // A thumbnail, such as album artwork, replaces the symbol once it loads.
                 icon.contentMode = .scaleAspectFill
@@ -2029,6 +2053,11 @@ private final class ChatMessageCell: UICollectionViewListCell, UIGestureRecogniz
                     icon.heightAnchor.constraint(equalToConstant: 48),
                 ])
                 loadImage(imageURL, into: icon)
+            } else {
+                NSLayoutConstraint.activate([
+                    icon.widthAnchor.constraint(equalToConstant: 22),
+                    icon.heightAnchor.constraint(equalToConstant: 22),
+                ])
             }
             return card(leading: icon, title: title, subtitle: subtitle, link: link)
         }
@@ -2335,7 +2364,9 @@ private enum ChatAttributedText {
         underlinesMentions: Bool,
         mentionPattern: NSRegularExpression?,
         mentionNames: [String: String],
+        redactsMentions: Bool,
         font base: UIFont,
+        formatsQuotes: Bool,
     ) -> NSAttributedString {
         let result = NSMutableAttributedString()
         for run in text.runs {
@@ -2370,12 +2401,45 @@ private enum ChatAttributedText {
                     detectLinks(in: segment, color: linkColor)
                 }
                 if let mentionPattern {
-                    highlightMentions(in: segment, pattern: mentionPattern, color: linkColor, underline: underlinesMentions, names: mentionNames)
+                    highlightMentions(in: segment, pattern: mentionPattern, color: linkColor, underline: underlinesMentions, names: mentionNames, redacts: redactsMentions)
                 }
             }
             result.append(segment)
         }
+        if formatsQuotes {
+            formatQuotes(in: result, color: color)
+        }
         return result
+    }
+
+    static let quoteIndent: CGFloat = 12
+
+    /// Lines starting with `>` lose the marker and are indented and dimmed; `ChatLinkLabel` draws the bar.
+    /// Messages are parsed as inline Markdown only, so block quotes are found here, line by line.
+    private static func formatQuotes(in text: NSMutableAttributedString, color: UIColor) {
+        let style = NSMutableParagraphStyle()
+        style.firstLineHeadIndent = quoteIndent
+        style.headIndent = quoteIndent
+        var lines: [NSRange] = []
+        (text.string as NSString).enumerateSubstrings(in: NSRange(location: 0, length: text.length), options: .byParagraphs) { _, range, _, _ in
+            lines.append(range)
+        }
+        // Back to front, so removing a marker doesn't move the lines before it.
+        for line in lines.reversed() {
+            let string = (text.string as NSString).substring(with: line)
+            guard string.hasPrefix(">") else { continue }
+            let marker = string.hasPrefix("> ") ? 2 : 1
+            text.deleteCharacters(in: NSRange(location: line.location, length: marker))
+            let quoted = NSRange(location: line.location, length: line.length - marker)
+            guard quoted.length > 0 else { continue }
+            text.addAttribute(.paragraphStyle, value: style, range: quoted)
+            text.addAttribute(.chatQuote, value: true, range: quoted)
+            text.enumerateAttribute(.foregroundColor, in: quoted) { value, range, _ in
+                // Links and mentions keep their color.
+                guard (value as? UIColor) == color else { return }
+                text.addAttribute(.foregroundColor, value: color.withAlphaComponent(0.7), range: range)
+            }
+        }
     }
 
     private static let linkDetector = try! NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
@@ -2395,7 +2459,7 @@ private enum ChatAttributedText {
 
     /// Mentions render in the link color, or underlined where that color isn't available, and show the user's
     /// name where it is known; code spans hold no mentions. A mention inside a link keeps its text.
-    private static func highlightMentions(in segment: NSMutableAttributedString, pattern: NSRegularExpression, color: UIColor, underline: Bool, names: [String: String]) {
+    private static func highlightMentions(in segment: NSMutableAttributedString, pattern: NSRegularExpression, color: UIColor, underline: Bool, names: [String: String], redacts: Bool) {
         let range = NSRange(location: 0, length: segment.length)
         // Back to front, so replacing a mention's text doesn't move the ones before it.
         for match in pattern.matches(in: segment.string, range: range).reversed() {
@@ -2405,7 +2469,7 @@ private enum ChatAttributedText {
             if underline {
                 segment.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: match.range)
             }
-            if let name = names[userId], segment.attribute(.chatLink, at: match.range.location, effectiveRange: nil) == nil {
+            if let name = redacts ? "Redacted" : names[userId], segment.attribute(.chatLink, at: match.range.location, effectiveRange: nil) == nil {
                 segment.replaceCharacters(in: match.range, with: "@\(name)")
             }
         }
@@ -2417,6 +2481,8 @@ private extension NSAttributedString.Key {
     static let chatLink = NSAttributedString.Key("ChatLink")
     /// The `user_id` of an `@` mention, which opens their profile on tap.
     static let chatMention = NSAttributedString.Key("ChatMention")
+    /// A block quote line, drawn with a bar at its leading edge.
+    static let chatQuote = NSAttributedString.Key("ChatQuote")
 }
 
 /// A label whose `.chatLink` runs open on tap and whose `.chatMention` runs show the user. Taps elsewhere
@@ -2461,9 +2527,63 @@ private final class ChatLinkLabel: UILabel {
         }
     }
 
-    /// Lays the text out with TextKit at the label's size to find the character under the point.
-    private func target(at point: CGPoint) -> Target? {
-        guard let text = attributedText, text.length > 0, bounds.width > 0 else { return nil }
+    /// One bar beside each run of quoted lines. Layers, because UILabel no longer reliably calls `drawText(in:)`.
+    private var quoteBars: [CALayer] = []
+
+    override var attributedText: NSAttributedString? {
+        didSet { setNeedsLayout() }
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        layoutQuoteBars()
+    }
+
+    /// Lays the bars out as `target(at:)` lays out the text.
+    private func layoutQuoteBars() {
+        var rects: [CGRect] = []
+        var color: UIColor?
+        if let text = attributedText, text.length > 0 {
+            var quotes: [NSRange] = []
+            text.enumerateAttribute(.chatQuote, in: NSRange(location: 0, length: text.length)) { value, range, _ in
+                if value != nil { quotes.append(range) }
+            }
+            if let first = quotes.first, let (storage, layoutManager, _, offset) = layout(in: text) {
+                defer { withExtendedLifetime(storage) {} }
+                color = text.attribute(.foregroundColor, at: first.location, effectiveRange: nil) as? UIColor
+                for quote in quotes {
+                    let glyphs = layoutManager.glyphRange(forCharacterRange: quote, actualCharacterRange: nil)
+                    var lines = CGRect.null
+                    layoutManager.enumerateLineFragments(forGlyphRange: glyphs) { lineRect, _, _, _, _ in
+                        lines = lines.union(lineRect)
+                    }
+                    if !lines.isNull {
+                        rects.append(CGRect(x: 0, y: lines.minY + offset, width: 3, height: lines.height).insetBy(dx: 0, dy: 1))
+                    }
+                }
+            }
+        }
+        while quoteBars.count < rects.count {
+            let bar = CALayer()
+            bar.cornerRadius = 1.5
+            layer.addSublayer(bar)
+            quoteBars.append(bar)
+        }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for (index, bar) in quoteBars.enumerated() {
+            bar.isHidden = index >= rects.count
+            guard index < rects.count else { continue }
+            bar.frame = rects[index]
+            bar.backgroundColor = (color ?? textColor).cgColor
+        }
+        CATransaction.commit()
+    }
+
+    /// TextKit at the label's size, and the vertical offset UILabel adds by centering its text. The storage is
+    /// returned so the caller keeps it alive; the layout manager holds it weakly.
+    private func layout(in text: NSAttributedString) -> (NSTextStorage, NSLayoutManager, NSTextContainer, CGFloat)? {
+        guard bounds.width > 0 else { return nil }
         let storage = NSTextStorage(attributedString: text)
         let layoutManager = NSLayoutManager()
         let container = NSTextContainer(size: CGSize(width: bounds.width, height: .greatestFiniteMagnitude))
@@ -2471,9 +2591,15 @@ private final class ChatLinkLabel: UILabel {
         container.maximumNumberOfLines = numberOfLines
         layoutManager.addTextContainer(container)
         storage.addLayoutManager(layoutManager)
-        // UILabel centers its text vertically.
         let used = layoutManager.usedRect(for: container)
-        let location = CGPoint(x: point.x, y: point.y - max(0, (bounds.height - used.height) / 2))
+        return (storage, layoutManager, container, max(0, (bounds.height - used.height) / 2))
+    }
+
+    /// Lays the text out with TextKit at the label's size to find the character under the point.
+    private func target(at point: CGPoint) -> Target? {
+        guard let text = attributedText, text.length > 0, let (storage, layoutManager, container, offset) = layout(in: text) else { return nil }
+        defer { withExtendedLifetime(storage) {} }
+        let location = CGPoint(x: point.x, y: point.y - offset)
         let glyph = layoutManager.glyphIndex(for: location, in: container)
         let glyphRect = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: container)
         guard glyphRect.insetBy(dx: -6, dy: -4).contains(location) else { return nil }

@@ -12,6 +12,18 @@ struct ChatView: View {
     /// While a screen pushed on top reads the chat's live state, leaving doesn't disconnect.
     var keepsConnection = false
 
+    @AppStorage("redactionEnabled") private var redactionEnabled = false
+
+    /// Like the feed, "Redact names" hides people's names: the title of a chat named for people, and an
+    /// `@username` subtitle.
+    private var displayTitle: String {
+        viewModel.titleNamesPeople ? DebugRedaction.name(viewModel.title, enabled: redactionEnabled) : viewModel.title
+    }
+
+    private var displaySubtitle: String {
+        redactionEnabled && viewModel.subtitle.hasPrefix("@") ? "Redacted" : viewModel.subtitle
+    }
+
     var body: some View {
         ChatUIKitView(viewModel: viewModel, showProfile: showProfile)
             .ignoresSafeArea(.keyboard)
@@ -26,11 +38,11 @@ struct ChatView: View {
                     // Without an action it isn't a button: a disabled button would dim the title.
                     if let onTitleTap {
                         Button(action: onTitleTap) {
-                            ChatTitlePill(title: viewModel.title, subtitle: viewModel.subtitle)
+                            ChatTitlePill(title: displayTitle, subtitle: displaySubtitle)
                         }
                         .buttonStyle(.plain)
                     } else {
-                        ChatTitlePill(title: viewModel.title, subtitle: viewModel.subtitle)
+                        ChatTitlePill(title: displayTitle, subtitle: displaySubtitle)
                     }
                 }
             }

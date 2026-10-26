@@ -27,6 +27,8 @@ public struct ApronUser: Codable, Hashable, Sendable {
     public let roles: [String]?
     /// What others see, in current objects only; `nil` when unknown (§4.5).
     public let status: String?
+    /// When the shown status last became `offline`, in `log_id` format; only with a shown `offline` (§4.5.2).
+    public let seen: String?
     /// `ext.bio`, the profile text apron-web shows; `""` clears it (§4.12).
     public let bio: String?
 
@@ -36,6 +38,7 @@ public struct ApronUser: Codable, Hashable, Sendable {
         case avatar
         case roles
         case status
+        case seen
         case ext
     }
 
@@ -43,12 +46,13 @@ public struct ApronUser: Codable, Hashable, Sendable {
         case bio
     }
 
-    public init(userId: String, name: String?, avatar: String?, roles: [String]?, status: String? = nil, bio: String? = nil) {
+    public init(userId: String, name: String?, avatar: String?, roles: [String]?, status: String? = nil, seen: String? = nil, bio: String? = nil) {
         self.userId = userId
         self.name = name
         self.avatar = avatar
         self.roles = roles
         self.status = status
+        self.seen = seen
         self.bio = bio
     }
 
@@ -59,6 +63,7 @@ public struct ApronUser: Codable, Hashable, Sendable {
         avatar = try container.decodeIfPresent(String.self, forKey: .avatar)
         roles = try container.decodeIfPresent([String].self, forKey: .roles)
         status = try container.decodeIfPresent(String.self, forKey: .status)
+        seen = try? container.decodeIfPresent(String.self, forKey: .seen)
         // `ext` is free-form; a missing or odd `bio` never drops the user.
         let ext = try? container.nestedContainer(keyedBy: ExtKeys.self, forKey: .ext)
         bio = (try? ext?.decodeIfPresent(String.self, forKey: .bio)) ?? nil
@@ -71,6 +76,7 @@ public struct ApronUser: Codable, Hashable, Sendable {
         try container.encodeIfPresent(avatar, forKey: .avatar)
         try container.encodeIfPresent(roles, forKey: .roles)
         try container.encodeIfPresent(status, forKey: .status)
+        try container.encodeIfPresent(seen, forKey: .seen)
         if let bio {
             var ext = container.nestedContainer(keyedBy: ExtKeys.self, forKey: .ext)
             try ext.encode(bio, forKey: .bio)
@@ -85,8 +91,15 @@ public struct ApronUser: Codable, Hashable, Sendable {
             avatar: update.avatar ?? avatar,
             roles: update.roles ?? roles,
             status: update.status ?? status,
+            seen: update.seen ?? seen,
             bio: update.bio ?? bio,
         )
+    }
+
+    /// `seen` as a date, shown only while the shown status is `offline` (§4.5.2).
+    public var lastSeen: Date? {
+        guard status == "offline", let millis = seen.flatMap(Int64.init) else { return nil }
+        return Date(timeIntervalSince1970: TimeInterval(millis) / 1000)
     }
 
     public var displayName: String {
@@ -150,6 +163,8 @@ public struct ApronRoom: Decodable, Hashable, Sendable {
     public let description: String?
     public let parentRoomId: String?
     public let latestLogId: String?
+    /// Visible only to members (§4.2.4).
+    public let isPrivate: Bool
     /// Users who joined, possibly only `user_id`; present with `members: true` (§4.2.1).
     public let members: [ApronUser]?
     /// How many users joined, when the server truncated `members`.
@@ -161,6 +176,7 @@ public struct ApronRoom: Decodable, Hashable, Sendable {
         case description
         case parentRoomId = "parent_room_id"
         case latestLogId = "latest_log_id"
+        case isPrivate = "private"
         case members
         case memberCount = "member_count"
     }
@@ -171,13 +187,44 @@ public struct ApronRoom: Decodable, Hashable, Sendable {
         description = nil
         parentRoomId = nil
         latestLogId = nil
+        isPrivate = false
         members = nil
         memberCount = nil
     }
 
-    public var displayTitle: String {
-        if let title, !title.isEmpty { return title }
-        return roomId
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        roomId = try container.decode(String.self, forKey: .roomId)
+        title = try container.decodeIfPresent(String.self, forKey: .title)
+        description = try container.decodeIfPresent(String.self, forKey: .description)
+        parentRoomId = try container.decodeIfPresent(String.self, forKey: .parentRoomId)
+        latestLogId = try container.decodeIfPresent(String.self, forKey: .latestLogId)
+        isPrivate = try container.decodeIfPresent(Bool.self, forKey: .isPrivate) ?? false
+        members = try container.decodeIfPresent([ApronUser].self, forKey: .members)
+        memberCount = try container.decodeIfPresent(Int.self, forKey: .memberCount)
+    }
+
+    /// An untitled top-level private room, such as a DM, is named for its members, as in apron-web.
+    public var isNamedForMembers: Bool {
+        isPrivate && parentRoomId == nil && (title ?? "").trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    /// Members other than `you`; empty while they aren't known.
+    public func otherMembers(you: String) -> [ApronUser] {
+        (members ?? []).filter { $0.userId != you }
+    }
+
+    /// The room's title, else its `room_id` (§3.4). A room named for its members takes the names of the others,
+    /// sorted and joined with ", ", or "You" when no one else is left (apron-web's `peopleTitle`).
+    public func displayTitle(users: [String: ApronUser], you: String) -> String {
+        guard isNamedForMembers else {
+            if let title, !title.isEmpty { return title }
+            return roomId
+        }
+        guard members != nil else { return "Private room" }
+        let names = otherMembers(you: you).map { (users[$0.userId] ?? $0).displayName }
+        guard !names.isEmpty else { return "You" }
+        return names.sorted { $0.localizedStandardCompare($1) == .orderedAscending }.joined(separator: ", ")
     }
 }
 

@@ -4,6 +4,7 @@ import SwiftUI
 /// One Apron user's profile: avatar, name, `@user_id` (§3.3.1 says to show it where there is room), status
 /// (§4.5), roles (§3.3.4) and bio (`ext.bio`). Reads the chat's kept object, so live changes show.
 struct ApronProfileView: View {
+    @AppStorage("redactionEnabled") private var redactionEnabled = false
     @ObservedObject var viewModel: ApronChatViewModel
     let user: ApronUser
 
@@ -17,12 +18,12 @@ struct ApronProfileView: View {
                     ApronUserAvatar(user: user, avatarURL: viewModel.avatarURL(for: user), presence: presence, size: 96, ringColor: Color(uiColor: .systemGroupedBackground), dotScale: 1 / 5)
                         .padding(.bottom, 6)
                     HStack(spacing: 6) {
-                        Text(user.displayName)
+                        Text(DebugRedaction.name(user.displayName, enabled: redactionEnabled))
                             .font(.title2.weight(.semibold))
                             .lineLimit(1)
                         ApronUserTags(roles: user.roles, isYou: isYou)
                     }
-                    Text("@\(user.userId)")
+                    Text(redactionEnabled ? "@Redacted" : "@\(user.userId)")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -31,6 +32,11 @@ struct ApronProfileView: View {
                     // The dot already says online or offline; only the other statuses need words.
                     if let presence, presence != .online, presence != .offline {
                         Text(presence.label)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    if presence == .offline, !isYou, let lastSeen = user.lastSeen {
+                        Text("Last seen \(lastSeen, format: .relative(presentation: .named))")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
@@ -46,7 +52,7 @@ struct ApronProfileView: View {
                 }
             }
         }
-        .navigationTitle(user.displayName)
+        .navigationTitle(DebugRedaction.name(user.displayName, enabled: redactionEnabled))
         .navigationBarTitleDisplayMode(.inline)
     }
 
@@ -89,6 +95,7 @@ struct ApronUserTags: View {
 
 /// A user's avatar, or initials on their chat color, with a dot for a known status.
 struct ApronUserAvatar: View {
+    @AppStorage("redactionEnabled") private var redactionEnabled = false
     let user: ApronUser
     let avatarURL: URL?
     let presence: ApronPresence?
@@ -128,7 +135,7 @@ struct ApronUserAvatar: View {
     private var initials: some View {
         ZStack {
             Color(uiColor: ChatUserColor.color(for: user.userId))
-            Text(user.displayName.split(separator: " ").prefix(2).compactMap(\.first).map(String.init).joined().uppercased())
+            Text(DebugRedaction.name(user.displayName, enabled: redactionEnabled).split(separator: " ").prefix(2).compactMap(\.first).map(String.init).joined().uppercased())
                 .font(.system(size: size * 0.39, weight: .semibold))
                 .foregroundStyle(.white)
         }

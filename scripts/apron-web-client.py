@@ -234,6 +234,14 @@ def cmd_join(session: Session, args: argparse.Namespace) -> None:
     print_json({"notifications": session.notifications})
 
 
+def og_image(url: str, size: str) -> dict[str, Any]:
+    """An `og.image`; `--image-size none` leaves out the size, as servers may (§4.8)."""
+    if size == "none":
+        return {"url": url}
+    width, height = (int(v) for v in size.split("x"))
+    return {"url": url, "width": width, "height": height}
+
+
 def cmd_send(session: Session, args: argparse.Namespace) -> None:
     authenticate(session, args)
     params: dict[str, Any] = {"body": {"text": args.text, "format": args.format}}
@@ -244,11 +252,17 @@ def cmd_send(session: Session, args: argparse.Namespace) -> None:
     if args.image_url:
         # A finished upload embed with an image preview (§4.8.4), for testing clients against servers that
         # pass embeds through without storing files, such as the js-minimal reference server.
-        width, height = (int(v) for v in args.image_size.split("x"))
         params["body"]["embeds"] = [{
             "kind": "upload", "embed_id": f"e{int(time.time() * 1000)}", "title": args.image_url.rsplit("/", 1)[-1],
-            "url": args.image_url, "og": {"image": {"url": args.image_url, "width": width, "height": height}},
+            "url": args.image_url, "og": {"image": og_image(args.image_url, args.image_size)},
         }]
+    if args.link_url:
+        # A link preview (§4.8.2): title, description and optionally an image, as a server would unfurl it.
+        og: dict[str, Any] = {"title": args.link_title or args.link_url, "description": args.link_description}
+        if args.link_image:
+            og["image"] = og_image(args.link_image, args.image_size)
+        embeds = params["body"].setdefault("embeds", [])
+        embeds.append({"kind": "link", "url": args.link_url, "og": {k: v for k, v in og.items() if v}})
     print_json(session.request("message", params))
     print_json({"notifications": session.notifications})
 
@@ -393,7 +407,11 @@ def main() -> None:
     send.add_argument("--format", choices=["plain", "markdown"], default="plain")
     send.add_argument("--reply-to")
     send.add_argument("--image-url")
-    send.add_argument("--image-size", default="1200x800", help="WIDTHxHEIGHT of --image-url")
+    send.add_argument("--image-size", default="1200x800", help="WIDTHxHEIGHT of --image-url or --link-image, or none")
+    send.add_argument("--link-url", help="attach a link preview embed")
+    send.add_argument("--link-title")
+    send.add_argument("--link-description")
+    send.add_argument("--link-image", help="og.image URL of the link preview")
     react = add("react", cmd_react)
     react.add_argument("--message", required=True)
     react.add_argument("--emoji", action="append", default=[])

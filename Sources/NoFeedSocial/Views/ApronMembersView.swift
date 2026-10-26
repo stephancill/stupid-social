@@ -68,6 +68,7 @@ struct ApronMembersView: View {
 }
 
 private struct ApronMemberRow: View {
+    @AppStorage("redactionEnabled") private var redactionEnabled = false
     let user: ApronUser
     let avatarURL: URL?
     let isYou: Bool
@@ -78,12 +79,17 @@ private struct ApronMemberRow: View {
             ApronUserAvatar(user: user, avatarURL: avatarURL, presence: presence)
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 6) {
-                    Text(user.displayName)
+                    Text(DebugRedaction.name(user.displayName, enabled: redactionEnabled))
                         .lineLimit(1)
                     ApronUserTags(roles: user.roles, isYou: isYou)
                 }
                 if !details.isEmpty {
                     Text(details.joined(separator: " · "))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                } else if presence == .offline, !isYou, let lastSeen = user.lastSeen {
+                    Text("Last seen \(lastSeen, format: .relative(presentation: .named))")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)

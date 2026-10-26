@@ -1,6 +1,23 @@
+import Foundation
 import NoFeedSocialCore
 
 enum DebugRedaction {
+    /// The "Redact names" setting, for UIKit code that can't use `@AppStorage("redactionEnabled")`.
+    static var isEnabled: Bool {
+        UserDefaults.standard.bool(forKey: "redactionEnabled")
+    }
+
+    /// A chat participant's name.
+    static func name(_ value: String, enabled: Bool = isEnabled) -> String {
+        enabled ? "Redacted" : value
+    }
+
+    /// Text with each `@` mention shown as `@Redacted`.
+    static func mentions(in text: String, pattern: NSRegularExpression?, enabled: Bool = isEnabled) -> String {
+        guard enabled, let pattern else { return text }
+        return pattern.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "@Redacted")
+    }
+
     static func username(_ value: String?, fallback: String = "user", enabled: Bool) -> String {
         guard enabled else { return value ?? fallback }
         return "Redacted"
