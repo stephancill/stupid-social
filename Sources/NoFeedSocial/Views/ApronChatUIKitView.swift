@@ -1065,19 +1065,23 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
         present(picker, animated: true)
     }
 
-    /// Long press on a reaction chip: who reacted, one section per emoji with the pressed one first.
-    private func reactionMenu(pressed: String, on id: String) -> UIMenu? {
+    private static let reactionTimeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        formatter.doesRelativeDateFormatting = true
+        return formatter
+    }()
+
+    /// Long press on a reaction chip: who reacted with that emoji, oldest first, each with when.
+    private func reactionMenu(pressed emoji: String, on id: String) -> UIMenu? {
         guard let messageId = messagesById[id]?.messageId else { return nil }
-        let emojis = [pressed] + (reactionTotals[id] ?? []).map(\.emoji).filter { $0 != pressed }
-        let sections: [UIMenuElement] = emojis.compactMap { emoji in
-            let users = viewModel.reactors(of: emoji, on: messageId)
-            guard !users.isEmpty else { return nil }
-            let rows = users.map { user in
-                UIAction(title: viewModel.isOwnUser(user) ? "You" : user.displayName, image: reactorImage(for: user)) { _ in }
-            }
-            return UIMenu(title: "\(emoji) \(users.count)", options: .displayInline, children: rows)
+        let rows = viewModel.reactors(of: emoji, on: messageId).map { reactor in
+            let action = UIAction(title: viewModel.isOwnUser(reactor.user) ? "You" : reactor.user.displayName, image: reactorImage(for: reactor.user)) { _ in }
+            action.subtitle = reactor.date.map(Self.reactionTimeFormatter.string(from:))
+            return action
         }
-        return sections.isEmpty ? nil : UIMenu(children: sections)
+        return rows.isEmpty ? nil : UIMenu(children: rows)
     }
 
     /// The reactor's avatar when it is already loaded, otherwise initials on their color, like the chat's avatars.

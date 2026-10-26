@@ -338,12 +338,16 @@ public final class ApronChatViewModel: ObservableObject {
         }
     }
 
-    /// Who reacted with `emoji` on a message, oldest first, for the reaction chip's long-press list.
-    public func reactors(of emoji: String, on messageId: String) -> [ApronUser] {
+    /// Who reacted with `emoji` on a message, oldest first, for the reaction chip's long-press list. The date is
+    /// when the user last set their reactions there: a user's set is logged as one record (§4.7).
+    public func reactors(of emoji: String, on messageId: String) -> [(user: ApronUser, date: Date?)] {
         (reactionEntries[messageId] ?? [:])
             .filter { $0.value.emojis.contains(emoji) }
             .sorted { ($0.value.logId, $0.key) < ($1.value.logId, $1.key) }
-            .map { users[$0.key] ?? reactionAuthors[$0.key] ?? ApronUser(userId: $0.key, name: nil, avatar: nil, roles: nil) }
+            .map { userId, entry in
+                let user = users[userId] ?? reactionAuthors[userId] ?? ApronUser(userId: userId, name: nil, avatar: nil, roles: nil)
+                return (user, entry.logId > 0 ? ApronLogId.date(String(entry.logId)) : nil)
+            }
     }
 
     public func isOwnUser(_ user: ApronUser) -> Bool {
