@@ -5,11 +5,13 @@ public final class GitHubNotificationSource: NotificationFetching, AccountValida
     public let network: SocialNetwork = .github
 
     private let client: GitHubClient
+    private let feedLoader: GitHubForYouFeedLoader
     private let credentialStore: KeychainCredentialStore
     private let metadataStore: AccountMetadataStore
 
-    public init(client: GitHubClient, credentialStore: KeychainCredentialStore, metadataStore: AccountMetadataStore) {
+    public init(client: GitHubClient, feedLoader: GitHubForYouFeedLoader, credentialStore: KeychainCredentialStore, metadataStore: AccountMetadataStore) {
         self.client = client
+        self.feedLoader = feedLoader
         self.credentialStore = credentialStore
         self.metadataStore = metadataStore
     }
@@ -92,12 +94,11 @@ public final class GitHubNotificationSource: NotificationFetching, AccountValida
     }
 
     private func fetch(credentials: GitHubCredentials) async throws -> GitHubFeedParseResult {
-        let result = try await client.forYouFeed(credentials: credentials)
-        guard case let .feed(response) = result else {
+        guard let loaded = try await feedLoader.load(credentials: credentials) else {
             return GitHubFeedParseResult(storyGroups: [], notificationItems: [])
         }
-        persistRefreshedSession(from: response, original: credentials)
-        return try GitHubActivityParser.parse(response.html, viewerUsername: credentials.username)
+        persistRefreshedSession(from: loaded.response, original: credentials)
+        return loaded.parsed
     }
 
     /// Persists a `user_session` GitHub re-issued via `Set-Cookie`. GitHub does

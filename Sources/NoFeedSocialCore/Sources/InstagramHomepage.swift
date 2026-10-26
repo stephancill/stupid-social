@@ -28,6 +28,13 @@ func instagramHomepageViewer(html: String, accountID: String) throws -> Instagra
     return viewer
 }
 
+/// `instagramHomepageTray` on the concurrent pool: it scans the whole homepage (about 360 ms on the simulator),
+/// which blocked scrolling when it ran on the main actor during a refresh.
+@concurrent
+func instagramHomepageTrayConcurrently(html: String, accountID: String) async throws -> InstagramReelsTrayResponse {
+    try instagramHomepageTray(html: html, accountID: accountID)
+}
+
 func instagramHomepageTray(html: String, accountID: String) throws -> InstagramReelsTrayResponse {
     _ = try instagramHomepageViewer(html: html, accountID: accountID)
     func findTray(_ value: Any) -> [String: Any]? {

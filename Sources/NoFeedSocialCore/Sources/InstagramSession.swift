@@ -268,7 +268,7 @@ extension InstagramClient {
 
     func storiesTrayResponse(credentials: InstagramCredentials) async throws -> InstagramReelsTrayResponse {
         let state = try await homepageState(credentials: credentials)
-        return try instagramHomepageTray(html: state.html, accountID: credentials.dsUserId)
+        return try await instagramHomepageTrayConcurrently(html: state.html, accountID: credentials.dsUserId)
     }
 
     func homepageViewer(credentials: InstagramCredentials) async throws -> InstagramDirectViewer {

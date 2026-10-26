@@ -4,12 +4,12 @@ import Foundation
 public final class GitHubActivitySource: GitHubActivityFetching, AccountValidating {
     public let network: SocialNetwork = .github
 
-    private let client: GitHubClient
+    private let feedLoader: GitHubForYouFeedLoader
     private let credentialStore: KeychainCredentialStore
     private let metadataStore: AccountMetadataStore
 
-    public init(client: GitHubClient, credentialStore: KeychainCredentialStore, metadataStore: AccountMetadataStore) {
-        self.client = client
+    public init(feedLoader: GitHubForYouFeedLoader, credentialStore: KeychainCredentialStore, metadataStore: AccountMetadataStore) {
+        self.feedLoader = feedLoader
         self.credentialStore = credentialStore
         self.metadataStore = metadataStore
     }
@@ -40,10 +40,9 @@ public final class GitHubActivitySource: GitHubActivityFetching, AccountValidati
     }
 
     private func fetch(credentials: GitHubCredentials) async throws -> [GitHubActivityGroup] {
-        let result = try await client.forYouFeed(credentials: credentials)
-        guard case let .feed(response) = result else { return [] }
-        persistRefreshedSession(from: response, original: credentials)
-        return try GitHubActivityParser.parse(response.html, viewerUsername: credentials.username).storyGroups
+        guard let loaded = try await feedLoader.load(credentials: credentials) else { return [] }
+        persistRefreshedSession(from: loaded.response, original: credentials)
+        return loaded.parsed.storyGroups
     }
 
     /// Persists a `user_session` GitHub re-issued via `Set-Cookie`. GitHub does
@@ -75,7 +74,59 @@ public struct GitHubFeedParseResult: Equatable, Sendable {
     }
 }
 
+/// One fetch and parse of the For You feed, shared by the notifications source and the stories bar. They refresh
+/// together and read the same page, which had been fetched and parsed twice. Parsing runs off the main actor: it is
+/// regex work over the whole page, about 360 ms per parse on the simulator, and blocked scrolling during refresh.
+@MainActor
+public final class GitHubForYouFeedLoader {
+    public struct Loaded: Sendable {
+        public let response: GitHubForYouFeedResponse
+        public let parsed: GitHubFeedParseResult
+    }
+
+    private let client: GitHubClient
+    private var inFlight: (credentials: GitHubCredentials, task: Task<Loaded?, Error>)?
+    private var recent: (credentials: GitHubCredentials, at: Date, loaded: Loaded?)?
+    /// Callers that start just after a load finished (the stories bar a moment after the feed) reuse it.
+    private let reuseInterval: TimeInterval = 10
+
+    public init(client: GitHubClient = GitHubClient()) {
+        self.client = client
+    }
+
+    /// The parsed feed, or nil when GitHub answered not modified. Concurrent callers share one request.
+    public func load(credentials: GitHubCredentials) async throws -> Loaded? {
+        if let recent, recent.credentials == credentials, Date().timeIntervalSince(recent.at) < reuseInterval {
+            return recent.loaded
+        }
+        if let inFlight, inFlight.credentials == credentials {
+            return try await inFlight.task.value
+        }
+        let client = client
+        let task = Task<Loaded?, Error> {
+            guard case let .feed(response) = try await client.forYouFeed(credentials: credentials) else { return nil }
+            let parsed = try await GitHubActivityParser.parseConcurrently(response.html, viewerUsername: credentials.username)
+            return Loaded(response: response, parsed: parsed)
+        }
+        inFlight = (credentials, task)
+        defer {
+            if inFlight?.credentials == credentials {
+                inFlight = nil
+            }
+        }
+        let loaded = try await task.value
+        recent = (credentials, Date(), loaded)
+        return loaded
+    }
+}
+
 public enum GitHubActivityParser {
+    /// `parse` on the concurrent pool, so callers on the main actor don't block it.
+    @concurrent
+    public static func parseConcurrently(_ html: String, viewerUsername: String?) async throws -> GitHubFeedParseResult {
+        try parse(html, viewerUsername: viewerUsername)
+    }
+
     private struct CardKey: Hashable {
         let type: String
         let recordId: String

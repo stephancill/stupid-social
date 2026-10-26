@@ -112,9 +112,17 @@ extension SocialNetwork {
     }
 }
 
+/// Decoded badges, so drawing a row doesn't read the PNG from disk each time (seen while scrolling the feed).
+@MainActor private var networkBadgeImages: [String: UIImage] = [:]
+
+@MainActor
 func networkBadgeImage(named name: String) -> Image? {
+    if let cached = networkBadgeImages[name] {
+        return Image(uiImage: cached)
+    }
     guard let path = Bundle.main.path(forResource: name, ofType: "png") else { return nil }
 
     guard let image = UIImage(contentsOfFile: path) else { return nil }
+    networkBadgeImages[name] = image
     return Image(uiImage: image)
 }
