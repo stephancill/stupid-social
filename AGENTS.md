@@ -53,6 +53,7 @@ Sources/
       GitHubActivitySource.swift
       GitHubNotificationSource.swift
       SpotifyClient.swift / SpotifyActivitySource.swift
+      SpotifyMessagesParser.swift / SpotifyMessagesSource.swift  # Spotify Messages (speechless) chats in the feed
       XClient.swift / XNotificationSource.swift
       FarcasterClient.swift / FarcasterNotificationSource.swift
       BlueskyClient.swift / BlueskyNotificationSource.swift

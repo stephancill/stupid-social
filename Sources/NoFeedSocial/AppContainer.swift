@@ -45,6 +45,10 @@ final class AppContainer {
             client: spotifyClient,
             metadataStore: metadataStore,
         )
+        let spotifyMessagesSource = SpotifyMessagesSource(
+            client: spotifyClient,
+            metadataStore: metadataStore,
+        )
         // Both read the same For You page; the loader fetches and parses it once per refresh.
         let githubFeedLoader = GitHubForYouFeedLoader()
         githubActivitySource = GitHubActivitySource(
@@ -84,6 +88,7 @@ final class AppContainer {
             instagramSource,
             blueskySource,
             githubNotificationSource,
+            spotifyMessagesSource,
             apronSource,
             debugSource,
         ]

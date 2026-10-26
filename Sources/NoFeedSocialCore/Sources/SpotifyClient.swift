@@ -57,13 +57,16 @@ public struct SpotifyClient {
         return (creds, creds.bearerToken)
     }
 
-    private func makeRequest(_ path: String) async throws -> (Data, HTTPURLResponse) {
+    private func makeRequest(_ path: String, protobufBody: Data? = nil) async throws -> (Data, HTTPURLResponse) {
         let creds = try await credentialsForRequest()
-        return try await makeRequest(path, credentials: creds, allowsTokenRefresh: true)
+        return try await makeRequest(path, protobufBody: protobufBody, credentials: creds, allowsTokenRefresh: true)
     }
 
+    /// Sends a GET, or a POST when `protobufBody` is set. Spotify Messages (`speechless`) only
+    /// accepts `application/x-protobuf`; `application/protobuf` returns HTTP 400.
     private func makeRequest(
         _ path: String,
+        protobufBody: Data? = nil,
         credentials creds: SpotifyCredentials,
         allowsTokenRefresh: Bool,
     ) async throws -> (Data, HTTPURLResponse) {
@@ -71,8 +74,15 @@ public struct SpotifyClient {
         request.setValue("Bearer \(creds.bearerToken)", forHTTPHeaderField: "authorization")
         request.setValue(Self.appVersion, forHTTPHeaderField: "spotify-app-version")
         request.setValue("WebPlayer", forHTTPHeaderField: "app-platform")
-        request.setValue("application/json", forHTTPHeaderField: "accept")
         request.setValue(Self.acceptLanguageHeader, forHTTPHeaderField: "accept-language")
+        if let protobufBody {
+            request.httpMethod = "POST"
+            request.httpBody = protobufBody
+            request.setValue("application/x-protobuf", forHTTPHeaderField: "content-type")
+            request.setValue("application/x-protobuf", forHTTPHeaderField: "accept")
+        } else {
+            request.setValue("application/json", forHTTPHeaderField: "accept")
+        }
 
         let (data, response) = try await session.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
@@ -82,7 +92,7 @@ public struct SpotifyClient {
         if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
             if allowsTokenRefresh {
                 let refreshed = try await refreshWebPlayerToken(existing: creds)
-                return try await makeRequest(path, credentials: refreshed, allowsTokenRefresh: false)
+                return try await makeRequest(path, protobufBody: protobufBody, credentials: refreshed, allowsTokenRefresh: false)
             }
             throw SourceError.serviceError("Invalid credentials")
         }
@@ -368,6 +378,23 @@ public struct SpotifyClient {
     func audioAnalysis(trackId: String) async throws -> SpotifyAudioAnalysis {
         let (data, _) = try await makeRequest("audio-attributes/v1/audio-analysis/\(trackId)")
         return try JSONDecoder().decode(SpotifyAudioAnalysis.self, from: data)
+    }
+
+    func latestChats(limit: Int) async throws -> [SpotifyChat] {
+        let request = SpotifyMessagesParser.latestChatsRequest(limit: limit)
+        let (data, _) = try await makeRequest("speechless/v1/retrieve/chats-share-set/latest", protobufBody: request)
+        return try SpotifyMessagesParser.parseLatestChats(data)
+    }
+
+    /// Title and artwork for a shared Spotify URL through the public oEmbed endpoint (no auth).
+    func shareMetadata(url: URL) async throws -> SpotifyShareMetadata {
+        var components = URLComponents(string: "https://open.spotify.com/oembed")!
+        components.queryItems = [URLQueryItem(name: "url", value: url.absoluteString)]
+        let (data, response) = try await session.data(from: components.url!)
+        guard let httpResponse = response as? HTTPURLResponse, (200 ... 299).contains(httpResponse.statusCode) else {
+            throw SourceError.serviceError("Spotify oEmbed failed")
+        }
+        return try JSONDecoder().decode(SpotifyShareMetadata.self, from: data)
     }
 
     public func trackPreviewURL(trackId: String) async -> URL? {
@@ -746,6 +773,16 @@ struct SpotifyProfileList: Decodable {
 
 struct SpotifyProfileEntry: Decodable {
     let uri: String
+}
+
+struct SpotifyShareMetadata: Decodable {
+    let title: String?
+    let thumbnailURL: String?
+
+    enum CodingKeys: String, CodingKey {
+        case title
+        case thumbnailURL = "thumbnail_url"
+    }
 }
 
 struct SpotifyAudioAnalysis: Decodable {

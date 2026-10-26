@@ -335,6 +335,13 @@ class SpotifyWebClient:
             "decoded": decoded,
         }
 
+    def share_metadata(self, uri: str) -> dict[str, Any]:
+        """Title and artwork for a shared URI through the public oEmbed endpoint (no auth)."""
+        kind, _, entity_id = uri.split("?", 1)[0].removeprefix("spotify:").partition(":")
+        open_url = f"{OPEN_SPOTIFY_BASE_URL}/{kind}/{entity_id}"
+        query = urllib.parse.urlencode({"url": open_url})
+        return self.request_json("GET", f"{OPEN_SPOTIFY_BASE_URL}/oembed?{query}", headers={"Accept": "application/json"})
+
     def profile_attributes(self) -> dict[str, Any]:
         return self.pathfinder_query("profile-attributes", variables={}, use_initial_token=False)
 
@@ -1144,7 +1151,10 @@ def build_parser() -> argparse.ArgumentParser:
     chat.add_argument("--page-size", type=int, default=20, help="Messages per page.")
     chat.add_argument("--page-token", help="next_page_token from a previous page.")
 
-    custom = subparsers.add_parser("get",help="GET a custom spclient path or absolute HTTPS URL with WebPlayer headers.")
+    share = subparsers.add_parser("share-metadata", help="Fetch title/artwork for a shared spotify: URI via the public oEmbed endpoint.")
+    share.add_argument("uri", help="spotify:<type>:<id> URI, optionally with a ?si= suffix.")
+
+    custom = subparsers.add_parser("get", help="GET a custom spclient path or absolute HTTPS URL with WebPlayer headers.")
     custom.add_argument("url_or_path", help="spclient path or absolute HTTPS URL.")
 
     return parser
@@ -1153,7 +1163,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
-    credentialless_commands = {"server-time", "totp", "track-preview"}
+    credentialless_commands = {"server-time", "totp", "track-preview", "share-metadata"}
     has_credential_source = bool(args.simulator or args.credentials_file or args.credentials_json)
     credentials = {} if args.command in credentialless_commands and not has_credential_source else load_credentials(args)
     client = SpotifyWebClient(credentials, args.accept_language)
@@ -1213,6 +1223,8 @@ def main() -> None:
         result = client.chats(args.limit)
     elif args.command == "chat":
         result = client.chat(args.chat_id, args.page_size, args.page_token)
+    elif args.command == "share-metadata":
+        result = client.share_metadata(args.uri)
     elif args.command == "get":
         result = client.custom_get(args.url_or_path)
     else:
