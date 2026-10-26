@@ -2020,10 +2020,12 @@ private extension NSAttributedString.Key {
 /// A label whose `.apronLink` runs open on tap. Taps elsewhere pass through, so long-press menus and
 /// swipe-to-reply on the bubble still work.
 private final class ApronLinkLabel: UILabel {
+    private lazy var linkTap = UITapGestureRecognizer(target: self, action: #selector(tapped(_:)))
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         isUserInteractionEnabled = true
-        addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(tapped(_:))))
+        addGestureRecognizer(linkTap)
     }
 
     @available(*, unavailable)
@@ -2031,8 +2033,11 @@ private final class ApronLinkLabel: UILabel {
         fatalError("init(coder:) has not been implemented")
     }
 
+    /// UIKit also asks the touched view about its ancestors' recognizers, such as the list's scroll pan, so
+    /// only the link tap is gated; anything else would stop drags that start on text from scrolling.
     override func gestureRecognizerShouldBegin(_ gesture: UIGestureRecognizer) -> Bool {
-        link(at: gesture.location(in: self)) != nil
+        guard gesture === linkTap else { return super.gestureRecognizerShouldBegin(gesture) }
+        return link(at: gesture.location(in: self)) != nil
     }
 
     @objc private func tapped(_ gesture: UITapGestureRecognizer) {

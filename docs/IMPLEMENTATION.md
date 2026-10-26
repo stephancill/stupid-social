@@ -1329,3 +1329,7 @@
 - Prepared version 1.0.1 (138) with `stupid-app release bump` (137 → 138). It includes the Apron chat feedback fixes above: tappable links, opening at the divider, cached reactions, stable reconnects, typing indicators and single-line reaction chips. It also includes the full-row feed hit box.
 - Release preflight, signed distribution archive and project-owned signature verification passed. IPA SHA-256: `d5dee2e3c1e45f478dba60cb17f029540a646cc04cd65d62121afbdc40d9d853`. Release evidence is in ignored `logs/testflight-138-*` and `.release/`.
 - Uploaded App Store Connect build `91346a91-3e4d-4ae4-93d7-c6aaea9387ce`; processing `VALID`, internal `IN_BETA_TESTING`. No What to Test note and no external submission.
+
+### 2026-10-26 — Apron link label blocked scrolling
+
+- In build 138, a scroll that started on message text sometimes didn't scroll. `ApronLinkLabel` overrode `UIView.gestureRecognizerShouldBegin`, which UIKit also calls on the touched view for its ancestors' recognizers, including the collection view's pan (UISlider uses the same hook to stop scrolling). It returned `false` whenever the touch wasn't on a link. The override now gates only the label's own link tap and defers to `super` for every other recognizer. Verified on the simulator: a drag starting on bubble text scrolls the list, and tapping a link still opens Safari.
