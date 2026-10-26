@@ -1343,3 +1343,9 @@
 - Prepared version 1.0.1 (139) with `stupid-app release bump` (138 → 139). It adds two fixes to 138: drags that start on Apron message text scroll again, and your own reactions are highlighted before sign-in.
 - Release preflight, signed distribution archive and project-owned signature verification passed. IPA SHA-256: `7f9ea0318cfac7d88e32e70a0e540ad88219b1cfa2bfd3df4e0fc5a05d4b697d`. Release evidence is in ignored `logs/testflight-139-*` and `.release/`.
 - Uploaded App Store Connect build `2aa204a0-1ebf-4d5e-b32b-4e1d9e786170`; processing `VALID`, internal `IN_BETA_TESTING`. No What to Test note and no external submission.
+
+### 2026-10-26 — Apron reaction chip long press lists who reacted
+
+- Long-pressing a reaction chip opens a context menu on the chip itself, through its own `UIContextMenuInteraction`, which takes precedence over the bubble's menu. The chip lifts alone with a capsule `visiblePath`, the same targeted-preview treatment the bubble gets. The menu has one inline section per emoji on the message, the pressed emoji first, titled "<emoji> <count>". Each section lists its reactors oldest first (by their set's `log_id`), with "You" for any of the user's identities. Rows show the reactor's avatar when it is already in `StoryImageCache`, otherwise initials on their user color. The rows have no action.
+- `ApronChatViewModel.reactors(of:on:)` names reactors from the room's kept user objects, falling back to the recorded `from` of their reaction set (§3.3.1). Those `from` objects are now kept, so reactors who aren't listed members still have a name. The reaction cache writes them as well.
+- Verified on the simulator against the demo's `general`: long-pressing "🔥 2" listed You and shazow over the lifted chip. Dismissing left the reaction unchanged, and long-pressing the bubble away from a chip still showed Reply, More Reactions and Copy.

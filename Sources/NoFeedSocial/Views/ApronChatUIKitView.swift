@@ -155,6 +155,7 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
                         guard let self, let target = message.replyTo?.messageId, !viewModel.isUnavailableReference(target) else { return }
                         Task { await self.viewModel.jump(to: target) }
                     },
+                    reactionMenu: { [weak self] emoji in self?.reactionMenu(pressed: emoji, on: id) },
                 ),
                 availableWidth: collectionView.bounds.width > 0 ? collectionView.bounds.width : view.bounds.width,
             )
@@ -1064,6 +1065,44 @@ final class ApronChatViewController: UIViewController, UICollectionViewDelegate,
         present(picker, animated: true)
     }
 
+    /// Long press on a reaction chip: who reacted, one section per emoji with the pressed one first.
+    private func reactionMenu(pressed: String, on id: String) -> UIMenu? {
+        guard let messageId = messagesById[id]?.messageId else { return nil }
+        let emojis = [pressed] + (reactionTotals[id] ?? []).map(\.emoji).filter { $0 != pressed }
+        let sections: [UIMenuElement] = emojis.compactMap { emoji in
+            let users = viewModel.reactors(of: emoji, on: messageId)
+            guard !users.isEmpty else { return nil }
+            let rows = users.map { user in
+                UIAction(title: viewModel.isOwnUser(user) ? "You" : user.displayName, image: reactorImage(for: user)) { _ in }
+            }
+            return UIMenu(title: "\(emoji) \(users.count)", options: .displayInline, children: rows)
+        }
+        return sections.isEmpty ? nil : UIMenu(children: sections)
+    }
+
+    /// The reactor's avatar when it is already loaded, otherwise initials on their color, like the chat's avatars.
+    private func reactorImage(for user: ApronUser) -> UIImage {
+        let size = CGSize(width: 28, height: 28)
+        let photo = viewModel.avatarURL(for: user).flatMap { StoryImageCache.shared.image(for: $0) }
+        let image = UIGraphicsImageRenderer(size: size).image { _ in
+            let rect = CGRect(origin: .zero, size: size)
+            UIBezierPath(ovalIn: rect).addClip()
+            if let photo {
+                let scale = max(size.width / photo.size.width, size.height / photo.size.height)
+                let drawn = CGSize(width: photo.size.width * scale, height: photo.size.height * scale)
+                photo.draw(in: CGRect(x: (size.width - drawn.width) / 2, y: (size.height - drawn.height) / 2, width: drawn.width, height: drawn.height))
+                return
+            }
+            ApronUserColor.color(for: user.userId).setFill()
+            UIRectFill(rect)
+            let initials = user.displayName.split(separator: " ").prefix(2).compactMap(\.first).map(String.init).joined().uppercased() as NSString
+            let attributes: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: 11, weight: .semibold), .foregroundColor: UIColor.white]
+            let textSize = initials.size(withAttributes: attributes)
+            initials.draw(at: CGPoint(x: (size.width - textSize.width) / 2, y: (size.height - textSize.height) / 2), withAttributes: attributes)
+        }
+        return image.withRenderingMode(.alwaysOriginal)
+    }
+
     /// Reconfigures only the messages whose totals changed.
     private func applyReactionTotals(_ totals: [String: [ApronReactionCount]]) {
         let changedIds = Set(totals.keys).union(reactionTotals.keys).filter { totals[$0] != reactionTotals[$0] }
@@ -1156,13 +1195,15 @@ private enum ApronUserColor {
 
 /// Telegram-style message: a bubble with the sender's avatar beside the last message of a group,
 /// the name atop the first, the time inline at the bottom-right, and system notices as centered captions.
-private final class ApronMessageCell: UICollectionViewListCell, UIGestureRecognizerDelegate {
+private final class ApronMessageCell: UICollectionViewListCell, UIGestureRecognizerDelegate, UIContextMenuInteractionDelegate {
     struct Actions {
         var canReply = false
         var canReact = false
         var reply: () -> Void = {}
         var toggleReaction: (String) -> Void = { _ in }
         var showReplyTarget: () -> Void = {}
+        /// Who reacted, for a chip's long-press menu.
+        var reactionMenu: (String) -> UIMenu? = { _ in nil }
     }
 
     private static let timeFormatter: DateFormatter = {
@@ -1194,6 +1235,8 @@ private final class ApronMessageCell: UICollectionViewListCell, UIGestureRecogni
     private let replyIcon = UIImageView(image: UIImage(systemName: "arrowshape.turn.up.left.fill"))
     private var imageTasks: [Task<Void, Never>] = []
     private var actions = Actions()
+    /// The emoji each chip's long-press menu describes.
+    private var chipEmojis: [ObjectIdentifier: (emoji: String, chip: UIView)] = [:]
     private var isOwn = false
 
     // Swipe to reply: a pan drags the bubble left; past the threshold a haptic fires and release replies.
@@ -1553,6 +1596,7 @@ private final class ApronMessageCell: UICollectionViewListCell, UIGestureRecogni
     /// Reaction chips inside the bubble: filled when you reacted, tinted otherwise. Tapping toggles yours (§4.7).
     private func configureReactions(_ reactions: [ApronReactionCount], canReact: Bool) {
         reactionsRow.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        chipEmojis = [:]
         reactionsContainer.isHidden = reactions.isEmpty
         let visible = reactions.prefix(5)
         for reaction in visible {
@@ -1583,6 +1627,10 @@ private final class ApronMessageCell: UICollectionViewListCell, UIGestureRecogni
             chip.isUserInteractionEnabled = canReact
             let emoji = reaction.emoji
             chip.addAction(UIAction { [weak self] _ in self?.actions.toggleReaction(emoji) }, for: .primaryActionTriggered)
+            // Long press lists who reacted; it takes precedence over the bubble's own menu.
+            let interaction = UIContextMenuInteraction(delegate: self)
+            chip.addInteraction(interaction)
+            chipEmojis[ObjectIdentifier(interaction)] = (emoji, chip)
             reactionsRow.addArrangedSubview(chip)
         }
         if reactions.count > visible.count {
@@ -1592,6 +1640,30 @@ private final class ApronMessageCell: UICollectionViewListCell, UIGestureRecogni
             more.textColor = isOwn ? .white : .secondaryLabel
             reactionsRow.addArrangedSubview(more)
         }
+    }
+
+    // MARK: Reaction chip menu
+
+    func contextMenuInteraction(_ interaction: UIContextMenuInteraction, configurationForMenuAtLocation _: CGPoint) -> UIContextMenuConfiguration? {
+        guard let emoji = chipEmojis[ObjectIdentifier(interaction)]?.emoji, let menu = actions.reactionMenu(emoji) else { return nil }
+        return UIContextMenuConfiguration(actionProvider: { _ in menu })
+    }
+
+    func contextMenuInteraction(_ interaction: UIContextMenuInteraction, configuration _: UIContextMenuConfiguration, highlightPreviewForItemWithIdentifier _: NSCopying) -> UITargetedPreview? {
+        chipPreview(for: interaction)
+    }
+
+    func contextMenuInteraction(_ interaction: UIContextMenuInteraction, configuration _: UIContextMenuConfiguration, dismissalPreviewForItemWithIdentifier _: NSCopying) -> UITargetedPreview? {
+        chipPreview(for: interaction)
+    }
+
+    /// Lifts the chip alone, in its capsule shape, like the bubble's long press.
+    private func chipPreview(for interaction: UIContextMenuInteraction) -> UITargetedPreview? {
+        guard let chip = chipEmojis[ObjectIdentifier(interaction)]?.chip, chip.window != nil else { return nil }
+        let parameters = UIPreviewParameters()
+        parameters.backgroundColor = .clear
+        parameters.visiblePath = UIBezierPath(roundedRect: chip.bounds, cornerRadius: chip.bounds.height / 2)
+        return UITargetedPreview(view: chip, parameters: parameters)
     }
 
     private func configureSystem(message: ApronMessage, body: NSAttributedString?, startsGroup: Bool) {

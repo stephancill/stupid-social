@@ -69,6 +69,7 @@ public final class ApronChatViewModel: ObservableObject {
     private var users: [String: ApronUser] = [:]
     /// messageId → userId → that user's newest set; the record with the greatest `log_id` wins (§4.7).
     private var reactionEntries: [String: [String: (logId: Int64, emojis: [String])]] = [:]
+    private var reactionAuthors: [String: ApronUser] = [:]
     private var notices: [ApronMessage] = []
     private var firstLogId: String?
     private var lastLogId: String?
@@ -240,7 +241,7 @@ public final class ApronChatViewModel: ObservableObject {
                     logId: String(entry.logId),
                     messageId: messageId,
                     roomId: roomId,
-                    reactions: [ApronReactionSet(from: users[userId] ?? ApronUser(userId: userId, name: nil, avatar: nil, roles: nil), emojis: entry.emojis)],
+                    reactions: [ApronReactionSet(from: users[userId] ?? reactionAuthors[userId] ?? ApronUser(userId: userId, name: nil, avatar: nil, roles: nil), emojis: entry.emojis)],
                 )
             }
         }
@@ -337,11 +338,25 @@ public final class ApronChatViewModel: ObservableObject {
         }
     }
 
+    /// Who reacted with `emoji` on a message, oldest first, for the reaction chip's long-press list.
+    public func reactors(of emoji: String, on messageId: String) -> [ApronUser] {
+        (reactionEntries[messageId] ?? [:])
+            .filter { $0.value.emojis.contains(emoji) }
+            .sorted { ($0.value.logId, $0.key) < ($1.value.logId, $1.key) }
+            .map { users[$0.key] ?? reactionAuthors[$0.key] ?? ApronUser(userId: $0.key, name: nil, avatar: nil, roles: nil) }
+    }
+
+    public func isOwnUser(_ user: ApronUser) -> Bool {
+        isOwnUserId(user.userId)
+    }
+
     private func applyReactions(_ record: ApronReactionRecord) {
         guard record.roomId == nil || record.roomId == roomId else { return }
         let logId = record.logId.flatMap(Int64.init) ?? 0
         var entries = reactionEntries[record.messageId] ?? [:]
         for set in record.reactions {
+            // Recorded `from` objects name reactors who aren't listed room members (§3.3.1).
+            reactionAuthors[set.from.userId] = set.from
             if let existing = entries[set.from.userId], existing.logId > logId { continue }
             // Duplicates collapse and order doesn't matter (§4.7).
             var seen = Set<String>()
