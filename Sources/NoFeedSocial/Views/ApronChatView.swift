@@ -6,13 +6,15 @@ import UIKit
 /// which outperformed a SwiftUI `ScrollView` on long rooms (see docs/IMPLEMENTATION.md).
 struct ApronChatView: View {
     @StateObject private var viewModel: ApronChatViewModel
+    @State private var profileUser: ApronUser?
+    @State private var showsMembers = false
 
     init(viewModel: @autoclosure @escaping () -> ApronChatViewModel) {
         _viewModel = StateObject(wrappedValue: viewModel())
     }
 
     var body: some View {
-        ApronChatUIKitView(viewModel: viewModel)
+        ApronChatUIKitView(viewModel: viewModel, showProfile: { profileUser = $0 })
             .ignoresSafeArea(.keyboard)
             // Full-bleed under the bar and home indicator; the list insets itself from the safe area.
             .ignoresSafeArea(edges: [.top, .bottom])
@@ -22,18 +24,26 @@ struct ApronChatView: View {
             .toolbarBackground(.hidden, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .principal) {
-                    NavigationLink {
-                        ApronMembersView(viewModel: viewModel)
+                    Button {
+                        showsMembers = true
                     } label: {
                         ApronChatTitlePill(title: viewModel.title, subtitle: viewModel.serverHost)
                     }
                     .buttonStyle(.plain)
                 }
             }
+            .navigationDestination(isPresented: $showsMembers) {
+                ApronMembersView(viewModel: viewModel)
+            }
+            .navigationDestination(item: $profileUser) { user in
+                ApronProfileView(viewModel: viewModel, user: user)
+            }
             .task {
                 await viewModel.connect()
             }
             .onDisappear {
+                // Members and profiles pushed on top read the chat's live state, so it stays connected for them.
+                guard !showsMembers, profileUser == nil else { return }
                 viewModel.disconnect()
             }
             // The shared connection closes in the background; rejoin it when the app is active again.

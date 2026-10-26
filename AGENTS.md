@@ -33,6 +33,8 @@ Sources/
       ApronChatView.swift           # Apron chat screen: title, connection lifecycle
       ApronChatUIKitView.swift      # Apron chat UIKit view controller: message list, floating composer, attachments
       ApronMembersView.swift        # Apron room member list, opened from the chat title
+      ApronProfileView.swift        # Apron user profile and shared avatar with presence dot
+      ApronImageViewer.swift        # Full-screen Apron image viewer: zoom, swipe to dismiss, save to Photos
       SettingsView.swift            # Settings with connection links
   NoFeedSocialCore/                 # Shared core (models, services, sources)
     Models/

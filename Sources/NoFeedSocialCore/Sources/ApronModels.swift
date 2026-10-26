@@ -27,6 +27,8 @@ public struct ApronUser: Codable, Hashable, Sendable {
     public let roles: [String]?
     /// What others see, in current objects only; `nil` when unknown (§4.5).
     public let status: String?
+    /// `ext.bio`, the profile text apron-web shows; `""` clears it (§4.12).
+    public let bio: String?
 
     enum CodingKeys: String, CodingKey {
         case userId = "user_id"
@@ -34,14 +36,45 @@ public struct ApronUser: Codable, Hashable, Sendable {
         case avatar
         case roles
         case status
+        case ext
     }
 
-    public init(userId: String, name: String?, avatar: String?, roles: [String]?, status: String? = nil) {
+    private enum ExtKeys: String, CodingKey {
+        case bio
+    }
+
+    public init(userId: String, name: String?, avatar: String?, roles: [String]?, status: String? = nil, bio: String? = nil) {
         self.userId = userId
         self.name = name
         self.avatar = avatar
         self.roles = roles
         self.status = status
+        self.bio = bio
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        userId = try container.decode(String.self, forKey: .userId)
+        name = try container.decodeIfPresent(String.self, forKey: .name)
+        avatar = try container.decodeIfPresent(String.self, forKey: .avatar)
+        roles = try container.decodeIfPresent([String].self, forKey: .roles)
+        status = try container.decodeIfPresent(String.self, forKey: .status)
+        // `ext` is free-form; a missing or odd `bio` never drops the user.
+        let ext = try? container.nestedContainer(keyedBy: ExtKeys.self, forKey: .ext)
+        bio = (try? ext?.decodeIfPresent(String.self, forKey: .bio)) ?? nil
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(userId, forKey: .userId)
+        try container.encodeIfPresent(name, forKey: .name)
+        try container.encodeIfPresent(avatar, forKey: .avatar)
+        try container.encodeIfPresent(roles, forKey: .roles)
+        try container.encodeIfPresent(status, forKey: .status)
+        if let bio {
+            var ext = container.nestedContainer(keyedBy: ExtKeys.self, forKey: .ext)
+            try ext.encode(bio, forKey: .bio)
+        }
     }
 
     /// A current object from a `user` notification merged into the kept one: carried fields replace (§3.3.1).
@@ -52,6 +85,7 @@ public struct ApronUser: Codable, Hashable, Sendable {
             avatar: update.avatar ?? avatar,
             roles: update.roles ?? roles,
             status: update.status ?? status,
+            bio: update.bio ?? bio,
         )
     }
 
@@ -73,6 +107,12 @@ public struct ApronUser: Codable, Hashable, Sendable {
     public var isSystem: Bool {
         userId.hasPrefix("~")
     }
+}
+
+public enum ApronMention {
+    /// `@` then an ID of `[A-Za-z0-9_.+@:-]` that starts and ends with a letter, digit or `_`,
+    /// not preceded by a letter or digit, so `foo@bar.com` is not a mention (Appendix A.3).
+    public static let pattern = try! NSRegularExpression(pattern: "(?<![A-Za-z0-9])@[A-Za-z0-9_](?:[A-Za-z0-9_.+@:-]*[A-Za-z0-9_])?")
 }
 
 /// The status others see, for online indicators (§4.5.1).

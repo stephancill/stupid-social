@@ -74,7 +74,13 @@ public final class ApronChatViewModel: ObservableObject {
     private var session: ApronSession?
     private var snapshots: [String: ApronMessage] = [:]
     /// Kept current user objects (§3.3.1); messages carry recorded `from` objects that often omit avatars.
-    private var users: [String: ApronUser] = [:]
+    private var users: [String: ApronUser] = [:] {
+        didSet { updateMentionNames() }
+    }
+
+    /// `user_id` → name, for showing `@` mentions by name. A name another known user shares is left out, so
+    /// those mentions keep their `@user_id` (§3.3.1).
+    @Published public private(set) var mentionNames: [String: String] = [:]
     /// messageId → userId → that user's newest set; the record with the greatest `log_id` wins (§4.7).
     private var reactionEntries: [String: [String: (logId: Int64, emojis: [String])]] = [:]
     private var reactionAuthors: [String: ApronUser] = [:]
@@ -308,9 +314,11 @@ public final class ApronChatViewModel: ObservableObject {
                 forgetTyping()
             }
             let bodyText = !isCommand && text.hasPrefix("//") ? String(text.dropFirst()) : text
+            let mentions = isCommand ? [] : mentionedUserIds(in: bodyText)
             let body = ApronMessageBody(
                 text: bodyText,
                 format: isCommand ? nil : "markdown",
+                mentions: mentions.isEmpty ? nil : mentions,
                 embeds: attachment.map { [.upload(title: $0.filename)] },
             )
             let result = try await session.connection.post(
@@ -841,6 +849,64 @@ public final class ApronChatViewModel: ObservableObject {
         if unreadCount != count {
             unreadCount = count
         }
+    }
+
+    private func updateMentionNames() {
+        let named = users.values.compactMap { user in user.name.flatMap { $0.isEmpty ? nil : (user.userId, $0) } }
+        let counts = Dictionary(named.map { ($0.1, 1) }, uniquingKeysWith: +)
+        let names = Dictionary(named.filter { counts[$0.1] == 1 }, uniquingKeysWith: { first, _ in first })
+        if mentionNames != names {
+            mentionNames = names
+        }
+    }
+
+    /// Members to offer while typing `@query`: names or `user_id`s that start with it, then names with a word
+    /// that does. Online members come first for an empty query. You aren't offered.
+    public func mentionSuggestions(for query: String, limit: Int = 5) -> [ApronUser] {
+        let candidates = (members ?? Array(users.values)).filter { !isOwnUser($0) && !$0.isSystem }
+        let query = query.lowercased()
+        func rank(_ user: ApronUser) -> Int? {
+            let name = user.displayName.lowercased()
+            if query.isEmpty { return presence(of: user)?.isConnected == true ? 0 : 1 }
+            if name.hasPrefix(query) || user.userId.lowercased().hasPrefix(query) { return 0 }
+            if name.split(separator: " ").contains(where: { $0.hasPrefix(query) }) { return 1 }
+            return nil
+        }
+        return candidates
+            .compactMap { user in rank(user).map { (user, $0) } }
+            .sorted { ($0.1, $0.0.displayName.lowercased()) < ($1.1, $1.0.displayName.lowercased()) }
+            .prefix(limit)
+            .map(\.0)
+    }
+
+    /// Known users written as `@user_id` in outgoing text. Only users in `mentions` count as mentioned (§3.5.5).
+    private func mentionedUserIds(in text: String) -> [String] {
+        let known = memberIds ?? Set(users.keys)
+        var ids: [String] = []
+        for match in ApronMention.pattern.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+            guard let range = Range(match.range, in: text) else { continue }
+            let userId = String(text[range].dropFirst())
+            if known.contains(userId), !ids.contains(userId) {
+                ids.append(userId)
+            }
+        }
+        return ids
+    }
+
+    /// Plain text with `@user_id` mentions shown by name, for previews such as reply quotes.
+    public func showingMentionNames(_ text: String) -> String {
+        let pattern = ApronMention.pattern
+        var result = text
+        for match in pattern.matches(in: text, range: NSRange(text.startIndex..., in: text)).reversed() {
+            guard let range = Range(match.range, in: text), let name = mentionNames[String(text[range].dropFirst())] else { continue }
+            result.replaceSubrange(range, with: "@\(name)")
+        }
+        return result
+    }
+
+    /// The kept current object, falling back to a recorded one such as a message's `from` (§3.3.1).
+    public func currentUser(_ user: ApronUser) -> ApronUser {
+        users[user.userId] ?? reactionAuthors[user.userId] ?? user
     }
 
     /// The kept user object's avatar, falling back to the recorded `from` (§3.3.1).

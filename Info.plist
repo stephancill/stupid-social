@@ -58,7 +58,7 @@
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Debug builds can connect to a local notifications server for background refresh testing.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>Save composed story images to your photo library.</string>
+	<string>Save composed story images and chat images to your photo library.</string>
 	<key>UIDesignRequiresCompatibility</key>
 	<false/>
 	<key>UIDeviceFamily</key>

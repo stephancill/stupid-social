@@ -241,6 +241,14 @@ def cmd_send(session: Session, args: argparse.Namespace) -> None:
         params["room_id"] = args.room
     if args.reply_to:
         params["reply_to"] = {"message_id": args.reply_to}
+    if args.image_url:
+        # A finished upload embed with an image preview (§4.8.4), for testing clients against servers that
+        # pass embeds through without storing files, such as the js-minimal reference server.
+        width, height = (int(v) for v in args.image_size.split("x"))
+        params["body"]["embeds"] = [{
+            "kind": "upload", "embed_id": f"e{int(time.time() * 1000)}", "title": args.image_url.rsplit("/", 1)[-1],
+            "url": args.image_url, "og": {"image": {"url": args.image_url, "width": width, "height": height}},
+        }]
     print_json(session.request("message", params))
     print_json({"notifications": session.notifications})
 
@@ -384,6 +392,8 @@ def main() -> None:
     send.add_argument("--text", required=True)
     send.add_argument("--format", choices=["plain", "markdown"], default="plain")
     send.add_argument("--reply-to")
+    send.add_argument("--image-url")
+    send.add_argument("--image-size", default="1200x800", help="WIDTHxHEIGHT of --image-url")
     react = add("react", cmd_react)
     react.add_argument("--message", required=True)
     react.add_argument("--emoji", action="append", default=[])
