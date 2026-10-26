@@ -1548,3 +1548,18 @@
 - Version 1.0.1 (146). App Store Connect already had 145, so `release new-build` suggested 146. It adds Apron private-room titles, `seen`, block quotes, a steady opening at unread messages, redacted names in chats, and full-width embeds.
 - Release preflight, signed distribution archive and project-owned signature verification passed. IPA SHA-256: `565e5f9ddf80b5fa208d6f800fa853371a661909fdd2fdade9cfffd53ee41e19`. Logs are in ignored `logs/testflight-146-*` and `.release/`.
 - Uploaded App Store Connect build `941819b1-ecdb-4f6b-b2cb-18da10b72caf`; processing `VALID`, internal `IN_BETA_TESTING`. No What to Test note and no external submission.
+
+### 2026-10-26 — Apron servers sync through iCloud
+
+- Before: Apron tokens already synced through the iCloud Keychain (`saveApronToken` uses the synchronizable store), and room read cursors through iCloud Key-Value storage. The server list (`account.apron.servers`) was in local `UserDefaults` only, so another device had the tokens but no servers.
+- `ApronServerSync` keeps one entry per server URL in iCloud KVS (`com.stupid.apron.servers`, mirrored locally as `apronServerSync`): the requested name, whether it was removed, and when it last changed. Removed servers stay as entries, so a device that missed a removal can't bring the server back. Local and remote entries merge per server, with the newer change winning, and the result is written to both sides, as `StorySeenSync` does.
+- `ApronService` applies the entries at launch and on `didChangeExternallyNotification`. It adds servers saved on other devices and drops ones removed there. Servers saved before this change are recorded on first launch, so they reach the other devices. A synced server is added with no user and signs in on first use, through the live feed or Chats, with the token from the iCloud Keychain when there is one. Adding a server, or a sign-in with a new requested name, records an add; removing one records a removal. A removal from another device drops this device's cursors, cache and drafts, but leaves the token to the Keychain's own sync. Server changes post `serversDidChangeNotification`. `ApronServersViewModel` reloads on it, and `ApronLiveFeed` disconnects removed servers and clears their Chats rows.
+- Loopback servers (`localhost`, `127.0.0.1`, `::1`), such as the local js-minimal test server, aren't synced: on another device they would point at that device.
+- Own user IDs (`apronOwnUserIds`) now also sync through KVS (`com.stupid.apron.ownusers`) as a per-server union. Messages sent as a guest from another device then render as your own.
+- Verified with `ApronModelsTests` (merge: the newer change wins, removals win over older adds; loopback stays local), `stupid-app build`, and on the simulator: the existing demo server was recorded, the local server wasn't, and both stayed saved. Syncing between two devices hasn't been tested yet; it needs two devices signed into the same iCloud account.
+
+### 2026-10-26 — Native internal TestFlight build 147
+
+- Version 1.0.1 (147). It adds to 146 the iCloud sync of Apron servers and own user IDs.
+- Release preflight, signed distribution archive and project-owned signature verification passed. IPA SHA-256: `51a95f830fca67e0b3447c8756fefc8b4fb39eefbd40ff6a4bf1a7615845b335`. Logs are in ignored `logs/testflight-147-*` and `.release/`.
+- Uploaded App Store Connect build `bfafdcb6-38e0-4dcf-ac08-3977ab91719b`; processing `VALID`, internal `IN_BETA_TESTING`. No What to Test note and no external submission.

@@ -16,6 +16,7 @@ public final class ApronReadStore: NSObject {
     private let cloudKey = "com.stupid.apron.readcursors"
     private let serverKey = "apronServerReadCursors"
     private let ownUsersKey = "apronOwnUserIds"
+    private let ownUsersCloudKey = "com.stupid.apron.ownusers"
 
     public init(defaults: UserDefaults = .standard, kvStore: NSUbiquitousKeyValueStore = .default) {
         self.defaults = defaults
@@ -74,21 +75,22 @@ public final class ApronReadStore: NSObject {
         Set((defaults.dictionary(forKey: ownUsersKey)?[serverURL.absoluteString] as? [String]) ?? [])
     }
 
+    /// Synced through iCloud, so messages sent from the user's other devices count as their own there too.
     public func addOwnUserId(_ userId: String, serverURL: URL) {
-        var all = defaults.dictionary(forKey: ownUsersKey) ?? [:]
-        var ids = Set((all[serverURL.absoluteString] as? [String]) ?? [])
+        var all = ownUsers
+        var ids = all[serverURL.absoluteString] ?? []
         guard ids.insert(userId).inserted else { return }
-        all[serverURL.absoluteString] = Array(ids)
-        defaults.set(all, forKey: ownUsersKey)
+        all[serverURL.absoluteString] = ids
+        saveOwnUsers(all)
     }
 
     public func removeServer(_ serverURL: URL) {
         let prefix = serverURL.absoluteString + "|"
         saveLocal(localCursors.filter { !$0.key.hasPrefix(prefix) })
         defaults.set(serverCursors.filter { !$0.key.hasPrefix(prefix) }.mapValues(NSNumber.init(value:)), forKey: serverKey)
-        var all = defaults.dictionary(forKey: ownUsersKey) ?? [:]
+        var all = ownUsers
         all[serverURL.absoluteString] = nil
-        defaults.set(all, forKey: ownUsersKey)
+        saveOwnUsers(all)
         postChange()
     }
 
@@ -96,6 +98,21 @@ public final class ApronReadStore: NSObject {
 
     private static func key(serverURL: URL, roomId: String) -> String {
         "\(serverURL.absoluteString)|\(roomId)"
+    }
+
+    private var ownUsers: [String: Set<String>] {
+        Self.decodeOwnUsers(defaults.dictionary(forKey: ownUsersKey))
+    }
+
+    private static func decodeOwnUsers(_ dictionary: [String: Any]?) -> [String: Set<String>] {
+        (dictionary ?? [:]).compactMapValues { ($0 as? [String]).map(Set.init) }
+    }
+
+    private func saveOwnUsers(_ all: [String: Set<String>]) {
+        let plist = all.mapValues { Array($0).sorted() }
+        defaults.set(plist, forKey: ownUsersKey)
+        kvStore.set(plist, forKey: ownUsersCloudKey)
+        kvStore.synchronize()
     }
 
     private var localCursors: [String: Int64] {
@@ -123,14 +140,24 @@ public final class ApronReadStore: NSObject {
         }
     }
 
-    /// Merges iCloud cursors into local storage with a per-room `max`, and writes the result back.
+    /// Merges iCloud cursors into local storage with a per-room `max`, and own user IDs as a union, and writes
+    /// the results back.
     private func mergeRemote() -> Bool {
+        var changed = false
         let local = localCursors
-        let remote = Self.decode(kvStore.dictionary(forKey: cloudKey))
-        let merged = local.merging(remote) { max($0, $1) }
-        guard merged != local else { return false }
-        saveLocal(merged)
-        return true
+        let merged = local.merging(Self.decode(kvStore.dictionary(forKey: cloudKey))) { max($0, $1) }
+        if merged != local {
+            saveLocal(merged)
+            changed = true
+        }
+        let localUsers = ownUsers
+        let remoteUsers = Self.decodeOwnUsers(kvStore.dictionary(forKey: ownUsersCloudKey))
+        let mergedUsers = localUsers.merging(remoteUsers) { $0.union($1) }
+        if mergedUsers != localUsers || mergedUsers != remoteUsers {
+            saveOwnUsers(mergedUsers)
+            changed = changed || mergedUsers != localUsers
+        }
+        return changed
     }
 
     private func postChange() {

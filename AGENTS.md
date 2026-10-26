@@ -75,6 +75,7 @@ Sources/
       GitHubActivitySeenStore.swift
       StorySeenSync.swift             # iCloud KVS seen-state sync (Spotify/GitHub)
       ApronReadStore.swift            # Apron read cursors (server truth or iCloud KVS)
+      ApronServerSync.swift           # Apron server list across devices (iCloud KVS, with removals)
       ApronMessageCache.swift         # Recent Apron messages per room for instant chat open
       ApronDraftStore.swift           # Unsent Apron composer text per room
       ChatSnapshotCache.swift         # Last messages and metadata per Spotify/Instagram chat for instant open

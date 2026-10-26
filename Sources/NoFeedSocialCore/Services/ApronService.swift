@@ -20,13 +20,59 @@ public final class ApronService {
     public let readStore: ApronReadStore
     public let messageCache = ApronMessageCache()
     public let draftStore = ApronDraftStore()
+    private let serverSync: ApronServerSync
 
-    public init(metadataStore: AccountMetadataStore, keychainStore: KeychainCredentialStore, readStore: ApronReadStore = ApronReadStore()) {
+    public init(
+        metadataStore: AccountMetadataStore,
+        keychainStore: KeychainCredentialStore,
+        readStore: ApronReadStore = ApronReadStore(),
+        serverSync: ApronServerSync = ApronServerSync(),
+    ) {
         self.metadataStore = metadataStore
         self.keychainStore = keychainStore
         self.readStore = readStore
+        self.serverSync = serverSync
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
         agent = "stupid-social/\(version)"
+        applySyncedServers()
+        NotificationCenter.default.addObserver(forName: ApronServerSync.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.applySyncedServers() else { return }
+                NotificationCenter.default.post(name: ApronLiveFeed.serversDidChangeNotification, object: nil)
+            }
+        }
+    }
+
+    /// Adds servers saved on other devices and drops ones removed there. Servers saved before syncing existed
+    /// are recorded first, so they reach the other devices. A synced server signs in on first use, with the
+    /// token from the iCloud Keychain when there is one.
+    @discardableResult
+    private func applySyncedServers() -> Bool {
+        for server in metadataStore.apronServers
+            where ApronServerSync.isSynced(server.serverURL) && serverSync.entries[server.serverURL.absoluteString] == nil
+        {
+            serverSync.recordAdded(server.serverURL, requestedName: server.requestedName)
+        }
+        var changed = false
+        for (key, entry) in serverSync.entries.sorted(by: { $0.value.changedAt < $1.value.changedAt }) {
+            guard let serverURL = URL(string: key) else { continue }
+            let isSaved = server(for: serverURL) != nil
+            if entry.removed, isSaved {
+                forgetServer(serverURL)
+                changed = true
+            } else if !entry.removed, !isSaved {
+                metadataStore.apronServers.append(ApronServerMetadata(
+                    serverURL: serverURL,
+                    requestedName: entry.requestedName,
+                    user: nil,
+                    agent: nil,
+                    welcome: nil,
+                    status: .valid,
+                ))
+                changed = true
+            }
+        }
+        return changed
     }
 
     public var servers: [ApronServerMetadata] {
@@ -88,11 +134,17 @@ public final class ApronService {
     }
 
     public func removeServer(serverURL: URL) {
+        forgetServer(serverURL)
+        try? keychainStore.deleteApronToken(serverURL: serverURL)
+        serverSync.recordRemoved(serverURL)
+    }
+
+    /// Drops a server and what this device kept for it. The token is the Keychain's to sync.
+    private func forgetServer(_ serverURL: URL) {
         closeSessions(for: serverURL)
         readStore.removeServer(serverURL)
         messageCache.removeServer(serverURL)
         draftStore.removeServer(serverURL)
-        try? keychainStore.deleteApronToken(serverURL: serverURL)
         metadataStore.apronServers.removeAll { $0.serverURL == serverURL }
     }
 
@@ -185,9 +237,13 @@ public final class ApronService {
         )
         var servers = metadataStore.apronServers
         if let index = servers.firstIndex(where: { $0.serverURL == session.serverURL }) {
+            if servers[index].requestedName != requestedName {
+                serverSync.recordAdded(session.serverURL, requestedName: requestedName)
+            }
             servers[index] = metadata
         } else {
             servers.append(metadata)
+            serverSync.recordAdded(session.serverURL, requestedName: requestedName)
         }
         metadataStore.apronServers = servers
         return metadata

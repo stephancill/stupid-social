@@ -53,6 +53,8 @@ public final class ApronLiveFeed {
         let saved = Set(service.servers.map(\.serverURL))
         for url in loops.keys where !saved.contains(url) {
             disconnect(url)
+            // Removed here or on another device.
+            chatList.replaceApronChats(serverURL: url, with: [])
         }
         for url in saved where loops[url] == nil {
             loops[url] = Task { [weak self] in await self?.run(url) }

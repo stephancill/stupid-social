@@ -48,4 +48,29 @@ final class ApronModelsTests: XCTestCase {
         XCTAssertEqual(online.seen, "1724803600000")
         XCTAssertNil(online.lastSeen)
     }
+
+    func testServerSyncKeepsTheNewerChangePerServer() {
+        typealias Entry = ApronServerSync.Entry
+        let local = [
+            "wss://a/": Entry(requestedName: "me", removed: false, changedAt: 100),
+            "wss://b/": Entry(requestedName: nil, removed: false, changedAt: 100),
+        ]
+        let remote = [
+            // Removed on another device after this one added it: the removal wins.
+            "wss://a/": Entry(requestedName: nil, removed: true, changedAt: 200),
+            // Removed there before this device re-added it: the server stays.
+            "wss://b/": Entry(requestedName: nil, removed: true, changedAt: 50),
+            "wss://c/": Entry(requestedName: "other", removed: false, changedAt: 10),
+        ]
+        let merged = ApronServerSync.merged(local, remote)
+        XCTAssertEqual(merged["wss://a/"]?.removed, true)
+        XCTAssertEqual(merged["wss://b/"]?.removed, false)
+        XCTAssertEqual(merged["wss://c/"]?.requestedName, "other")
+    }
+
+    func testLoopbackServersStayOnTheDevice() throws {
+        XCTAssertFalse(try ApronServerSync.isSynced(XCTUnwrap(URL(string: "ws://127.0.0.1:8765/"))))
+        XCTAssertFalse(try ApronServerSync.isSynced(XCTUnwrap(URL(string: "ws://localhost:8765/"))))
+        XCTAssertTrue(try ApronServerSync.isSynced(XCTUnwrap(URL(string: "wss://server.apron.chat/"))))
+    }
 }

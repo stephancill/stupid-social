@@ -18,6 +18,10 @@ public final class ApronServersViewModel: ObservableObject {
         self.service = service
         self.chatList = chatList
         reload()
+        // Servers also arrive and leave from other devices through iCloud.
+        NotificationCenter.default.addObserver(forName: ApronLiveFeed.serversDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.reload() }
+        }
     }
 
     public var connectionLabel: String {
