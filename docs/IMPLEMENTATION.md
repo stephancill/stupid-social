@@ -1359,3 +1359,9 @@
   - `GitHubForYouFeedLoader` (shared by `GitHubNotificationSource` and `GitHubActivitySource`, built in `AppContainer`) fetches and parses the For You page once. Concurrent callers with the same credentials share the in-flight request. A result is reused for 10 s, so the stories bar starting just after the feed doesn't fetch again. Each source still persists any refreshed session cookies from the shared response. Settings' connection checks still call `GitHubClient` and the parser directly.
   - Badge images are cached after the first load, using the same 1x file, so the inline badge size doesn't change.
 - Verified with the same trace after the change: parser time on the main thread went from about 1,086 ms to 0, with 424 ms (GitHub, parsed once) and 433 ms (Instagram) on background threads. The busiest main-thread 250 ms window went from 250 ms (fully blocked for about 1 s) to 121 ms. The refresh log shows `story-github-activity` and `manual-source-github` finishing together (2.07 s and 2.09 s), from the one shared request. These are simulator measurements.
+
+### 2026-10-26 — Native internal TestFlight build 140
+
+- Prepared version 1.0.1 (140) with `stupid-app release bump` (139 → 140). It adds to 139: the long-press list of who reacted with an emoji (with times and avatars), and the refresh scroll-stutter fix (GitHub and Instagram HTML parsed off the main thread, GitHub's For You page fetched once per refresh, badge images cached).
+- Release preflight, signed distribution archive and project-owned signature verification passed. IPA SHA-256: `c5f2c9187ba144aca64881bda6fc260cee1327dffced14c59508bdfd88a7d0db`. Release evidence is in ignored `logs/testflight-140-*` and `.release/`.
+- Uploaded App Store Connect build `21818ebe-f87f-4f36-bffa-7b5bdc1cc266`; processing `VALID`, internal `IN_BETA_TESTING`. No What to Test note and no external submission.
