@@ -32,6 +32,7 @@ Sources/
       ApronServersView.swift        # Apron server list, add form, and server detail
       ApronChatView.swift           # Apron chat screen: title, connection lifecycle
       ApronChatUIKitView.swift      # Apron chat UIKit view controller: message list, floating composer, attachments
+      ApronMembersView.swift        # Apron room member list, opened from the chat title
       SettingsView.swift            # Settings with connection links
   NoFeedSocialCore/                 # Shared core (models, services, sources)
     Models/
@@ -65,6 +66,7 @@ Sources/
       StorySeenSync.swift             # iCloud KVS seen-state sync (Spotify/GitHub)
       ApronReadStore.swift            # Apron read cursors (server truth or iCloud KVS)
       ApronMessageCache.swift         # Recent Apron messages per room for instant chat open
+      ApronDraftStore.swift           # Unsent Apron composer text per room
     ViewModels/
       FeedViewModel.swift
       ProfileSearchViewModel.swift

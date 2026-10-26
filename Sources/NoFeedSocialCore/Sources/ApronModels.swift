@@ -25,12 +25,34 @@ public struct ApronUser: Codable, Hashable, Sendable {
     public let name: String?
     public let avatar: String?
     public let roles: [String]?
+    /// What others see, in current objects only; `nil` when unknown (§4.5).
+    public let status: String?
 
     enum CodingKeys: String, CodingKey {
         case userId = "user_id"
         case name
         case avatar
         case roles
+        case status
+    }
+
+    public init(userId: String, name: String?, avatar: String?, roles: [String]?, status: String? = nil) {
+        self.userId = userId
+        self.name = name
+        self.avatar = avatar
+        self.roles = roles
+        self.status = status
+    }
+
+    /// A current object from a `user` notification merged into the kept one: carried fields replace (§3.3.1).
+    func merging(_ update: ApronUser) -> ApronUser {
+        ApronUser(
+            userId: userId,
+            name: update.name ?? name,
+            avatar: update.avatar ?? avatar,
+            roles: update.roles ?? roles,
+            status: update.status ?? status,
+        )
     }
 
     public var displayName: String {
@@ -53,12 +75,45 @@ public struct ApronUser: Codable, Hashable, Sendable {
     }
 }
 
+/// The status others see, for online indicators (§4.5.1).
+public enum ApronPresence: Hashable, Sendable {
+    case online
+    case idle
+    case doNotDisturb
+    case offline
+    /// A value this client doesn't know, shown as written.
+    case other(String)
+
+    /// `""` and `nil` are no known status.
+    init?(status: String?) {
+        switch status {
+        case "online": self = .online
+        case "idle": self = .idle
+        case "dnd": self = .doNotDisturb
+        case "offline": self = .offline
+        case nil, "": return nil
+        case let value?: self = .other(value)
+        }
+    }
+
+    public var isConnected: Bool {
+        switch self {
+        case .online, .idle, .doNotDisturb: true
+        case .offline, .other: false
+        }
+    }
+}
+
 public struct ApronRoom: Decodable, Hashable, Sendable {
     public let roomId: String
     public let title: String?
     public let description: String?
     public let parentRoomId: String?
     public let latestLogId: String?
+    /// Users who joined, possibly only `user_id`; present with `members: true` (§4.2.1).
+    public let members: [ApronUser]?
+    /// How many users joined, when the server truncated `members`.
+    public let memberCount: Int?
 
     enum CodingKeys: String, CodingKey {
         case roomId = "room_id"
@@ -66,6 +121,8 @@ public struct ApronRoom: Decodable, Hashable, Sendable {
         case description
         case parentRoomId = "parent_room_id"
         case latestLogId = "latest_log_id"
+        case members
+        case memberCount = "member_count"
     }
 
     public init(roomId: String) {
@@ -74,6 +131,8 @@ public struct ApronRoom: Decodable, Hashable, Sendable {
         description = nil
         parentRoomId = nil
         latestLogId = nil
+        members = nil
+        memberCount = nil
     }
 
     public var displayTitle: String {
@@ -413,6 +472,34 @@ struct ApronActivityParams: Encodable {
 }
 
 struct ApronEmptyResult: Decodable {}
+
+/// A `user` notification: `new` is another user's current object (§3.3.3).
+struct ApronUserUpdate: Decodable {
+    let new: ApronUser?
+}
+
+/// A `room_update` frame; only the parts the chat uses (§4.2.3).
+struct ApronRoomUpdate: Decodable {
+    let joined: [ApronRoom]?
+    let memberships: [ApronMembershipRecord]?
+    let users: [ApronUser]?
+}
+
+/// One logged membership change; each entry replaces that user's membership (§4.2.2).
+struct ApronMembershipRecord: Decodable {
+    struct Entry: Decodable {
+        let user: ApronUser
+        let joined: Bool
+    }
+
+    let roomId: String
+    let members: [Entry]
+
+    enum CodingKeys: String, CodingKey {
+        case roomId = "room_id"
+        case members
+    }
+}
 
 /// An `activity` frame: typing and read cursors (§4.6).
 struct ApronActivity: Decodable {

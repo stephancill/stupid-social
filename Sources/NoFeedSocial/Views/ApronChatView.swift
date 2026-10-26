@@ -22,7 +22,12 @@ struct ApronChatView: View {
             .toolbarBackground(.hidden, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .principal) {
-                    ApronChatTitlePill(title: viewModel.title, subtitle: viewModel.serverHost)
+                    NavigationLink {
+                        ApronMembersView(viewModel: viewModel)
+                    } label: {
+                        ApronChatTitlePill(title: viewModel.title, subtitle: viewModel.serverHost)
+                    }
+                    .buttonStyle(.plain)
                 }
             }
             .task {

@@ -320,6 +320,32 @@ def cmd_typing(session: Session, args: argparse.Namespace) -> None:
     print_json({"notifications": [n for n in session.notifications if n.get("method") == "activity"]})
 
 
+def cmd_typing_rate(session: Session, args: argparse.Namespace) -> None:
+    """Sends --count `activity.typing` frames --interval seconds apart and prints every other frame that comes
+    back, tagged with the frame that preceded it, to find a server's typing rate limit and how it reports it
+    (§4.6). --stops alternates start and stop frames."""
+    authenticate(session, args)
+    session.notifications.clear()
+    start = time.time()
+    replies = []
+
+    def collect(after: int) -> None:
+        for frame in session.notifications:
+            if frame.get("method") in ("activity", "user"):
+                continue
+            replies.append({"after_frame": after, "at": round(time.time() - start, 1), "frame": redact(frame)})
+        session.notifications.clear()
+
+    for index in range(args.count):
+        typing = 0 if args.stops and index % 2 else args.seconds
+        session.ws.send_text(json.dumps({"method": "activity", "params": {"room_id": args.room, "typing": typing}}))
+        session.drain(args.interval)
+        collect(index + 1)
+    session.drain(args.wait)
+    collect(args.count)
+    print_json({"sent": args.count, "interval": args.interval, "stops": args.stops, "replies": replies})
+
+
 def cmd_listen(session: Session, args: argparse.Namespace) -> None:
     authenticate(session, args)
     deadline = time.time() + args.wait
@@ -374,6 +400,12 @@ def main() -> None:
     typing.add_argument("--room", required=True)
     typing.add_argument("--seconds", type=int, default=8)
     typing.add_argument("--hold", type=float, default=3)
+    rate = add("typing-rate", cmd_typing_rate)
+    rate.add_argument("--room", default="general")
+    rate.add_argument("--count", type=int, default=12)
+    rate.add_argument("--interval", type=float, default=1)
+    rate.add_argument("--seconds", type=int, default=8)
+    rate.add_argument("--stops", action="store_true")
     add("listen", cmd_listen)
 
     args = parser.parse_args()

@@ -19,6 +19,7 @@ public final class ApronService {
     private var pendingSessions: [URL: Task<ApronSession, Error>] = [:]
     public let readStore: ApronReadStore
     public let messageCache = ApronMessageCache()
+    public let draftStore = ApronDraftStore()
 
     public init(metadataStore: AccountMetadataStore, keychainStore: KeychainCredentialStore, readStore: ApronReadStore = ApronReadStore()) {
         self.metadataStore = metadataStore
@@ -90,6 +91,7 @@ public final class ApronService {
         closeSessions(for: serverURL)
         readStore.removeServer(serverURL)
         messageCache.removeServer(serverURL)
+        draftStore.removeServer(serverURL)
         try? keychainStore.deleteApronToken(serverURL: serverURL)
         metadataStore.apronServers.removeAll { $0.serverURL == serverURL }
     }

@@ -1207,7 +1207,7 @@ private struct ApronBubbleLayout: Hashable, CustomStringConvertible {
 }
 
 /// Stable per-user accent, like Telegram's name colors. `hashValue` is seeded per launch, so sum the scalars.
-private enum ApronUserColor {
+enum ApronUserColor {
     private static let palette: [UIColor] = [.systemRed, .systemOrange, .systemPurple, .systemGreen, .systemTeal, .systemBlue, .systemPink]
 
     static func color(for userId: String) -> UIColor {
