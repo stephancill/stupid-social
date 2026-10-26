@@ -1479,3 +1479,9 @@
 
 - Tapping the message list dismisses the composer's keyboard (a tap recognizer with `cancelsTouchesInView = false`, so links, cards, images and reactions still get their taps). Verified on the simulator by the composer's caret disappearing after a tap between bubbles.
 - Returning from a chat briefly showed the row's old latest message and unread count until the list reloaded. `ChatListViewModel.follow(_:chatId:)` now wires a chat opened from the list to its row: `ChatViewModel` reports its newest message (skipped while an older window is showing) with a one-line preview (text with mentions by name, "Shared “title”" for cards and tracks, "Photo" for images) and its unread count whenever `messages` or `unreadCount` change, and the list rewrites that row (`You: ` prefix for your messages, the sender's name where `ChatSummary.namesSenderInPreview`, set for Apron rooms and Spotify groups). Spotify reports no unread count, so its row reads 0 once opened, matching the chat being marked seen. The reload on return still runs afterwards. Saved lists from before `namesSenderInPreview` don't decode and are rebuilt by the first load. Not yet verified with a message arriving while a chat is open.
+
+### 2026-10-26 — Native internal TestFlight build 143
+
+- Version 1.0.1 (143), built from `69fe1cc3`. It adds to 142: chats moved out of the feed, the saved Chats list, rows following the open chat, keyboard dismissal on tapping messages, continuous page dots, tighter feed rows, the restored last page, and Chats row times and separators.
+- Release preflight, signed distribution archive and project-owned signature verification passed. IPA SHA-256: `fc8db6f2c41989db70b62e095c9fc0953e31998de75fe6e795d089a1d9ccd413`. Logs are in ignored `logs/testflight-143-*` and `.release/`.
+- Uploaded App Store Connect build `53fd38a7-8a1e-4bf5-af41-69a76d8e8ba8`; processing `VALID`, internal `IN_BETA_TESTING`. No What to Test note and no external submission.
