@@ -15,6 +15,7 @@ final class AppContainer {
     let chatListViewModel: ChatListViewModel
     let telegramClient: TelegramClient
     let telegramConnectionViewModel: TelegramConnectionViewModel
+    let telegramPushService: TelegramPushService
 
     private let metadataStore: AccountMetadataStore
     private let keychainStore: KeychainCredentialStore
@@ -155,11 +156,16 @@ final class AppContainer {
         )
 
         telegramClient = TelegramClient()
+        TelegramFileURLProtocol.register(client: telegramClient)
         chatListViewModel = ChatListViewModel(apronSource: apronSource, spotifySource: spotifyMessagesSource, instagramClient: instagramClient, telegramClient: telegramClient)
         telegramConnectionViewModel = TelegramConnectionViewModel(client: telegramClient)
-        telegramConnectionViewModel.onChange = { [chatListViewModel] in
+        telegramPushService = TelegramPushService(client: telegramClient)
+        telegramConnectionViewModel.onChange = { [chatListViewModel, telegramPushService] in
             Task { await chatListViewModel.load() }
+            // Signing in is when the app asks to show Telegram's notifications.
+            Task { await telegramPushService.register(askingPermission: true) }
         }
+        Task { [telegramPushService] in await telegramPushService.register(askingPermission: false) }
         apronServersViewModel = ApronServersViewModel(service: apronService, chatList: chatListViewModel)
         apronLiveFeed = ApronLiveFeed(service: apronService, source: apronSource, chatList: chatListViewModel)
 

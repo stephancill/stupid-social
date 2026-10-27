@@ -60,6 +60,7 @@ Sources/
       ApronLiveFeed.swift           # Foreground WebSocket per Apron server for realtime feed items
       ApronPushService.swift        # Apron push registration through the push.stupidtech.net relay
       ApronRoomNotifications.swift  # Per-room notification levels mapped to mute and wake scopes
+      TelegramPushService.swift     # Telegram APNs registration (token type 1) after sign-in, at launch, on token change
     Sources/                        # Network clients + notification sources
       NotificationSource.swift      # Protocol definition
       InstagramClient.swift / InstagramSession.swift / Instagram*Models.swift / Instagram*Parser.swift / InstagramNotificationSource.swift
@@ -79,7 +80,8 @@ Sources/
       TelegramTL.swift              # TL schema parsing and generic encoder/decoder
       TelegramCrypto.swift          # BigUInt, AES-IGE, RSA_PAD, factorization, SRP
       TelegramMTProto.swift         # MTProto transport, auth key exchange, encrypted session actor
-      TelegramClient.swift          # Telegram account: DCs, sign-in, dialogs, history, send, read
+      TelegramClient.swift          # Telegram account: DCs, sign-in, dialogs, history, send, read, files, push
+      TelegramMedia.swift           # tgfile: URLs and their URLProtocol, media/avatar/reaction parsing
     Resources/
       TelegramSchema.tl             # Telegram TL schema (scripts/telegram-schema.py); TelegramAPI.json is gitignored
     Storage/

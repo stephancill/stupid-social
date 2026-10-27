@@ -152,18 +152,14 @@ public final class InstagramChatViewModel: ChatViewModel {
         }
     }
 
+    /// Sends optimistically (see `sendOptimistically`).
     override public func send() async {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, state == .connected else { return }
-        isSending = true
-        errorMessage = nil
-        defer { isSending = false }
-        do {
-            let replyTo = replyingTo?.id
+        let replyTo = replyingTo?.id
+        await sendOptimistically(text: text, attachment: nil, replyToId: replyTo) {
             let sent = try await client.sendDirectText(threadFbid: threadFbid, text: text, replyToMessageId: replyTo)
-            draft = ""
-            replyingTo = nil
-            // Shown right away; the next poll replaces it with Instagram's copy, which has the same id.
+            // Added as sent; the next poll replaces it with Instagram's copy, which has the same id.
             loaded[sent.id] = InstagramDirectMessage(
                 id: sent.id,
                 senderFbid: viewerFbid,
@@ -177,9 +173,7 @@ public final class InstagramChatViewModel: ChatViewModel {
                 sender: nil,
             )
             publish()
-            scrollToLatestRequest += 1
-        } catch {
-            errorMessage = error.localizedDescription
+            return sent.id
         }
     }
 
@@ -212,8 +206,8 @@ public final class InstagramChatViewModel: ChatViewModel {
     private func publish() {
         let sorted = loaded.values.sorted { ($0.sentAt ?? .distantPast, $0.id) < ($1.sentAt ?? .distantPast, $1.id) }
         let chatMessages = sorted.map(chatMessage)
-        if messages != chatMessages {
-            messages = chatMessages
+        if history != chatMessages {
+            history = chatMessages
         }
         var totals: [String: [ChatReaction]] = [:]
         for message in sorted {

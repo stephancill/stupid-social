@@ -135,11 +135,18 @@ Reference behavior from `docs/CLI_DOCS.md`:
 - Users sign in to their own Telegram account in Settings with their phone number, the login code Telegram sends (normally to their other Telegram app), and their two-step verification password when they have one.
 - Telegram chats appear on the Chats screen, not in the notifications feed: private chats, basic groups and supergroups from the main chat list, with the latest message and unread count. Broadcast channels are left out, since they are feeds rather than conversations.
 - Chats archived in Telegram stay archived: they are not in the main list but behind an Archived Chats row at the top of the Chats screen (as in Telegram), which shows their names and how many have unread messages, and opens a list of them. Search on the Chats screen includes archived chats.
-- Opening a chat shows its history (older pages load on scroll), and the user can send text messages and replies. Reading moves Telegram's read cursor, so the chat is read on the user's other Telegram apps too.
-- New messages appear while the chat is open. Media shows as a label ("Photo", "Voice message", "Sticker") rather than the media itself, and service messages ("Group renamed") show as captions.
+- Opening a chat shows its history (older pages load on scroll), and the user can send text messages, replies, photos and files. Reading moves Telegram's read cursor, so the chat is read on the user's other Telegram apps too.
+- New messages appear while the chat is open. Photos, static stickers and GIF thumbnails show in the bubble; videos, voice messages, music, files, locations, contacts, polls and link previews show as cards (with a thumbnail where there is one). Media the app can't draw shows a label, and service messages ("Group renamed") show as captions. Quoted messages in replies show with the chat, even when the original is older than the loaded messages.
+- Chats and senders show their Telegram profile photos.
+- Reactions show under messages and can be added or changed (one per person, as without Premium).
+- Telegram's notifications reach the app through APNs for unmuted chats, worded like Telegram's own ("Name @ Group: text"), and tapping one opens the chat. The app asks for notification permission when the user signs in to Telegram.
 - Each device signs in as its own Telegram session; the session stays on the device and is not synced through iCloud. Signing out ends that session on Telegram.
 - The app connects to Telegram directly with MTProto; there is no backend. Telegram is available only in builds that include the app's Telegram API credentials.
-- Not in the first version: push notifications for Telegram, avatars, photos and other media, reactions, secret chats, and starting new chats.
+- Not supported: secret chats, starting new chats, playing videos and voice messages, and Premium reactions.
+
+### Sending
+
+- In every chat (Apron, Spotify, Instagram, Telegram), a sent message shows at once with a clock beside its time while it is sending, and the network's copy then takes its place without moving it. A photo shows from the picked image straight away. If sending fails, the message goes and its text and attachment return to the composer. Apron commands are the exception: they may not post a message, so the composer waits for them.
 
 ## Combined Feed
 

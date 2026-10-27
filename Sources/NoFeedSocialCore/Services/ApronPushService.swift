@@ -50,6 +50,11 @@ public final class ApronPushService {
         defaults.string(forKey: Self.deviceTokenKey)
     }
 
+    /// The APNs token (hex) the app delegate last stored, which Telegram push registers too.
+    static func storedDeviceToken(defaults: UserDefaults = .standard) -> String? {
+        defaults.string(forKey: deviceTokenKey)
+    }
+
     public func isEnabled(serverURL: URL) -> Bool {
         !(defaults.stringArray(forKey: Self.disabledServersKey) ?? []).contains(serverURL.absoluteString)
     }

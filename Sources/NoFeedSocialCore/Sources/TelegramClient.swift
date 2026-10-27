@@ -12,6 +12,12 @@ public struct TelegramPeer: Hashable, Codable, Sendable {
     public let id: Int64
     public let accessHash: Int64
 
+    public init(kind: Kind, id: Int64, accessHash: Int64) {
+        self.kind = kind
+        self.id = id
+        self.accessHash = accessHash
+    }
+
     public var key: String {
         "\(kind.rawValue):\(id)"
     }
@@ -35,8 +41,13 @@ public struct TelegramAccount: Codable, Sendable, Equatable {
 public struct TelegramMessage: Codable, Sendable, Hashable {
     public let id: Int32
     public let date: Date
-    /// The text, or what was sent when there's none, such as "Photo".
+    /// One line for previews: the text, with what was sent before it, such as "Photo · caption".
     public let text: String
+    /// The message's own text, empty for media without a caption.
+    public var caption: String = ""
+    public var embeds: [TelegramEmbed] = []
+    public var reactions: [TelegramReaction] = []
+    public var reactors: [TelegramReactor] = []
     public let senderId: Int64?
     public let isOutgoing: Bool
     public let replyToId: Int32?
@@ -48,6 +59,8 @@ public struct TelegramHistoryPage: Sendable {
     public let messages: [TelegramMessage]
     /// User and chat id → display name, for senders.
     public let names: [Int64: String]
+    /// User and chat id → profile photo (a `tgfile:` URL).
+    public let avatars: [Int64: URL]
     public let hasMore: Bool
 }
 
@@ -82,6 +95,22 @@ public actor TelegramClient {
         var homeDC = 2
         var keys: [Int: TelegramDCKey] = [:]
         var account: TelegramAccount?
+        /// Other DCs this account's authorization was imported into, for files stored there.
+        var authorizedDCs: Set<Int> = []
+        /// The APNs token registered for Telegram's pushes, unregistered on sign-out.
+        var pushToken: String?
+
+        init() {}
+
+        /// Missing fields take their defaults, so a session saved by an earlier build still loads.
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            homeDC = try container.decodeIfPresent(Int.self, forKey: .homeDC) ?? 2
+            keys = try container.decodeIfPresent([Int: TelegramDCKey].self, forKey: .keys) ?? [:]
+            account = try container.decodeIfPresent(TelegramAccount.self, forKey: .account)
+            authorizedDCs = try container.decodeIfPresent(Set<Int>.self, forKey: .authorizedDCs) ?? []
+            pushToken = try container.decodeIfPresent(String.self, forKey: .pushToken)
+        }
     }
 
     public static var isAvailable: Bool {
@@ -94,6 +123,12 @@ public actor TelegramClient {
     private var opening: Task<MTProtoSession, Error>?
     private var phoneLogin: (phone: String, hash: String)?
     private var observers: [UUID: @Sendable (TLObject) -> Void] = [:]
+    /// Sessions on other DCs, for downloading files stored there.
+    private var fileSessions: [Int: MTProtoSession] = [:]
+    private var openingFileSessions: [Int: Task<MTProtoSession, Error>] = [:]
+    /// Downloads in flight by cache key, so a file shown twice downloads once.
+    private var downloads: [String: Task<Data, Error>] = [:]
+    private let mediaDirectory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appending(path: "telegram-media", directoryHint: .isDirectory)
 
     public init() {
         stored = keychain.loadTelegramSession().flatMap { try? JSONDecoder().decode(Stored.self, from: $0) } ?? Stored()
@@ -130,7 +165,9 @@ public actor TelegramClient {
         return session
     }
 
-    private func openSession(dc: Int, retryingKey: Bool = true) async throws -> MTProtoSession {
+    /// Opens a session on `dc`. The first call, wrapped in `initConnection`, is `help.getConfig` on the home
+    /// DC and `auth.importAuthorization` (`firstQuery`) when signing in to another DC for files.
+    private func openSession(dc: Int, firstQuery: TLObject = TLObject("help.getConfig"), retryingKey: Bool = true) async throws -> MTProtoSession {
         guard let config = TelegramAPIConfig.bundled else { throw TelegramError.notConfigured }
         let session = try await MTProtoSession.open(
             dc: dc,
@@ -154,12 +191,12 @@ public actor TelegramClient {
                 "system_lang_code": .string(Locale.current.language.languageCode?.identifier ?? "en"),
                 "lang_pack": .string(""),
                 "lang_code": .string(Locale.current.language.languageCode?.identifier ?? "en"),
-                "query": .object(TLObject("help.getConfig")),
+                "query": .object(firstQuery),
             ])),
         ])
         do {
             _ = try await session.call(initConnection)
-            if stored.account != nil {
+            if stored.account != nil, dc == stored.homeDC {
                 // Telegram pushes updates only to sessions that have asked for the update state.
                 _ = try await session.call(TLObject("updates.getState"))
             }
@@ -167,8 +204,9 @@ public actor TelegramClient {
         } catch TelegramError.authKeyInvalid where retryingKey {
             await session.close()
             stored.keys[dc] = nil
+            stored.authorizedDCs.remove(dc)
             save()
-            return try await openSession(dc: dc, retryingKey: false)
+            return try await openSession(dc: dc, firstQuery: firstQuery, retryingKey: false)
         } catch {
             await session.close()
             throw error
@@ -195,6 +233,104 @@ public actor TelegramClient {
                 stored.account = nil
                 save()
                 throw TelegramError.notSignedIn
+            }
+        }
+    }
+
+    // MARK: Files
+
+    /// A session on another DC, signed in there by exporting this account's authorization from the home DC
+    /// (validated with the probe's `avatar`, which reads a DC 1 photo from a DC 4 account).
+    private func fileSession(dc: Int) async throws -> MTProtoSession {
+        if let session = fileSessions[dc], await !session.isClosed {
+            return session
+        }
+        if let opening = openingFileSessions[dc] {
+            return try await opening.value
+        }
+        let task = Task { try await openFileSession(dc: dc) }
+        openingFileSessions[dc] = task
+        defer { openingFileSessions[dc] = nil }
+        let session = try await task.value
+        fileSessions[dc] = session
+        return session
+    }
+
+    private func openFileSession(dc: Int) async throws -> MTProtoSession {
+        if stored.authorizedDCs.contains(dc), stored.keys[dc] != nil {
+            return try await openSession(dc: dc)
+        }
+        guard let exported = try await invoke(TLObject("auth.exportAuthorization", ["dc_id": .int(Int32(dc))])).object,
+              let id = exported["id"]?.long, let bytes = exported["bytes"]?.bytes
+        else { throw TelegramError.protocolViolation("no exported authorization") }
+        let session = try await openSession(dc: dc, firstQuery: TLObject("auth.importAuthorization", ["id": .long(id), "bytes": .bytes(bytes)]))
+        stored.authorizedDCs.insert(dc)
+        save()
+        return session
+    }
+
+    /// A call on `dc`: the home session, or a file session on another DC, reconnecting once.
+    private func invoke(_ method: TLObject, dc: Int) async throws -> TLValue {
+        guard dc != stored.homeDC else { return try await invoke(method) }
+        do {
+            return try await fileSession(dc: dc).call(method)
+        } catch TelegramError.connectionLost {
+            fileSessions[dc] = nil
+            return try await fileSession(dc: dc).call(method)
+        } catch TelegramError.rpc(401, _) {
+            // The DC forgot the imported authorization: import it again.
+            await fileSessions.removeValue(forKey: dc)?.close()
+            stored.authorizedDCs.remove(dc)
+            save()
+            return try await fileSession(dc: dc).call(method)
+        }
+    }
+
+    /// A file behind a `tgfile:` URL, from the disk cache or Telegram.
+    public func file(at url: URL) async throws -> Data {
+        guard let file = TelegramMediaURL.parse(url) else { throw TelegramError.protocolViolation("bad media URL") }
+        try requireAccount()
+        let cached = mediaDirectory.appending(path: TelegramMediaURL.cacheName(file.key))
+        if let data = try? Data(contentsOf: cached) {
+            return data
+        }
+        if let running = downloads[file.key] {
+            return try await running.value
+        }
+        let task = Task { try await download(location: file.location, dc: file.dc) }
+        downloads[file.key] = task
+        defer { downloads[file.key] = nil }
+        let data = try await task.value
+        try? FileManager.default.createDirectory(at: mediaDirectory, withIntermediateDirectories: true)
+        try? data.write(to: cached, options: .atomic)
+        return data
+    }
+
+    /// `upload.getFile` in 512 KB parts until a short one, following `FILE_MIGRATE_X`.
+    private func download(location: TLObject, dc initialDC: Int) async throws -> Data {
+        let limit = 512 * 1024
+        var dc = initialDC
+        var data = Data()
+        var migrations = 0
+        while true {
+            let part: TLObject?
+            do {
+                part = try await invoke(TLObject("upload.getFile", [
+                    "precise": .bool(true), "location": .object(location), "offset": .long(Int64(data.count)), "limit": .int(Int32(limit)),
+                ]), dc: dc).object
+            } catch let TelegramError.rpc(303, message) where message.hasPrefix("FILE_MIGRATE_") && migrations < 2 {
+                guard let next = Int(message.dropFirst("FILE_MIGRATE_".count)) else { throw TelegramError.rpc(code: 303, message: message) }
+                migrations += 1
+                dc = next
+                continue
+            }
+            // CDN redirects (`upload.fileCdnRedirect`) only come for large files, which the app doesn't download.
+            guard let part, part.name == "upload.file", let bytes = part["bytes"]?.bytes else {
+                throw TelegramError.protocolViolation("unsupported file reply \(part?.name ?? "")")
+            }
+            data.append(bytes)
+            if bytes.count < limit || data.count >= TelegramMediaURL.maxDownloadSize {
+                return data
             }
         }
     }
@@ -319,14 +455,44 @@ public actor TelegramClient {
         _ = try? await invoke(TLObject("updates.getState"))
     }
 
+    // MARK: Push
+
+    /// Registers this device's APNs token (hex) so Telegram pushes new messages straight to the app (token type 1,
+    /// using the APNs certificate uploaded on my.telegram.org). Telegram suggests repeating it daily, so the app
+    /// does at every launch. Muted chats aren't pushed.
+    public func registerPush(deviceToken: String, sandbox: Bool) async throws {
+        try requireAccount()
+        _ = try await invoke(TLObject("account.registerDevice", [
+            "no_muted": .bool(true),
+            "token_type": .int(1),
+            "token": .string(deviceToken),
+            "app_sandbox": .bool(sandbox),
+            "secret": .bytes(Data()),
+            "other_uids": .vector([]),
+        ]))
+        stored.pushToken = deviceToken
+        save()
+    }
+
+    private func unregisterPush() async {
+        guard let token = stored.pushToken else { return }
+        _ = try? await invoke(TLObject("account.unregisterDevice", ["token_type": .int(1), "token": .string(token), "other_uids": .vector([])]))
+    }
+
     public func signOut() async {
+        await unregisterPush()
         if stored.account != nil {
             _ = try? await invoke(TLObject("auth.logOut"))
         }
         await current?.close()
         current = nil
+        for session in fileSessions.values {
+            await session.close()
+        }
+        fileSessions = [:]
         stored = Stored()
         try? keychain.deleteTelegramSession()
+        try? FileManager.default.removeItem(at: mediaDirectory)
     }
 
     // MARK: Chats
@@ -377,11 +543,12 @@ public actor TelegramClient {
                     preview = name.map { "\($0): \(body)" } ?? body
                 }
             }
+            let photo = peer.kind == .user ? users[peer.id]?["photo"]?.object : chats[peer.id]?["photo"]?.object
             return ChatSummary(
                 id: "telegram:\(peer.key)",
                 network: .telegram,
                 title: title,
-                avatarURL: nil,
+                avatarURL: TelegramMediaParser.avatarURL(photo: photo, inputPeer: peer.inputPeer, key: peer.key),
                 preview: preview,
                 timestamp: latest?.date,
                 unreadCount: Int(dialog["unread_count"]?.int ?? 0),
@@ -424,20 +591,64 @@ public actor TelegramClient {
             "peer": .object(peer.inputPeer), "offset_id": .int(offsetId), "offset_date": .int(0), "add_offset": .int(0),
             "limit": .int(Int32(limit)), "max_id": .int(0), "min_id": .int(0), "hash": .long(0),
         ])).object else { throw TelegramError.protocolViolation("no history") }
+        let page = page(from: result, peer: peer)
+        let hasMore = result.name == "messages.messages" ? false : page.messages.count >= limit
+        return TelegramHistoryPage(messages: page.messages, names: page.names, avatars: page.avatars, hasMore: hasMore)
+    }
+
+    /// Specific messages, such as the ones replies quote that aren't loaded; missing ids are left out.
+    public func messages(peer: TelegramPeer, ids: [Int32]) async throws -> TelegramHistoryPage {
+        try requireAccount()
+        let inputIds: TLValue = .vector(ids.map { .object(TLObject("inputMessageID", ["id": .int($0)])) })
+        // Supergroup message ids are per channel, so they're fetched through the channel.
+        let method = peer.kind == .channel
+            ? TLObject("channels.getMessages", [
+                "channel": .object(TLObject("inputChannel", ["channel_id": .long(peer.id), "access_hash": .long(peer.accessHash)])),
+                "id": inputIds,
+            ])
+            : TLObject("messages.getMessages", ["id": inputIds])
+        guard let result = try await invoke(method).object else { throw TelegramError.protocolViolation("no messages") }
+        return page(from: result, peer: peer)
+    }
+
+    /// Messages with their senders' names and avatars, from any `messages.Messages`.
+    private func page(from result: TLObject, peer: TelegramPeer) -> TelegramHistoryPage {
+        let rawMessages = result.objects("messages").filter { $0.name != "messageEmpty" }
         var names: [Int64: String] = [:]
+        var avatars: [Int64: URL] = [:]
         for user in result.objects("users") {
-            if let id = user["id"]?.long {
-                names[id] = Self.name(of: user)
+            guard let id = user["id"]?.long else { continue }
+            names[id] = Self.name(of: user)
+            // A "min" user's access hash can't be used; its photo is reached through a message it sent.
+            let inputPeer: TLObject? = if !user.flag("min"), let hash = user["access_hash"]?.long {
+                TLObject("inputPeerUser", ["user_id": .long(id), "access_hash": .long(hash)])
+            } else if let sent = rawMessages.first(where: { $0["from_id"]?.object?["user_id"]?.long == id })?["id"]?.int {
+                TLObject("inputPeerUserFromMessage", ["peer": .object(peer.inputPeer), "msg_id": .int(sent), "user_id": .long(id)])
+            } else {
+                nil
+            }
+            if let inputPeer, let url = TelegramMediaParser.avatarURL(photo: user["photo"]?.object, inputPeer: inputPeer, key: "user:\(id)") {
+                avatars[id] = url
             }
         }
         for chat in result.objects("chats") {
-            if let id = chat["id"]?.long, let title = chat["title"]?.string {
+            guard let id = chat["id"]?.long else { continue }
+            if let title = chat["title"]?.string {
                 names[id] = title
             }
+            let inputPeer: TLObject? = if chat.name == "chat" {
+                TLObject("inputPeerChat", ["chat_id": .long(id)])
+            } else if chat.name == "channel", !chat.flag("min"), let hash = chat["access_hash"]?.long {
+                TLObject("inputPeerChannel", ["channel_id": .long(id), "access_hash": .long(hash)])
+            } else {
+                nil
+            }
+            if let inputPeer, let url = TelegramMediaParser.avatarURL(photo: chat["photo"]?.object, inputPeer: inputPeer, key: "chat:\(id)") {
+                avatars[id] = url
+            }
         }
-        let messages = result.objects("messages").filter { $0.name != "messageEmpty" }.map { Self.message($0, selfId: stored.account?.userId) }
-        let hasMore = result.name == "messages.messages" ? false : messages.count >= limit
-        return TelegramHistoryPage(messages: messages, names: names, hasMore: hasMore)
+        let messages = rawMessages.map { Self.message($0, selfId: stored.account?.userId) }
+        return TelegramHistoryPage(messages: messages, names: names, avatars: avatars, hasMore: false)
     }
 
     /// Sends text, returning the new message's id.
@@ -448,7 +659,11 @@ public actor TelegramClient {
         if let replyTo {
             method["reply_to"] = .object(TLObject("inputReplyToMessage", ["reply_to_msg_id": .int(replyTo)]))
         }
-        guard let updates = try await invoke(method).object else { return nil }
+        return try await Self.sentMessageId(invoke(method).object, randomId: randomId)
+    }
+
+    private static func sentMessageId(_ updates: TLObject?, randomId: Int64) -> Int32? {
+        guard let updates else { return nil }
         if updates.name == "updateShortSentMessage" {
             return updates["id"]?.int
         }
@@ -456,6 +671,49 @@ public actor TelegramClient {
             return update["id"]?.int
         }
         return nil
+    }
+
+    /// Uploads a photo or file in 512 KB parts and sends it with `caption`, returning the new message's id
+    /// (validated with the probe's `send-photo`).
+    public func sendMedia(peer: TelegramPeer, data: Data, mimeType: String, filename: String, isImage: Bool, caption: String, replyTo: Int32?) async throws -> Int32? {
+        try requireAccount()
+        let fileId = Int64.random(in: 1 ... .max)
+        let partSize = 512 * 1024
+        let parts = (data.count + partSize - 1) / partSize
+        // Files over 10 MB go up as "big" files, which name their part count on every part.
+        let isBig = data.count > 10 * 1024 * 1024
+        for part in 0 ..< parts {
+            let bytes = data.subdata(in: part * partSize ..< min(data.count, (part + 1) * partSize))
+            let method = isBig
+                ? TLObject("upload.saveBigFilePart", ["file_id": .long(fileId), "file_part": .int(Int32(part)), "file_total_parts": .int(Int32(parts)), "bytes": .bytes(bytes)])
+                : TLObject("upload.saveFilePart", ["file_id": .long(fileId), "file_part": .int(Int32(part)), "bytes": .bytes(bytes)])
+            guard try await invoke(method).bool == true else { throw TelegramError.protocolViolation("upload part refused") }
+        }
+        let file = isBig
+            ? TLObject("inputFileBig", ["id": .long(fileId), "parts": .int(Int32(parts)), "name": .string(filename)])
+            : TLObject("inputFile", ["id": .long(fileId), "parts": .int(Int32(parts)), "name": .string(filename), "md5_checksum": .string("")])
+        let media = isImage
+            ? TLObject("inputMediaUploadedPhoto", ["file": .object(file)])
+            : TLObject("inputMediaUploadedDocument", [
+                "file": .object(file),
+                "mime_type": .string(mimeType),
+                "attributes": .vector([.object(TLObject("documentAttributeFilename", ["file_name": .string(filename)]))]),
+            ])
+        let randomId = Int64.random(in: 1 ... .max)
+        var method = TLObject("messages.sendMedia", ["peer": .object(peer.inputPeer), "media": .object(media), "message": .string(caption), "random_id": .long(randomId)])
+        if let replyTo {
+            method["reply_to"] = .object(TLObject("inputReplyToMessage", ["reply_to_msg_id": .int(replyTo)]))
+        }
+        return try await Self.sentMessageId(invoke(method).object, randomId: randomId)
+    }
+
+    /// Sets the user's reaction (nil removes it), returning the message's new totals when Telegram sends them.
+    public func setReaction(peer: TelegramPeer, messageId: Int32, emoji: String?) async throws -> (totals: [TelegramReaction], reactors: [TelegramReactor])? {
+        try requireAccount()
+        let reaction: [TLValue] = emoji.map { [.object(TLObject("reactionEmoji", ["emoticon": .string($0)]))] } ?? []
+        let updates = try await invoke(TLObject("messages.sendReaction", ["peer": .object(peer.inputPeer), "msg_id": .int(messageId), "reaction": .vector(reaction)])).object
+        guard let update = updates?.objects("updates").first(where: { $0.name == "updateMessageReactions" }), let reactions = update["reactions"] else { return nil }
+        return TelegramMediaParser.reactions(of: TLObject("message", ["reactions": reactions]))
     }
 
     public func markRead(peer: TelegramPeer, maxId: Int32) async throws {
@@ -507,57 +765,35 @@ public actor TelegramClient {
     /// `selfId` marks the user's own messages where Telegram leaves out `out`, as in Saved Messages.
     static func message(_ message: TLObject, selfId: Int64? = nil) -> TelegramMessage {
         let isService = message.name == "messageService"
-        var text = message["message"]?.string ?? ""
+        let caption = message["message"]?.string ?? ""
+        var text = caption
+        var embeds: [TelegramEmbed] = []
         if isService {
             text = message["action"]?.object.map(serviceText) ?? "Service message"
-        } else if let media = message["media"]?.object, let label = mediaLabel(media) {
-            text = text.isEmpty ? label : "\(label) · \(text)"
+        } else if let media = message["media"]?.object {
+            let content = TelegramMediaParser.content(of: media)
+            embeds = content.embeds
+            if let label = content.label {
+                text = caption.isEmpty ? label : "\(label) · \(caption)"
+            }
         }
         let from = message["from_id"]?.object
         let senderId: Int64? = from.flatMap { $0["user_id"]?.long ?? $0["channel_id"]?.long ?? $0["chat_id"]?.long }
             ?? message["peer_id"]?.object.flatMap { $0.name == "peerUser" ? $0["user_id"]?.long : nil }
+        let reactions = TelegramMediaParser.reactions(of: message)
         return TelegramMessage(
             id: message["id"]?.int ?? 0,
             date: Date(timeIntervalSince1970: TimeInterval(message["date"]?.int ?? 0)),
             text: text,
+            caption: isService ? "" : caption,
+            embeds: embeds,
+            reactions: reactions.totals,
+            reactors: reactions.reactors,
             senderId: senderId,
             isOutgoing: message.flag("out") || (selfId != nil && senderId == selfId),
             replyToId: message["reply_to"]?.object?["reply_to_msg_id"]?.int,
             isService: isService,
         )
-    }
-
-    /// What a message without text shows, such as "Photo" or "Voice message"; nil for link previews.
-    static func mediaLabel(_ media: TLObject) -> String? {
-        switch media.name {
-        case "messageMediaPhoto": return "Photo"
-        case "messageMediaGeo", "messageMediaGeoLive", "messageMediaVenue": return "Location"
-        case "messageMediaContact": return "Contact"
-        case "messageMediaPoll": return "Poll"
-        case "messageMediaDice": return media["emoticon"]?.string ?? "Dice"
-        case "messageMediaGame": return "Game"
-        case "messageMediaInvoice": return "Invoice"
-        case "messageMediaStory": return "Story"
-        case "messageMediaGiveaway", "messageMediaGiveawayResults": return "Giveaway"
-        case "messageMediaWebPage", "messageMediaEmpty": return nil
-        case "messageMediaDocument":
-            let attributes = media["document"]?.object?.objects("attributes") ?? []
-            if let sticker = attributes.first(where: { $0.name == "documentAttributeSticker" }) {
-                return [sticker["alt"]?.string, "Sticker"].compactMap(\.self).filter { !$0.isEmpty }.joined(separator: " ")
-            }
-            if let video = attributes.first(where: { $0.name == "documentAttributeVideo" }) {
-                return video.flag("round_message") ? "Video message" : attributes.contains { $0.name == "documentAttributeAnimated" } ? "GIF" : "Video"
-            }
-            if let audio = attributes.first(where: { $0.name == "documentAttributeAudio" }) {
-                return audio.flag("voice") ? "Voice message" : audio["title"]?.string ?? "Audio"
-            }
-            if attributes.contains(where: { $0.name == "documentAttributeAnimated" }) {
-                return "GIF"
-            }
-            return attributes.first { $0.name == "documentAttributeFilename" }?["file_name"]?.string ?? "File"
-        default:
-            return "Attachment"
-        }
     }
 
     static func serviceText(_ action: TLObject) -> String {

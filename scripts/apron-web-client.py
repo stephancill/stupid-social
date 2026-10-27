@@ -230,7 +230,13 @@ def cmd_history(session: Session, args: argparse.Namespace) -> None:
     params: dict[str, Any] = {"room_id": args.room, "limit": args.limit}
     if args.after:
         params["after"] = args.after
-    print_json(session.request("history", params))
+    if args.before:
+        params["before"] = args.before
+    started = time.time()
+    result = session.request("history", params)
+    # How long the server took, for diagnosing slow reply-target fetches (`--after X --before X --limit 1`).
+    result["_elapsed_s"] = round(time.time() - started, 3)
+    print_json(result)
 
 
 def cmd_join(session: Session, args: argparse.Namespace) -> None:
@@ -709,6 +715,7 @@ def main() -> None:
     history.add_argument("--room", required=True)
     history.add_argument("--limit", type=int, default=20)
     history.add_argument("--after")
+    history.add_argument("--before")
     join = add("join", cmd_join)
     join.add_argument("--room", required=True)
     join.add_argument("--leave", action="store_true")

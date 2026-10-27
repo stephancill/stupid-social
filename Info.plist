@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
 	<key>CFBundleDisplayName</key>
 	<string>stupid social</string>
 	<key>CFBundleIconName</key>
@@ -50,10 +52,6 @@
 	<string>147</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
-	<key>NSUserActivityTypes</key>
-	<array>
-		<string>INSendMessageIntent</string>
-	</array>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>
@@ -63,6 +61,10 @@
 	<string>Debug builds can connect to a local notifications server for background refresh testing.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Save composed story images and chat images to your photo library.</string>
+	<key>NSUserActivityTypes</key>
+	<array>
+		<string>INSendMessageIntent</string>
+	</array>
 	<key>UIDesignRequiresCompatibility</key>
 	<false/>
 	<key>UIDeviceFamily</key>

@@ -149,22 +149,18 @@ public final class SpotifyChatViewModel: ChatViewModel {
         }
     }
 
+    /// Sends optimistically (see `sendOptimistically`); when Spotify doesn't return the message, the refresh
+    /// loads it before the sending copy goes.
     override public func send() async {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, state == .connected else { return }
-        isSending = true
-        errorMessage = nil
-        defer { isSending = false }
-        do {
-            let sent = try await client.sendChatText(chatId: chatId, text: text)
-            draft = ""
-            if let sent {
-                merge([sent])
-            } else {
+        await sendOptimistically(text: text, attachment: nil, replyToId: nil) {
+            guard let sent = try await client.sendChatText(chatId: chatId, text: text) else {
                 await refreshNewest()
+                return nil
             }
-        } catch {
-            errorMessage = error.localizedDescription
+            merge([sent])
+            return sent.id
         }
     }
 
@@ -189,8 +185,8 @@ public final class SpotifyChatViewModel: ChatViewModel {
     private func publish() {
         let sorted = loaded.values.sorted { ($0.sentAt ?? .distantPast, $0.id) < ($1.sentAt ?? .distantPast, $1.id) }
         let chatMessages = sorted.map(chatMessage)
-        if messages != chatMessages {
-            messages = chatMessages
+        if history != chatMessages {
+            history = chatMessages
         }
         var totals: [String: [ChatReaction]] = [:]
         for message in sorted where !message.reactions.isEmpty {

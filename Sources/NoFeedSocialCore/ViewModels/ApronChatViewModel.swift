@@ -155,6 +155,7 @@ public final class ApronChatViewModel: ChatViewModel {
                     try await openAtFirstUnread()
                 }
                 hasLoadedHistory = true
+                await loadMissingReferences()
                 publish()
             }
             updateNotifications()
@@ -302,42 +303,55 @@ public final class ApronChatViewModel: ChatViewModel {
             errorMessage = "\(attachment.filename) is larger than this server's \(ByteCountFormatter.string(fromByteCount: Int64(limit), countStyle: .file)) limit."
             return
         }
+        // `/` sends a command, and `//` escapes a message that starts with `/` (§4.1).
+        if text.hasPrefix("/"), !text.hasPrefix("//"), session.server.has("command") {
+            await sendCommand(text, session: session)
+            return
+        }
+        // A new message ends the indication for others (§4.6).
+        forgetTyping()
+        let bodyText = text.hasPrefix("//") ? String(text.dropFirst()) : text
+        let mentions = mentionedUserIds(in: bodyText)
+        var writeURL: URL?
+        let replyTo = replyingTo?.id
+        // Shown at once as sending until the server's broadcast of it arrives (see `sendOptimistically`).
+        await sendOptimistically(text: text, attachment: attachment, replyToId: replyTo) {
+            let result = try await session.connection.post(
+                method: "message",
+                roomId: roomId,
+                body: ApronMessageBody(
+                    text: bodyText,
+                    format: "markdown",
+                    mentions: mentions.isEmpty ? nil : mentions,
+                    embeds: attachment.map { [.upload(title: $0.filename)] },
+                ),
+                replyTo: replyTo,
+            )
+            writeURL = result.embeds?.first?.writeUrl.flatMap(URL.init(string:))
+            return result.messageId
+        }
+        // The message is broadcast with a pending upload, then the file is written; the chat keeps showing the
+        // picked image meanwhile.
+        guard let attachment, errorMessage == nil else { return }
+        do {
+            guard let writeURL else { throw SourceError.serviceError("The server did not accept the attachment.") }
+            try await ApronUploader.put(data: attachment.data, mimeType: attachment.mimeType, to: writeURL)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    /// A command may not post a message, so it keeps the composer busy rather than showing one.
+    private func sendCommand(_ text: String, session: ApronSession) async {
         isSending = true
         errorMessage = nil
         defer { isSending = false }
+        stopTyping()
         do {
-            // `/` sends a command, and `//` escapes a message that starts with `/` (§4.1).
-            let isCommand = text.hasPrefix("/") && !text.hasPrefix("//") && session.server.has("command")
-            // A new message ends the indication for others (§4.6), so only a command needs an explicit stop.
-            if isCommand {
-                stopTyping()
-            } else {
-                forgetTyping()
-            }
-            let bodyText = !isCommand && text.hasPrefix("//") ? String(text.dropFirst()) : text
-            let mentions = isCommand ? [] : mentionedUserIds(in: bodyText)
-            let body = ApronMessageBody(
-                text: bodyText,
-                format: isCommand ? nil : "markdown",
-                mentions: mentions.isEmpty ? nil : mentions,
-                embeds: attachment.map { [.upload(title: $0.filename)] },
-            )
-            let result = try await session.connection.post(
-                method: isCommand ? "command" : "message",
-                roomId: roomId,
-                body: body,
-                replyTo: replyingTo?.id,
-            )
-            // The message is broadcast with a pending upload; clear the composer before writing the file.
+            _ = try await session.connection.post(method: "command", roomId: roomId, body: ApronMessageBody(text: text), replyTo: replyingTo?.id)
             draft = ""
-            self.attachment = nil
+            attachment = nil
             replyingTo = nil
-            if let attachment {
-                guard let write = result.embeds?.first?.writeUrl, let writeURL = URL(string: write) else {
-                    throw SourceError.serviceError("The server did not accept the attachment.")
-                }
-                try await ApronUploader.put(data: attachment.data, mimeType: attachment.mimeType, to: writeURL)
-            }
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -639,18 +653,33 @@ public final class ApronChatViewModel: ChatViewModel {
         }
     }
 
-    /// Fetches reply targets that aren't loaded with `after` and `before` both at their id (§4.3.1).
+    /// Fetches reply targets later pages and live messages quote, without holding up the update.
     private func fetchMissingReferences() {
+        Task { await loadMissingReferences() }
+    }
+
+    /// Fetches, all at once, reply targets that aren't loaded, with `after` and `before` both at their id
+    /// (§4.3.1). The first load awaits it, so quotes show with the messages instead of loading after them
+    /// (the server answers each in about 0.2 s; the wait was the fetches starting only after the chat showed).
+    private func loadMissingReferences() async {
         guard let session, session.server.has("history") else { return }
         let missing = Set(snapshots.values.compactMap { $0.replyTo?.messageId }).filter {
             snapshots[$0] == nil && referencedMessages[$0] == nil && !unavailableReferences.contains($0) && !pendingReferences.contains($0)
         }
-        for messageId in missing {
-            pendingReferences.insert(messageId)
-            Task {
-                defer { pendingReferences.remove(messageId) }
-                let page = try? await session.connection.history(roomId: roomId, after: messageId, before: messageId, limit: 1)
-                if let message = page?.messages?.first(where: { $0.messageId == messageId }) {
+        guard !missing.isEmpty else { return }
+        pendingReferences.formUnion(missing)
+        let connection = session.connection
+        let roomId = roomId
+        await withTaskGroup(of: (String, ApronMessage?).self) { group in
+            for messageId in missing {
+                group.addTask {
+                    let page = try? await connection.history(roomId: roomId, after: messageId, before: messageId, limit: 1)
+                    return (messageId, page?.messages?.first { $0.messageId == messageId })
+                }
+            }
+            for await (messageId, message) in group {
+                pendingReferences.remove(messageId)
+                if let message {
                     referencedMessages[messageId] = chatMessage(message)
                 } else {
                     unavailableReferences.insert(messageId)
@@ -677,7 +706,7 @@ public final class ApronChatViewModel: ChatViewModel {
 
     private func publish() {
         updateUnreadCount()
-        messages = (sortedSnapshots() + notices).map(chatMessage)
+        history = (sortedSnapshots() + notices).map(chatMessage)
         fetchMissingReferences()
         scheduleCacheSave()
     }

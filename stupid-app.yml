@@ -39,6 +39,8 @@ resources:
   - Resources/TelegramBadge.png
   - Resources/TelegramBadge@2x.png
   - Resources/TelegramBadge@3x.png
+  # Telegram push templates for loc-key alerts (scripts/telegram-push-strings.py).
+  - Resources/en.lproj
 extensions:
   - product: NoFeedSocialNotificationService
     bundleID: tech.stupid.StupidSocial.NotificationService

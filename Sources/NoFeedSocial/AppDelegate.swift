@@ -52,6 +52,16 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     ) {
         nonisolated(unsafe) let completion = completionHandler
         let content = response.notification.request.content
+        if let peer = Self.telegramPeer(content.userInfo) {
+            let opens = response.actionIdentifier == UNNotificationDefaultActionIdentifier
+            Task { @MainActor in
+                if opens {
+                    NotificationRouter.shared.pendingChat = .telegram(peer: peer)
+                }
+                completion()
+            }
+            return
+        }
         guard let info = content.userInfo[ApronPushNotification.userInfoKey] as? [String: String],
               let server = info["server"].flatMap(URL.init(string:)),
               let room = info["room"]
@@ -75,6 +85,30 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             }
             completion()
         }
+    }
+}
+
+extension AppDelegate {
+    /// The chat a Telegram push is about, from its `custom` fields (core.telegram.org/api/push-updates): a
+    /// supergroup, a basic group, or else the sender of a private message. Values may be strings or numbers. The
+    /// access hash comes from the Chats list when the chat opens.
+    nonisolated static func telegramPeer(_ userInfo: [AnyHashable: Any]) -> TelegramPeer? {
+        guard userInfo["loc_key"] != nil || (userInfo["aps"] as? [String: Any])?["alert"].flatMap({ ($0 as? [String: Any])?["loc-key"] }) != nil else { return nil }
+        let custom = userInfo["custom"] as? [String: Any] ?? userInfo as? [String: Any] ?? [:]
+        func id(_ key: String) -> Int64? {
+            if let number = custom[key] as? NSNumber { return number.int64Value }
+            return (custom[key] as? String).flatMap { Int64($0) }
+        }
+        if let channel = id("channel_id") {
+            return TelegramPeer(kind: .channel, id: channel, accessHash: 0)
+        }
+        if let chat = id("chat_id") {
+            return TelegramPeer(kind: .chat, id: chat, accessHash: 0)
+        }
+        if let user = id("from_id") {
+            return TelegramPeer(kind: .user, id: user, accessHash: 0)
+        }
+        return nil
     }
 }
 

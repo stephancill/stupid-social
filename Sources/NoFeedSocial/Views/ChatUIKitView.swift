@@ -1774,9 +1774,11 @@ private final class ChatMessageCell: UICollectionViewListCell, UIGestureRecogniz
             replyView.isHidden = true
         }
 
-        let time = message.timestamp.map(Self.timeFormatter.string(from:)) ?? ""
-        timeLabel.text = time
+        // The clock takes about the width of two digits, so the reserved space covers it.
+        let time = (message.isSending ? "00 " : "") + (message.timestamp.map(Self.timeFormatter.string(from:)) ?? "")
+        timeLabel.attributedText = Self.timeText(message.timestamp.map(Self.timeFormatter.string(from:)) ?? "", isSending: message.isSending)
         timeLabel.textColor = layout.isOwn ? UIColor.white.withAlphaComponent(0.75) : .secondaryLabel
+        timeLabel.accessibilityLabel = message.isSending ? "Sending" : nil
 
         let text: NSAttributedString? = if message.isDeleted {
             NSAttributedString(string: "Message deleted", attributes: [
@@ -1974,6 +1976,19 @@ private final class ChatMessageCell: UICollectionViewListCell, UIGestureRecogniz
 
     /// Appends the time again in clear text, so the visible time label sits on the last line when it fits
     /// and the placeholder wraps to its own line when it doesn't, the way Telegram lays out bubbles.
+    /// The time, after a clock while the message is sending, as Telegram shows it. The clock is a template
+    /// symbol, so it takes the label's color, including white over an image.
+    private static func timeText(_ time: String, isSending: Bool) -> NSAttributedString {
+        let text = NSMutableAttributedString()
+        if isSending, let clock = UIImage(systemName: "clock", withConfiguration: UIImage.SymbolConfiguration(font: timeFont, scale: .small)) {
+            text.append(NSAttributedString(attachment: NSTextAttachment(image: clock)))
+            text.append(NSAttributedString(string: " "))
+        }
+        text.append(NSAttributedString(string: time))
+        text.addAttribute(.font, value: timeFont, range: NSRange(location: 0, length: text.length))
+        return text
+    }
+
     private static func reservingTimeSpace(in text: NSAttributedString, time: String) -> NSAttributedString {
         let result = NSMutableAttributedString(attributedString: text)
         result.append(NSAttributedString(string: "   \(time)", attributes: [.font: timeFont, .foregroundColor: UIColor.clear]))

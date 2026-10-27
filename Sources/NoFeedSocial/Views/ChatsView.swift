@@ -127,6 +127,13 @@ struct ChatsView: View {
         if let listed = (viewModel.chats + viewModel.archivedChats).first(where: { $0.destination == destination }) {
             return listed
         }
+        // A Telegram notification names the chat without its access hash, so it matches on kind and id.
+        if case let .telegram(peer) = destination {
+            return (viewModel.chats + viewModel.archivedChats).first { chat in
+                guard case let .telegram(listed) = chat.destination else { return false }
+                return listed.kind == peer.kind && listed.id == peer.id
+            }
+        }
         guard case let .apron(serverURL, roomId) = destination else { return nil }
         return ChatSummary(
             id: "apron:\(serverURL.absoluteString)|\(roomId)",

@@ -125,6 +125,41 @@ final class TelegramTests: XCTestCase {
         XCTAssertEqual(service.text, "Group renamed to “Friends”")
     }
 
+    func testMediaURLRoundTripsItsLocation() throws {
+        let location = TLObject("inputPhotoFileLocation", [
+            "id": .long(42), "access_hash": .long(-7), "file_reference": .bytes(Data([1, 2, 3, 255])), "thumb_size": .string("y"),
+        ])
+        let url = try XCTUnwrap(TelegramMediaURL.make(key: "photo-42-y", dc: 4, location: location))
+        XCTAssertEqual(url.scheme, "tgfile")
+        let parsed = try XCTUnwrap(TelegramMediaURL.parse(url))
+        XCTAssertEqual(parsed.key, "photo-42-y")
+        XCTAssertEqual(parsed.dc, 4)
+        XCTAssertEqual(parsed.location, location)
+    }
+
+    /// Size shapes from a Saved Messages photo read with the probe.
+    func testPicksLargestPhotoSizeWithinLimit() {
+        let sizes = [
+            TLObject("photoStrippedSize", ["type": .string("i"), "bytes": .bytes(Data())]),
+            TLObject("photoSize", ["type": .string("m"), "w": .int(148), "h": .int(320), "size": .int(1)]),
+            TLObject("photoSize", ["type": .string("y"), "w": .int(590), "h": .int(1280), "size": .int(1)]),
+            TLObject("photoSizeProgressive", ["type": .string("w"), "w": .int(1179), "h": .int(2556), "sizes": .vector([])]),
+        ]
+        XCTAssertEqual(TelegramMediaParser.bestSize(sizes)?.type, "y")
+        XCTAssertEqual(TelegramMediaParser.bestSize(sizes, maxSide: 100)?.type, "m")
+    }
+
+    func testParsesReactions() {
+        let message = TLObject("message", ["reactions": .object(TLObject("messageReactions", [
+            "results": .vector([
+                .object(TLObject("reactionCount", ["reaction": .object(TLObject("reactionEmoji", ["emoticon": .string("👍")])), "count": .int(3), "chosen_order": .int(0)])),
+                .object(TLObject("reactionCount", ["reaction": .object(TLObject("reactionCustomEmoji", ["document_id": .long(1)])), "count": .int(1)])),
+            ]),
+        ]))])
+        let parsed = TelegramMediaParser.reactions(of: message)
+        XCTAssertEqual(parsed.totals, [TelegramReaction(emoji: "👍", count: 3, isMine: true), TelegramReaction(emoji: "⭐️", count: 1, isMine: false)])
+    }
+
     /// Shapes seen with `scripts/telegram-client.py listen`.
     func testUpdatesConcernOnlyTheirChat() {
         let group = TelegramPeer(kind: .channel, id: 2_009_589_709, accessHash: 1)

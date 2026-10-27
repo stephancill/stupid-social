@@ -1,4 +1,5 @@
 import Foundation
+import ImageIO
 
 /// Someone shown in a chat: a message sender, reactor, or mention suggestion.
 public struct ChatUser: Hashable, Identifiable, Codable, Sendable {
@@ -45,6 +46,8 @@ public struct ChatMessage: Hashable, Identifiable, Sendable {
     public let isOwn: Bool
     /// A transient notice outside the history: it can't be replied to, reacted to, or marked read.
     public let isNotice: Bool
+    /// Sent by the user and not yet confirmed by the network: shown at once, with a sending indicator.
+    public let isSending: Bool
 
     public init(
         id: String,
@@ -57,6 +60,7 @@ public struct ChatMessage: Hashable, Identifiable, Sendable {
         isDeleted: Bool = false,
         isOwn: Bool,
         isNotice: Bool = false,
+        isSending: Bool = false,
     ) {
         self.id = id
         self.sender = sender
@@ -68,6 +72,27 @@ public struct ChatMessage: Hashable, Identifiable, Sendable {
         self.isDeleted = isDeleted
         self.isOwn = isOwn
         self.isNotice = isNotice
+        self.isSending = isSending
+    }
+
+    /// The message with `image` in place of its first image or pending upload, such as the picked file for a
+    /// message the user just sent.
+    func showing(_ image: ChatEmbed) -> ChatMessage {
+        var embeds = embeds
+        if let index = embeds.firstIndex(where: {
+            switch $0 {
+            case .image, .pending: true
+            default: false
+            }
+        }) {
+            embeds[index] = image
+        } else {
+            return self
+        }
+        return ChatMessage(
+            id: id, sender: sender, timestamp: timestamp, text: text, isMarkdown: isMarkdown, embeds: embeds,
+            replyToId: replyToId, isDeleted: isDeleted, isOwn: isOwn, isNotice: isNotice, isSending: isSending,
+        )
     }
 
     /// Whether it is a real message someone sent, rather than a notice or system caption.
@@ -142,11 +167,17 @@ public enum ChatConnectionState: Equatable {
 /// `ChatMessage`s, and overrides the actions it supports; the capability flags hide the rest of the UI.
 @MainActor
 public class ChatViewModel: ObservableObject {
-    @Published public internal(set) var messages: [ChatMessage] = [] {
+    /// What the chat shows: the network's `history`, then the user's messages still sending.
+    @Published public private(set) var messages: [ChatMessage] = [] {
         didSet {
             messagesById = Dictionary(messages.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
             reportSummary()
         }
+    }
+
+    /// The network's messages, oldest first; each network sets this and `messages` follows.
+    var history: [ChatMessage] = [] {
+        didSet { composeMessages() }
     }
 
     @Published public internal(set) var state: ChatConnectionState = .connecting
@@ -207,6 +238,14 @@ public class ChatViewModel: ObservableObject {
 
     public static let quickReactions = ["👍", "❤️", "😂", "🔥", "😮", "🙏"]
     public static let unreadBadgeCap = 50
+
+    /// Messages the user sent that aren't in `history` yet, shown after it with a sending indicator.
+    private var outgoing: [ChatMessage] = []
+    /// Confirmed message id → its sending copy, which stays until the message is in `history`.
+    private var awaitingHistory: [String: String] = [:]
+    /// Confirmed message id → the image the user picked. The message keeps showing it, so the swap from the
+    /// sending copy doesn't reload the image or change its size.
+    private var pickedImages: [String: ChatEmbed] = [:]
 
     /// The newest message with its one-line preview, and the unread count, for the chat's row in the Chats list.
     var summaryDidChange: ((_ latest: ChatMessage?, _ body: String?, _ unreadCount: Int) -> Void)?
@@ -270,8 +309,80 @@ public class ChatViewModel: ObservableObject {
     /// Runs whenever `draft` is assigned, such as to keep it across visits.
     func draftWasSet() {}
 
+    /// The optimistic send every network shares: the message shows at once as sending and the composer clears;
+    /// `deliver` sends it and returns the network's id for it (nil when unknown). The sending copy stays until a
+    /// message with that id is in `history`, so it never blinks out; without an id it goes when `deliver`
+    /// returns, which should first load the sent message. A failure takes it away and puts the text and
+    /// attachment back in the composer, if the user hasn't started another message.
+    func sendOptimistically(text: String, attachment: ChatAttachment?, replyToId: String?, deliver: () async throws -> String?) async {
+        errorMessage = nil
+        let localId = "sending-\(UUID().uuidString)"
+        let image = attachment.flatMap { Self.localImage(attachment: $0, id: localId) }
+        outgoing.append(ChatMessage(
+            id: localId,
+            sender: ChatUser(id: "you", name: "You", avatarURL: nil),
+            timestamp: Date(),
+            text: text.isEmpty ? nil : text,
+            embeds: image.map { [$0] } ?? attachment.map { [.pending(title: $0.filename)] } ?? [],
+            replyToId: replyToId,
+            isOwn: true,
+            isSending: true,
+        ))
+        draft = ""
+        self.attachment = nil
+        replyingTo = nil
+        composeMessages()
+        scrollToLatestRequest += 1
+        do {
+            if let id = try await deliver() {
+                pickedImages[id] = image
+                awaitingHistory[id] = localId
+            } else {
+                outgoing.removeAll { $0.id == localId }
+            }
+        } catch {
+            outgoing.removeAll { $0.id == localId }
+            if draft.isEmpty, self.attachment == nil {
+                draft = text
+                self.attachment = attachment
+            }
+            errorMessage = error.localizedDescription
+        }
+        composeMessages()
+    }
+
+    private func composeMessages() {
+        let ids = Set(history.map(\.id))
+        for (id, localId) in awaitingHistory where ids.contains(id) {
+            awaitingHistory[id] = nil
+            outgoing.removeAll { $0.id == localId }
+        }
+        let shown = history.map { message in pickedImages[message.id].map(message.showing) ?? message } + outgoing
+        if messages != shown {
+            messages = shown
+        }
+    }
+
+    /// The picked image, written to a local file the chat's image views load like any URL.
+    private static func localImage(attachment: ChatAttachment, id: String) -> ChatEmbed? {
+        guard attachment.isImage else { return nil }
+        let file = FileManager.default.temporaryDirectory.appending(path: "\(id)-\(attachment.filename)")
+        guard (try? attachment.data.write(to: file)) != nil else { return nil }
+        return .image(url: file, aspectRatio: aspectRatio(of: attachment.data), alt: nil, link: nil, opensViewer: true)
+    }
+
+    private static func aspectRatio(of data: Data) -> Double? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? Double, let height = properties[kCGImagePropertyPixelHeight] as? Double, height > 0
+        else { return nil }
+        // EXIF orientations 5–8 are rotated a quarter turn.
+        let orientation = properties[kCGImagePropertyOrientation] as? Int ?? 1
+        return orientation >= 5 ? height / width : width / height
+    }
+
     public func startReply(to message: ChatMessage) {
-        guard canReply, message.isUserMessage, !message.isDeleted else { return }
+        guard canReply, message.isUserMessage, !message.isDeleted, !message.isSending else { return }
         replyingTo = message
     }
 

@@ -20,6 +20,10 @@ Commands:
   send --peer user:1 --text "hi" [--reply-to N]
   read --peer user:1 --max-id N
   listen [--seconds N]        print updates pushed on the connection
+  download --peer K --msg-id N [--size x] -o FILE   a message's photo or document (a size type, or "full")
+  avatar --peer K -o FILE     a user's or chat's profile photo (small)
+  send-photo --peer K --file F [--caption T]   upload.saveFilePart + messages.sendMedia
+  react --peer K --msg-id N [--emoji E]        messages.sendReaction; no emoji removes yours
   raw --method name --json '{...}'   any method, with peers like {"_": "inputPeerSelf"}
 """
 
@@ -110,25 +114,27 @@ def _build_aes_tables():
 SBOX, INV_SBOX, TE, TD = _build_aes_tables()
 
 
-class AES256:
+class AES:
     def __init__(self, key: bytes):
-        assert len(key) == 32
-        words = list(struct.unpack(">8I", key))
+        assert len(key) in (16, 32)
+        nk = len(key) // 4
+        self.rounds = nk + 6
+        words = list(struct.unpack(f">{nk}I", key))
         rcon = 1
-        for i in range(8, 60):
+        for i in range(nk, 4 * (self.rounds + 1)):
             temp = words[i - 1]
-            if i % 8 == 0:
+            if i % nk == 0:
                 temp = ((temp << 8) | (temp >> 24)) & 0xFFFFFFFF
                 temp = self._sub_word(temp) ^ (rcon << 24)
                 rcon = ((rcon << 1) ^ 0x11B) if rcon & 0x80 else rcon << 1
-            elif i % 8 == 4:
+            elif nk == 8 and i % 8 == 4:
                 temp = self._sub_word(temp)
-            words.append(words[i - 8] ^ temp)
+            words.append(words[i - nk] ^ temp)
         self.ek = words
         dk = []
-        for r in range(14, -1, -1):
+        for r in range(self.rounds, -1, -1):
             round_key = words[4 * r : 4 * r + 4]
-            if 0 < r < 14:
+            if 0 < r < self.rounds:
                 round_key = [
                     TD[0][SBOX[w >> 24]] ^ TD[1][SBOX[(w >> 16) & 255]] ^ TD[2][SBOX[(w >> 8) & 255]] ^ TD[3][SBOX[w & 255]]
                     for w in round_key
@@ -142,13 +148,14 @@ class AES256:
 
     def encrypt_block(self, block: bytes) -> bytes:
         k = self.ek
+        f = 4 * self.rounds
         t0, t1, t2, t3 = TE
         s0, s1, s2, s3 = struct.unpack(">4I", block)
         s0 ^= k[0]
         s1 ^= k[1]
         s2 ^= k[2]
         s3 ^= k[3]
-        for r in range(1, 14):
+        for r in range(1, self.rounds):
             i = 4 * r
             s0, s1, s2, s3 = (
                 t0[s0 >> 24] ^ t1[(s1 >> 16) & 255] ^ t2[(s2 >> 8) & 255] ^ t3[s3 & 255] ^ k[i],
@@ -159,21 +166,22 @@ class AES256:
         S = SBOX
         return struct.pack(
             ">4I",
-            ((S[s0 >> 24] << 24) | (S[(s1 >> 16) & 255] << 16) | (S[(s2 >> 8) & 255] << 8) | S[s3 & 255]) ^ k[56],
-            ((S[s1 >> 24] << 24) | (S[(s2 >> 16) & 255] << 16) | (S[(s3 >> 8) & 255] << 8) | S[s0 & 255]) ^ k[57],
-            ((S[s2 >> 24] << 24) | (S[(s3 >> 16) & 255] << 16) | (S[(s0 >> 8) & 255] << 8) | S[s1 & 255]) ^ k[58],
-            ((S[s3 >> 24] << 24) | (S[(s0 >> 16) & 255] << 16) | (S[(s1 >> 8) & 255] << 8) | S[s2 & 255]) ^ k[59],
+            ((S[s0 >> 24] << 24) | (S[(s1 >> 16) & 255] << 16) | (S[(s2 >> 8) & 255] << 8) | S[s3 & 255]) ^ k[f],
+            ((S[s1 >> 24] << 24) | (S[(s2 >> 16) & 255] << 16) | (S[(s3 >> 8) & 255] << 8) | S[s0 & 255]) ^ k[f + 1],
+            ((S[s2 >> 24] << 24) | (S[(s3 >> 16) & 255] << 16) | (S[(s0 >> 8) & 255] << 8) | S[s1 & 255]) ^ k[f + 2],
+            ((S[s3 >> 24] << 24) | (S[(s0 >> 16) & 255] << 16) | (S[(s1 >> 8) & 255] << 8) | S[s2 & 255]) ^ k[f + 3],
         )
 
     def decrypt_block(self, block: bytes) -> bytes:
         k = self.dk
+        f = 4 * self.rounds
         t0, t1, t2, t3 = TD
         s0, s1, s2, s3 = struct.unpack(">4I", block)
         s0 ^= k[0]
         s1 ^= k[1]
         s2 ^= k[2]
         s3 ^= k[3]
-        for r in range(1, 14):
+        for r in range(1, self.rounds):
             i = 4 * r
             s0, s1, s2, s3 = (
                 t0[s0 >> 24] ^ t1[(s3 >> 16) & 255] ^ t2[(s2 >> 8) & 255] ^ t3[s1 & 255] ^ k[i],
@@ -184,10 +192,10 @@ class AES256:
         S = INV_SBOX
         return struct.pack(
             ">4I",
-            ((S[s0 >> 24] << 24) | (S[(s3 >> 16) & 255] << 16) | (S[(s2 >> 8) & 255] << 8) | S[s1 & 255]) ^ k[56],
-            ((S[s1 >> 24] << 24) | (S[(s0 >> 16) & 255] << 16) | (S[(s3 >> 8) & 255] << 8) | S[s2 & 255]) ^ k[57],
-            ((S[s2 >> 24] << 24) | (S[(s1 >> 16) & 255] << 16) | (S[(s0 >> 8) & 255] << 8) | S[s3 & 255]) ^ k[58],
-            ((S[s3 >> 24] << 24) | (S[(s2 >> 16) & 255] << 16) | (S[(s1 >> 8) & 255] << 8) | S[s0 & 255]) ^ k[59],
+            ((S[s0 >> 24] << 24) | (S[(s3 >> 16) & 255] << 16) | (S[(s2 >> 8) & 255] << 8) | S[s1 & 255]) ^ k[f],
+            ((S[s1 >> 24] << 24) | (S[(s0 >> 16) & 255] << 16) | (S[(s3 >> 8) & 255] << 8) | S[s2 & 255]) ^ k[f + 1],
+            ((S[s2 >> 24] << 24) | (S[(s1 >> 16) & 255] << 16) | (S[(s0 >> 8) & 255] << 8) | S[s3 & 255]) ^ k[f + 2],
+            ((S[s3 >> 24] << 24) | (S[(s2 >> 16) & 255] << 16) | (S[(s1 >> 8) & 255] << 8) | S[s0 & 255]) ^ k[f + 3],
         )
 
 
@@ -197,7 +205,7 @@ def _xor(a: bytes, b: bytes) -> bytes:
 
 def ige_encrypt(data: bytes, key: bytes, iv: bytes) -> bytes:
     assert len(data) % 16 == 0
-    aes = AES256(key)
+    aes = AES(key)
     prev_cipher, prev_plain = iv[:16], iv[16:]
     out = bytearray()
     for i in range(0, len(data), 16):
@@ -210,7 +218,7 @@ def ige_encrypt(data: bytes, key: bytes, iv: bytes) -> bytes:
 
 def ige_decrypt(data: bytes, key: bytes, iv: bytes) -> bytes:
     assert len(data) % 16 == 0
-    aes = AES256(key)
+    aes = AES(key)
     prev_cipher, prev_plain = iv[:16], iv[16:]
     out = bytearray()
     for i in range(0, len(data), 16):
@@ -222,7 +230,7 @@ def ige_decrypt(data: bytes, key: bytes, iv: bytes) -> bytes:
 
 
 def self_test():
-    aes = AES256(bytes(range(32)))
+    aes = AES(bytes(range(32)))
     plain = bytes.fromhex("00112233445566778899aabbccddeeff")
     cipher = aes.encrypt_block(plain)
     assert cipher.hex() == "8ea2b7ca516745bfeafc49904b496089", cipher.hex()
@@ -857,6 +865,35 @@ class Client:
                 return self.session.call(method)
             raise
 
+    def dc_session(self, dc: int) -> "Session":
+        """A session on another DC for files, signed in by exporting the home DC's authorization."""
+        if dc == self.session.dc:
+            return self.session
+        sessions = self.__dict__.setdefault("dc_sessions", {})
+        if dc not in sessions:
+            session = Session(self.store, dc)
+            authorized = self.store.data.setdefault("authorized_dcs", [])
+            if dc not in authorized:
+                exported = self.call({"_": "auth.exportAuthorization", "dc_id": dc})
+                session.call({"_": "auth.importAuthorization", "id": exported["id"], "bytes": exported["bytes"]})
+                authorized.append(dc)
+                self.store.save()
+            sessions[dc] = session
+        return sessions[dc]
+
+    def download(self, location: dict, dc: int) -> bytes:
+        """upload.getFile in 512 KB parts until a short part."""
+        session = self.dc_session(dc)
+        limit = 512 * 1024
+        data = b""
+        while True:
+            part = session.call({"_": "upload.getFile", "precise": True, "location": location, "offset": len(data), "limit": limit})
+            if part["_"] != "upload.file":
+                raise SystemExit(f"Unsupported file reply {part['_']} (CDN)")
+            data += part["bytes"]
+            if len(part["bytes"]) < limit:
+                return data
+
     def remember_peers(self, users: list, chats: list):
         peers = self.store.data["peers"]
         for user in users:
@@ -924,6 +961,132 @@ def check_password(client: Client, password: str) -> dict:
     return client.call({"_": "auth.checkPassword", "password": {"_": "inputCheckPasswordSRP", "srp_id": info["srp_id"], "A": g_a, "M1": m1}})
 
 
+# MARK: Web Push (RFC 8291) for Telegram's token_type 10
+
+# Telegram's VAPID public key, from Telegram Web (tweb src/config/app.ts `pushServerKey`).
+TELEGRAM_VAPID_KEY = "BHEbKOXt-GD8MCTTYiAYT3I5R4MB0epIE7Tbbymj1uR0xJRE_7m27eXTVAC_P19TeZnO9413lRz-0oZ87JRPKPM"
+
+P256_P = 2**256 - 2**224 + 2**192 + 2**96 - 1
+P256_N = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
+P256_B = 0x5AC635D8AA3A93E7B3EBBD55769886BC651D06B0CC53B0F63BCE3C3E27D2604B
+P256_G = (
+    0x6B17D1F2E12C4247F8BCE6E563A440F277037D812DEB33A0F4A13945D898C296,
+    0x4FE342E2FE1A7F9B8EE7EB4A7C0F9E162BCE33576B315ECECBB6406837BF51F5,
+)
+
+
+def p256_add(a, b):
+    if a is None:
+        return b
+    if b is None:
+        return a
+    if a[0] == b[0] and (a[1] + b[1]) % P256_P == 0:
+        return None
+    if a == b:
+        slope = (3 * a[0] * a[0] - 3) * pow(2 * a[1], P256_P - 2, P256_P) % P256_P
+    else:
+        slope = (b[1] - a[1]) * pow(b[0] - a[0], P256_P - 2, P256_P) % P256_P
+    x = (slope * slope - a[0] - b[0]) % P256_P
+    return x, (slope * (a[0] - x) - a[1]) % P256_P
+
+
+def p256_mul(k: int, point):
+    result = None
+    while k:
+        if k & 1:
+            result = p256_add(result, point)
+        point = p256_add(point, point)
+        k >>= 1
+    return result
+
+
+def p256_point(data: bytes):
+    assert len(data) == 65 and data[0] == 4
+    x, y = int.from_bytes(data[1:33], "big"), int.from_bytes(data[33:], "big")
+    assert (y * y - (x * x * x - 3 * x + P256_B)) % P256_P == 0, "not on P-256"
+    return x, y
+
+
+def p256_bytes(point) -> bytes:
+    return b"\x04" + point[0].to_bytes(32, "big") + point[1].to_bytes(32, "big")
+
+
+def b64url(data: bytes) -> str:
+    import base64
+
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+
+def b64url_decode(text: str) -> bytes:
+    import base64
+
+    return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+
+
+def hmac_sha256(key: bytes, data: bytes) -> bytes:
+    import hmac
+
+    return hmac.new(key, data, hashlib.sha256).digest()
+
+
+def gcm_decrypt(key: bytes, nonce: bytes, data: bytes) -> bytes:
+    """AES-GCM with a 96-bit nonce; checks the tag."""
+    aes = AES(key)
+    ciphertext, tag = data[:-16], data[-16:]
+    h = int.from_bytes(aes.encrypt_block(bytes(16)), "big")
+
+    def gf_mul(x: int, y: int) -> int:
+        z, v = 0, y
+        for i in range(127, -1, -1):
+            if (x >> i) & 1:
+                z ^= v
+            v = (v >> 1) ^ (0xE1 << 120) if v & 1 else v >> 1
+        return z
+
+    ghash = 0
+    padded = ciphertext + bytes(-len(ciphertext) % 16)
+    for i in range(0, len(padded), 16):
+        ghash = gf_mul(ghash ^ int.from_bytes(padded[i : i + 16], "big"), h)
+    ghash = gf_mul(ghash ^ (len(ciphertext) * 8), h)
+    expected = _xor(aes.encrypt_block(nonce + b"\x00\x00\x00\x01"), ghash.to_bytes(16, "big"))
+    if expected != tag:
+        raise SystemExit("GCM tag mismatch")
+    plain = bytearray()
+    for index, start in enumerate(range(0, len(ciphertext), 16)):
+        stream = aes.encrypt_block(nonce + (index + 2).to_bytes(4, "big"))
+        block = ciphertext[start : start + 16]
+        plain += _xor(block, stream[: len(block)])
+    return bytes(plain)
+
+
+def webpush_decrypt(body: bytes, private_key: int, auth: bytes) -> bytes:
+    """RFC 8291 `aes128gcm`: salt, record size, the sender's key, then one record."""
+    salt, record_size, key_length = body[:16], int.from_bytes(body[16:20], "big"), body[20]
+    sender = body[21 : 21 + key_length]
+    ciphertext = body[21 + key_length :]
+    assert len(ciphertext) <= record_size
+    receiver = p256_bytes(p256_mul(private_key, P256_G))
+    shared = p256_mul(private_key, p256_point(sender))[0].to_bytes(32, "big")
+    ikm = hmac_sha256(hmac_sha256(auth, shared), b"WebPush: info\x00" + receiver + sender + b"\x01")
+    prk = hmac_sha256(salt, ikm)
+    cek = hmac_sha256(prk, b"Content-Encoding: aes128gcm\x00\x01")[:16]
+    nonce = hmac_sha256(prk, b"Content-Encoding: nonce\x00\x01")[:12]
+    padded = gcm_decrypt(cek, nonce, ciphertext).rstrip(b"\x00")
+    assert padded.endswith(b"\x02"), "missing last-record delimiter"
+    return padded[:-1]
+
+
+def webpush_token(store: "Store", endpoint: str) -> str:
+    """The token_type 10 token: the endpoint and this probe's P-256 key and auth secret (kept in the session)."""
+    push = store.data.setdefault("webpush", {})
+    if "private_key" not in push:
+        push["private_key"] = int.from_bytes(os.urandom(32), "big") % (P256_N - 1) + 1
+        push["auth"] = os.urandom(16).hex()
+        store.save()
+    public = p256_bytes(p256_mul(push["private_key"], P256_G))
+    return json.dumps({"endpoint": endpoint, "keys": {"p256dh": b64url(public), "auth": b64url(bytes.fromhex(push["auth"]))}, "vapid": True}, separators=(",", ":"))
+
+
 # MARK: Commands
 
 
@@ -981,6 +1144,31 @@ def main():
     read.add_argument("--max-id", type=int, required=True)
     listen = sub.add_parser("listen")
     listen.add_argument("--seconds", type=float, default=60)
+    download = sub.add_parser("download")
+    download.add_argument("--peer", required=True)
+    download.add_argument("--msg-id", type=int, required=True)
+    download.add_argument("--size", default="x", help='photo or thumbnail size type such as m, x, y; "full" for a whole document')
+    download.add_argument("-o", "--output", required=True)
+    avatar = sub.add_parser("avatar")
+    avatar.add_argument("--peer", required=True)
+    avatar.add_argument("-o", "--output", required=True)
+    send_photo = sub.add_parser("send-photo")
+    send_photo.add_argument("--peer", required=True)
+    send_photo.add_argument("--file", required=True)
+    send_photo.add_argument("--caption", default="")
+    push_register = sub.add_parser("push-register")
+    push_register.add_argument("--endpoint", help="Web Push endpoint (token_type 10)")
+    push_register.add_argument("--apns", help="APNs device token in hex (token_type 1)")
+    push_register.add_argument("--sandbox", action="store_true")
+    push_unregister = sub.add_parser("push-unregister")
+    push_unregister.add_argument("--endpoint")
+    push_unregister.add_argument("--apns")
+    push_decrypt = sub.add_parser("push-decrypt")
+    push_decrypt.add_argument("--file", required=True, help="a captured Web Push request body")
+    react = sub.add_parser("react")
+    react.add_argument("--peer", required=True)
+    react.add_argument("--msg-id", type=int, required=True)
+    react.add_argument("--emoji", default="", help="empty removes your reaction")
     raw = sub.add_parser("raw")
     raw.add_argument("--method", required=True)
     raw.add_argument("--json", default="{}")
@@ -1075,6 +1263,75 @@ def main():
         client.call({"_": "updates.getState"})
         print(f"Listening on DC {client.session.dc} for {args.seconds:.0f}s", file=sys.stderr)
         client.session.listen(args.seconds)
+    elif args.command == "download":
+        kind, peer_id = args.peer.split(":")
+        if kind == "channel":
+            channel = {"_": "inputChannel", "channel_id": int(peer_id), "access_hash": client.store.data["peers"][args.peer]}
+            result = client.call({"_": "channels.getMessages", "channel": channel, "id": [{"_": "inputMessageID", "id": args.msg_id}]})
+        else:
+            result = client.call({"_": "messages.getMessages", "id": [{"_": "inputMessageID", "id": args.msg_id}]})
+        media = result["messages"][0].get("media") or {}
+        if media.get("_") == "messageMediaPhoto":
+            photo = media["photo"]
+            location = {"_": "inputPhotoFileLocation", "id": photo["id"], "access_hash": photo["access_hash"], "file_reference": photo["file_reference"], "thumb_size": args.size}
+            dc = photo["dc_id"]
+        elif media.get("_") == "messageMediaDocument":
+            doc = media["document"]
+            location = {"_": "inputDocumentFileLocation", "id": doc["id"], "access_hash": doc["access_hash"], "file_reference": doc["file_reference"], "thumb_size": "" if args.size == "full" else args.size}
+            dc = doc["dc_id"]
+        else:
+            raise SystemExit(f"No downloadable media: {media.get('_')}")
+        started = time.time()
+        data = client.download(location, dc)
+        pathlib.Path(args.output).write_bytes(data)
+        print(f"{len(data)} bytes from DC {dc} in {time.time() - started:.1f}s -> {args.output}")
+    elif args.command == "avatar":
+        kind, peer_id = args.peer.split(":")
+        result = client.call({"_": "messages.getPeerDialogs", "peers": [{"_": "inputDialogPeer", "peer": client.input_peer(args.peer)}]})
+        owner = next(o for o in result["users"] + result["chats"] if o["id"] == int(peer_id))
+        photo = owner.get("photo") or {}
+        if "photo_id" not in photo:
+            raise SystemExit(f"No photo: {photo.get('_')}")
+        location = {"_": "inputPeerPhotoFileLocation", "peer": client.input_peer(args.peer), "photo_id": photo["photo_id"]}
+        started = time.time()
+        data = client.download(location, photo["dc_id"])
+        pathlib.Path(args.output).write_bytes(data)
+        print(f"{len(data)} bytes from DC {photo['dc_id']} in {time.time() - started:.1f}s -> {args.output}")
+    elif args.command == "send-photo":
+        data = pathlib.Path(args.file).read_bytes()
+        file_id = secrets.randbits(63)
+        part_size = 512 * 1024
+        parts = [data[i : i + part_size] for i in range(0, len(data), part_size)]
+        for index, part in enumerate(parts):
+            assert client.call({"_": "upload.saveFilePart", "file_id": file_id, "file_part": index, "bytes": part}) is True
+        uploaded = {"_": "inputFile", "id": file_id, "parts": len(parts), "name": pathlib.Path(args.file).name, "md5_checksum": ""}
+        result = client.call({
+            "_": "messages.sendMedia",
+            "peer": client.input_peer(args.peer),
+            "media": {"_": "inputMediaUploadedPhoto", "file": uploaded},
+            "message": args.caption,
+            "random_id": secrets.randbits(63),
+        })
+        sent = [u for u in result.get("updates", []) if u["_"] == "updateMessageID"]
+        print(f"{result['_']}: uploaded {len(data)} bytes in {len(parts)} parts, message id {sent[0]['id'] if sent else '?'}")
+    elif args.command == "push-register":
+        token_type, token = (1, args.apns) if args.apns else (10, webpush_token(client.store, args.endpoint))
+        result = client.call({"_": "account.registerDevice", "no_muted": True, "token_type": token_type, "token": token, "app_sandbox": args.sandbox, "secret": b"", "other_uids": []})
+        print(f"account.registerDevice: {result}")
+    elif args.command == "push-unregister":
+        token_type, token = (1, args.apns) if args.apns else (10, webpush_token(client.store, args.endpoint))
+        print(f"account.unregisterDevice: {client.call({'_': 'account.unregisterDevice', 'token_type': token_type, 'token': token, 'other_uids': []})}")
+    elif args.command == "push-decrypt":
+        push = client.store.data["webpush"]
+        plain = webpush_decrypt(pathlib.Path(args.file).read_bytes(), push["private_key"], bytes.fromhex(push["auth"]))
+        print(json.dumps(json.loads(plain), indent=1, ensure_ascii=False))
+    elif args.command == "react":
+        reaction = [{"_": "reactionEmoji", "emoticon": args.emoji}] if args.emoji else []
+        result = client.call({"_": "messages.sendReaction", "peer": client.input_peer(args.peer), "msg_id": args.msg_id, "reaction": reaction})
+        for update in result.get("updates", []):
+            if update["_"] == "updateMessageReactions":
+                counts = [(r["reaction"].get("emoticon"), r["count"], "chosen_order" in r) for r in update["reactions"]["results"]]
+                print("updateMessageReactions", counts)
     elif args.command == "raw":
         params = json.loads(args.json)
         params["_"] = args.method
