@@ -24,6 +24,10 @@ public struct ContentView: View {
             }
         }
         .background(refreshShortcutButton)
+        // `apron:` links, and link.apron.chat links once the app is in its registry.
+        .onOpenURL { url in
+            _ = notificationRouter.open(url)
+        }
         .task {
             if container == nil {
                 configureDependencies()
@@ -62,6 +66,25 @@ public struct ContentView: View {
             social: socialStack(container: container),
         )
         .ignoresSafeArea()
+        .sheet(item: $notificationRouter.linkRequest) { request in
+            switch request {
+            case let .link(link):
+                ApronLinkView(
+                    viewModel: ApronLinkViewModel(link: link, service: container.apronService, chatList: container.chatListViewModel),
+                    openRoom: { notificationRouter.openRoom(of: $0) },
+                )
+            case let .invalid(message):
+                NavigationStack {
+                    ContentUnavailableView("Can't Open Link", systemImage: "link", description: Text(message))
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Done") { notificationRouter.linkRequest = nil }
+                            }
+                        }
+                }
+                .presentationDetents([.medium])
+            }
+        }
         .onChange(of: notificationRouter.pendingChat, initial: true) { _, request in
             // A tapped notification's chat opens on the Chats side.
             if request != nil {
@@ -108,6 +131,7 @@ public struct ContentView: View {
         let appContainer = AppContainer(modelContext: modelContext)
         container = appContainer
         NotificationRouter.shared.apronService = appContainer.apronService
+        NotificationRouter.shared.chatList = appContainer.chatListViewModel
         appContainer.apronLiveFeed.start()
 
         Task {

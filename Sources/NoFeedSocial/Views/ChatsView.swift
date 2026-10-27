@@ -15,6 +15,8 @@ struct ChatsView: View {
     /// A chat to open, such as from a tapped notification; cleared once opened.
     @Binding var openRequest: ChatSummary.Destination?
     @State private var selection: ChatSummary?
+    /// What a link asked to show in the chat it opened.
+    @State private var focus: (destination: ChatSummary.Destination, focus: NotificationRouter.ChatFocus)?
     @State private var isShowingArchive = false
     @State private var query = ""
     /// With the search bar in the navigation bar's drawer, rows present while the bar first lays out start the
@@ -78,6 +80,9 @@ struct ChatsView: View {
         .searchBar(text: $query, placement: .navigationBarDrawer(displayMode: .always))
         .onChange(of: selection == nil && !isShowingArchive) { _, isOnList in
             isShowingChat = !isOnList
+            if isOnList {
+                focus = nil
+            }
         }
         .navigationDestination(item: $selection) { chat in
             destination(for: chat)
@@ -88,6 +93,8 @@ struct ChatsView: View {
         .onChange(of: openRequest, initial: true) { _, request in
             guard let request else { return }
             openRequest = nil
+            focus = NotificationRouter.shared.pendingFocus.map { (request, $0) }
+            NotificationRouter.shared.pendingFocus = nil
             guard selection?.destination != request else { return }
             let chat = chat(for: request)
             guard selection != nil else {
@@ -152,10 +159,15 @@ struct ChatsView: View {
     private func destination(for chat: ChatSummary) -> some View {
         switch chat.destination {
         case let .apron(serverURL, roomId):
-            ApronChatView(viewModel: viewModel.follow(
-                ApronChatViewModel(service: apronService, serverURL: serverURL, roomId: roomId, title: chat.title, expectsUnread: chat.unreadCount > 0),
-                chatId: chat.id,
-            ))
+            let focus = focus?.destination == chat.destination ? focus?.focus : nil
+            ApronChatView(
+                viewModel: {
+                    let room = ApronChatViewModel(service: apronService, serverURL: serverURL, roomId: roomId, title: chat.title, expectsUnread: chat.unreadCount > 0)
+                    room.focusMessageId = focus?.messageId
+                    return viewModel.follow(room, chatId: chat.id)
+                }(),
+                profileUserId: focus?.userId,
+            )
         case let .spotify(chatId):
             if let makeChat = spotifyChat(chatId, chat.title) {
                 NetworkChatView(viewModel: viewModel.follow(makeChat(), chatId: chat.id))

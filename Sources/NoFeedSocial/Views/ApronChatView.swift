@@ -6,9 +6,13 @@ struct ApronChatView: View {
     @StateObject private var viewModel: ApronChatViewModel
     @State private var profileUser: ApronUser?
     @State private var showsMembers = false
+    /// A member to show on opening, such as from a link.
+    private let profileUserId: String?
+    @State private var hasShownLinkedProfile = false
 
-    init(viewModel: @autoclosure @escaping () -> ApronChatViewModel) {
+    init(viewModel: @autoclosure @escaping () -> ApronChatViewModel, profileUserId: String? = nil) {
         _viewModel = StateObject(wrappedValue: viewModel())
+        self.profileUserId = profileUserId
     }
 
     var body: some View {
@@ -27,6 +31,12 @@ struct ApronChatView: View {
         }
         .onAppear {
             NotificationRouter.shared.roomDidOpen(serverURL: viewModel.serverURL, roomId: viewModel.roomId)
+        }
+        .task {
+            if let profileUserId, !hasShownLinkedProfile {
+                hasShownLinkedProfile = true
+                profileUser = viewModel.apronUser(for: ChatUser(id: profileUserId, name: nil, avatarURL: nil))
+            }
         }
         .onDisappear {
             NotificationRouter.shared.roomDidClose(serverURL: viewModel.serverURL, roomId: viewModel.roomId)

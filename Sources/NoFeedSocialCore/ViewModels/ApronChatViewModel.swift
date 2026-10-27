@@ -64,6 +64,8 @@ public final class ApronChatViewModel: ChatViewModel {
 
     /// Set when the Chats list knows of unread messages, which may all be newer than the cache.
     private let expectsUnread: Bool
+    /// A message to show once the room loads, such as from a link.
+    public var focusMessageId: String?
 
     public init(service: ApronService, serverURL: URL, roomId: String, title: String?, expectsUnread: Bool = false) {
         ownUserIds = service.readStore.ownUserIds(serverURL: serverURL)
@@ -160,6 +162,10 @@ public final class ApronChatViewModel: ChatViewModel {
             }
             updateNotifications()
             state = .connected
+            if let message = focusMessageId {
+                focusMessageId = nil
+                await jump(to: message)
+            }
         } catch {
             stopObserving()
             state = .disconnected(error.localizedDescription)
@@ -923,6 +929,12 @@ public final class ApronChatViewModel: ChatViewModel {
     }
 
     /// The kept or recorded user behind a chat user, such as a tapped avatar, for the profile screen.
+    /// A link to share for a message the server has numbered (SPEC.md §1: the web form).
+    public func link(toMessage messageId: String) -> URL? {
+        guard ApronLink.isMessageId(messageId) else { return nil }
+        return ApronLink(serverURL: serverURL, room: roomId, message: messageId).webURL
+    }
+
     public func apronUser(for user: ChatUser) -> ApronUser {
         users[user.id] ?? reactionAuthors[user.id]
             ?? ApronUser(userId: user.id, name: user.name == user.id ? nil : user.name, avatar: user.avatarURL?.absoluteString, roles: nil)

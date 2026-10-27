@@ -174,6 +174,11 @@ public final class ChatListViewModel: ObservableObject {
         return chat
     }
 
+    /// Whether the chat is listed, such as an Apron room the user has joined.
+    public func contains(_ destination: ChatSummary.Destination) -> Bool {
+        (chats + archivedChats).contains { $0.destination == destination }
+    }
+
     /// One Apron server's rooms, rebuilt by the live connection when its rooms change.
     public func replaceApronChats(serverURL: URL, with summaries: [ChatSummary]) {
         let others = chats.filter { chat in

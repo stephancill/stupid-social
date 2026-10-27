@@ -35,6 +35,7 @@ Sources/
       FarcasterExternalClientView.swift # Farcaster external client picker
       DebugConnectionView.swift     # Debug notifications toggle
       ApronServersView.swift        # Apron server list, add form, and server detail
+      ApronLinkView.swift           # Confirmation sheet for opened Apron links
       ChatView.swift                # Shared chat screen: title pill, connection lifecycle; NetworkChatView for Spotify
       ChatUIKitView.swift           # Shared chat UIKit view controller: message list, floating composer, attachments
       ChatAudioPreview.swift        # Inline audio preview player and track card for chat messages
@@ -77,6 +78,7 @@ Sources/
       BlueskyClient.swift / BlueskyNotificationSource.swift
       DebugNotificationsClient.swift / DebugNotificationSource.swift
       ApronModels.swift / ApronClient.swift / ApronNotificationSource.swift  # Apron Chat Protocol WebSocket client
+      ApronLink.swift               # Apron links (link.apron.chat and apron:): parse, validate, write
       TelegramTL.swift              # TL schema parsing and generic encoder/decoder
       TelegramCrypto.swift          # BigUInt, AES-IGE, RSA_PAD, factorization, SRP
       TelegramMTProto.swift         # MTProto transport, auth key exchange, encrypted session actor
@@ -106,6 +108,7 @@ Sources/
       ChatViewModel.swift            # Shared chat models (ChatMessage, ChatUser, ChatEmbed) and base view model
       ChatListViewModel.swift        # Chats list: ChatSummary, merged from Apron and Spotify
       ApronChatViewModel.swift
+      ApronLinkViewModel.swift       # What an opened Apron link offers: add server, sign in, join, open
       SpotifyChatViewModel.swift     # Spotify Messages chat: history, polling, send, seen, track metadata
       InstagramChatViewModel.swift   # Instagram Direct chat: history, polling, send, replies, read receipt
       TelegramChatViewModel.swift    # Telegram chat: history, pushed updates, send, replies, read cursor

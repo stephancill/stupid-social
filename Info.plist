@@ -47,6 +47,14 @@
 				<string>net.stupidtech</string>
 			</array>
 		</dict>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>tech.stupid.StupidSocial.apron</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>apron</string>
+			</array>
+		</dict>
 	</array>
 	<key>CFBundleVersion</key>
 	<string>148</string>

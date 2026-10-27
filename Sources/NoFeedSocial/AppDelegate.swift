@@ -112,16 +112,65 @@ extension AppDelegate {
     }
 }
 
-/// Chats a notification asked to open, the Apron rooms on screen, and replies sent from notifications.
+/// Chats a notification or link asked to open, the Apron rooms on screen, and replies sent from notifications.
 @MainActor
 final class NotificationRouter: ObservableObject {
+    /// An Apron link waiting for the user to confirm it, or why it can't be opened.
+    enum LinkRequest: Identifiable, Equatable {
+        case link(ApronLink)
+        case invalid(String)
+
+        var id: String {
+            switch self {
+            case let .link(link): "link:\(link.webURL.absoluteString)|\(link.token ?? "")"
+            case let .invalid(message): "invalid:\(message)"
+            }
+        }
+    }
+
+    /// A message or member to show once a linked Apron room opens.
+    struct ChatFocus: Equatable {
+        var messageId: String?
+        var userId: String?
+    }
+
     static let shared = NotificationRouter()
 
     @Published var pendingChat: ChatSummary.Destination?
+    /// Read with `pendingChat` when it opens.
+    var pendingFocus: ChatFocus?
+    @Published var linkRequest: LinkRequest?
     private(set) var openThreads: Set<String> = []
     /// The app's Apron service once the UI has built it. A reply that launches the app in the background,
     /// without a scene, makes its own.
     weak var apronService: ApronService?
+    weak var chatList: ChatListViewModel?
+
+    /// Opens an Apron link in the app, never in a browser (SPEC.md §6). A room the user has joined opens directly;
+    /// anything else waits for the user to confirm. `contentServer` is the server that sent the text holding the
+    /// link, which relative links refer to. Returns false for URLs that aren't Apron links.
+    func open(_ url: URL, contentServer: URL? = nil) -> Bool {
+        guard ApronLink.isLink(url) else { return false }
+        do {
+            let link = try ApronLink(url: url, contentServer: contentServer)
+            if link.token == nil, let room = link.room, apronService?.server(for: link.serverURL) != nil,
+               chatList?.contains(.apron(serverURL: link.serverURL, roomId: room)) == true
+            {
+                openRoom(of: link)
+            } else {
+                linkRequest = .link(link)
+            }
+        } catch {
+            linkRequest = .invalid(error.localizedDescription)
+        }
+        return true
+    }
+
+    func openRoom(of link: ApronLink) {
+        guard let room = link.room else { return }
+        pendingFocus = ChatFocus(messageId: link.message, userId: link.user)
+        pendingChat = .apron(serverURL: link.serverURL, roomId: room)
+    }
 
     /// Marks a room on screen and clears its delivered notifications.
     func roomDidOpen(serverURL: URL, roomId: String) {

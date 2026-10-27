@@ -195,6 +195,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
                         // The profile fills in what the network knows about the user.
                         self?.showProfile(ChatUser(id: userId, name: nil, avatarURL: nil))
                     },
+                    openLink: { [weak self] url in self?.openLink(url) },
                 ),
                 availableWidth: collectionView.bounds.width > 0 ? collectionView.bounds.width : view.bounds.width,
             )
@@ -1021,9 +1022,33 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
                     UIPasteboard.general.string = text
                 })
             }
+            if let link = (viewModel as? ApronChatViewModel)?.link(toMessage: id) {
+                actions.append(UIAction(title: "Copy Link", image: UIImage(systemName: "link")) { _ in
+                    UIPasteboard.general.url = link
+                })
+            }
             children.append(UIMenu(options: .displayInline, children: actions))
             return UIMenu(children: children)
         })
+    }
+
+    /// Apron links open in the app, relative ones against this room's server; a link to a message or member of
+    /// this room shows it here. Message text is untrusted, so otherwise only web and mail links open.
+    private func openLink(_ url: URL) {
+        let room = viewModel as? ApronChatViewModel
+        if let room, ApronLink.isLink(url), let link = try? ApronLink(url: url, contentServer: room.serverURL),
+           link.token == nil, link.serverURL == room.serverURL, link.room == room.roomId
+        {
+            if let user = link.user {
+                showProfile(ChatUser(id: user, name: nil, avatarURL: nil))
+            } else if let message = link.message {
+                Task { await viewModel.jump(to: message) }
+            }
+            return
+        }
+        guard !NotificationRouter.shared.open(url, contentServer: room?.serverURL) else { return }
+        guard ["http", "https", "mailto"].contains(url.scheme?.lowercased()) else { return }
+        UIApplication.shared.open(url)
     }
 
     // MARK: - Replies and reactions
@@ -1427,6 +1452,7 @@ private final class ChatMessageCell: UICollectionViewListCell, UIGestureRecogniz
         var audioPlayer: ChatAudioPreviewPlayer?
         var previewURL: (String) async -> URL? = { _ in nil }
         var showMentionedUser: (String) -> Void = { _ in }
+        var openLink: (URL) -> Void = { _ in }
     }
 
     private static let timeFormatter: DateFormatter = {
@@ -1731,6 +1757,7 @@ private final class ChatMessageCell: UICollectionViewListCell, UIGestureRecogniz
     ) {
         self.actions = actions
         bodyLabel.showMention = { [weak self] userId in self?.actions.showMentionedUser(userId) }
+        bodyLabel.openLink = { [weak self] url in self?.actions.openLink(url) }
         isOwn = layout.isOwn
         imageTasks.forEach { $0.cancel() }
         imageTasks = []
@@ -2330,6 +2357,8 @@ final class ChatLinkTapGesture: UITapGestureRecognizer {
     }
 
     @objc private func open() {
+        // Apron links open in the app, never in a browser.
+        guard !NotificationRouter.shared.open(link) else { return }
         UIApplication.shared.open(link)
     }
 }
@@ -2458,17 +2487,24 @@ private enum ChatAttributedText {
     }
 
     private static let linkDetector = try! NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+    /// `apron:?…` links, which the data detector doesn't find. Trailing punctuation ends a sentence, not the link.
+    private static let apronLinkPattern = try! NSRegularExpression(pattern: #"\bapron:\?[^\s<>"'`]*[^\s<>"'`.,;:!?)\]]"#, options: .caseInsensitive)
 
     /// Bare URLs in plain text (and any Markdown left unlinked) become tappable links too.
     private static func detectLinks(in segment: NSMutableAttributedString, color: UIColor) {
         let range = NSRange(location: 0, length: segment.length)
-        for match in linkDetector.matches(in: segment.string, range: range) {
-            guard let url = match.url, ["http", "https"].contains(url.scheme?.lowercased()) else { continue }
+        let web = linkDetector.matches(in: segment.string, range: range).compactMap { match in
+            match.url.flatMap { ["http", "https"].contains($0.scheme?.lowercased()) ? (match.range, $0) : nil }
+        }
+        let apron = apronLinkPattern.matches(in: segment.string, range: range).compactMap { match in
+            URL(string: (segment.string as NSString).substring(with: match.range)).map { (match.range, $0) }
+        }
+        for (range, url) in web + apron {
             segment.addAttributes([
                 .foregroundColor: color,
                 .underlineStyle: NSUnderlineStyle.single.rawValue,
                 .chatLink: url,
-            ], range: match.range)
+            ], range: range)
         }
     }
 
@@ -2509,6 +2545,7 @@ private final class ChatLinkLabel: UILabel {
     }
 
     var showMention: (String) -> Void = { _ in }
+    var openLink: (URL) -> Void = { _ in }
     private lazy var linkTap = UITapGestureRecognizer(target: self, action: #selector(tapped(_:)))
 
     override init(frame: CGRect) {
@@ -2532,9 +2569,7 @@ private final class ChatLinkLabel: UILabel {
     @objc private func tapped(_ gesture: UITapGestureRecognizer) {
         switch target(at: gesture.location(in: self)) {
         case let .link(url):
-            // Message text is untrusted; only web and mail links open.
-            guard ["http", "https", "mailto"].contains(url.scheme?.lowercased()) else { return }
-            UIApplication.shared.open(url)
+            openLink(url)
         case let .mention(userId):
             showMention(userId)
         case nil:
