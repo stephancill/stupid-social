@@ -9,7 +9,7 @@ struct ChatsView: View {
     let spotifyChat: (_ chatId: String, _ title: String) -> (() -> ChatViewModel)?
     /// The chat for an Instagram thread and title; `nil` when Instagram isn't connected.
     let instagramChat: (_ threadFbid: String, _ title: String) -> (() -> ChatViewModel)?
-    let telegramChat: (_ peer: TelegramPeer, _ title: String) -> () -> ChatViewModel
+    let telegramChat: (_ peer: TelegramPeer, _ title: String) -> () -> TelegramChatViewModel
     /// The chat for an X Chat conversation and title; `nil` until the XChat PIN unlocks it.
     let xChat: (_ conversationId: String, _ title: String) -> (() -> ChatViewModel)?
     /// Whether a chat is pushed, so the home pager can stop paging.
@@ -158,7 +158,7 @@ struct ChatsView: View {
     }
 
     /// A network chat opening from its row, which says whether there are unread messages to wait for.
-    private func opened(_ chatViewModel: ChatViewModel, chat: ChatSummary) -> ChatViewModel {
+    private func opened<ViewModel: ChatViewModel>(_ chatViewModel: ViewModel, chat: ChatSummary) -> ViewModel {
         if chat.unreadCount > 0 {
             chatViewModel.expectUnread()
         }
@@ -191,7 +191,7 @@ struct ChatsView: View {
                 ContentUnavailableView("Instagram Not Connected", systemImage: "camera")
             }
         case let .telegram(peer):
-            NetworkChatView(viewModel: opened(telegramChat(peer, chat.title)(), chat: chat))
+            TelegramChatView(viewModel: opened(telegramChat(peer, chat.title)(), chat: chat))
         case let .x(conversationId):
             if let makeChat = xChat(conversationId, chat.title) {
                 NetworkChatView(viewModel: opened(makeChat(), chat: chat))

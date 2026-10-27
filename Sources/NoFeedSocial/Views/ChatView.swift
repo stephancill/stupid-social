@@ -38,11 +38,11 @@ struct ChatView: View {
                     // Without an action it isn't a button: a disabled button would dim the title.
                     if let onTitleTap {
                         Button(action: onTitleTap) {
-                            ChatTitlePill(title: displayTitle, subtitle: displaySubtitle)
+                            ChatTitlePill(title: displayTitle, subtitle: displaySubtitle, network: viewModel.network)
                         }
                         .buttonStyle(.plain)
                     } else {
-                        ChatTitlePill(title: displayTitle, subtitle: displaySubtitle)
+                        ChatTitlePill(title: displayTitle, subtitle: displaySubtitle, network: viewModel.network)
                     }
                 }
             }
@@ -75,6 +75,7 @@ struct NetworkChatView: View {
 private struct ChatTitlePill: View {
     let title: String
     let subtitle: String
+    let network: SocialNetwork
 
     var body: some View {
         let content = VStack(spacing: 0) {
@@ -82,10 +83,13 @@ private struct ChatTitlePill: View {
                 .font(.headline)
                 .lineLimit(1)
             if !subtitle.isEmpty {
-                Text(subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                HStack(spacing: 4) {
+                    NetworkBadgeIcon(network: network, size: 12)
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
             }
         }
         .padding(.horizontal, 18)

@@ -45,6 +45,7 @@ Sources/
       ApronProfileView.swift        # Apron user profile and shared avatar with presence dot
       SettingsView.swift            # Settings with connection links
       TelegramConnectionView.swift  # Telegram sign-in: phone, code, 2FA password
+      TelegramChatView.swift        # Telegram chat with the group member list from the title
   NoFeedSocialPush/                 # Shared with the notification extension: Web Push decryption, push store, notification content
     WebPushDecryptor.swift
     ApronPushStore.swift

@@ -73,7 +73,7 @@ public final class ApronChatViewModel: ChatViewModel {
         self.service = service
         self.serverURL = serverURL
         self.roomId = roomId
-        super.init(title: title ?? roomId, subtitle: serverURL.host() ?? serverURL.absoluteString, canReply: true, offersAttachments: true, mentionPattern: ApronMention.pattern)
+        super.init(network: .apron, title: title ?? roomId, subtitle: serverURL.host() ?? serverURL.absoluteString, canReply: true, offersAttachments: true, mentionPattern: ApronMention.pattern)
         draft = service.draftStore.draft(serverURL: serverURL, roomId: roomId)
     }
 

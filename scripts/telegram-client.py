@@ -17,6 +17,7 @@ Commands:
   me                          the signed-in user
   dialogs [--limit N] [--archived]   messages.getDialogs, newest first; --archived for the Archive folder
   history --peer user:1 [--limit N] [--offset-id N]
+  members --peer channel:1 [--limit N]   a group's members: channels.getParticipants (supergroups) or messages.getFullChat (basic groups)
   send --peer user:1 --text "hi" [--reply-to N]
   read --peer user:1 --max-id N
   listen [--seconds N]        print updates pushed on the connection
@@ -1169,6 +1170,10 @@ def main():
     react.add_argument("--peer", required=True)
     react.add_argument("--msg-id", type=int, required=True)
     react.add_argument("--emoji", default="", help="empty removes your reaction")
+    members = sub.add_parser("members")
+    members.add_argument("--peer", required=True)
+    members.add_argument("--limit", type=int, default=200)
+    members.add_argument("--json", action="store_true")
     raw = sub.add_parser("raw")
     raw.add_argument("--method", required=True)
     raw.add_argument("--json", default="{}")
@@ -1246,6 +1251,31 @@ def main():
         print(f"{result['_']} count={result.get('count', len(result['messages']))}")
         for message in reversed(result["messages"]):
             print(message_line(message, users, chats))
+    elif args.command == "members":
+        peer = client.input_peer(args.peer)
+        if peer["_"] == "inputPeerChannel":
+            channel = {"_": "inputChannel", "channel_id": peer["channel_id"], "access_hash": peer["access_hash"]}
+            result = client.call({"_": "channels.getParticipants", "channel": channel, "filter": {"_": "channelParticipantsRecent"}, "offset": 0, "limit": args.limit, "hash": 0})
+            participants, count = result["participants"], result["count"]
+        elif peer["_"] == "inputPeerChat":
+            result = client.call({"_": "messages.getFullChat", "chat_id": peer["chat_id"]})
+            participants = result["full_chat"]["participants"].get("participants", [])
+            count = len(participants)
+        else:
+            raise SystemExit("members needs a group (chat:… or channel:…)")
+        if args.json:
+            print(json.dumps(to_json(result), indent=1, ensure_ascii=False))
+            return
+        users = {u["id"]: u for u in result["users"]}
+        print(f"{result['_']} count={count} listed={len(participants)}")
+        roles: dict = {}
+        statuses: dict = {}
+        for participant in participants:
+            roles[participant["_"]] = roles.get(participant["_"], 0) + 1
+            status = (users.get(participant.get("user_id") or participant.get("peer", {}).get("user_id"), {}).get("status") or {}).get("_", "none")
+            statuses[status] = statuses.get(status, 0) + 1
+        print("roles", roles)
+        print("statuses", statuses)
     elif args.command == "send":
         method = {"_": "messages.sendMessage", "peer": client.input_peer(args.peer), "message": args.text, "random_id": secrets.randbits(63)}
         if args.reply_to:

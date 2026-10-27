@@ -137,8 +137,9 @@ Reference behavior from `docs/CLI_DOCS.md`:
 - Chats archived in Telegram stay archived: they are not in the main list but behind an Archived Chats row at the top of the Chats screen (as in Telegram), which shows their names and how many have unread messages, and opens a list of them. Search on the Chats screen includes archived chats.
 - A chat muted in Telegram (or an Apron room set to None) shows its unread count on a gray badge rather than blue.
 - Opening a chat shows its history (older pages load on scroll), and the user can send text messages, replies, photos and files. Reading moves Telegram's read cursor, so the chat is read on the user's other Telegram apps too.
-- New messages appear while the chat is open. Photos, static stickers and GIF thumbnails show in the bubble; videos, voice messages, music, files, locations, contacts, polls and link previews show as cards (with a thumbnail where there is one). Media the app can't draw shows a label, and service messages ("Group renamed") show as captions. Quoted messages in replies show with the chat, even when the original is older than the loaded messages.
+- New messages appear while the chat is open. Photos, static stickers and GIF thumbnails show in the bubble; videos, voice messages, music, files, locations, contacts, polls and link previews show as cards (with a thumbnail where there is one). Media the app can't draw shows a label, and service messages show as captions worded like Telegram's, with the people they name ("Ashiq joined the group via invite link", "Stephan added Mat"). Quoted messages in replies show with the chat, even when the original is older than the loaded messages.
 - Chats and senders show their Telegram profile photos.
+- In groups, tapping the chat title opens the member list: online members first, then by last seen ("last seen 10 minutes ago", or "recently" when Telegram keeps the time private), with owner, admin, bot and "you" tags. Groups whose admins hide their members say so.
 - Reactions show under messages and can be added or changed (one per person, as without Premium).
 - Telegram's notifications reach the app through APNs for unmuted chats, worded like Telegram's own ("Name @ Group: text"), and tapping one opens the chat. The app asks for notification permission when the user signs in to Telegram.
 - Each device signs in as its own Telegram session; the session stays on the device and is not synced through iCloud. Signing out ends that session on Telegram.
@@ -152,6 +153,10 @@ Reference behavior from `docs/CLI_DOCS.md`:
 - Opening a chat shows its decrypted history (older pages load on scroll), new messages and reactions as they happen (the Chats list updates live too), edits, deletions, reactions and quoted replies. The user can send text messages and add or remove reactions. Reading moves the user's X read marker, so the chat is read on X too. Unread counts, like X's badge, count messages, not reactions.
 - Messages that don't decrypt show as "Couldn't decrypt this message." rather than disappearing. Shared posts and links show as cards; photos migrated from old DMs show in the bubble, and newer (encrypted) media shows as a card that opens X.
 - Not supported yet: sending replies and media, decrypting encrypted media, group titles, message requests, starting chats, and old (pre-X Chat) DM conversations that weren't migrated.
+
+### Chat Title
+
+- Every chat's title shows its network's icon before the subtitle.
 
 ### Sending
 

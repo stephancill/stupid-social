@@ -22,13 +22,40 @@ public final class TelegramChatViewModel: ChatViewModel {
     /// Reply targets being fetched, so a refresh doesn't ask for them again.
     private var pendingReferences: Set<Int32> = []
 
+    /// The group's members once `loadMembers()` has run; `nil` while loading or for a private chat.
+    @Published public private(set) var members: TelegramMemberList?
+    @Published public private(set) var membersError: String?
+
+    /// Groups list their members from the title; private chats have none to list.
+    public var isGroup: Bool {
+        peer.kind != .user
+    }
+
     public init(client: TelegramClient, peer: TelegramPeer, title: String, snapshotCache: ChatSnapshotCache = ChatSnapshotCache()) {
         self.client = client
         self.peer = peer
         self.snapshotCache = snapshotCache
-        super.init(title: title, subtitle: "Telegram", canReply: true, offersAttachments: true)
+        super.init(network: .telegram, title: title, subtitle: "Telegram", canReply: true, offersAttachments: true)
         showsSenderNames = peer.kind != .user
         restoreSnapshot()
+    }
+
+    /// Fetches the member list each time it opens, so statuses are current.
+    public func loadMembers() async {
+        guard isGroup else { return }
+        membersError = nil
+        do {
+            members = try await client.members(peer: peer)
+        } catch {
+            membersError = Self.membersErrorText(error)
+        }
+    }
+
+    private static func membersErrorText(_ error: Error) -> String {
+        if case let TelegramError.rpc(_, message) = error, message == "CHAT_ADMIN_REQUIRED" {
+            return "This group's admins have hidden its member list."
+        }
+        return error.localizedDescription
     }
 
     private struct Snapshot: Codable {

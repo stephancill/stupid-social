@@ -239,6 +239,8 @@ public class ChatViewModel: ObservableObject {
         !showsSenderNames || titleIsMemberNames
     }
 
+    /// The chat's network, whose icon leads the subtitle.
+    public let network: SocialNetwork
     /// Whether swipe-to-reply and the Reply action are offered.
     public let canReply: Bool
     /// Whether the composer has an attachments button; `canAttach` enables it once the network allows uploads.
@@ -262,7 +264,8 @@ public class ChatViewModel: ObservableObject {
     private var messagesById: [String: ChatMessage] = [:]
     private var renderedTextCache: [String: AttributedString] = [:]
 
-    init(title: String, subtitle: String, canReply: Bool, offersAttachments: Bool = false, mentionPattern: NSRegularExpression? = nil) {
+    init(network: SocialNetwork, title: String, subtitle: String, canReply: Bool, offersAttachments: Bool = false, mentionPattern: NSRegularExpression? = nil) {
+        self.network = network
         self.title = title
         self.subtitle = subtitle
         self.canReply = canReply

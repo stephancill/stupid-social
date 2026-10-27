@@ -25,7 +25,7 @@ public final class XChatViewModel: ChatViewModel {
         self.client = client
         self.liveFeed = liveFeed
         self.conversationId = conversationId
-        super.init(title: title, subtitle: "X", canReply: false)
+        super.init(network: .x, title: title, subtitle: "X", canReply: false)
     }
 
     override public func connect() async {

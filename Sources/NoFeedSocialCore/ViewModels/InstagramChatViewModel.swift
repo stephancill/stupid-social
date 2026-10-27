@@ -26,7 +26,7 @@ public final class InstagramChatViewModel: ChatViewModel {
         self.client = client
         self.threadFbid = threadFbid
         self.snapshotCache = snapshotCache
-        super.init(title: title, subtitle: "Instagram", canReply: true)
+        super.init(network: .instagram, title: title, subtitle: "Instagram", canReply: true)
         restoreSnapshot()
     }
 

@@ -207,7 +207,7 @@ final class AppContainer {
         return { XChatViewModel(client: client, liveFeed: liveFeed, conversationId: conversationId, title: title) }
     }
 
-    func telegramChatFactory(peer: TelegramPeer, title: String) -> () -> ChatViewModel {
+    func telegramChatFactory(peer: TelegramPeer, title: String) -> () -> TelegramChatViewModel {
         let client = telegramClient
         return { TelegramChatViewModel(client: client, peer: peer, title: title) }
     }

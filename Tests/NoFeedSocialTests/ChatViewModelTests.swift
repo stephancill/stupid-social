@@ -5,7 +5,7 @@ import XCTest
 @MainActor
 final class ChatViewModelTests: XCTestCase {
     private func chat(restored: Int, unread: Int = 0) -> ChatViewModel {
-        let viewModel = ChatViewModel(title: "Chat", subtitle: "Test", canReply: true)
+        let viewModel = ChatViewModel(network: .apron, title: "Chat", subtitle: "Test", canReply: true)
         let sender = ChatUser(id: "ada", name: "Ada", avatarURL: nil)
         viewModel.history = (0 ..< restored).map { ChatMessage(id: "\($0)", sender: sender, timestamp: nil, text: "Message \($0)", isOwn: false) }
         viewModel.unreadCount = unread

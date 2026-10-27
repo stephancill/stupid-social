@@ -45,6 +45,23 @@ final class TelegramTests: XCTestCase {
         XCTAssertEqual(check.m1, Data(hex: "1ad01014368e20a2ce6e7b12f9ddb0eba3a352b05d86b320ed9c6c9b1d26e553"))
     }
 
+    /// Service messages name their people from the response's users, as Telegram words them.
+    func testServiceMessagesNameTheirUsers() {
+        func service(_ action: TLObject, from: Int64) -> String {
+            TelegramClient.message(
+                TLObject("messageService", ["id": .int(12), "date": .int(0), "from_id": .object(TLObject("peerUser", ["user_id": .long(from)])), "action": .object(action)]),
+                selfId: 1,
+                names: [1: "Stephan", 2: "Aho", 3: "Mat"],
+            ).text
+        }
+        XCTAssertEqual(service(TLObject("messageActionChatJoinedByLink", ["inviter_id": .long(1)]), from: 2), "Aho joined the group via invite link")
+        XCTAssertEqual(service(TLObject("messageActionChatAddUser", ["users": .vector([.long(2)])]), from: 2), "Aho joined the group")
+        XCTAssertEqual(service(TLObject("messageActionChatAddUser", ["users": .vector([.long(2), .long(3)])]), from: 1), "You added Aho and Mat")
+        XCTAssertEqual(service(TLObject("messageActionChatDeleteUser", ["user_id": .long(3)]), from: 3), "Mat left the group")
+        XCTAssertEqual(service(TLObject("messageActionChatDeleteUser", ["user_id": .long(3)]), from: 2), "Aho removed Mat")
+        XCTAssertEqual(service(TLObject("messageActionPinMessage"), from: 9), "Someone pinned a message")
+    }
+
     func testFactorizesPQ() {
         let (p, q) = TelegramCrypto.factorize(0x17ED_4894_1A08_F981)
         XCTAssertEqual(p, 0x494C_553B)

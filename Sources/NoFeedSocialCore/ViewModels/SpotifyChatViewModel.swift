@@ -32,7 +32,7 @@ public final class SpotifyChatViewModel: ChatViewModel {
         self.chatId = chatId
         self.viewerUsername = viewerUsername
         self.snapshotCache = snapshotCache
-        super.init(title: title, subtitle: "Spotify", canReply: false)
+        super.init(network: .spotify, title: title, subtitle: "Spotify", canReply: false)
         restoreSnapshot()
     }
 

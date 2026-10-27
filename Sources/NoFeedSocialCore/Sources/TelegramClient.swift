@@ -55,6 +55,38 @@ public struct TelegramMessage: Codable, Sendable, Hashable {
     public let isService: Bool
 }
 
+/// Someone in a group, as its member list shows them.
+public struct TelegramMember: Identifiable, Hashable, Sendable {
+    public enum Role: String, Sendable {
+        case owner, admin, member
+    }
+
+    /// Telegram's last-seen status: exact for people who share it, otherwise only roughly.
+    public enum Status: Hashable, Sendable {
+        case online
+        case lastSeen(Date)
+        case recently
+        case lastWeek
+        case lastMonth
+        case unknown
+    }
+
+    public let id: Int64
+    public let name: String
+    public let username: String?
+    public let avatarURL: URL?
+    public let role: Role
+    public let status: Status
+    public let isYou: Bool
+    public let isBot: Bool
+}
+
+public struct TelegramMemberList: Sendable {
+    public let members: [TelegramMember]
+    /// The group's member count, which can be more than are listed.
+    public let count: Int
+}
+
 public struct TelegramHistoryPage: Sendable {
     public let messages: [TelegramMessage]
     /// User and chat id → display name, for senders.
@@ -649,8 +681,78 @@ public actor TelegramClient {
                 avatars[id] = url
             }
         }
-        let messages = rawMessages.map { Self.message($0, selfId: stored.account?.userId) }
+        let messages = rawMessages.map { Self.message($0, selfId: stored.account?.userId, names: names) }
         return TelegramHistoryPage(messages: messages, names: names, avatars: avatars, hasMore: false)
+    }
+
+    /// A group's members: `channels.getParticipants` (recent, up to 200) for supergroups, the full participant list
+    /// of `messages.getFullChat` for basic groups. Groups that hide their members answer `CHAT_ADMIN_REQUIRED`.
+    public func members(peer: TelegramPeer) async throws -> TelegramMemberList {
+        try requireAccount()
+        let result: TLObject
+        let participants: [TLObject]
+        let count: Int
+        switch peer.kind {
+        case .channel:
+            guard let page = try await invoke(TLObject("channels.getParticipants", [
+                "channel": .object(TLObject("inputChannel", ["channel_id": .long(peer.id), "access_hash": .long(peer.accessHash)])),
+                "filter": .object(TLObject("channelParticipantsRecent")),
+                "offset": .int(0),
+                "limit": .int(200),
+                "hash": .long(0),
+            ])).object else { throw TelegramError.protocolViolation("no participants") }
+            result = page
+            participants = page.objects("participants")
+            count = page["count"]?.int.map(Int.init) ?? participants.count
+        case .chat:
+            guard let full = try await invoke(TLObject("messages.getFullChat", ["chat_id": .long(peer.id)])).object else {
+                throw TelegramError.protocolViolation("no full chat")
+            }
+            result = full
+            participants = full["full_chat"]?.object?["participants"]?.object?.objects("participants") ?? []
+            count = participants.count
+        case .user:
+            return TelegramMemberList(members: [], count: 0)
+        }
+        let users = Dictionary(result.objects("users").compactMap { user in user["id"]?.long.map { ($0, user) } }, uniquingKeysWith: { first, _ in first })
+        let selfId = stored.account?.userId
+        let members: [TelegramMember] = participants.compactMap { participant in
+            guard let id = participant["user_id"]?.long ?? participant["peer"]?.object?["user_id"]?.long, let user = users[id] else { return nil }
+            let role: TelegramMember.Role = switch participant.name {
+            case "channelParticipantCreator", "chatParticipantCreator": .owner
+            case "channelParticipantAdmin", "chatParticipantAdmin": .admin
+            default: .member
+            }
+            let avatar = (!user.flag("min") ? user["access_hash"]?.long : nil).flatMap { hash in
+                TelegramMediaParser.avatarURL(
+                    photo: user["photo"]?.object,
+                    inputPeer: TLObject("inputPeerUser", ["user_id": .long(id), "access_hash": .long(hash)]),
+                    key: "user:\(id)",
+                )
+            }
+            return TelegramMember(
+                id: id,
+                name: Self.name(of: user),
+                username: user["username"]?.string,
+                avatarURL: avatar,
+                role: role,
+                status: id == selfId ? .online : Self.status(of: user["status"]?.object),
+                isYou: id == selfId,
+                isBot: user.flag("bot"),
+            )
+        }
+        return TelegramMemberList(members: members, count: max(count, members.count))
+    }
+
+    static func status(of status: TLObject?) -> TelegramMember.Status {
+        switch status?.name {
+        case "userStatusOnline": .online
+        case "userStatusOffline": status?["was_online"]?.int.map { .lastSeen(Date(timeIntervalSince1970: TimeInterval($0))) } ?? .unknown
+        case "userStatusRecently": .recently
+        case "userStatusLastWeek": .lastWeek
+        case "userStatusLastMonth": .lastMonth
+        default: .unknown
+        }
     }
 
     /// Sends text, returning the new message's id.
@@ -765,13 +867,18 @@ public actor TelegramClient {
     }
 
     /// `selfId` marks the user's own messages where Telegram leaves out `out`, as in Saved Messages.
-    static func message(_ message: TLObject, selfId: Int64? = nil) -> TelegramMessage {
+    /// `names` (user and chat id → name, from the same response) words service messages, such as who joined.
+    static func message(_ message: TLObject, selfId: Int64? = nil, names: [Int64: String] = [:]) -> TelegramMessage {
         let isService = message.name == "messageService"
         let caption = message["message"]?.string ?? ""
         var text = caption
         var embeds: [TelegramEmbed] = []
+        let from = message["from_id"]?.object
+        let senderId: Int64? = from.flatMap { $0["user_id"]?.long ?? $0["channel_id"]?.long ?? $0["chat_id"]?.long }
+            ?? message["peer_id"]?.object.flatMap { $0.name == "peerUser" ? $0["user_id"]?.long : nil }
         if isService {
-            text = message["action"]?.object.map(serviceText) ?? "Service message"
+            let name = { (id: Int64?) in id == selfId && selfId != nil ? "You" : id.flatMap { names[$0] } ?? "Someone" }
+            text = message["action"]?.object.map { serviceText($0, actor: name(senderId), name: { name($0) }) } ?? "Service message"
         } else if let media = message["media"]?.object {
             let content = TelegramMediaParser.content(of: media)
             embeds = content.embeds
@@ -779,9 +886,6 @@ public actor TelegramClient {
                 text = caption.isEmpty ? label : "\(label) · \(caption)"
             }
         }
-        let from = message["from_id"]?.object
-        let senderId: Int64? = from.flatMap { $0["user_id"]?.long ?? $0["channel_id"]?.long ?? $0["chat_id"]?.long }
-            ?? message["peer_id"]?.object.flatMap { $0.name == "peerUser" ? $0["user_id"]?.long : nil }
         let reactions = TelegramMediaParser.reactions(of: message)
         return TelegramMessage(
             id: message["id"]?.int ?? 0,
@@ -798,19 +902,31 @@ public actor TelegramClient {
         )
     }
 
-    static func serviceText(_ action: TLObject) -> String {
+    /// Worded like Telegram's own service messages, with `actor` the sender and `name` for other users.
+    static func serviceText(_ action: TLObject, actor: String, name: (Int64) -> String) -> String {
         switch action.name {
-        case "messageActionChatCreate": "Group created"
-        case "messageActionChatEditTitle": "Group renamed to “\(action["title"]?.string ?? "")”"
-        case "messageActionChatEditPhoto": "Group photo changed"
-        case "messageActionChatAddUser", "messageActionChatJoinedByLink", "messageActionChatJoinedByRequest": "Someone joined"
-        case "messageActionChatDeleteUser": "Someone left"
-        case "messageActionPinMessage": "Message pinned"
-        case "messageActionPhoneCall": action.flag("video") ? "Video call" : "Call"
-        case "messageActionScreenshotTaken": "Screenshot taken"
-        case "messageActionContactSignUp": "Joined Telegram"
-        case "messageActionChannelMigrateFrom", "messageActionChatMigrateTo": "Group upgraded"
-        default: action.name.replacingOccurrences(of: "messageAction", with: "")
+        case "messageActionChatCreate": return "\(actor) created the group “\(action["title"]?.string ?? "")”"
+        case "messageActionChatEditTitle": return "\(actor) changed the group name to “\(action["title"]?.string ?? "")”"
+        case "messageActionChatEditPhoto": return "\(actor) changed the group photo"
+        case "messageActionChatDeletePhoto": return "\(actor) removed the group photo"
+        case "messageActionChatAddUser":
+            let added = action["users"]?.vector?.compactMap(\.long) ?? []
+            // Joining by yourself (through the public link of a supergroup) is an add of the sender.
+            if added.isEmpty || added.allSatisfy({ name($0) == actor }) {
+                return "\(actor) joined the group"
+            }
+            return "\(actor) added \(ListFormatter.localizedString(byJoining: added.map(name)))"
+        case "messageActionChatJoinedByLink": return "\(actor) joined the group via invite link"
+        case "messageActionChatJoinedByRequest": return "\(actor) was accepted to the group"
+        case "messageActionChatDeleteUser":
+            guard let removed = action["user_id"]?.long, name(removed) != actor else { return "\(actor) left the group" }
+            return "\(actor) removed \(name(removed))"
+        case "messageActionPinMessage": return "\(actor) pinned a message"
+        case "messageActionPhoneCall": return action.flag("video") ? "Video call" : "Call"
+        case "messageActionScreenshotTaken": return "\(actor) took a screenshot"
+        case "messageActionContactSignUp": return "\(actor) joined Telegram"
+        case "messageActionChannelMigrateFrom", "messageActionChatMigrateTo": return "Group upgraded"
+        default: return action.name.replacingOccurrences(of: "messageAction", with: "")
         }
     }
 }

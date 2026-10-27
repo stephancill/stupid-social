@@ -250,7 +250,9 @@ actor MTProtoSession {
         do {
             try await transport.send(packet: encrypt(messageId: messageId, seqNo: nextSeqNo(contentRelated: true), body: body))
         } catch {
-            pending.removeValue(forKey: messageId)?.continuation.resume(throwing: error)
+            // A socket iOS dropped while suspended fails writes (POSIX 57, "Socket is not connected"). Closing fails
+            // this call and the others as `connectionLost`, which the client answers by reconnecting and retrying.
+            close()
         }
     }
 
@@ -271,7 +273,11 @@ actor MTProtoSession {
     private func ping() async {
         var writer = TLWriter(schema: schema)
         try? writer.object(TLObject("ping_delay_disconnect", ["ping_id": .long(Int64.random(in: 1 ... .max)), "disconnect_delay": .int(75)]))
-        try? await transport.send(packet: encrypt(messageId: nextMessageId(), seqNo: nextSeqNo(contentRelated: true), body: writer.data))
+        do {
+            try await transport.send(packet: encrypt(messageId: nextMessageId(), seqNo: nextSeqNo(contentRelated: true), body: writer.data))
+        } catch {
+            close()
+        }
     }
 
     private func flushAcks() async {
