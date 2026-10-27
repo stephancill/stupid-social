@@ -1,3 +1,4 @@
+import Combine
 import NoFeedSocialCore
 import NoFeedSocialPush
 import UIKit
@@ -144,7 +145,13 @@ final class NotificationRouter: ObservableObject {
     /// The app's Apron service once the UI has built it. A reply that launches the app in the background,
     /// without a scene, makes its own.
     weak var apronService: ApronService?
-    weak var chatList: ChatListViewModel?
+    weak var chatList: ChatListViewModel? {
+        didSet { routeWaitingLink() }
+    }
+
+    /// A link opened before the Chats list could say which rooms are joined.
+    private var waitingLink: ApronLink?
+    private var chatListLoad: AnyCancellable?
 
     /// Opens an Apron link in the app, never in a browser (SPEC.md §6). A room the user has joined opens directly;
     /// anything else waits for the user to confirm. `contentServer` is the server that sent the text holding the
@@ -152,18 +159,32 @@ final class NotificationRouter: ObservableObject {
     func open(_ url: URL, contentServer: URL? = nil) -> Bool {
         guard ApronLink.isLink(url) else { return false }
         do {
-            let link = try ApronLink(url: url, contentServer: contentServer)
-            if link.token == nil, let room = link.room, apronService?.server(for: link.serverURL) != nil,
-               chatList?.contains(.apron(serverURL: link.serverURL, roomId: room)) == true
-            {
-                openRoom(of: link)
-            } else {
-                linkRequest = .link(link)
-            }
+            waitingLink = try ApronLink(url: url, contentServer: contentServer)
+            routeWaitingLink()
         } catch {
             linkRequest = .invalid(error.localizedDescription)
         }
         return true
+    }
+
+    /// Joined rooms are the ones in the Chats list, so a link waits for the list: at launch, before the UI has
+    /// built it, and until its first load when there was no saved list or the saved one didn't decode.
+    private func routeWaitingLink() {
+        guard let link = waitingLink, let chatList else { return }
+        guard chatList.hasLoaded else {
+            // `@Published` emits before the value is stored, so the check runs again on the next turn.
+            chatListLoad = chatList.$hasLoaded.first(where: \.self).sink { [weak self] _ in
+                Task { @MainActor in self?.routeWaitingLink() }
+            }
+            return
+        }
+        waitingLink = nil
+        chatListLoad = nil
+        if link.token == nil, let room = link.room, chatList.contains(.apron(serverURL: link.serverURL, roomId: room)) {
+            openRoom(of: link)
+        } else {
+            linkRequest = .link(link)
+        }
     }
 
     func openRoom(of link: ApronLink) {
