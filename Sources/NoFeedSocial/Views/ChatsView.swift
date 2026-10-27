@@ -15,22 +15,36 @@ struct ChatsView: View {
     /// A chat to open, such as from a tapped notification; cleared once opened.
     @Binding var openRequest: ChatSummary.Destination?
     @State private var selection: ChatSummary?
+    @State private var isShowingArchive = false
     @State private var query = ""
     /// With the search bar in the navigation bar's drawer, rows present while the bar first lays out start the
     /// list collapsed to the inline title, so saved chats are inserted just after the screen appears.
     @State private var hasAppeared = false
 
     var body: some View {
-        List(filteredChats) { chat in
-            Button {
-                selection = chat
-            } label: {
-                ChatRow(chat: chat)
+        List {
+            // Like Telegram, archived chats sit behind one row at the top, which search looks through.
+            if hasAppeared, query.isEmpty, !viewModel.archivedChats.isEmpty {
+                Button {
+                    isShowingArchive = true
+                } label: {
+                    ArchivedChatsRow(chats: viewModel.archivedChats)
+                }
+                .buttonStyle(.plain)
+                .listRowSeparator(.hidden, edges: .top)
+                .compactListRowInsets()
             }
-            .buttonStyle(.plain)
-            // Only the line above the first row; lower rows share theirs with the row above.
-            .listRowSeparator(chat.id == filteredChats.first?.id ? .hidden : .automatic, edges: .top)
-            .compactListRowInsets()
+            ForEach(filteredChats) { chat in
+                Button {
+                    selection = chat
+                } label: {
+                    ChatRow(chat: chat)
+                }
+                .buttonStyle(.plain)
+                // Only the line above the first row; lower rows share theirs with the row above.
+                .listRowSeparator(chat.id == filteredChats.first?.id && !showsArchiveRow ? .hidden : .automatic, edges: .top)
+                .compactListRowInsets()
+            }
         }
         .listStyle(.plain)
         .overlay {
@@ -62,11 +76,14 @@ struct ChatsView: View {
         }
         .navigationTitle("Chats")
         .searchBar(text: $query, placement: .navigationBarDrawer(displayMode: .always))
-        .onChange(of: selection == nil) { _, isNil in
-            isShowingChat = !isNil
+        .onChange(of: selection == nil && !isShowingArchive) { _, isOnList in
+            isShowingChat = !isOnList
         }
         .navigationDestination(item: $selection) { chat in
             destination(for: chat)
+        }
+        .navigationDestination(isPresented: $isShowingArchive) {
+            ArchivedChatsView(viewModel: viewModel) { AnyView(destination(for: $0)) }
         }
         .onChange(of: openRequest, initial: true) { _, request in
             guard let request else { return }
@@ -91,19 +108,23 @@ struct ChatsView: View {
         }
     }
 
-    /// Chats whose name or latest message contains the query.
+    private var showsArchiveRow: Bool {
+        hasAppeared && query.isEmpty && !viewModel.archivedChats.isEmpty
+    }
+
+    /// Chats whose name or latest message contains the query, archived ones included.
     private var filteredChats: [ChatSummary] {
         let query = query.trimmingCharacters(in: .whitespaces)
         guard hasAppeared else { return [] }
         guard !query.isEmpty else { return viewModel.chats }
-        return viewModel.chats.filter { chat in
+        return (viewModel.chats + viewModel.archivedChats).filter { chat in
             chat.title.localizedStandardContains(query) || (chat.preview ?? "").localizedStandardContains(query)
         }
     }
 
     /// The listed chat, or one titled by its room until the list has it.
     private func chat(for destination: ChatSummary.Destination) -> ChatSummary? {
-        if let listed = viewModel.chats.first(where: { $0.destination == destination }) {
+        if let listed = (viewModel.chats + viewModel.archivedChats).first(where: { $0.destination == destination }) {
             return listed
         }
         guard case let .apron(serverURL, roomId) = destination else { return nil }
@@ -143,6 +164,90 @@ struct ChatsView: View {
         case let .telegram(peer):
             NetworkChatView(viewModel: viewModel.follow(telegramChat(peer, chat.title)(), chatId: chat.id))
         }
+    }
+}
+
+/// Telegram's Archive folder: the chats the user archived there, newest first.
+private struct ArchivedChatsView: View {
+    @ObservedObject var viewModel: ChatListViewModel
+    let destination: (ChatSummary) -> AnyView
+    @State private var selection: ChatSummary?
+
+    var body: some View {
+        List(viewModel.archivedChats) { chat in
+            Button {
+                selection = chat
+            } label: {
+                ChatRow(chat: chat)
+            }
+            .buttonStyle(.plain)
+            .listRowSeparator(chat.id == viewModel.archivedChats.first?.id ? .hidden : .automatic, edges: .top)
+            .compactListRowInsets()
+        }
+        .listStyle(.plain)
+        .overlay {
+            if viewModel.archivedChats.isEmpty {
+                ContentUnavailableView("No Archived Chats", systemImage: "archivebox")
+            }
+        }
+        .refreshable {
+            await viewModel.load()
+        }
+        .navigationTitle("Archived Chats")
+        .navigationDestination(item: $selection) { chat in
+            destination(chat)
+        }
+        .task(id: selection == nil) {
+            guard selection == nil else { return }
+            await viewModel.load()
+        }
+    }
+}
+
+/// The row that opens the archive: the archived chats' names, and how many have unread messages.
+private struct ArchivedChatsRow: View {
+    let chats: [ChatSummary]
+    @AppStorage("redactionEnabled") private var redactionEnabled = false
+
+    private var unreadChats: Int {
+        chats.count(where: { $0.unreadCount > 0 })
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ZStack {
+                Circle().fill(Color.secondary.opacity(0.18))
+                Image(systemName: "archivebox.fill")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(width: 48, height: 48)
+            .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Archived Chats")
+                    .font(.headline)
+                HStack(alignment: .top) {
+                    Text(chats.map { DebugRedaction.chatTitle($0, enabled: redactionEnabled) }.joined(separator: ", "))
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                    Spacer(minLength: 8)
+                    if unreadChats > 0 {
+                        // Gray, as in Telegram: archived chats don't call for attention.
+                        Text("\(unreadChats)")
+                            .font(.caption.weight(.semibold).monospacedDigit())
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 2)
+                            .background(.gray, in: Capsule())
+                    }
+                }
+            }
+        }
+        .alignmentGuide(.listRowSeparatorLeading) { _ in 58 }
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
     }
 }
 

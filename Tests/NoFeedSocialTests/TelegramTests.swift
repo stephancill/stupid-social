@@ -125,6 +125,23 @@ final class TelegramTests: XCTestCase {
         XCTAssertEqual(service.text, "Group renamed to “Friends”")
     }
 
+    /// Shapes seen with `scripts/telegram-client.py listen`.
+    func testUpdatesConcernOnlyTheirChat() {
+        let group = TelegramPeer(kind: .channel, id: 2_009_589_709, accessHash: 1)
+        let dm = TelegramPeer(kind: .user, id: 185_733_531, accessHash: 2)
+        let channelMessage = TLObject("updates", ["updates": .vector([.object(TLObject("updateNewChannelMessage", [
+            "message": .object(TLObject("message", ["id": .int(92290), "peer_id": .object(TLObject("peerChannel", ["channel_id": .long(2_009_589_709)]))])),
+        ]))])])
+        let status = TLObject("updateShort", ["update": .object(TLObject("updateUserStatus", ["user_id": .long(185_733_531)]))])
+        let shortMessage = TLObject("updateShortMessage", ["user_id": .long(185_733_531), "id": .int(5)])
+
+        XCTAssertTrue(TelegramClient.update(channelMessage, concerns: group))
+        XCTAssertFalse(TelegramClient.update(channelMessage, concerns: dm))
+        XCTAssertFalse(TelegramClient.update(status, concerns: dm))
+        XCTAssertTrue(TelegramClient.update(shortMessage, concerns: dm))
+        XCTAssertFalse(TelegramClient.update(shortMessage, concerns: group))
+    }
+
     // MARK: Live
 
     /// Creates an auth key with Telegram's DC 2; run with `TEST_RUNNER_TELEGRAM_LIVE_TESTS=1`.

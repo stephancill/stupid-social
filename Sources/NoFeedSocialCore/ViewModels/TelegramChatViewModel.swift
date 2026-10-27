@@ -77,7 +77,7 @@ public final class TelegramChatViewModel: ChatViewModel {
             }
             saveSnapshot()
             self.state = .connected
-            observer = await client.addUpdateObserver { [weak self] _ in
+            observer = await client.addUpdateObserver(peer: peer) { [weak self] in
                 Task { @MainActor in self?.scheduleRefresh() }
             }
             startPolling()

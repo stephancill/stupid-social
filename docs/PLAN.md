@@ -133,7 +133,8 @@ Reference behavior from `docs/CLI_DOCS.md`:
 ### Telegram
 
 - Users sign in to their own Telegram account in Settings with their phone number, the login code Telegram sends (normally to their other Telegram app), and their two-step verification password when they have one.
-- Telegram chats appear on the Chats screen, not in the notifications feed: private chats, basic groups and supergroups from the main chat list, with the latest message and unread count. Broadcast channels and archived chats are left out, since they are feeds rather than conversations.
+- Telegram chats appear on the Chats screen, not in the notifications feed: private chats, basic groups and supergroups from the main chat list, with the latest message and unread count. Broadcast channels are left out, since they are feeds rather than conversations.
+- Chats archived in Telegram stay archived: they are not in the main list but behind an Archived Chats row at the top of the Chats screen (as in Telegram), which shows their names and how many have unread messages, and opens a list of them. Search on the Chats screen includes archived chats.
 - Opening a chat shows its history (older pages load on scroll), and the user can send text messages and replies. Reading moves Telegram's read cursor, so the chat is read on the user's other Telegram apps too.
 - New messages appear while the chat is open. Media shows as a label ("Photo", "Voice message", "Sticker") rather than the media itself, and service messages ("Group renamed") show as captions.
 - Each device signs in as its own Telegram session; the session stays on the device and is not synced through iCloud. Signing out ends that session on Telegram.

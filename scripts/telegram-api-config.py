@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Writes Sources/NoFeedSocialCore/Resources/TelegramAPI.json (gitignored) from TELEGRAM_API_ID and
-TELEGRAM_API_HASH in the environment or .env.local, so the build can sign in to Telegram.
+"""Writes Sources/NoFeedSocialCore/Resources/TelegramAPI.json (gitignored) from TELEGRAM_APP_ID and
+TELEGRAM_APP_API_HASH in the environment or .env.local, so the build can sign in to Telegram.
 
 Get both from https://my.telegram.org → API development tools. Builds without the file show Telegram as
 unavailable.
@@ -20,7 +20,7 @@ if local.exists():
         if "=" in line and not line.lstrip().startswith("#"):
             key, value = line.split("=", 1)
             env.setdefault(key.strip(), value.strip().strip("'\""))
-if "TELEGRAM_API_ID" not in env or "TELEGRAM_API_HASH" not in env:
-    raise SystemExit("Set TELEGRAM_API_ID and TELEGRAM_API_HASH in the environment or .env.local")
-OUTPUT.write_text(json.dumps({"apiId": int(env["TELEGRAM_API_ID"]), "apiHash": env["TELEGRAM_API_HASH"]}) + "\n")
+if "TELEGRAM_APP_ID" not in env or "TELEGRAM_APP_API_HASH" not in env:
+    raise SystemExit("Set TELEGRAM_APP_ID and TELEGRAM_APP_API_HASH in the environment or .env.local")
+OUTPUT.write_text(json.dumps({"apiId": int(env["TELEGRAM_APP_ID"]), "apiHash": env["TELEGRAM_APP_API_HASH"]}) + "\n")
 print(f"Wrote {OUTPUT.relative_to(ROOT)}")

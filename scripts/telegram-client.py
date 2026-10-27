@@ -4,7 +4,7 @@
 Talks to Telegram's production DCs over TCP (intermediate transport) with a user account, using the TL
 schema in Sources/NoFeedSocialCore/Resources/TelegramSchema.tl (built by scripts/telegram-schema.py).
 
-API credentials come from TELEGRAM_API_ID and TELEGRAM_API_HASH (environment or .env.local), from
+API credentials come from TELEGRAM_APP_ID and TELEGRAM_APP_API_HASH (environment or .env.local), from
 https://my.telegram.org. The session (auth keys per DC, salts, peer access hashes) is kept in
 logs/telegram-session.json, which holds secrets and is never committed.
 
@@ -13,9 +13,9 @@ Commands:
   config                      help.getConfig: this DC and the DC list
   send-code --phone +...      auth.sendCode; keeps phone_code_hash in the session
   sign-in --code 12345        auth.signIn; reports when a 2FA password is needed
-  password                    auth.checkPassword (SRP) with TELEGRAM_PASSWORD or a prompt
+  password                    auth.checkPassword (SRP) with TELEGRAM_USER_PASSWORD (environment or .env.local) or a prompt
   me                          the signed-in user
-  dialogs [--limit N]         messages.getDialogs, newest first
+  dialogs [--limit N] [--archived]   messages.getDialogs, newest first; --archived for the Archive folder
   history --peer user:1 [--limit N] [--offset-id N]
   send --peer user:1 --text "hi" [--reply-to N]
   read --peer user:1 --max-id N
@@ -808,7 +808,8 @@ class Store:
         os.chmod(SESSION_PATH, 0o600)
 
 
-def api_credentials() -> tuple[int, str]:
+def local_env() -> dict[str, str]:
+    """The environment, with .env.local filling in what it doesn't set."""
     env = dict(os.environ)
     local = ROOT / ".env.local"
     if local.exists():
@@ -816,9 +817,14 @@ def api_credentials() -> tuple[int, str]:
             if "=" in line and not line.lstrip().startswith("#"):
                 key, value = line.split("=", 1)
                 env.setdefault(key.strip(), value.strip().strip("'\""))
-    if "TELEGRAM_API_ID" not in env or "TELEGRAM_API_HASH" not in env:
-        raise SystemExit("Set TELEGRAM_API_ID and TELEGRAM_API_HASH (from https://my.telegram.org) in the environment or .env.local")
-    return int(env["TELEGRAM_API_ID"]), env["TELEGRAM_API_HASH"]
+    return env
+
+
+def api_credentials() -> tuple[int, str]:
+    env = local_env()
+    if "TELEGRAM_APP_ID" not in env or "TELEGRAM_APP_API_HASH" not in env:
+        raise SystemExit("Set TELEGRAM_APP_ID and TELEGRAM_APP_API_HASH (from https://my.telegram.org) in the environment or .env.local")
+    return int(env["TELEGRAM_APP_ID"]), env["TELEGRAM_APP_API_HASH"]
 
 
 def to_json(value):
@@ -960,6 +966,7 @@ def main():
     dialogs = sub.add_parser("dialogs")
     dialogs.add_argument("--limit", type=int, default=20)
     dialogs.add_argument("--json", action="store_true")
+    dialogs.add_argument("--archived", action="store_true", help="the Archive folder (folder_id 1)")
     history = sub.add_parser("history")
     history.add_argument("--peer", required=True)
     history.add_argument("--limit", type=int, default=20)
@@ -1009,7 +1016,7 @@ def main():
             raise
         print(result["_"], result.get("user", {}).get("id"))
     elif args.command == "password":
-        password = os.environ.get("TELEGRAM_PASSWORD") or getpass.getpass("Telegram password: ")
+        password = local_env().get("TELEGRAM_USER_PASSWORD") or getpass.getpass("Telegram password: ")
         result = check_password(client, password)
         print(result["_"], result.get("user", {}).get("id"))
     elif args.command == "me":
@@ -1017,7 +1024,10 @@ def main():
         me = users[0]
         print(json.dumps({k: to_json(me.get(k)) for k in ("id", "first_name", "last_name", "username", "photo")}, indent=1))
     elif args.command == "dialogs":
-        result = client.call({"_": "messages.getDialogs", "offset_date": 0, "offset_id": 0, "offset_peer": {"_": "inputPeerEmpty"}, "limit": args.limit, "hash": 0})
+        method = {"_": "messages.getDialogs", "offset_date": 0, "offset_id": 0, "offset_peer": {"_": "inputPeerEmpty"}, "limit": args.limit, "hash": 0}
+        if args.archived:
+            method["folder_id"] = 1
+        result = client.call(method)
         client.remember_peers(result["users"], result["chats"])
         if args.json:
             print(json.dumps(to_json(result), indent=1, ensure_ascii=False))
@@ -1027,6 +1037,9 @@ def main():
         messages = {(peer_key(m["peer_id"]), m["id"]): m for m in result["messages"] if "peer_id" in m}
         print(f"{result['_']} count={result.get('count', len(result['dialogs']))}")
         for dialog in result["dialogs"]:
+            if dialog["_"] == "dialogFolder":
+                print(f"dialogFolder {dialog['folder']['title']!r} unmuted_peers={dialog['unread_unmuted_peers_count']} muted_peers={dialog['unread_muted_peers_count']}")
+                continue
             key = peer_key(dialog["peer"])
             chat = chats.get(int(key.split(":")[1])) if not key.startswith("user") else None
             kind = "broadcast" if chat and chat.get("broadcast") else "group" if chat else "user"

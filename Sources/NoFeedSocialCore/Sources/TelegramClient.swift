@@ -64,7 +64,7 @@ public enum TelegramSignInResult: Sendable, Equatable {
     case passwordNeeded(hint: String?)
 }
 
-/// `TELEGRAM_API_ID` and `TELEGRAM_API_HASH`, written to `Resources/TelegramAPI.json` by
+/// `TELEGRAM_APP_ID` and `TELEGRAM_APP_API_HASH`, written to `Resources/TelegramAPI.json` by
 /// `scripts/telegram-api-config.py` and never committed; builds without it have no Telegram.
 struct TelegramAPIConfig: Decodable {
     let apiId: Int32
@@ -201,11 +201,42 @@ public actor TelegramClient {
 
     // MARK: Updates
 
-    /// Calls `observer` with each update Telegram pushes while the session is open.
-    public func addUpdateObserver(_ observer: @escaping @Sendable (_ name: String) -> Void) -> UUID {
+    /// Calls `observer` when Telegram pushes an update to `peer`'s messages (new, edited, deleted, read by
+    /// the other side) while the session is open. Status and typing updates, which arrive constantly, don't count.
+    public func addUpdateObserver(peer: TelegramPeer, _ observer: @escaping @Sendable () -> Void) -> UUID {
         let id = UUID()
-        observers[id] = { observer($0.name) }
+        observers[id] = { update in
+            if Self.update(update, concerns: peer) {
+                observer()
+            }
+        }
         return id
+    }
+
+    static func update(_ update: TLObject, concerns peer: TelegramPeer) -> Bool {
+        switch update.name {
+        case "updatesTooLong":
+            true
+        case "updateShortMessage":
+            peer.kind == .user && update["user_id"]?.long == peer.id
+        case "updateShortChatMessage":
+            peer.kind == .chat && update["chat_id"]?.long == peer.id
+        case "updateShort":
+            update["update"]?.object.map { self.update($0, concerns: peer) } ?? false
+        case "updates", "updatesCombined":
+            update.objects("updates").contains { self.update($0, concerns: peer) }
+        case "updateNewMessage", "updateEditMessage", "updateNewChannelMessage", "updateEditChannelMessage":
+            update["message"]?.object?["peer_id"]?.object.map(peerKey) == peer.key
+        case "updateReadHistoryOutbox", "updateReadHistoryInbox":
+            update["peer"]?.object.map(peerKey) == peer.key
+        case "updateDeleteMessages":
+            // Carries only message ids, which are per account outside channels.
+            peer.kind != .channel
+        case "updateDeleteChannelMessages", "updateReadChannelOutbox", "updateReadChannelInbox", "updateChannelTooLong":
+            peer.kind == .channel && update["channel_id"]?.long == peer.id
+        default:
+            false
+        }
     }
 
     public func removeUpdateObserver(_ id: UUID) {
@@ -304,10 +335,12 @@ public actor TelegramClient {
         guard TelegramAPIConfig.bundled != nil, stored.account != nil else { throw SourceError.notConfigured }
     }
 
-    /// The main chat list, without broadcast channels and archived chats.
-    public func chatSummaries(limit: Int = 50) async throws -> [ChatSummary] {
+    /// The main chat list (folder 0), or the Archive (folder 1), without broadcast channels. Leaving out
+    /// `folder_id` returns both folders mixed.
+    public func chatSummaries(archived: Bool = false, limit: Int = 50) async throws -> [ChatSummary] {
         try requireAccount()
         guard let result = try await invoke(TLObject("messages.getDialogs", [
+            "folder_id": .int(archived ? 1 : 0),
             "offset_date": .int(0), "offset_id": .int(0), "offset_peer": .object(TLObject("inputPeerEmpty")), "limit": .int(Int32(limit)), "hash": .long(0),
         ])).object else { return [] }
         let users = Dictionary(result.objects("users").compactMap { user in user["id"]?.long.map { ($0, user) } }, uniquingKeysWith: { $1 })
@@ -334,7 +367,7 @@ public actor TelegramClient {
                 title = chat?["title"]?.string ?? "Group"
             }
             let top = messages["\(Self.peerKey(peerObject)):\(dialog["top_message"]?.int ?? 0)"]
-            let latest = top.map { Self.message($0) }
+            let latest = top.map { Self.message($0, selfId: stored.account?.userId) }
             var preview = latest?.text.replacingOccurrences(of: "\n", with: " ")
             if let latest, let body = preview, !latest.isService {
                 if latest.isOutgoing {
@@ -402,7 +435,7 @@ public actor TelegramClient {
                 names[id] = title
             }
         }
-        let messages = result.objects("messages").filter { $0.name != "messageEmpty" }.map { Self.message($0) }
+        let messages = result.objects("messages").filter { $0.name != "messageEmpty" }.map { Self.message($0, selfId: stored.account?.userId) }
         let hasMore = result.name == "messages.messages" ? false : messages.count >= limit
         return TelegramHistoryPage(messages: messages, names: names, hasMore: hasMore)
     }
@@ -471,7 +504,8 @@ public actor TelegramClient {
         return full.isEmpty ? user["username"]?.string ?? "Telegram User" : full
     }
 
-    static func message(_ message: TLObject) -> TelegramMessage {
+    /// `selfId` marks the user's own messages where Telegram leaves out `out`, as in Saved Messages.
+    static func message(_ message: TLObject, selfId: Int64? = nil) -> TelegramMessage {
         let isService = message.name == "messageService"
         var text = message["message"]?.string ?? ""
         if isService {
@@ -487,7 +521,7 @@ public actor TelegramClient {
             date: Date(timeIntervalSince1970: TimeInterval(message["date"]?.int ?? 0)),
             text: text,
             senderId: senderId,
-            isOutgoing: message.flag("out"),
+            isOutgoing: message.flag("out") || (selfId != nil && senderId == selfId),
             replyToId: message["reply_to"]?.object?["reply_to_msg_id"]?.int,
             isService: isService,
         )

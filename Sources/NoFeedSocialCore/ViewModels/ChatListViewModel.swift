@@ -58,6 +58,8 @@ public struct ChatSummary: Identifiable, Hashable, Codable, Sendable {
 @MainActor
 public final class ChatListViewModel: ObservableObject {
     @Published public private(set) var chats: [ChatSummary] = []
+    /// Chats the user archived on their network (Telegram's Archive folder), shown apart from `chats`.
+    @Published public private(set) var archivedChats: [ChatSummary] = []
     @Published public private(set) var isLoading = false
     @Published public private(set) var hasLoaded = false
     /// Networks that failed to load, with the reason.
@@ -69,16 +71,22 @@ public final class ChatListViewModel: ObservableObject {
     private let telegramClient: TelegramClient
     /// The last loaded list, shown at launch while it refreshes, so only the very first load waits.
     private let cacheURL: URL
+    private let archiveCacheURL: URL
 
     public init(apronSource: ApronNotificationSource, spotifySource: SpotifyMessagesSource, instagramClient: InstagramClient, telegramClient: TelegramClient, fileManager: FileManager = .default) {
         self.apronSource = apronSource
         self.spotifySource = spotifySource
         self.instagramClient = instagramClient
         self.telegramClient = telegramClient
-        cacheURL = fileManager.urls(for: .cachesDirectory, in: .userDomainMask)[0].appending(path: "chat-list.json")
+        let caches = fileManager.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        cacheURL = caches.appending(path: "chat-list.json")
+        archiveCacheURL = caches.appending(path: "chat-list-archived.json")
         if let data = try? Data(contentsOf: cacheURL), let cached = try? JSONDecoder().decode([ChatSummary].self, from: data) {
             chats = cached
             hasLoaded = true
+        }
+        if let data = try? Data(contentsOf: archiveCacheURL), let cached = try? JSONDecoder().decode([ChatSummary].self, from: data) {
+            archivedChats = cached
         }
     }
 
@@ -91,6 +99,7 @@ public final class ChatListViewModel: ObservableObject {
         async let spotify = Self.result { try await self.spotifySource.chatSummaries() }
         async let instagram = Self.result { try await self.instagramClient.directChatSummaries() }
         async let telegram = Self.result { try await self.telegramClient.chatSummaries() }
+        async let telegramArchive = Self.result { try await self.telegramClient.chatSummaries(archived: true) }
         let results: [(SocialNetwork, Result<[ChatSummary], Error>)] = await [(.apron, apron), (.spotify, spotify), (.instagram, instagram), (.telegram, telegram)]
 
         var merged: [ChatSummary] = []
@@ -109,6 +118,10 @@ public final class ChatListViewModel: ObservableObject {
         }
         errorMessage = failures.isEmpty ? nil : failures.joined(separator: "\n")
         setChats(merged)
+        // A failed archive keeps its rows; the main list's failure already reports the network.
+        if case let .success(archived) = await telegramArchive {
+            setArchivedChats(archived)
+        }
     }
 
     /// Keeps the chat's row current while it is open, so returning to the list shows its latest message and
@@ -121,8 +134,23 @@ public final class ChatListViewModel: ObservableObject {
     }
 
     private func updateChat(id: String, latest: ChatMessage?, body: String?, unreadCount: Int) {
-        guard let index = chats.firstIndex(where: { $0.id == id }) else { return }
-        var chat = chats[index]
+        if let index = chats.firstIndex(where: { $0.id == id }) {
+            let chat = Self.updated(chats[index], latest: latest, body: body, unreadCount: unreadCount)
+            guard chat != chats[index] else { return }
+            var updated = chats
+            updated[index] = chat
+            setChats(updated)
+        } else if let index = archivedChats.firstIndex(where: { $0.id == id }) {
+            let chat = Self.updated(archivedChats[index], latest: latest, body: body, unreadCount: unreadCount)
+            guard chat != archivedChats[index] else { return }
+            var updated = archivedChats
+            updated[index] = chat
+            setArchivedChats(updated)
+        }
+    }
+
+    private static func updated(_ chat: ChatSummary, latest: ChatMessage?, body: String?, unreadCount: Int) -> ChatSummary {
+        var chat = chat
         if let latest, let body {
             chat.preview = if latest.isOwn {
                 "You: \(body)"
@@ -134,10 +162,7 @@ public final class ChatListViewModel: ObservableObject {
             chat.timestamp = latest.timestamp ?? chat.timestamp
         }
         chat.unreadCount = unreadCount
-        guard chat != chats[index] else { return }
-        var updated = chats
-        updated[index] = chat
-        setChats(updated)
+        return chat
     }
 
     /// One Apron server's rooms, rebuilt by the live connection when its rooms change.
@@ -160,6 +185,13 @@ public final class ChatListViewModel: ObservableObject {
         hasLoaded = true
         if let data = try? JSONEncoder().encode(chats) {
             try? data.write(to: cacheURL, options: .atomic)
+        }
+    }
+
+    private func setArchivedChats(_ summaries: [ChatSummary]) {
+        archivedChats = summaries.sorted { ($0.timestamp ?? .distantPast) > ($1.timestamp ?? .distantPast) }
+        if let data = try? JSONEncoder().encode(archivedChats) {
+            try? data.write(to: archiveCacheURL, options: .atomic)
         }
     }
 
