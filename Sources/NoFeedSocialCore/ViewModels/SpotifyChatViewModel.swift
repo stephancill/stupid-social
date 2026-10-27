@@ -184,10 +184,6 @@ public final class SpotifyChatViewModel: ChatViewModel {
 
     private func publish() {
         let sorted = loaded.values.sorted { ($0.sentAt ?? .distantPast, $0.id) < ($1.sentAt ?? .distantPast, $1.id) }
-        let chatMessages = sorted.map(chatMessage)
-        if history != chatMessages {
-            history = chatMessages
-        }
         var totals: [String: [ChatReaction]] = [:]
         for message in sorted where !message.reactions.isEmpty {
             let counts = Dictionary(grouping: message.reactions, by: \.emoji)
@@ -197,9 +193,7 @@ public final class SpotifyChatViewModel: ChatViewModel {
                 }
                 .sorted { ($0.count, $0.emoji) > ($1.count, $1.emoji) }
         }
-        if reactions != totals {
-            reactions = totals
-        }
+        publish(history: sorted.map(chatMessage), reactions: totals)
     }
 
     override public func reactors(of emoji: String, on messageId: String) -> [ChatReactor] {

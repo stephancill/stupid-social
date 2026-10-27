@@ -157,6 +157,14 @@ struct ChatsView: View {
         )
     }
 
+    /// A network chat opening from its row, which says whether there are unread messages to wait for.
+    private func opened(_ chatViewModel: ChatViewModel, chat: ChatSummary) -> ChatViewModel {
+        if chat.unreadCount > 0 {
+            chatViewModel.expectUnread()
+        }
+        return viewModel.follow(chatViewModel, chatId: chat.id)
+    }
+
     @ViewBuilder
     private func destination(for chat: ChatSummary) -> some View {
         switch chat.destination {
@@ -172,21 +180,21 @@ struct ChatsView: View {
             )
         case let .spotify(chatId):
             if let makeChat = spotifyChat(chatId, chat.title) {
-                NetworkChatView(viewModel: viewModel.follow(makeChat(), chatId: chat.id))
+                NetworkChatView(viewModel: opened(makeChat(), chat: chat))
             } else {
                 ContentUnavailableView("Spotify Not Connected", systemImage: "music.note")
             }
         case let .instagram(threadFbid):
             if let makeChat = instagramChat(threadFbid, chat.title) {
-                NetworkChatView(viewModel: viewModel.follow(makeChat(), chatId: chat.id))
+                NetworkChatView(viewModel: opened(makeChat(), chat: chat))
             } else {
                 ContentUnavailableView("Instagram Not Connected", systemImage: "camera")
             }
         case let .telegram(peer):
-            NetworkChatView(viewModel: viewModel.follow(telegramChat(peer, chat.title)(), chatId: chat.id))
+            NetworkChatView(viewModel: opened(telegramChat(peer, chat.title)(), chat: chat))
         case let .x(conversationId):
             if let makeChat = xChat(conversationId, chat.title) {
-                NetworkChatView(viewModel: viewModel.follow(makeChat(), chatId: chat.id))
+                NetworkChatView(viewModel: opened(makeChat(), chat: chat))
             } else {
                 ContentUnavailableView("X Chat Locked", systemImage: "lock", description: Text("Enter your X Chat PIN in Settings → X."))
             }

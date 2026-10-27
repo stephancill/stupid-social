@@ -180,7 +180,17 @@ public class ChatViewModel: ObservableObject {
         didSet { composeMessages() }
     }
 
-    @Published public internal(set) var state: ChatConnectionState = .connecting
+    @Published public internal(set) var state: ChatConnectionState = .connecting {
+        didSet {
+            // History has arrived, or won't.
+            if state != .connecting {
+                releaseRestoredMessages()
+            }
+        }
+    }
+
+    /// While set, `messages` stays empty; see `expectUnread()`.
+    private var holdsRestoredMessages = false
     @Published public internal(set) var title: String
     @Published public internal(set) var subtitle: String
     @Published public internal(set) var hasEarlierMessages = false
@@ -351,13 +361,44 @@ public class ChatViewModel: ObservableObject {
         composeMessages()
     }
 
+    /// Sets reactions before the messages they belong to, so new bubbles render with their reactions instead of
+    /// growing a moment later.
+    func publish(history newHistory: [ChatMessage], reactions newReactions: [String: [ChatReaction]]) {
+        if reactions != newReactions {
+            reactions = newReactions
+        }
+        if history != newHistory {
+            history = newHistory
+        }
+    }
+
+    /// Called as a chat opens from a Chats row with unread messages. When the messages restored from the last visit
+    /// hold none of them, showing those would open at their bottom and then jump once history adds the new
+    /// messages and the "New Messages" divider. So the chat shows nothing until history arrives, for at most 1.5
+    /// seconds, and then opens at the divider.
+    public func expectUnread() {
+        guard unreadCount == 0, state == .connecting else { return }
+        holdsRestoredMessages = true
+        composeMessages()
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(1500))
+            self?.releaseRestoredMessages()
+        }
+    }
+
+    private func releaseRestoredMessages() {
+        guard holdsRestoredMessages else { return }
+        holdsRestoredMessages = false
+        composeMessages()
+    }
+
     private func composeMessages() {
         let ids = Set(history.map(\.id))
         for (id, localId) in awaitingHistory where ids.contains(id) {
             awaitingHistory[id] = nil
             outgoing.removeAll { $0.id == localId }
         }
-        let shown = history.map { message in pickedImages[message.id].map(message.showing) ?? message } + outgoing
+        let shown = holdsRestoredMessages ? [] : history.map { message in pickedImages[message.id].map(message.showing) ?? message } + outgoing
         if messages != shown {
             messages = shown
         }

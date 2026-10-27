@@ -54,6 +54,8 @@ public final class TelegramChatViewModel: ChatViewModel {
         readInboxMaxId = snapshot.readInboxMaxId
         title = snapshot.title
         subtitle = snapshot.subtitle
+        // The divider is in the first render, rather than appearing once history arrives.
+        firstUnreadMessageId = loaded.values.sorted { $0.id < $1.id }.map(chatMessage).first(where: isUnread)?.id
         publish()
     }
 
@@ -291,19 +293,13 @@ public final class TelegramChatViewModel: ChatViewModel {
 
     private func publish() {
         let sorted = loaded.values.sorted { $0.id < $1.id }
-        let chatMessages = sorted.map(chatMessage)
-        if history != chatMessages {
-            history = chatMessages
-        }
         var totals: [String: [ChatReaction]] = [:]
         for message in sorted where !message.reactions.isEmpty {
             totals[String(message.id)] = message.reactions
                 .map { ChatReaction(emoji: $0.emoji, count: $0.count, includesYou: $0.isMine) }
                 .sorted { ($0.count, $0.emoji) > ($1.count, $1.emoji) }
         }
-        if reactions != totals {
-            reactions = totals
-        }
+        publish(history: sorted.map(chatMessage), reactions: totals)
         updateUnreadCount()
     }
 
@@ -312,7 +308,8 @@ public final class TelegramChatViewModel: ChatViewModel {
     }
 
     private func updateUnreadCount() {
-        let count = messages.count(where: isUnread)
+        // `history`, since `messages` may be held back while the chat opens.
+        let count = history.count(where: isUnread)
         if unreadCount != count {
             unreadCount = count
         }

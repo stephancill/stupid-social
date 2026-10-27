@@ -58,6 +58,9 @@ public final class InstagramChatViewModel: ChatViewModel {
         title = snapshot.title
         subtitle = snapshot.subtitle
         showsSenderNames = snapshot.showsSenderNames
+        // The divider is in the first render, rather than appearing once history arrives.
+        firstUnreadMessageId = loaded.values.sorted { ($0.sentAt ?? .distantPast, $0.id) < ($1.sentAt ?? .distantPast, $1.id) }
+            .map(chatMessage).first(where: isUnread)?.id
         publish()
     }
 
@@ -205,10 +208,6 @@ public final class InstagramChatViewModel: ChatViewModel {
 
     private func publish() {
         let sorted = loaded.values.sorted { ($0.sentAt ?? .distantPast, $0.id) < ($1.sentAt ?? .distantPast, $1.id) }
-        let chatMessages = sorted.map(chatMessage)
-        if history != chatMessages {
-            history = chatMessages
-        }
         var totals: [String: [ChatReaction]] = [:]
         for message in sorted {
             guard let reactions = message.reactions, !reactions.isEmpty else { continue }
@@ -219,9 +218,7 @@ public final class InstagramChatViewModel: ChatViewModel {
                 }
                 .sorted { ($0.count, $0.emoji) > ($1.count, $1.emoji) }
         }
-        if reactions != totals {
-            reactions = totals
-        }
+        publish(history: sorted.map(chatMessage), reactions: totals)
         updateUnreadCount()
     }
 
@@ -230,7 +227,8 @@ public final class InstagramChatViewModel: ChatViewModel {
     }
 
     private func updateUnreadCount() {
-        let count = messages.count(where: isUnread)
+        // `history`, since `messages` may be held back while the chat opens.
+        let count = history.count(where: isUnread)
         if unreadCount != count {
             unreadCount = count
         }

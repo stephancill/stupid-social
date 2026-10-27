@@ -213,9 +213,6 @@ public final class XChatViewModel: ChatViewModel {
                 continue
             }
         }
-        if history != chatMessages {
-            history = chatMessages
-        }
         if referencedMessages != references {
             referencedMessages = references
         }
@@ -226,9 +223,7 @@ public final class XChatViewModel: ChatViewModel {
                 .map { emoji, reactions in ChatReaction(emoji: emoji, count: reactions.count, includesYou: reactions.contains { $0.sender == viewerId }) }
                 .sorted { ($0.count, $0.emoji) > ($1.count, $1.emoji) }
         }
-        if reactions != totals {
-            reactions = totals
-        }
+        publish(history: chatMessages, reactions: totals)
         updateUnreadCount()
     }
 
@@ -237,7 +232,8 @@ public final class XChatViewModel: ChatViewModel {
     }
 
     private func updateUnreadCount() {
-        let count = messages.count(where: isUnread)
+        // `history`, since `messages` may be held back while the chat opens.
+        let count = history.count(where: isUnread)
         if unreadCount != count {
             unreadCount = count
         }
