@@ -2,6 +2,7 @@
 
 ## 2026-10-27
 
+- The home pager's page dots sit on a small pill (`UIVisualEffectView`, `.systemMaterial`, 7×5 pt padding) so they stay legible over list content (product request). The thin material was too faint over white rows.
 - Added Telegram chats (see `docs/PLAN.md` § Telegram and `docs/TECHNICAL_DESIGN.md` § Telegram). Telegram has no HTTP API for user accounts and stupid-app rejects binary targets (`Planner.swift`: "binaryTarget … unsupported"), so TDLib was ruled out and the app implements MTProto 2.0 itself. Decisions: chats only (no feed items or push yet); broadcast channels and archived chats are skipped; media shows as labels; the session is device-local (Keychain, not synchronizable); the API id and hash are build-time, from the gitignored `Resources/TelegramAPI.json`, since the repository is public.
   - Probe first: `scripts/telegram-client.py` is a stdlib-only MTProto client (pure-Python AES with an IGE wrapper checked against the FIPS-197 vector, RSA_PAD, DH, Pollard–Brent, schema-driven TL codec, SRP). `handshake` created a real auth key on DC 2 in about 2 s (server fingerprint matched TDLib's RSA key; DH prime matched). The other commands were run live later (below).
   - The TL codec is generic over the official schema (`scripts/telegram-schema.py` writes `Resources/TelegramSchema.tl` from core.telegram.org's JSON, layer 225, deduplicated by constructor id). The MTProto and API schemas both define `message`; encoding by name prefers the API one, and decoding goes by id.

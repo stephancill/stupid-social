@@ -136,6 +136,9 @@ final class HomePageDotsView: UIView {
     private static let minimumSize: CGFloat = 5
     private static let growth: CGFloat = 2
     private static let spacing: CGFloat = 5
+    /// Padding inside the pill that keeps the dots legible over content.
+    private static let inset = UIEdgeInsets(top: 5, left: 7, bottom: 5, right: 7)
+    private let pill = UIVisualEffectView(effect: UIBlurEffect(style: .systemMaterial))
     private let dotViews = [UIView(), UIView()]
 
     /// 0 on Chats, 1 on Social.
@@ -150,6 +153,8 @@ final class HomePageDotsView: UIView {
     override init(frame: CGRect) {
         super.init(frame: frame)
         isUserInteractionEnabled = false
+        pill.clipsToBounds = true
+        addSubview(pill)
         dotViews.forEach(addSubview)
         isAccessibilityElement = true
         accessibilityLabel = "Social, page 2 of 2"
@@ -162,16 +167,21 @@ final class HomePageDotsView: UIView {
 
     override var intrinsicContentSize: CGSize {
         let largest = Self.minimumSize + Self.growth
-        return CGSize(width: largest * 2 + Self.spacing, height: largest)
+        return CGSize(
+            width: largest * 2 + Self.spacing + Self.inset.left + Self.inset.right,
+            height: largest + Self.inset.top + Self.inset.bottom,
+        )
     }
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        pill.frame = bounds
+        pill.layer.cornerRadius = bounds.height / 2
         let slot = Self.minimumSize + Self.growth
         for (index, dot) in dotViews.enumerated() {
             let intensity = max(0, 1 - abs(progress - CGFloat(index)))
             let size = Self.minimumSize + Self.growth * intensity
-            let centerX = slot / 2 + CGFloat(index) * (slot + Self.spacing)
+            let centerX = Self.inset.left + slot / 2 + CGFloat(index) * (slot + Self.spacing)
             dot.frame = CGRect(x: centerX - size / 2, y: (bounds.height - size) / 2, width: size, height: size)
             dot.layer.cornerRadius = size / 2
             dot.backgroundColor = UIColor.secondaryLabel.withAlphaComponent(0.25 + 0.75 * intensity)
