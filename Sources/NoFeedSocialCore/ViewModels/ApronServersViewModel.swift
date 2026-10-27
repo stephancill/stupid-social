@@ -40,6 +40,16 @@ public final class ApronServersViewModel: ObservableObject {
         service.hasToken(serverURL: server.serverURL)
     }
 
+    /// Whether this device gets push notifications from the server.
+    public func isPushEnabled(_ server: ApronServerMetadata) -> Bool {
+        service.push.isEnabled(serverURL: server.serverURL)
+    }
+
+    public func setPushEnabled(_ enabled: Bool, for server: ApronServerMetadata) async {
+        objectWillChange.send()
+        await service.setPushEnabled(enabled, serverURL: server.serverURL)
+    }
+
     public func reload() {
         servers = service.servers
     }

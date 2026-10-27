@@ -3,6 +3,16 @@ product: NoFeedSocial
 bundleID: tech.stupid.StupidSocial
 deploymentTarget: "18.0"
 infoPath: Info.plist
+entitlementsPath: App.entitlements
+capabilities:
+  - entitlementKey: com.apple.developer.ubiquity-kvstore-identifier
+    type: ICLOUD
+  - entitlementKey: aps-environment
+    type: PUSH_NOTIFICATIONS
+  - entitlementKey: com.apple.security.application-groups
+    type: APP_GROUPS
+  - entitlementKey: com.apple.developer.siri
+    type: SIRIKIT
 iconPath: Resources/AppIcon.appiconset/Icon-1024.png
 resources:
   - Resources/XBadge.png
@@ -26,3 +36,11 @@ resources:
   - Resources/ApronBadge.png
   - Resources/ApronBadge@2x.png
   - Resources/ApronBadge@3x.png
+extensions:
+  - product: NoFeedSocialNotificationService
+    bundleID: tech.stupid.StupidSocial.NotificationService
+    infoPath: NotificationService/Info.plist
+    entitlementsPath: NotificationService/NotificationService.entitlements
+    capabilities:
+      - entitlementKey: com.apple.security.application-groups
+        type: APP_GROUPS

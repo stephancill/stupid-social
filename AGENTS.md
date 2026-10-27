@@ -6,6 +6,7 @@
 Sources/
   NoFeedSocial/                     # App UI layer (SwiftUI views)
     AppContainer.swift              # App-layer composition root
+    AppDelegate.swift               # APNs token, notification taps, inline replies and foreground presentation
     NoFeedSocialApp.swift           # iOS @main entry point
     Views/
       ContentView.swift             # Root view, container wiring
@@ -42,6 +43,12 @@ Sources/
       ApronMembersView.swift        # Apron room member list, opened from the chat title
       ApronProfileView.swift        # Apron user profile and shared avatar with presence dot
       SettingsView.swift            # Settings with connection links
+  NoFeedSocialPush/                 # Shared with the notification extension: Web Push decryption, push store, notification content
+    WebPushDecryptor.swift
+    ApronPushStore.swift
+    ApronPushNotification.swift
+  NoFeedSocialNotificationService/  # Notification Service Extension: decrypts Apron pushes
+    NotificationService.swift
   NoFeedSocialCore/                 # Shared core (models, services, sources)
     Models/
       AppModels.swift               # All public model types
@@ -50,6 +57,8 @@ Sources/
       FeedService.swift             # Central feed orchestration
       ApronService.swift            # Apron server list, tokens, and signed-in sessions
       ApronLiveFeed.swift           # Foreground WebSocket per Apron server for realtime feed items
+      ApronPushService.swift        # Apron push registration through the push.stupidtech.net relay
+      ApronRoomNotifications.swift  # Per-room notification levels mapped to mute and wake scopes
     Sources/                        # Network clients + notification sources
       NotificationSource.swift      # Protocol definition
       InstagramClient.swift / InstagramSession.swift / Instagram*Models.swift / Instagram*Parser.swift / InstagramNotificationSource.swift
@@ -91,6 +100,8 @@ Sources/
       SpotifyChatViewModel.swift     # Spotify Messages chat: history, polling, send, seen, track metadata
       InstagramChatViewModel.swift   # Instagram Direct chat: history, polling, send, replies, read receipt
 ```
+
+Outside `Sources/`: `NotificationService/` holds the extension's Info.plist and entitlements, and `workers/push-relay/` the Apron push relay Worker (`bun run push-relay:test`, `bun run push-relay:deploy`).
 
 - Keep `## Project Structure` in sync when files are added, moved, or renamed.
 

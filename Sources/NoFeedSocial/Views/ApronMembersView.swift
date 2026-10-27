@@ -10,6 +10,7 @@ struct ApronMembersView: View {
         Group {
             if let members = viewModel.members {
                 List {
+                    notificationSection
                     if members.contains(where: { viewModel.presence(of: $0) != nil }) {
                         let online = members.filter { viewModel.presence(of: $0)?.isConnected == true }
                         let offline = members.filter { viewModel.presence(of: $0)?.isConnected != true }
@@ -37,6 +38,27 @@ struct ApronMembersView: View {
         }
         .navigationTitle(memberTitle)
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    /// The room's notification level, kept by the server for all of the user's devices.
+    @ViewBuilder
+    private var notificationSection: some View {
+        if let notifications = viewModel.notifications, notifications.options.count > 1 {
+            Section {
+                Picker("Notifications", selection: Binding(
+                    get: { notifications.level },
+                    set: { level in Task { await viewModel.setNotificationLevel(level) } },
+                )) {
+                    ForEach(notifications.options, id: \.self) { level in
+                        Text(level.label).tag(level)
+                    }
+                }
+            } footer: {
+                if let error = viewModel.notificationError {
+                    Text(error)
+                }
+            }
+        }
     }
 
     private func memberSection(_ title: String?, _ members: [ApronUser]) -> some View {

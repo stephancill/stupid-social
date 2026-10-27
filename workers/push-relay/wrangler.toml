@@ -1,0 +1,15 @@
+name = "stupid-push-relay"
+main = "src/index.ts"
+compatibility_date = "2026-07-14"
+workers_dev = false
+preview_urls = false
+routes = [{ pattern = "push.stupidtech.net", custom_domain = true }]
+
+[vars]
+APNS_TOPIC = "tech.stupid.StupidSocial"
+APNS_KEY_ID = "U7W6CW4B57"
+APNS_TEAM_ID = "6JKMV57Y77"
+# RELAY_SECRET and APNS_PRIVATE_KEY are secrets.
+
+[observability]
+enabled = true

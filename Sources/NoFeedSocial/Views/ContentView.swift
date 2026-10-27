@@ -11,6 +11,7 @@ public struct ContentView: View {
     @AppStorage("homePage") private var page = HomePage.social
     @State private var isShowingChat = false
     @State private var isShowingFeedDetail = false
+    @ObservedObject private var notificationRouter = NotificationRouter.shared
 
     public init() {}
 
@@ -54,11 +55,18 @@ public struct ContentView: View {
                     spotifyChat: { container.spotifyChatFactory(chatId: $0, title: $1) },
                     instagramChat: { container.instagramChatFactory(threadFbid: $0, title: $1) },
                     isShowingChat: $isShowingChat,
+                    openRequest: $notificationRouter.pendingChat,
                 )
             },
             social: socialStack(container: container),
         )
         .ignoresSafeArea()
+        .onChange(of: notificationRouter.pendingChat, initial: true) { _, request in
+            // A tapped notification's chat opens on the Chats side.
+            if request != nil {
+                page = .chats
+            }
+        }
     }
 
     /// Paging stops while the visible side has a screen pushed, so back swipes and swipe-to-reply aren't taken
@@ -97,6 +105,7 @@ public struct ContentView: View {
     private func configureDependencies() {
         let appContainer = AppContainer(modelContext: modelContext)
         container = appContainer
+        NotificationRouter.shared.apronService = appContainer.apronService
         appContainer.apronLiveFeed.start()
 
         Task {

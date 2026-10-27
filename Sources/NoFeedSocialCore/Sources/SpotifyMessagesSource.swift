@@ -43,6 +43,7 @@ public final class SpotifyMessagesSource {
                 unreadCount: chat.unseenCount,
                 destination: .spotify(chatId: chat.id),
                 namesSenderInPreview: chat.isGroup,
+                titleNamesPeople: !chat.isGroup,
             ))
         }
         return summaries

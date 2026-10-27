@@ -57,6 +57,10 @@ public final class ApronConnection {
     var joinedRoomsRequest: Task<(rooms: [ApronRoom], users: [ApronUser]), Error>?
     /// Bumped by each `room_update`, so a listing requested before one isn't kept.
     var roomsGeneration = 0
+    /// Rooms the user muted, and their per-room wake scopes, as the server last sent them in `status`; each
+    /// sign-in sends the ones in effect (§4.5.4).
+    public private(set) var mutedRooms: Set<String> = []
+    public private(set) var roomWakes: [String: [String]] = [:]
 
     private let task: URLSessionWebSocketTask
     private let decoder = JSONDecoder()
@@ -188,8 +192,26 @@ public final class ApronConnection {
             joinedRoomsListing = nil
             roomsGeneration += 1
         }
+        if method == "status", let status = frame["params"] as? [String: Any] {
+            applyStatus(status)
+        }
         for observer in notificationObservers.values {
             observer(method, params)
+        }
+    }
+
+    /// A room's `mute` is `true`, `false`, or seconds left; a missing field changes nothing (§4.5.3).
+    func applyStatus(_ status: [String: Any]) {
+        guard let roomId = status["room_id"] as? String else { return }
+        if let mute = status["mute"] as? NSNumber {
+            if mute.boolValue {
+                mutedRooms.insert(roomId)
+            } else {
+                mutedRooms.remove(roomId)
+            }
+        }
+        if let wake = status["wake"] {
+            roomWakes[roomId] = wake as? [String]
         }
     }
 

@@ -141,6 +141,10 @@ public final class ApronLiveFeed {
                     try await chatList.updateChats(source.chatSummaries(in: session, roomIds: roomIds))
                 } else {
                     try await chatList.replaceApronChats(serverURL: url, with: source.chatSummaries(in: session))
+                    // Rooms changed: notifications title new rooms, such as a new DM, by name.
+                    if session.server.has("rooms") {
+                        try await service.push.updateRoomTitles(session: session, rooms: session.connection.joinedRooms())
+                    }
                 }
             } catch {
                 logger.info("Apron live rebuild failed for \(url.host() ?? "server", privacy: .public): \(error.localizedDescription, privacy: .public)")

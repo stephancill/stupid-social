@@ -27,7 +27,7 @@ Build an iOS app with xtool that shows a combined social network notifications f
 - Cross-posting.
 - Multiple accounts per network.
 - Syncing full notification items across devices.
-- Backend service for polling, normalization, or push notifications.
+- Backend service for polling or normalization. The one exception is the stateless Apron push relay (see Apron).
 - App lock, Face ID lock, hidden previews, or custom privacy overlay.
 - Cross-network identity merging.
 
@@ -122,6 +122,13 @@ Reference behavior from `docs/CLI_DOCS.md`:
 - Apron rooms appear on the Chats screen, not in the notifications feed: every joined room, with its latest message and unread count, updated live while the app is open.
 - Opening an Apron room shows a live chat for that room, where the user can read recent history and send messages.
 - The chat opens at the first unread message when there is one, shows who is typing (and shares the user's own typing) on servers with `activity`, and opens links in messages.
+- Push notifications: on servers that offer Web Push (`server.push.webpush`), signed-in accounts (not guests) get notifications for mentions, replies and messages in private rooms such as DMs, while the app is closed. The app asks for notification permission the first time such a server connects.
+- Each room has a notification level in its member list (opened from the chat title): All Messages, Mentions Only, or None. Rooms default to Mentions Only and private rooms to All Messages. None is a server-side room mute, so it applies to all of the user's devices. All Messages in a public room, and Mentions Only in a private room, appear only on servers that support per-room wake scopes (proposed protocol extension, see `docs/TECHNICAL_DESIGN.md`).
+- Each server's notifications can be turned off on this device in its server settings.
+- A notification is titled with the sender in a DM and "<sender> in <room>" in a room, shows the sender's avatar, has the server as its subtitle, and shows the message as plain text (Markdown removed, `@user_id` mentions shown as `@Name`).
+- Tapping a notification opens that room, from either side of the home pager or from another open chat. Notifications for the open room aren't shown, and opening a room clears its delivered notifications.
+- A notification's Reply action sends a message to the room without opening the app: in rooms it replies to the notified message, in DMs it is a plain message. A reply that fails is reported with a notification.
+- Push goes through the Stupid Tech relay at `push.stupidtech.net`, which forwards end-to-end encrypted payloads to APNs and keeps no state; only the device can read message contents.
 
 ## Combined Feed
 

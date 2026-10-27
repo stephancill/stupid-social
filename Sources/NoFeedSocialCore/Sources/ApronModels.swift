@@ -10,6 +10,8 @@ public struct ApronServerInfo: Decodable, Equatable, Sendable {
     public let signup: [String]?
     public let ping: Double?
     public let ext: ApronServerExt?
+    /// Push kinds and wake scopes; absent when the server doesn't push (§4.9).
+    public let push: ApronPushInfo?
 
     public func has(_ capability: String) -> Bool {
         capabilities?.contains(capability) ?? false
@@ -17,6 +19,28 @@ public struct ApronServerInfo: Decodable, Equatable, Sendable {
 
     public var acceptedSchemes: Set<String> {
         Set(auth).union(signup ?? [])
+    }
+}
+
+public struct ApronPushInfo: Decodable, Equatable, Sendable {
+    public let webpush: WebPush?
+    public let wake: [String]?
+    /// The proposed per-room wake scopes, set with `status` `wake` and a `room_id` (see `ApronRoomNotifications`).
+    public let roomWake: Bool?
+
+    public struct WebPush: Decodable, Equatable, Sendable {
+        /// The server's VAPID public key, unpadded base64url (§4.9.2).
+        public let key: String
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case webpush
+        case wake
+        case roomWake = "room_wake"
+    }
+
+    public func wakes(_ scope: String) -> Bool {
+        wake?.contains(scope) ?? false
     }
 }
 
@@ -552,6 +576,49 @@ struct ApronActivityParams: Encodable {
 }
 
 struct ApronEmptyResult: Decodable {}
+
+struct ApronPushRegisterParams: Encodable {
+    let kind = "webpush"
+    let url: String
+    let pushId: String
+    let keys: Keys
+    let wake: [String]
+
+    struct Keys: Encodable {
+        let p256dh: String
+        let auth: String
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case kind
+        case url
+        case pushId = "push_id"
+        case keys
+        case wake
+    }
+}
+
+/// A room's `status`: `mute`, or the proposed room `wake`, where `.some(nil)` sends `null` to clear it.
+struct ApronRoomStatusParams: Encodable {
+    let roomId: String
+    var mute: Bool?
+    var wake: [String]??
+
+    enum CodingKeys: String, CodingKey {
+        case roomId = "room_id"
+        case mute
+        case wake
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(roomId, forKey: .roomId)
+        try container.encodeIfPresent(mute, forKey: .mute)
+        if let wake {
+            try container.encode(wake, forKey: .wake)
+        }
+    }
+}
 
 /// A `user` notification: `new` is another user's current object (§3.3.3).
 struct ApronUserUpdate: Decodable {

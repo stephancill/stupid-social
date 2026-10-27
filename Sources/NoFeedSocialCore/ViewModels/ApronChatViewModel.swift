@@ -8,6 +8,9 @@ public final class ApronChatViewModel: ChatViewModel {
     @Published public private(set) var members: [ApronUser]?
     /// The total when the server listed only some members.
     @Published public private(set) var memberCount: Int?
+    /// This room's notification level and the levels it offers; `nil` where the server doesn't push to this account.
+    @Published public private(set) var notifications: ApronRoomNotifications?
+    @Published public private(set) var notificationError: String?
 
     public let serverURL: URL
     public let roomId: String
@@ -27,6 +30,7 @@ public final class ApronChatViewModel: ChatViewModel {
     private var reactionEntries: [String: [String: (logId: Int64, emojis: [String])]] = [:]
     private var reactionAuthors: [String: ApronUser] = [:]
     private var memberIds: Set<String>?
+    private var isPrivateRoom = false
     private var notices: [ApronMessage] = []
     private var firstLogId: String?
     private var lastLogId: String?
@@ -126,6 +130,7 @@ public final class ApronChatViewModel: ChatViewModel {
                     users[user.userId] = user
                 }
                 if let room = listing.rooms.first(where: { $0.roomId == roomId }) {
+                    isPrivateRoom = room.isPrivate
                     titleIsMemberNames = room.isNamedForMembers
                     title = room.displayTitle(users: users, you: session.you.userId)
                     setMembers(of: room)
@@ -152,11 +157,44 @@ public final class ApronChatViewModel: ChatViewModel {
                 hasLoadedHistory = true
                 publish()
             }
+            updateNotifications()
             state = .connected
         } catch {
             stopObserving()
             state = .disconnected(error.localizedDescription)
         }
+    }
+
+    private func updateNotifications() {
+        guard let session, service.offersPush(session), let push = session.server.push else {
+            notifications = nil
+            return
+        }
+        notifications = ApronRoomNotifications(
+            isPrivate: isPrivateRoom,
+            isMuted: session.connection.mutedRooms.contains(roomId),
+            roomWake: session.connection.roomWakes[roomId],
+            serverWake: push.wake ?? [],
+            supportsRoomWake: push.roomWake == true,
+            supportsMute: session.server.has("status"),
+        )
+    }
+
+    /// Applies a notification level with `status` (`ApronRoomNotifications`); the server keeps it for every device.
+    public func setNotificationLevel(_ level: ApronNotificationLevel) async {
+        guard let session, let notifications else { return }
+        notificationError = nil
+        do {
+            for change in notifications.changes(to: level) {
+                switch change {
+                case let .mute(muted): try await session.connection.setRoomMuted(roomId: roomId, muted: muted)
+                case let .wake(scopes): try await session.connection.setRoomWake(roomId: roomId, scopes: scopes)
+                }
+            }
+        } catch {
+            notificationError = error.localizedDescription
+        }
+        updateNotifications()
     }
 
     /// Leaves the room. The connection is shared with the feed, so only this chat's observer goes away.
@@ -434,6 +472,11 @@ public final class ApronChatViewModel: ChatViewModel {
     }
 
     private func handle(method: String, params: Data) {
+        if method == "status" {
+            // The connection already applied it; this room's level may have changed, also from another device.
+            updateNotifications()
+            return
+        }
         if method == "user" {
             // `you` carries the user's own setting, not what others see, so only `new` applies here (§4.5.2).
             if let new = try? JSONDecoder().decode(ApronUserUpdate.self, from: params).new {

@@ -8,24 +8,35 @@ let package = Package(
         .iOS(.v18),
     ],
     products: [
-        // An xtool project should contain exactly one library product,
-        // representing the main app.
+        // A stupid-app project contains one library product per app/extension bundle.
         .library(
             name: "NoFeedSocial",
             targets: ["NoFeedSocial"]
+        ),
+        .library(
+            name: "NoFeedSocialNotificationService",
+            targets: ["NoFeedSocialNotificationService"]
         ),
     ],
     targets: [
         .target(
             name: "NoFeedSocial",
-            dependencies: ["NoFeedSocialCore"]
+            dependencies: ["NoFeedSocialCore", "NoFeedSocialPush"]
         ),
         .target(
-            name: "NoFeedSocialCore"
+            name: "NoFeedSocialCore",
+            dependencies: ["NoFeedSocialPush"]
+        ),
+        .target(
+            name: "NoFeedSocialPush"
+        ),
+        .target(
+            name: "NoFeedSocialNotificationService",
+            dependencies: ["NoFeedSocialPush"]
         ),
         .testTarget(
             name: "NoFeedSocialTests",
-            dependencies: ["NoFeedSocialCore"]
+            dependencies: ["NoFeedSocialCore", "NoFeedSocialPush"]
         ),
     ]
 )

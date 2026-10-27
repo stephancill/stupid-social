@@ -5,11 +5,17 @@
   "scripts": {
     "worker:check": "tsc --noEmit",
     "worker:dry-run": "wrangler deploy --dry-run",
-    "worker:deploy": "wrangler deploy"
+    "worker:deploy": "wrangler deploy",
+    "push-relay:test": "bun test workers/push-relay",
+    "push-relay:dry-run": "wrangler deploy --dry-run -c workers/push-relay/wrangler.toml",
+    "push-relay:deploy": "wrangler deploy -c workers/push-relay/wrangler.toml"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "latest",
     "typescript": "^5.8.3",
     "wrangler": "^4.110.0"
+  },
+  "dependencies": {
+    "zod": "^4.6.7"
   }
 }

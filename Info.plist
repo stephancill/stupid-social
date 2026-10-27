@@ -50,6 +50,10 @@
 	<string>147</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>NSUserActivityTypes</key>
+	<array>
+		<string>INSendMessageIntent</string>
+	</array>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

@@ -110,6 +110,15 @@ private struct ApronServerDetailView: View {
             }
 
             Section {
+                Toggle("Notifications", isOn: Binding(
+                    get: { viewModel.isPushEnabled(server) },
+                    set: { enabled in Task { await viewModel.setPushEnabled(enabled, for: server) } },
+                ))
+            } footer: {
+                Text("Mentions, replies and private rooms notify this device when the server supports push and you're signed in with a token. Choose what each room notifies about from its member list.")
+            }
+
+            Section {
                 SecureField(viewModel.hasToken(server) ? "Replace token" : "Token", text: $viewModel.tokenInput)
                 Button("Save Token") {
                     Task { await viewModel.updateToken(for: server) }

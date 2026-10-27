@@ -11,6 +11,8 @@ struct ChatsView: View {
     let instagramChat: (_ threadFbid: String, _ title: String) -> (() -> ChatViewModel)?
     /// Whether a chat is pushed, so the home pager can stop paging.
     @Binding var isShowingChat: Bool
+    /// A chat to open, such as from a tapped notification; cleared once opened.
+    @Binding var openRequest: ChatSummary.Destination?
     @State private var selection: ChatSummary?
     @State private var query = ""
     /// With the search bar in the navigation bar's drawer, rows present while the bar first lays out start the
@@ -65,6 +67,22 @@ struct ChatsView: View {
         .navigationDestination(item: $selection) { chat in
             destination(for: chat)
         }
+        .onChange(of: openRequest, initial: true) { _, request in
+            guard let request else { return }
+            openRequest = nil
+            guard selection?.destination != request else { return }
+            let chat = chat(for: request)
+            guard selection != nil else {
+                selection = chat
+                return
+            }
+            // A destination that is showing isn't replaced when its item changes, so close it, then open the chat.
+            selection = nil
+            Task {
+                try? await Task.sleep(for: .milliseconds(450))
+                selection = chat
+            }
+        }
         // Reloads on returning from a chat too, so unread counts and latest messages stay current.
         .task(id: selection == nil) {
             guard selection == nil else { return }
@@ -80,6 +98,25 @@ struct ChatsView: View {
         return viewModel.chats.filter { chat in
             chat.title.localizedStandardContains(query) || (chat.preview ?? "").localizedStandardContains(query)
         }
+    }
+
+    /// The listed chat, or one titled by its room until the list has it.
+    private func chat(for destination: ChatSummary.Destination) -> ChatSummary? {
+        if let listed = viewModel.chats.first(where: { $0.destination == destination }) {
+            return listed
+        }
+        guard case let .apron(serverURL, roomId) = destination else { return nil }
+        return ChatSummary(
+            id: "apron:\(serverURL.absoluteString)|\(roomId)",
+            network: .apron,
+            title: roomId,
+            subtitle: serverURL.host(),
+            avatarURL: nil,
+            preview: nil,
+            timestamp: nil,
+            unreadCount: 0,
+            destination: destination,
+        )
     }
 
     @ViewBuilder
@@ -108,6 +145,7 @@ struct ChatsView: View {
 
 private struct ChatRow: View {
     let chat: ChatSummary
+    @AppStorage("redactionEnabled") private var redactionEnabled = false
     private static let avatarSize: CGFloat = 48
     private static let spacing: CGFloat = 10
 
@@ -133,7 +171,7 @@ private struct ChatRow: View {
 
             VStack(alignment: .leading, spacing: 1) {
                 HStack(alignment: .firstTextBaseline) {
-                    Text(chat.title)
+                    Text(DebugRedaction.chatTitle(chat, enabled: redactionEnabled))
                         .font(.headline)
                         .lineLimit(1)
                     Spacer(minLength: 8)
@@ -144,7 +182,7 @@ private struct ChatRow: View {
                     }
                 }
                 HStack(alignment: .top) {
-                    Text(chat.preview ?? chat.subtitle ?? "No messages yet")
+                    Text(chat.preview.map { DebugRedaction.chatPreview($0, chat: chat, enabled: redactionEnabled) } ?? chat.subtitle ?? "No messages yet")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
@@ -171,6 +209,7 @@ private struct ChatRow: View {
 private struct ChatSummaryAvatar: View {
     let chat: ChatSummary
     let size: CGFloat
+    @AppStorage("redactionEnabled") private var redactionEnabled = false
 
     var body: some View {
         Group {
@@ -194,7 +233,7 @@ private struct ChatSummaryAvatar: View {
     private var fallback: some View {
         ZStack {
             Circle().fill(Color.secondary.opacity(0.18))
-            Text(chat.title.first.map { String($0).uppercased() } ?? "?")
+            Text(DebugRedaction.chatTitle(chat, enabled: redactionEnabled).first.map { String($0).uppercased() } ?? "?")
                 .font(.headline)
                 .foregroundStyle(.secondary)
         }

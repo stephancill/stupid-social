@@ -113,6 +113,7 @@ public final class ApronNotificationSource: AccountValidating {
                 timestamp: latest?.timestamp,
                 unreadCount: unread,
                 destination: .apron(serverURL: session.serverURL, roomId: room.roomId),
+                titleNamesPeople: room.isNamedForMembers,
             ))
         }
         return summaries

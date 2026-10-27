@@ -1,4 +1,5 @@
 import Foundation
+import NoFeedSocialPush
 
 public struct ApronSession: Sendable {
     public let serverURL: URL
@@ -20,6 +21,7 @@ public final class ApronService {
     public let readStore: ApronReadStore
     public let messageCache = ApronMessageCache()
     public let draftStore = ApronDraftStore()
+    public let push: ApronPushService
     private let serverSync: ApronServerSync
 
     public init(
@@ -27,7 +29,9 @@ public final class ApronService {
         keychainStore: KeychainCredentialStore,
         readStore: ApronReadStore = ApronReadStore(),
         serverSync: ApronServerSync = ApronServerSync(),
+        push: ApronPushService = ApronPushService(),
     ) {
+        self.push = push
         self.metadataStore = metadataStore
         self.keychainStore = keychainStore
         self.readStore = readStore
@@ -133,6 +137,30 @@ public final class ApronService {
         session.server.has("activity") && session.server.ext?.readCursorsDisabled != true && hasToken(serverURL: session.serverURL)
     }
 
+    /// Posts text to a room, as a reply to `replyTo` when given, such as from a notification's Reply action.
+    public func send(text: String, serverURL: URL, roomId: String, replyTo: String?) async throws {
+        let session = try await session(serverURL: serverURL)
+        _ = try await session.connection.post(method: "message", roomId: roomId, body: ApronMessageBody(text: text), replyTo: replyTo)
+    }
+
+    /// Whether the server pushes to this account, so notification settings apply.
+    public func offersPush(_ session: ApronSession) -> Bool {
+        ApronPushService.offersPush(session, isSignedIn: hasToken(serverURL: session.serverURL))
+    }
+
+    /// Turns push for one server on or off on this device.
+    public func setPushEnabled(_ enabled: Bool, serverURL: URL) async {
+        push.setEnabled(enabled, serverURL: serverURL)
+        guard let session = try? await session(serverURL: serverURL) else { return }
+        if enabled {
+            if offersPush(session) {
+                await push.register(session: session)
+            }
+        } else {
+            await push.unregister(serverURL: serverURL, connection: session.connection)
+        }
+    }
+
     public func removeServer(serverURL: URL) {
         forgetServer(serverURL)
         try? keychainStore.deleteApronToken(serverURL: serverURL)
@@ -141,6 +169,12 @@ public final class ApronService {
 
     /// Drops a server and what this device kept for it. The token is the Keychain's to sync.
     private func forgetServer(_ serverURL: URL) {
+        // Unregisters push on the open connection before closing it, so the server stops pushing (§4.9.1).
+        let connection = sharedSessions.removeValue(forKey: serverURL)?.connection
+        Task { [push] in
+            await push.unregister(serverURL: serverURL, connection: connection)
+            connection?.close()
+        }
         closeSessions(for: serverURL)
         readStore.removeServer(serverURL)
         messageCache.removeServer(serverURL)
@@ -187,6 +221,9 @@ public final class ApronService {
             let session = try await signIn(serverURL: serverURL, token: token, requestedName: metadata.requestedName)
             _ = try saveSignIn(session, token: nil, requestedName: metadata.requestedName)
             readStore.addOwnUserId(session.you.userId, serverURL: serverURL)
+            if ApronPushService.offersPush(session, isSignedIn: token != nil || session.issuedToken) {
+                Task { [push] in await push.register(session: session) }
+            }
             return session
         } catch let error as ApronError where error.isDenied {
             updateStatus(serverURL: serverURL, status: .invalidCredentials)
@@ -303,6 +340,33 @@ public extension ApronConnection {
 
     func markRead(roomId: String, messageId: String) async throws {
         try await notify("activity", params: ApronActivityParams(roomId: roomId, readMessageId: messageId))
+    }
+
+    /// Registers a Web Push endpoint for this account (§4.9.1); registering the same `url` again renews it.
+    func registerPush(endpoint: URL, pushId: String, p256dh: Data, auth: Data, wake: [String]) async throws {
+        let params = ApronPushRegisterParams(
+            url: endpoint.absoluteString,
+            pushId: pushId,
+            keys: .init(p256dh: p256dh.base64URLEncodedString, auth: auth.base64URLEncodedString),
+            wake: wake,
+        )
+        _ = try await request("push_register", params: params, as: ApronEmptyResult.self)
+    }
+
+    func unregisterPush(endpoint: URL) async throws {
+        _ = try await request("push_unregister", params: ["url": endpoint.absoluteString], as: ApronEmptyResult.self)
+    }
+
+    /// Mutes or unmutes a room's notifications, mentions included (§4.5.3).
+    func setRoomMuted(roomId: String, muted: Bool) async throws {
+        _ = try await request("status", params: ApronRoomStatusParams(roomId: roomId, mute: muted), as: ApronEmptyResult.self)
+        applyStatus(["room_id": roomId, "mute": muted])
+    }
+
+    /// Sets the room's own wake scopes, or with `nil` returns it to the registration's (`ApronRoomNotifications`).
+    func setRoomWake(roomId: String, scopes: [String]?) async throws {
+        _ = try await request("status", params: ApronRoomStatusParams(roomId: roomId, wake: .some(scopes)), as: ApronEmptyResult.self)
+        applyStatus(["room_id": roomId, "wake": scopes as Any? ?? NSNull()])
     }
 
     /// Shows this user as typing for `seconds`, or stops it with `0` (§4.6).

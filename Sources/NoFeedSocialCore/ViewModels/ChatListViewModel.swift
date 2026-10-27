@@ -23,6 +23,8 @@ public struct ChatSummary: Identifiable, Hashable, Codable, Sendable {
     public let destination: Destination
     /// Whether previews of others' messages start with the sender's name: in rooms and groups, not in DMs.
     public let namesSenderInPreview: Bool
+    /// Whether the title is a person's name or a list of members' names, which "Redact names" hides.
+    public let titleNamesPeople: Bool
 
     public init(
         id: String,
@@ -35,6 +37,7 @@ public struct ChatSummary: Identifiable, Hashable, Codable, Sendable {
         unreadCount: Int,
         destination: Destination,
         namesSenderInPreview: Bool = true,
+        titleNamesPeople: Bool = false,
     ) {
         self.id = id
         self.network = network
@@ -46,6 +49,7 @@ public struct ChatSummary: Identifiable, Hashable, Codable, Sendable {
         self.unreadCount = unreadCount
         self.destination = destination
         self.namesSenderInPreview = namesSenderInPreview
+        self.titleNamesPeople = titleNamesPeople
     }
 }
 

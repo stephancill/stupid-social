@@ -25,5 +25,11 @@ struct ApronChatView: View {
         .navigationDestination(item: $profileUser) { user in
             ApronProfileView(viewModel: viewModel, user: user)
         }
+        .onAppear {
+            NotificationRouter.shared.roomDidOpen(serverURL: viewModel.serverURL, roomId: viewModel.roomId)
+        }
+        .onDisappear {
+            NotificationRouter.shared.roomDidClose(serverURL: viewModel.serverURL, roomId: viewModel.roomId)
+        }
     }
 }

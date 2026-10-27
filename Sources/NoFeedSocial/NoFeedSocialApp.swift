@@ -5,6 +5,7 @@ import SwiftUI
 @main
 @MainActor
 struct NoFeedSocialApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     private let modelContainer: ModelContainer
 
     init() {

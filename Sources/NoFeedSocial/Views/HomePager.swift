@@ -36,6 +36,11 @@ struct HomePager<Chats: View, Social: View>: UIViewControllerRepresentable {
         coordinator.chats.rootView = chats
         coordinator.social.rootView = social
         controller.setPagingEnabled(isPagingEnabled)
+        // A page set from outside, such as by a tapped notification, and not by a swipe.
+        let target = coordinator.controller(for: page)
+        if controller.pageController.viewControllers?.first !== target {
+            controller.show(target)
+        }
     }
 
     final class Coordinator: NSObject, UIPageViewControllerDataSource, UIPageViewControllerDelegate {
@@ -93,6 +98,13 @@ final class HomePagerController: UIViewController {
             dots.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             dots.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -4),
         ])
+    }
+
+    /// Shows a page without a swipe.
+    func show(_ page: UIViewController) {
+        let isLeft = page === leftPage
+        pageController.setViewControllers([page], direction: isLeft ? .reverse : .forward, animated: false)
+        dots.progress = isLeft ? 0 : 1
     }
 
     func setPagingEnabled(_ enabled: Bool) {
