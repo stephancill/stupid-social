@@ -329,7 +329,8 @@ private struct ChatSummaryAvatar: View {
 
     var body: some View {
         Group {
-            if let url = chat.avatarURL {
+            // Profile photos identify people as names do, so redaction shows the initial instead.
+            if let url = chat.avatarURL, !redactionEnabled {
                 CachedAsyncImage(url: url) { fallback } failure: { fallback }
             } else {
                 fallback

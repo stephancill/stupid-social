@@ -28,8 +28,9 @@ enum DebugRedaction {
         return "Redacted"
     }
 
+    /// Every Chats row title: people's names, and group and room names, which can identify them too.
     static func chatTitle(_ chat: ChatSummary, enabled: Bool) -> String {
-        enabled && chat.titleNamesPeople ? "Redacted" : chat.title
+        enabled ? "Redacted" : chat.title
     }
 
     /// A Chats row preview: the sender before ": " in groups, mentions, and in a DM the person's name.

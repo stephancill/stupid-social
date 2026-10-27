@@ -2,6 +2,7 @@
 
 ## 2026-10-27
 
+- "Redact names" now covers every Chats row (user report: Telegram group titles showed). Titles were only redacted when they named people (DMs, member-named rooms); every title is now "Redacted", including the Archived Chats row's list, and row avatars show the initial instead of the photo while redaction is on.
 - Muted chats show their unread count on a gray badge (product request): `ChatSummary.isMuted` (stored optional, so cached lists from earlier builds decode). Telegram: the dialog's `notify_settings.mute_until` is in the future (`2147483647` for chats muted forever, seen with the probe); Apron: the room is in the connection's `mutedRooms` (level None). Instagram and Spotify don't report a mute the app reads.
 - Telegram media, avatars, reactions, sending photos and push (see `docs/TECHNICAL_DESIGN.md` § Telegram).
   - Probe first: `download` (photo from DC 4, 92 KB in 2 s) and `avatar` (Hypersnap's photo from DC 1 via `auth.exportAuthorization`/`importAuthorization`, from a DC 4 account) validated file downloads and the cross-DC sign-in; `send-photo` validated `upload.saveFilePart` + `messages.sendMedia` (into Saved Messages). `react` failed in Saved Messages with `PREMIUM_ACCOUNT_REQUIRED` (reactions there are Premium tags); testing in a group was blocked by the auto-mode classifier, so reaction toggling follows the schema and isn't live-tested.
