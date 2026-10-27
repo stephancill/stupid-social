@@ -1,5 +1,9 @@
 # Implementation Notes
 
+## 2026-10-28
+
+- Native internal TestFlight build 150 (1.0.1): X Chat (encrypted X DMs: PIN unlock, Chats rows, decrypted chats, sending, reactions, live updates over the WebSocket), Telegram member lists and named service messages, reconnecting Telegram after suspension, reply quotes that resolve when their message loads, the network icon in chat titles, and the other session's Return-to-send, trackpad reply and layout-shift fixes. Built with stupid-app 0.0.22 (static-library XCFramework for Juicebox). IPA SHA-256 `86d02f9987342ea554bc2e5ddddbbde3b8f33872c9e8743f38b5a307ee37bfb0`; Build Upload `fc72da33-7cbf-4cb5-970d-88832cecff45` reached `processing=VALID internal=IN_BETA_TESTING`. No What to Test note and no external submission.
+
 ## 2026-10-27
 
 - Native internal TestFlight build 149 (1.0.1): Apron links (link.apron.chat and `apron:` links open in the app, with confirmation for new servers, sign-in tokens and unjoined rooms; Copy Link on Apron messages). Upload reached `processing=VALID internal=READY_FOR_BETA_TESTING`.
