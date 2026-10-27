@@ -34,17 +34,17 @@ public struct XClient {
     private let credentialStore: KeychainCredentialStore
     private let session: URLSession
 
-    private static let bearerToken = "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
+    private nonisolated static let bearerToken = "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
     private static let searchTimelineQueryId = "hz_94eVAtrtQo_vO3my7Rw"
     private static let notificationsTimelineQueryId = "8kmedJD_u653xqEjZIS7yA"
-    private static let appUserAgent = "NoFeedSocial/1"
+    private nonisolated static let appUserAgent = "NoFeedSocial/1"
 
     public init(credentialStore: KeychainCredentialStore, session: URLSession = defaultSession) {
         self.credentialStore = credentialStore
         self.session = session
     }
 
-    public static let defaultSession: URLSession = {
+    public nonisolated static let defaultSession: URLSession = {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 15
         config.timeoutIntervalForResource = 30
@@ -160,7 +160,7 @@ public struct XClient {
         var request = URLRequest(url: components.url!)
         request.httpMethod = "POST"
         request.httpBody = body
-        request.allHTTPHeaderFields = searchHeaders(credentials: credentials)
+        request.allHTTPHeaderFields = Self.apiHeaders(credentials: credentials)
 
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else {
@@ -490,12 +490,13 @@ public struct XClient {
         ]
     }
 
-    private func searchHeaders(credentials: XCredentials) -> [String: String] {
+    /// The headers X's web API needs and no more (see `scripts/x-web-client.py`); XChat uses them too.
+    nonisolated static func apiHeaders(credentials: XCredentials) -> [String: String] {
         [
-            "Authorization": "Bearer \(Self.bearerToken)",
+            "Authorization": "Bearer \(bearerToken)",
             "Cookie": "auth_token=\(credentials.authToken); ct0=\(credentials.ct0)",
             "X-Csrf-Token": credentials.ct0,
-            "User-Agent": Self.appUserAgent,
+            "User-Agent": appUserAgent,
         ]
     }
 

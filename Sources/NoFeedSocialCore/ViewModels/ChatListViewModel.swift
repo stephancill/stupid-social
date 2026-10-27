@@ -9,6 +9,8 @@ public struct ChatSummary: Identifiable, Hashable, Codable, Sendable {
         /// The id in `/direct/t/<thread_fbid>/`.
         case instagram(threadFbid: String)
         case telegram(peer: TelegramPeer)
+        /// An XChat conversation id: "<user id>:<user id>" for one-to-one chats.
+        case x(conversationId: String)
     }
 
     public let id: String
@@ -63,11 +65,12 @@ public struct ChatSummary: Identifiable, Hashable, Codable, Sendable {
     }
 }
 
-/// Every chat across Apron servers, Spotify Messages, Instagram Direct and Telegram, newest first.
+/// Every chat across Apron servers, Spotify Messages, Instagram Direct, Telegram and X Chat, newest first.
 @MainActor
 public final class ChatListViewModel: ObservableObject {
     @Published public private(set) var chats: [ChatSummary] = []
-    /// Chats the user archived on their network (Telegram's Archive folder), shown apart from `chats`.
+    /// Chats the user archived on their network (Telegram's Archive folder, archived X chats), shown apart from
+    /// `chats`.
     @Published public private(set) var archivedChats: [ChatSummary] = []
     @Published public private(set) var isLoading = false
     @Published public private(set) var hasLoaded = false
@@ -78,15 +81,17 @@ public final class ChatListViewModel: ObservableObject {
     private let spotifySource: SpotifyMessagesSource
     private let instagramClient: InstagramClient
     private let telegramClient: TelegramClient
+    private let xChatClient: XChatClient
     /// The last loaded list, shown at launch while it refreshes, so only the very first load waits.
     private let cacheURL: URL
     private let archiveCacheURL: URL
 
-    public init(apronSource: ApronNotificationSource, spotifySource: SpotifyMessagesSource, instagramClient: InstagramClient, telegramClient: TelegramClient, fileManager: FileManager = .default) {
+    public init(apronSource: ApronNotificationSource, spotifySource: SpotifyMessagesSource, instagramClient: InstagramClient, telegramClient: TelegramClient, xChatClient: XChatClient, fileManager: FileManager = .default) {
         self.apronSource = apronSource
         self.spotifySource = spotifySource
         self.instagramClient = instagramClient
         self.telegramClient = telegramClient
+        self.xChatClient = xChatClient
         let caches = fileManager.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         cacheURL = caches.appending(path: "chat-list.json")
         archiveCacheURL = caches.appending(path: "chat-list-archived.json")
@@ -109,7 +114,8 @@ public final class ChatListViewModel: ObservableObject {
         async let instagram = Self.result { try await self.instagramClient.directChatSummaries() }
         async let telegram = Self.result { try await self.telegramClient.chatSummaries() }
         async let telegramArchive = Self.result { try await self.telegramClient.chatSummaries(archived: true) }
-        let results: [(SocialNetwork, Result<[ChatSummary], Error>)] = await [(.apron, apron), (.spotify, spotify), (.instagram, instagram), (.telegram, telegram)]
+        async let x = Self.result { try await self.xChatClient.chatSummaries(archived: false) }
+        let results: [(SocialNetwork, Result<[ChatSummary], Error>)] = await [(.apron, apron), (.spotify, spotify), (.instagram, instagram), (.telegram, telegram), (.x, x)]
 
         var merged: [ChatSummary] = []
         var failures: [String] = []
@@ -128,9 +134,15 @@ public final class ChatListViewModel: ObservableObject {
         errorMessage = failures.isEmpty ? nil : failures.joined(separator: "\n")
         setChats(merged)
         // A failed archive keeps its rows; the main list's failure already reports the network.
-        if case let .success(archived) = await telegramArchive {
-            setArchivedChats(archived)
+        var archived = archivedChats
+        if case let .success(summaries) = await telegramArchive {
+            archived = archived.filter { $0.network != .telegram } + summaries
         }
+        // X's archived chats come with the inbox the main list just loaded.
+        if case .success = await x, let summaries = try? await xChatClient.chatSummaries(archived: true) {
+            archived = archived.filter { $0.network != .x } + summaries
+        }
+        setArchivedChats(archived)
     }
 
     /// Keeps the chat's row current while it is open, so returning to the list shows its latest message and

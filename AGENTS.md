@@ -59,6 +59,7 @@ Sources/
       FeedService.swift             # Central feed orchestration
       ApronService.swift            # Apron server list, tokens, and signed-in sessions
       ApronLiveFeed.swift           # Foreground WebSocket per Apron server for realtime feed items
+      XChatLiveFeed.swift           # Foreground X Chat WebSocket: pushed events for open chats and the Chats list
       ApronPushService.swift        # Apron push registration through the push.stupidtech.net relay
       ApronRoomNotifications.swift  # Per-room notification levels mapped to mute and wake scopes
       TelegramPushService.swift     # Telegram APNs registration (token type 1) after sign-in, at launch, on token change
@@ -84,6 +85,9 @@ Sources/
       TelegramMTProto.swift         # MTProto transport, auth key exchange, encrypted session actor
       TelegramClient.swift          # Telegram account: DCs, sign-in, dialogs, history, send, read, files, push
       TelegramMedia.swift           # tgfile: URLs and their URLProtocol, media/avatar/reaction parsing
+      XChatThrift.swift             # Thrift binary protocol values and coder for X Chat events
+      XChatCrypto.swift             # X Chat crypto: ECIES key unwrap, XSalsa20-Poly1305 secretbox, franking, signing
+      XChatClient.swift             # X Chat (encrypted X DMs): GraphQL inbox/history/send/read, Juicebox key recovery
     Resources/
       TelegramSchema.tl             # Telegram TL schema (scripts/telegram-schema.py); TelegramAPI.json is gitignored
     Storage/
@@ -113,9 +117,11 @@ Sources/
       InstagramChatViewModel.swift   # Instagram Direct chat: history, polling, send, replies, read receipt
       TelegramChatViewModel.swift    # Telegram chat: history, pushed updates, send, replies, read cursor
       TelegramConnectionViewModel.swift # Telegram sign-in steps
+      XChatViewModel.swift           # X Chat conversation: decrypted history, live events, send, reactions, read marker
+      XChatUnlockViewModel.swift     # X Chat PIN unlock and Forget Keys
 ```
 
-Outside `Sources/`: `NotificationService/` holds the extension's Info.plist and entitlements, and `workers/push-relay/` the Apron push relay Worker (`bun run push-relay:test`, `bun run push-relay:deploy`).
+Outside `Sources/`: `NotificationService/` holds the extension's Info.plist and entitlements, `workers/push-relay/` the Apron push relay Worker (`bun run push-relay:test`, `bun run push-relay:deploy`), and `Vendor/JuiceboxSdk/` the vendored Juicebox SDK (Swift wrapper and static-library XCFramework) that X Chat key recovery uses; regenerate it with `scripts/vendor-juicebox.sh`, never edit it by hand.
 
 - Keep `## Project Structure` in sync when files are added, moved, or renamed.
 
@@ -155,7 +161,8 @@ Outside `Sources/`: `NotificationService/` holds the extension's Info.plist and 
 
 ## Network Integration
 
-- Always diagnose network behavior and validate the fix in the dependency-free Python client first, before implementing or changing the native Swift client. The probes (`scripts/x-web-client.py`, `scripts/instagram-web-client.py`, `scripts/github-web-client.py`, `scripts/spotify-web-client.py`, `scripts/bluesky-web-client.py`, `scripts/apron-web-client.py`, `scripts/telegram-client.py`) are the source of truth for endpoint behavior, auth/session freshness, redirects, and response shape. Reproduce the issue live with the probe (using simulator credentials where applicable), add or update a probe command that demonstrates the diagnosis, then port the validated behavior into Swift. Do not guess endpoint/auth behavior from Swift alone.
+- Always diagnose network behavior and validate the fix in the dependency-free Python client first, before implementing or changing the native Swift client. The probes (`scripts/x-web-client.py`, `scripts/instagram-web-client.py`, `scripts/github-web-client.py`, `scripts/spotify-web-client.py`, `scripts/bluesky-web-client.py`, `scripts/apron-web-client.py`, `scripts/telegram-client.py`, `scripts/xchat-client.py`) are the source of truth for endpoint behavior, auth/session freshness, redirects, and response shape. Reproduce the issue live with the probe (using simulator credentials where applicable), add or update a probe command that demonstrates the diagnosis, then port the validated behavior into Swift. Do not guess endpoint/auth behavior from Swift alone.
+- `scripts/xchat-client.py` is the one probe with dependencies: Python's standard library has no P-256 or libsodium, so it runs as a uv inline script (`uv run --script scripts/xchat-client.py --env-local …`, reading `DIAGNOSE_X_CREDS` from `.env.local`) and recovers keys through the official Juicebox JS SDK under bun (`scripts/xchat-juicebox-recover.ts`, PIN from `X_CHAT_PIN`). `recover-keys` uses a PIN guess when the PIN is wrong; it saves the keys to `logs/xchat-keys.json` (0600, gitignored) so decryption can be iterated without more guesses. Never print message text from other people (`--show-text` is for messages the agent sent), and send, react and mark read only in a conversation the user named for testing (`--expect-participant` guards the recipient).
 - Implement X as a native Swift client using `docs/CLI_DOCS.md` and the patched `twitter-cli` behavior as references only.
 - Do not shell out to `twitter-cli` for the production app path.
 - X background polling must use count-only behavior to avoid marking notifications read server-side.

@@ -10,6 +10,8 @@ struct ChatsView: View {
     /// The chat for an Instagram thread and title; `nil` when Instagram isn't connected.
     let instagramChat: (_ threadFbid: String, _ title: String) -> (() -> ChatViewModel)?
     let telegramChat: (_ peer: TelegramPeer, _ title: String) -> () -> ChatViewModel
+    /// The chat for an X Chat conversation and title; `nil` until the XChat PIN unlocks it.
+    let xChat: (_ conversationId: String, _ title: String) -> (() -> ChatViewModel)?
     /// Whether a chat is pushed, so the home pager can stop paging.
     @Binding var isShowingChat: Bool
     /// A chat to open, such as from a tapped notification; cleared once opened.
@@ -54,7 +56,7 @@ struct ChatsView: View {
                 ContentUnavailableView.search(text: query)
             } else if viewModel.chats.isEmpty {
                 if viewModel.hasLoaded {
-                    ContentUnavailableView("No Chats", systemImage: "bubble.left.and.bubble.right", description: Text(viewModel.errorMessage ?? "Chats from Apron servers, Spotify, Instagram and Telegram appear here."))
+                    ContentUnavailableView("No Chats", systemImage: "bubble.left.and.bubble.right", description: Text(viewModel.errorMessage ?? "Chats from Apron servers, Spotify, Instagram, Telegram and X appear here."))
                 } else {
                     ProgressView()
                 }
@@ -182,6 +184,12 @@ struct ChatsView: View {
             }
         case let .telegram(peer):
             NetworkChatView(viewModel: viewModel.follow(telegramChat(peer, chat.title)(), chatId: chat.id))
+        case let .x(conversationId):
+            if let makeChat = xChat(conversationId, chat.title) {
+                NetworkChatView(viewModel: viewModel.follow(makeChat(), chatId: chat.id))
+            } else {
+                ContentUnavailableView("X Chat Locked", systemImage: "lock", description: Text("Enter your X Chat PIN in Settings → X."))
+            }
         }
     }
 }

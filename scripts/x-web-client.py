@@ -29,6 +29,19 @@ SIM_PREFS_SCRIPT = os.path.expanduser(
     "~/.config/opencode/skills/sim-prefs/sim-prefs/scripts/read_prefs.py"
 )
 SIM_X_FALLBACK_KEY = "tech.stupid.StupidSocial.credentials.x.localFallback"
+ENV_LOCAL_CREDENTIALS_KEY = "DIAGNOSE_X_CREDS"
+
+DM_QUERY = {
+    "dm_users": "true",
+    "include_groups": "true",
+    "include_inbox_timelines": "true",
+    "include_ext_media_color": "true",
+    "supports_reactions": "true",
+    "supports_edit": "true",
+    "include_ext_edit_control": "true",
+    "include_ext_is_blue_verified": "1",
+    "ext": "mediaColor,altText,mediaStats",
+}
 
 SEARCH_TIMELINE_FEATURES = {
     "rweb_video_screen_enabled": False,
@@ -276,6 +289,41 @@ class XWebClient:
         summary["unread_count_after"] = self.unread_count()
         return summary
 
+    def dm_inbox(self) -> dict[str, Any]:
+        """Legacy (plaintext) DM inbox: conversations, their latest events, and the users in them."""
+        response = self.request_json("GET", BASE_URL + "/i/api/1.1/dm/inbox_initial_state.json?" + urllib.parse.urlencode(DM_QUERY))
+        state = response.get("inbox_initial_state") or {}
+        return {"status": "ok", "summary": summarize_dm_inbox(state), "raw": response}
+
+    def dm_conversation(self, conversation_id: str, max_id: str | None = None) -> dict[str, Any]:
+        """One page of a legacy conversation's history, older than `max_id` when given."""
+        query = dict(DM_QUERY, context="FETCH_DM_CONVERSATION_HISTORY", include_conversation_info="true")
+        if max_id:
+            query["max_id"] = max_id
+        response = self.request_json(
+            "GET",
+            BASE_URL + f"/i/api/1.1/dm/conversation/{urllib.parse.quote(conversation_id)}.json?" + urllib.parse.urlencode(query),
+        )
+        timeline = response.get("conversation_timeline") or {}
+        return {
+            "status": timeline.get("status"),
+            "min_entry_id": timeline.get("min_entry_id"),
+            "max_entry_id": timeline.get("max_entry_id"),
+            "entry_kinds": count_entry_kinds(timeline.get("entries") or []),
+            "raw": response,
+        }
+
+    def dm_updates(self, cursor: str) -> dict[str, Any]:
+        """Legacy DM events since `cursor` (the inbox's `cursor`), as the app polls while a chat is open."""
+        response = self.request_json(
+            "GET", BASE_URL + "/i/api/1.1/dm/user_updates.json?" + urllib.parse.urlencode(dict(DM_QUERY, cursor=cursor))
+        )
+        events = response.get("user_events") or {}
+        return {"cursor": events.get("cursor"), "entry_kinds": count_entry_kinds(events.get("entries") or []), "raw": response}
+
+    def dm_unread_count(self) -> dict[str, Any]:
+        return self.request_json("GET", BASE_URL + "/i/api/2/badge_count/badge_count.json?supports_ntab_urt=1")
+
     def auth_token(self) -> str:
         token = str(self.credentials.get("authToken") or self.credentials.get("auth_token") or "")
         if not token:
@@ -297,11 +345,19 @@ def load_credentials(args: argparse.Namespace) -> dict[str, Any]:
             return json.load(sys.stdin)
         with open(args.credentials_file, "r", encoding="utf-8") as handle:
             return json.load(handle)
+    if args.env_local:
+        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env.local")
+        with open(path, "r", encoding="utf-8") as handle:
+            for line in handle:
+                name, _, value = line.strip().partition("=")
+                if name == ENV_LOCAL_CREDENTIALS_KEY:
+                    return json.loads(value.strip().strip("'\""))
+        raise SystemExit(f"{ENV_LOCAL_CREDENTIALS_KEY} not found in .env.local")
     if args.simulator:
         command = [sys.executable, SIM_PREFS_SCRIPT, "--raw-key", SIM_X_FALLBACK_KEY]
         result = subprocess.run(command, check=True, text=True, capture_output=True)
         return json.loads(result.stdout)
-    raise SystemExit("Pass --simulator, --credentials-file, or --credentials-json")
+    raise SystemExit("Pass --simulator, --env-local, --credentials-file, or --credentials-json")
 
 
 def credential_presence(credentials: dict[str, Any]) -> dict[str, str]:
@@ -314,6 +370,33 @@ def credential_presence(credentials: dict[str, Any]) -> dict[str, str]:
         else:
             result[key] = str(value) if value is not None else "null"
     return result
+
+
+def summarize_dm_inbox(state: dict[str, Any]) -> list[dict[str, Any]]:
+    """Conversations newest first, by shape only: no names or message text."""
+    rows = []
+    for conversation in state.get("conversations", {}).values():
+        rows.append(
+            {
+                "conversation_id_length": len(conversation.get("conversation_id") or ""),
+                "type": conversation.get("type"),
+                "status": conversation.get("status"),
+                "trusted": conversation.get("trusted"),
+                "muted": conversation.get("muted"),
+                "participants": len(conversation.get("participants") or []),
+                "unread": int(conversation.get("last_read_event_id") or 0) < int(conversation.get("max_entry_id") or 0),
+                "sort_timestamp": conversation.get("sort_timestamp"),
+            }
+        )
+    return sorted(rows, key=lambda row: -int(row["sort_timestamp"] or 0))
+
+
+def count_entry_kinds(entries: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for entry in entries:
+        for kind in entry:
+            counts[kind] = counts.get(kind, 0) + 1
+    return counts
 
 
 def summarize_search_timeline_users(response: dict[str, Any]) -> list[dict[str, Any]]:
@@ -451,6 +534,8 @@ def notification_top_cursor(response: dict[str, Any]) -> str | None:
 
 
 def summarize(value: Any, max_depth: int = 3) -> Any:
+    if isinstance(value, dict) and "raw" in value and max_depth == 3:
+        return {key: item for key, item in value.items() if key != "raw"}
     if isinstance(value, dict) and "users" in value and "query" in value:
         return {
             "status": value.get("status"),
@@ -494,6 +579,7 @@ def write_output(path: str | None, value: Any) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Validate X web API calls using captured app cookies.")
     parser.add_argument("--simulator", action="store_true", help="Read X credentials from the booted simulator fallback store.")
+    parser.add_argument("--env-local", action="store_true", help=f"Read X credentials JSON from {ENV_LOCAL_CREDENTIALS_KEY} in .env.local.")
     parser.add_argument("--credentials-file", help="Path to credentials JSON, or '-' for stdin.")
     parser.add_argument("--credentials-json", help="Credentials JSON string.")
     parser.add_argument("--summary", action="store_true", help="Print compact summarized JSON instead of full responses.")
@@ -518,6 +604,13 @@ def build_parser() -> argparse.ArgumentParser:
     notify = subparsers.add_parser("notify", help="Set post notifications for an X user.")
     notify.add_argument("user_id", help="Numeric X user id.")
     notify.add_argument("enabled", choices=["on", "off"], help="Turn notifications on or off.")
+    dm_inbox = subparsers.add_parser("dm-inbox", help="Fetch the legacy (plaintext) DM inbox; --summary prints conversation shapes only.")
+    dm_conversation = subparsers.add_parser("dm-conversation", help="Fetch one page of a legacy DM conversation's history.")
+    dm_conversation.add_argument("conversation_id", help="Legacy conversation id, e.g. <user_id>-<user_id>.")
+    dm_conversation.add_argument("--max-id", help="Fetch events older than this event id.")
+    dm_updates = subparsers.add_parser("dm-updates", help="Fetch legacy DM events since an inbox cursor.")
+    dm_updates.add_argument("cursor", help="The inbox's `cursor` value.")
+    subparsers.add_parser("dm-unread-count", help="Fetch the DM unread badge count.")
     return parser
 
 
@@ -543,6 +636,14 @@ def main() -> None:
         result = client.set_following(args.user_id, False)
     elif args.command == "notify":
         result = client.set_notifications(args.user_id, args.enabled == "on")
+    elif args.command == "dm-inbox":
+        result = client.dm_inbox()
+    elif args.command == "dm-conversation":
+        result = client.dm_conversation(args.conversation_id, max_id=args.max_id)
+    elif args.command == "dm-updates":
+        result = client.dm_updates(args.cursor)
+    elif args.command == "dm-unread-count":
+        result = client.dm_unread_count()
     else:
         raise SystemExit(f"Unknown command: {args.command}")
 

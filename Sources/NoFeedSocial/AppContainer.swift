@@ -16,6 +16,9 @@ final class AppContainer {
     let telegramClient: TelegramClient
     let telegramConnectionViewModel: TelegramConnectionViewModel
     let telegramPushService: TelegramPushService
+    let xChatClient: XChatClient
+    let xChatUnlockViewModel: XChatUnlockViewModel
+    let xChatLiveFeed: XChatLiveFeed
 
     private let metadataStore: AccountMetadataStore
     private let keychainStore: KeychainCredentialStore
@@ -157,7 +160,16 @@ final class AppContainer {
 
         telegramClient = TelegramClient()
         TelegramFileURLProtocol.register(client: telegramClient)
-        chatListViewModel = ChatListViewModel(apronSource: apronSource, spotifySource: spotifyMessagesSource, instagramClient: instagramClient, telegramClient: telegramClient)
+        xChatClient = XChatClient()
+        chatListViewModel = ChatListViewModel(apronSource: apronSource, spotifySource: spotifyMessagesSource, instagramClient: instagramClient, telegramClient: telegramClient, xChatClient: xChatClient)
+        xChatUnlockViewModel = XChatUnlockViewModel(client: xChatClient, keychainStore: keychainStore)
+        xChatLiveFeed = XChatLiveFeed(client: xChatClient, chatList: chatListViewModel, keychainStore: keychainStore)
+        xChatUnlockViewModel.onChange = { [chatListViewModel, xChatLiveFeed] in
+            Task { await chatListViewModel.load() }
+            // Unlocking opens the socket; without keys it stays closed.
+            xChatLiveFeed.stop()
+            xChatLiveFeed.start()
+        }
         telegramConnectionViewModel = TelegramConnectionViewModel(client: telegramClient)
         telegramPushService = TelegramPushService(client: telegramClient)
         telegramConnectionViewModel.onChange = { [chatListViewModel, telegramPushService] in
@@ -186,6 +198,13 @@ final class AppContainer {
         guard (try? keychainStore.loadInstagramCredentials()) != nil else { return nil }
         let client = instagramClient
         return { InstagramChatViewModel(client: client, threadFbid: threadFbid, title: title) }
+    }
+
+    /// `nil` until the XChat PIN has unlocked the account's keys.
+    func xChatFactory(conversationId: String, title: String) -> (() -> ChatViewModel)? {
+        guard keychainStore.hasXChatKeys() else { return nil }
+        let client = xChatClient, liveFeed = xChatLiveFeed
+        return { XChatViewModel(client: client, liveFeed: liveFeed, conversationId: conversationId, title: title) }
     }
 
     func telegramChatFactory(peer: TelegramPeer, title: String) -> () -> ChatViewModel {

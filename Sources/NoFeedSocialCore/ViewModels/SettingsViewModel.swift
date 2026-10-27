@@ -384,6 +384,7 @@ public final class SettingsViewModel: ObservableObject {
 
     public func disconnectX() {
         try? keychainStore.deleteXCredentials()
+        try? keychainStore.deleteXChatKeys()
         xCredentialStorage = nil
         metadataStore.xAccount = nil
         xEnabledCategories = []

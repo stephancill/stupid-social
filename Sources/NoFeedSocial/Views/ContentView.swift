@@ -35,12 +35,16 @@ public struct ContentView: View {
         }
         .onChange(of: scenePhase) { _, phase in
             guard let container else { return }
-            // Apron servers stream updates only while the app is in the foreground.
+            // Apron servers and X Chat stream updates only while the app is in the foreground.
             guard phase == .active else {
-                if phase == .background { container.apronLiveFeed.stop() }
+                if phase == .background {
+                    container.apronLiveFeed.stop()
+                    container.xChatLiveFeed.stop()
+                }
                 return
             }
             container.apronLiveFeed.start()
+            container.xChatLiveFeed.start()
             Task {
                 await foregroundRefreshFeedAndStories(container: container)
             }
@@ -59,6 +63,7 @@ public struct ContentView: View {
                     spotifyChat: { container.spotifyChatFactory(chatId: $0, title: $1) },
                     instagramChat: { container.instagramChatFactory(threadFbid: $0, title: $1) },
                     telegramChat: { container.telegramChatFactory(peer: $0, title: $1) },
+                    xChat: { container.xChatFactory(conversationId: $0, title: $1) },
                     isShowingChat: $isShowingChat,
                     openRequest: $notificationRouter.pendingChat,
                 )
@@ -119,6 +124,7 @@ public struct ContentView: View {
                         viewModel: container.settingsViewModel,
                         apronServersViewModel: container.apronServersViewModel,
                         telegramConnectionViewModel: container.telegramConnectionViewModel,
+                        xChatUnlockViewModel: container.xChatUnlockViewModel,
                         onLoadDemoData: { container.loadDemoData() },
                         onClearDemoData: { container.clearDemoData() },
                     )
@@ -133,6 +139,7 @@ public struct ContentView: View {
         NotificationRouter.shared.apronService = appContainer.apronService
         NotificationRouter.shared.chatList = appContainer.chatListViewModel
         appContainer.apronLiveFeed.start()
+        appContainer.xChatLiveFeed.start()
 
         Task {
             await foregroundRefreshFeedAndStories(container: appContainer)

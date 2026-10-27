@@ -5,6 +5,7 @@ struct SettingsView: View {
     @ObservedObject var viewModel: SettingsViewModel
     @ObservedObject var apronServersViewModel: ApronServersViewModel
     @ObservedObject var telegramConnectionViewModel: TelegramConnectionViewModel
+    let xChatUnlockViewModel: XChatUnlockViewModel
     var onLoadDemoData: (() -> Void)?
     var onClearDemoData: (() -> Void)?
     @Environment(\.openURL) private var openURL
@@ -15,7 +16,7 @@ struct SettingsView: View {
         Form {
             Section("Connections") {
                 NavigationLink {
-                    XConnectionView(viewModel: viewModel)
+                    XConnectionView(viewModel: viewModel, xChatViewModel: xChatUnlockViewModel)
                 } label: {
                     connectionRow(
                         name: "X",

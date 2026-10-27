@@ -145,9 +145,17 @@ Reference behavior from `docs/CLI_DOCS.md`:
 - The app connects to Telegram directly with MTProto; there is no backend. Telegram is available only in builds that include the app's Telegram API credentials.
 - Not supported: secret chats, starting new chats, playing videos and voice messages, and Premium reactions.
 
+### X Chat
+
+- X's chats (X Chat, which replaced X DMs and is end-to-end encrypted) appear on the Chats screen when X is connected and the user has entered their X Chat PIN in Settings → X. The PIN recovers the account's chat keys from X's key backup once; the keys sync to the user's other devices through iCloud Keychain, so the PIN is needed once per Apple account. A wrong PIN uses one of X's limited tries, and the app says how many are left. "Forget Keys" removes them, and disconnecting X does too.
+- Every inbox conversation (not message requests) is listed with its latest message, time and unread count; archived ones sit behind the Archived Chats row and muted ones show a gray badge. Group chats are named for their members.
+- Opening a chat shows its decrypted history (older pages load on scroll), new messages and reactions as they happen (the Chats list updates live too), edits, deletions, reactions and quoted replies. The user can send text messages and add or remove reactions. Reading moves the user's X read marker, so the chat is read on X too. Unread counts, like X's badge, count messages, not reactions.
+- Messages that don't decrypt show as "Couldn't decrypt this message." rather than disappearing. Shared posts and links show as cards; photos migrated from old DMs show in the bubble, and newer (encrypted) media shows as a card that opens X.
+- Not supported yet: sending replies and media, decrypting encrypted media, group titles, message requests, starting chats, and old (pre-X Chat) DM conversations that weren't migrated.
+
 ### Sending
 
-- In every chat (Apron, Spotify, Instagram, Telegram), a sent message shows at once with a clock beside its time while it is sending, and the network's copy then takes its place without moving it. A photo shows from the picked image straight away. If sending fails, the message goes and its text and attachment return to the composer. Apron commands are the exception: they may not post a message, so the composer waits for them.
+- In every chat (Apron, Spotify, Instagram, Telegram, X), a sent message shows at once with a clock beside its time while it is sending, and the network's copy then takes its place without moving it. A photo shows from the picked image straight away. If sending fails, the message goes and its text and attachment return to the composer. Apron commands are the exception: they may not post a message, so the composer waits for them.
 
 ## Combined Feed
 
@@ -160,7 +168,7 @@ Reference behavior from `docs/CLI_DOCS.md`:
 - Spotify listening activity is not shown in the main notifications list.
 - Spotify Messages chats appear on the Chats screen, not in the notifications feed.
 - Opening a Spotify Messages chat shows the full chat in the same chat screen as Apron: paged history, new messages polled while open, sending text, and the chat marked seen in Spotify once its newest incoming message is shown. Shared tracks show their artwork, artists, album, year and length, and play their 30-second preview inline; other shares open in Spotify.
-- Swiping right from the feed shows a Chats screen to the left of the feed listing every chat: all joined Apron rooms on every server, the latest 50 Spotify Messages chats and the latest 35 Instagram Direct threads, newest first, each with its latest message, time and unread count. Small page dots at the bottom centre show which side is visible. The app reopens on whichever side it was left on. A search bar under the Chats title filters chats by name and latest message. Swiping between them is disabled while a screen is pushed on either side, and the dots are hidden then.
+- Swiping right from the feed shows a Chats screen to the left of the feed listing every chat: all joined Apron rooms on every server, the latest 50 Spotify Messages chats, the latest 35 Instagram Direct threads, Telegram chats and X chats, newest first, each with its latest message, time and unread count. Small page dots at the bottom centre show which side is visible. The app reopens on whichever side it was left on. A search bar under the Chats title filters chats by name and latest message. Swiping between them is disabled while a screen is pushed on either side, and the dots are hidden then.
 - Instagram Direct threads appear on the Chats screen (newest 35). Opening one shows the same chat screen: paged history, new messages polled while open, sending text and replies, reacting to messages (one reaction per person, as in Instagram), and the thread marked read once its newest incoming message is shown. Photos open full screen; shared posts, reels and stories open in Instagram.
 - GitHub For You activity is not shown in the main notifications list, except "starred your repository" events, which route to the notifications feed.
 - GitHub story tiles group stars, follows, created repositories, and repository forks by actor, with each activity represented as a slide.

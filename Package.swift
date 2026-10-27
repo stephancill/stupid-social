@@ -25,12 +25,23 @@ let package = Package(
         ),
         .target(
             name: "NoFeedSocialCore",
-            dependencies: ["NoFeedSocialPush"],
+            dependencies: ["NoFeedSocialPush", "JuiceboxSdk"],
             // TelegramSchema.tl, and TelegramAPI.json when scripts/telegram-api-config.py has written it.
             resources: [.process("Resources")]
         ),
         .target(
             name: "NoFeedSocialPush"
+        ),
+        // XChat key recovery. Vendored by scripts/vendor-juicebox.sh; don't edit these by hand.
+        .target(
+            name: "JuiceboxSdk",
+            dependencies: ["JuiceboxSdkFfi"],
+            path: "Vendor/JuiceboxSdk/Sources/JuiceboxSdk",
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+        .binaryTarget(
+            name: "JuiceboxSdkFfi",
+            path: "Vendor/JuiceboxSdk/JuiceboxSdkFfi.xcframework"
         ),
         .target(
             name: "NoFeedSocialNotificationService",

@@ -78,6 +78,26 @@ public final class KeychainCredentialStore {
         try deleteForAccount("x")
     }
 
+    /// The XChat private keys, recovered from Juicebox with the PIN; synced like the X cookies, so the PIN is
+    /// needed once per Apple account rather than per device.
+    func saveXChatKeys(_ keys: XChatKeys) throws {
+        _ = try save(data: encoder.encode(keys), account: "xchat")
+    }
+
+    func loadXChatKeys() throws -> XChatKeys? {
+        guard let data = try load(account: "xchat") else { return nil }
+        return try decoder.decode(XChatKeys.self, from: data)
+    }
+
+    /// Whether the X Chat PIN has unlocked the keys: without them, X chats can't be read.
+    public func hasXChatKeys() -> Bool {
+        (try? loadXChatKeys()) != nil
+    }
+
+    public func deleteXChatKeys() throws {
+        try deleteForAccount("xchat")
+    }
+
     public func saveInstagramCredentials(_ credentials: InstagramCredentials) throws -> CredentialSaveResult {
         let data = try encoder.encode(credentials)
         return try save(data: data, account: "instagram")

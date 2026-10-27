@@ -12,6 +12,7 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "latest",
+    "juicebox-sdk": "0.3.7",
     "typescript": "^5.8.3",
     "wrangler": "^4.110.0"
   },
