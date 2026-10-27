@@ -13,6 +13,9 @@ capabilities:
     type: APP_GROUPS
   - entitlementKey: com.apple.developer.siri
     type: SIRIKIT
+  # Universal links for link.apron.chat, whose apple-app-site-association lists the app.
+  - entitlementKey: com.apple.developer.associated-domains
+    type: ASSOCIATED_DOMAINS
 iconPath: Resources/AppIcon.appiconset/Icon-1024.png
 resources:
   - Resources/XBadge.png
