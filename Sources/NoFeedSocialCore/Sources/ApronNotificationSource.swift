@@ -114,6 +114,8 @@ public final class ApronNotificationSource: AccountValidating {
                 unreadCount: unread,
                 destination: .apron(serverURL: session.serverURL, roomId: room.roomId),
                 titleNamesPeople: room.isNamedForMembers,
+                // A room set to None is muted on the server (§4.5.3).
+                isMuted: session.connection.mutedRooms.contains(room.roomId),
             ))
         }
         return summaries

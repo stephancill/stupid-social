@@ -555,6 +555,8 @@ public actor TelegramClient {
                 destination: .telegram(peer: peer),
                 namesSenderInPreview: peer.kind != .user,
                 titleNamesPeople: peer.kind == .user,
+                // Muted chats have `mute_until` in the future (2147483647 for "forever").
+                isMuted: TimeInterval(dialog["notify_settings"]?.object?["mute_until"]?.int ?? 0) > Date().timeIntervalSince1970,
             )
         }
     }

@@ -26,6 +26,13 @@ public struct ChatSummary: Identifiable, Hashable, Codable, Sendable {
     public let namesSenderInPreview: Bool
     /// Whether the title is a person's name or a list of members' names, which "Redact names" hides.
     public let titleNamesPeople: Bool
+    /// Optional so chat lists cached before it existed still decode.
+    private let muted: Bool?
+
+    /// Whether the user muted the chat on its network, so its unread count is shown quietly.
+    public var isMuted: Bool {
+        muted == true
+    }
 
     public init(
         id: String,
@@ -39,6 +46,7 @@ public struct ChatSummary: Identifiable, Hashable, Codable, Sendable {
         destination: Destination,
         namesSenderInPreview: Bool = true,
         titleNamesPeople: Bool = false,
+        isMuted: Bool = false,
     ) {
         self.id = id
         self.network = network
@@ -51,6 +59,7 @@ public struct ChatSummary: Identifiable, Hashable, Codable, Sendable {
         self.destination = destination
         self.namesSenderInPreview = namesSenderInPreview
         self.titleNamesPeople = titleNamesPeople
+        muted = isMuted
     }
 }
 

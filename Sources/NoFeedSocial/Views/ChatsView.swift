@@ -308,7 +308,8 @@ private struct ChatRow: View {
                             .foregroundStyle(.white)
                             .padding(.horizontal, 7)
                             .padding(.vertical, 2)
-                            .background(.blue, in: Capsule())
+                            // Gray for muted chats, as in Telegram.
+                            .background(chat.isMuted ? Color.gray : Color.blue, in: Capsule())
                     }
                 }
             }
