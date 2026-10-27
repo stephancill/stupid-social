@@ -98,7 +98,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     private let replyPreviewText = UILabel()
     private let attachmentThumbnail = UIImageView()
     private let attachmentName = UILabel()
-    private let textView = UITextView()
+    private let textView = ChatComposerTextView()
     private let placeholderLabel = UILabel()
     private let sendButton = UIButton(configuration: .plain())
     private let pillStack = UIStackView()
@@ -289,6 +289,10 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         textView.textContainerInset = UIEdgeInsets(top: 8, left: 0, bottom: 8, right: 0)
         textView.isScrollEnabled = false
         textView.delegate = self
+        textView.onReturn = { [weak self] in
+            guard let self, sendButton.isEnabled else { return }
+            send()
+        }
         textView.accessibilityLabel = "Message"
         textViewHeight = textView.heightAnchor.constraint(equalToConstant: minimumTextHeight)
         textViewHeight.isActive = true
@@ -1590,6 +1594,8 @@ private final class ChatMessageCell: UICollectionViewListCell, UIGestureRecogniz
         ])
         let pan = UIPanGestureRecognizer(target: self, action: #selector(handleSwipe(_:)))
         pan.delegate = self
+        // A two-finger horizontal scroll on a trackpad, such as on a Mac, swipes too.
+        pan.allowedScrollTypesMask = .continuous
         contentView.addGestureRecognizer(pan)
 
         bubbleTop = bubble.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 2)
@@ -2534,6 +2540,46 @@ private extension NSAttributedString.Key {
     static let chatMention = NSAttributedString.Key("ChatMention")
     /// A block quote line, drawn with a bar at its leading edge.
     static let chatQuote = NSAttributedString.Key("ChatQuote")
+}
+
+/// The composer. Return on a hardware keyboard sends and Shift-Return adds a line; the on-screen keyboard's
+/// Return still adds a line. While an input method is composing, Return confirms the composition instead.
+private final class ChatComposerTextView: UITextView {
+    var onReturn: () -> Void = {}
+    /// The Return press taken for sending, whose end and cancel are kept from the text view too.
+    private var sendPress: UIPress?
+
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        guard presses.count == 1, let press = presses.first, let key = press.key, markedTextRange == nil,
+              key.keyCode == .keyboardReturnOrEnter || key.keyCode == .keypadEnter,
+              key.modifierFlags.isDisjoint(with: [.shift, .alternate, .command, .control])
+        else {
+            super.pressesBegan(presses, with: event)
+            return
+        }
+        sendPress = press
+        onReturn()
+    }
+
+    override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        forward(presses, with: event, to: super.pressesEnded)
+    }
+
+    override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        forward(presses, with: event, to: super.pressesCancelled)
+    }
+
+    private func forward(_ presses: Set<UIPress>, with event: UIPressesEvent?, to handler: (Set<UIPress>, UIPressesEvent?) -> Void) {
+        guard let sendPress, presses.contains(sendPress) else {
+            handler(presses, event)
+            return
+        }
+        self.sendPress = nil
+        let others = presses.subtracting([sendPress])
+        if !others.isEmpty {
+            handler(others, event)
+        }
+    }
 }
 
 /// A label whose `.chatLink` runs open on tap and whose `.chatMention` runs show the user. Taps elsewhere
