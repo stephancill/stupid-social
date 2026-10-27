@@ -2,6 +2,7 @@
 
 ## 2026-10-28
 
+- Native external TestFlight build 151 (1.0.1): build 150 plus the `applinks:link.apron.chat` associated domain, built with stupid-app 0.0.23 (the App Store profile was replaced to authorize it). IPA SHA-256 `039a8ec0728d477f8386cb57fe63c064aa7bc1b569fa421c30694bf3d2af2266`; Build Upload `d4bcb375-3b19-468d-95dd-4375931699ff` reached `processing=VALID internal=IN_BETA_TESTING`. External TestFlight: `release external-beta --group ac67336d-4435-4ad7-9c6d-17ef19701dd1 --no-wait` with a short What to Test covering the changes since the last external build (148): X DMs with the X Chat PIN, Apron links opening in the app, Telegram member lists and named joins, smoother chats. `release status --live` reported external `IN_BETA_TESTING`.
 - Native internal TestFlight build 150 (1.0.1): X Chat (encrypted X DMs: PIN unlock, Chats rows, decrypted chats, sending, reactions, live updates over the WebSocket), Telegram member lists and named service messages, reconnecting Telegram after suspension, reply quotes that resolve when their message loads, the network icon in chat titles, and the other session's Return-to-send, trackpad reply and layout-shift fixes. Built with stupid-app 0.0.22 (static-library XCFramework for Juicebox). IPA SHA-256 `86d02f9987342ea554bc2e5ddddbbde3b8f33872c9e8743f38b5a307ee37bfb0`; Build Upload `fc72da33-7cbf-4cb5-970d-88832cecff45` reached `processing=VALID internal=IN_BETA_TESTING`. No What to Test note and no external submission.
 
 ## 2026-10-27
