@@ -43,7 +43,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     private var orderedMessages: [ChatMessage] = []
     private var indexById: [String: Int] = [:]
     /// What each cell was configured from: its message and its place in a sender group.
-    private var renderedMessages: [String: (message: ChatMessage, layout: ChatBubbleLayout)] = [:]
+    private var renderedMessages: [String: (message: ChatMessage, layout: ChatBubbleLayout, reply: ChatReplyQuote?)] = [:]
     private var attributedCache: [String: NSAttributedString] = [:]
     private var isNearBottom = true
     /// Follows the newest message: set when the room opens at the bottom or the user scrolls back down,
@@ -475,14 +475,16 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         snapshot.appendItems(rows, toSection: .messages)
 
         // Edits, tombstones and finished uploads keep their id, and a new message can end the previous one's
-        // group, so re-render items whose message or group position changed.
+        // group, so re-render items whose message or group position changed. A reply also re-renders when its
+        // quote does, such as when an older page brings in the message it quotes.
         var changed: [Item] = []
         for (index, message) in messages.enumerated() {
             let layout = bubbleLayout(at: index)
-            if let rendered = renderedMessages[message.id], rendered.message != message || rendered.layout != layout {
+            let reply = message.replyToId.map(replyQuote(for:))
+            if let rendered = renderedMessages[message.id], rendered.message != message || rendered.layout != layout || rendered.reply != reply {
                 changed.append(.message(message.id))
             }
-            renderedMessages[message.id] = (message, layout)
+            renderedMessages[message.id] = (message, layout, reply)
         }
         snapshot.reconfigureItems(changed)
 
@@ -520,7 +522,8 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
 
     /// The quote shown in a reply, including targets outside the loaded window while they load.
     private func replyQuote(for targetId: String) -> ChatReplyQuote {
-        if let target = viewModel.message(withId: targetId) {
+        // The view's own messages first: it renders from the view model's `messages` before that property is set.
+        if let target = messagesById[targetId] ?? viewModel.message(withId: targetId) {
             let text = target.isDeleted ? target.previewText : mentionText(target.previewText)
             return ChatReplyQuote(name: DebugRedaction.name(target.sender.name), text: text, accentUserId: target.sender.id)
         }
@@ -547,11 +550,16 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         applyKeepingBottom(snapshot)
     }
 
+    /// Re-renders replies whose quote changed, such as when a quoted message outside the loaded ones arrives.
     private func reconfigureReplies() {
         var snapshot = dataSource.snapshot()
         let replies = items(in: .messages, of: snapshot).filter { item in
-            guard case let .message(id) = item else { return false }
-            return messagesById[id]?.replyToId != nil
+            guard case let .message(id) = item, let target = messagesById[id]?.replyToId, var rendered = renderedMessages[id] else { return false }
+            let reply = replyQuote(for: target)
+            guard rendered.reply != reply else { return false }
+            rendered.reply = reply
+            renderedMessages[id] = rendered
+            return true
         }
         guard !replies.isEmpty else { return }
         snapshot.reconfigureItems(replies)
@@ -1411,7 +1419,7 @@ private final class ChatUnreadDividerCell: UICollectionViewListCell {
 }
 
 /// What a reply quote shows: the target when loaded, otherwise a loading or unavailable placeholder.
-private struct ChatReplyQuote {
+private struct ChatReplyQuote: Equatable {
     let name: String
     let text: String
     let accentUserId: String?
