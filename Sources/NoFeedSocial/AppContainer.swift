@@ -13,6 +13,8 @@ final class AppContainer {
     let apronServersViewModel: ApronServersViewModel
     let apronLiveFeed: ApronLiveFeed
     let chatListViewModel: ChatListViewModel
+    let telegramClient: TelegramClient
+    let telegramConnectionViewModel: TelegramConnectionViewModel
 
     private let metadataStore: AccountMetadataStore
     private let keychainStore: KeychainCredentialStore
@@ -152,7 +154,12 @@ final class AppContainer {
             cacheStore: cacheStore,
         )
 
-        chatListViewModel = ChatListViewModel(apronSource: apronSource, spotifySource: spotifyMessagesSource, instagramClient: instagramClient)
+        telegramClient = TelegramClient()
+        chatListViewModel = ChatListViewModel(apronSource: apronSource, spotifySource: spotifyMessagesSource, instagramClient: instagramClient, telegramClient: telegramClient)
+        telegramConnectionViewModel = TelegramConnectionViewModel(client: telegramClient)
+        telegramConnectionViewModel.onChange = { [chatListViewModel] in
+            Task { await chatListViewModel.load() }
+        }
         apronServersViewModel = ApronServersViewModel(service: apronService, chatList: chatListViewModel)
         apronLiveFeed = ApronLiveFeed(service: apronService, source: apronSource, chatList: chatListViewModel)
 
@@ -173,6 +180,11 @@ final class AppContainer {
         guard (try? keychainStore.loadInstagramCredentials()) != nil else { return nil }
         let client = instagramClient
         return { InstagramChatViewModel(client: client, threadFbid: threadFbid, title: title) }
+    }
+
+    func telegramChatFactory(peer: TelegramPeer, title: String) -> () -> ChatViewModel {
+        let client = telegramClient
+        return { TelegramChatViewModel(client: client, peer: peer, title: title) }
     }
 
     func loadDemoData() {

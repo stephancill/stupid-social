@@ -4,6 +4,7 @@ import SwiftUI
 struct SettingsView: View {
     @ObservedObject var viewModel: SettingsViewModel
     @ObservedObject var apronServersViewModel: ApronServersViewModel
+    @ObservedObject var telegramConnectionViewModel: TelegramConnectionViewModel
     var onLoadDemoData: (() -> Void)?
     var onClearDemoData: (() -> Void)?
     @Environment(\.openURL) private var openURL
@@ -83,6 +84,12 @@ struct SettingsView: View {
                     )
                 }
 
+                NavigationLink {
+                    TelegramConnectionView(viewModel: telegramConnectionViewModel)
+                } label: {
+                    connectionRow(name: "Telegram", subtitle: telegramConnectionViewModel.connectionLabel)
+                }
+
                 if devModeEnabled {
                     NavigationLink {
                         DebugConnectionView(viewModel: viewModel)
@@ -152,6 +159,7 @@ struct SettingsView: View {
             viewModel.loadStatuses()
             apronServersViewModel.reload()
         }
+        .task { await telegramConnectionViewModel.reload() }
         .onChange(of: devModeEnabled) { _, enabled in
             if !enabled {
                 onClearDemoData?()

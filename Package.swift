@@ -25,7 +25,9 @@ let package = Package(
         ),
         .target(
             name: "NoFeedSocialCore",
-            dependencies: ["NoFeedSocialPush"]
+            dependencies: ["NoFeedSocialPush"],
+            // TelegramSchema.tl, and TelegramAPI.json when scripts/telegram-api-config.py has written it.
+            resources: [.process("Resources")]
         ),
         .target(
             name: "NoFeedSocialPush"

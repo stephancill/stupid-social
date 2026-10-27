@@ -151,6 +151,24 @@ public final class KeychainCredentialStore {
         "apron.\(serverURL.absoluteString)"
     }
 
+    /// Telegram auth keys stay on this device: each device signs in as its own Telegram session.
+    func saveTelegramSession(_ data: Data) throws {
+        do {
+            try save(data: data, account: "telegram", synchronizable: false)
+        } catch let error as KeychainCredentialStoreError {
+            guard allowsInsecureFallback else { throw error }
+            fallbackStore.set(data, forKey: fallbackKey(account: "telegram"))
+        }
+    }
+
+    func loadTelegramSession() -> Data? {
+        (try? load(account: "telegram", synchronizable: false))?.data ?? fallbackStore.data(forKey: fallbackKey(account: "telegram"))
+    }
+
+    func deleteTelegramSession() throws {
+        try deleteForAccount("telegram")
+    }
+
     public func xCredentialStorage() throws -> CredentialSaveResult? {
         try storage(account: "x")
     }

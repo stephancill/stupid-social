@@ -36,6 +36,9 @@ resources:
   - Resources/ApronBadge.png
   - Resources/ApronBadge@2x.png
   - Resources/ApronBadge@3x.png
+  - Resources/TelegramBadge.png
+  - Resources/TelegramBadge@2x.png
+  - Resources/TelegramBadge@3x.png
 extensions:
   - product: NoFeedSocialNotificationService
     bundleID: tech.stupid.StupidSocial.NotificationService

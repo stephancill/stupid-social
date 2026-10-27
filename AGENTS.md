@@ -43,6 +43,7 @@ Sources/
       ApronMembersView.swift        # Apron room member list, opened from the chat title
       ApronProfileView.swift        # Apron user profile and shared avatar with presence dot
       SettingsView.swift            # Settings with connection links
+      TelegramConnectionView.swift  # Telegram sign-in: phone, code, 2FA password
   NoFeedSocialPush/                 # Shared with the notification extension: Web Push decryption, push store, notification content
     WebPushDecryptor.swift
     ApronPushStore.swift
@@ -75,6 +76,12 @@ Sources/
       BlueskyClient.swift / BlueskyNotificationSource.swift
       DebugNotificationsClient.swift / DebugNotificationSource.swift
       ApronModels.swift / ApronClient.swift / ApronNotificationSource.swift  # Apron Chat Protocol WebSocket client
+      TelegramTL.swift              # TL schema parsing and generic encoder/decoder
+      TelegramCrypto.swift          # BigUInt, AES-IGE, RSA_PAD, factorization, SRP
+      TelegramMTProto.swift         # MTProto transport, auth key exchange, encrypted session actor
+      TelegramClient.swift          # Telegram account: DCs, sign-in, dialogs, history, send, read
+    Resources/
+      TelegramSchema.tl             # Telegram TL schema (scripts/telegram-schema.py); TelegramAPI.json is gitignored
     Storage/
       AccountMetadataStore.swift
       CookieHeaderParser.swift
@@ -99,6 +106,8 @@ Sources/
       ApronChatViewModel.swift
       SpotifyChatViewModel.swift     # Spotify Messages chat: history, polling, send, seen, track metadata
       InstagramChatViewModel.swift   # Instagram Direct chat: history, polling, send, replies, read receipt
+      TelegramChatViewModel.swift    # Telegram chat: history, pushed updates, send, replies, read cursor
+      TelegramConnectionViewModel.swift # Telegram sign-in steps
 ```
 
 Outside `Sources/`: `NotificationService/` holds the extension's Info.plist and entitlements, and `workers/push-relay/` the Apron push relay Worker (`bun run push-relay:test`, `bun run push-relay:deploy`).
@@ -141,7 +150,7 @@ Outside `Sources/`: `NotificationService/` holds the extension's Info.plist and 
 
 ## Network Integration
 
-- Always diagnose network behavior and validate the fix in the dependency-free Python client first, before implementing or changing the native Swift client. The probes (`scripts/x-web-client.py`, `scripts/instagram-web-client.py`, `scripts/github-web-client.py`, `scripts/spotify-web-client.py`, `scripts/bluesky-web-client.py`, `scripts/apron-web-client.py`) are the source of truth for endpoint behavior, auth/session freshness, redirects, and response shape. Reproduce the issue live with the probe (using simulator credentials where applicable), add or update a probe command that demonstrates the diagnosis, then port the validated behavior into Swift. Do not guess endpoint/auth behavior from Swift alone.
+- Always diagnose network behavior and validate the fix in the dependency-free Python client first, before implementing or changing the native Swift client. The probes (`scripts/x-web-client.py`, `scripts/instagram-web-client.py`, `scripts/github-web-client.py`, `scripts/spotify-web-client.py`, `scripts/bluesky-web-client.py`, `scripts/apron-web-client.py`, `scripts/telegram-client.py`) are the source of truth for endpoint behavior, auth/session freshness, redirects, and response shape. Reproduce the issue live with the probe (using simulator credentials where applicable), add or update a probe command that demonstrates the diagnosis, then port the validated behavior into Swift. Do not guess endpoint/auth behavior from Swift alone.
 - Implement X as a native Swift client using `docs/CLI_DOCS.md` and the patched `twitter-cli` behavior as references only.
 - Do not shell out to `twitter-cli` for the production app path.
 - X background polling must use count-only behavior to avoid marking notifications read server-side.

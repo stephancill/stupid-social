@@ -8,6 +8,7 @@ public enum SocialNetwork: String, Codable, CaseIterable, Identifiable, Sendable
     case bluesky
     case github
     case apron
+    case telegram
     case debug
 
     public var id: String {
@@ -23,6 +24,7 @@ public enum SocialNetwork: String, Codable, CaseIterable, Identifiable, Sendable
         case .bluesky: "Bluesky"
         case .github: "GitHub"
         case .apron: "Apron"
+        case .telegram: "Telegram"
         case .debug: "Debug"
         }
     }
@@ -300,7 +302,7 @@ public enum NotificationTargetURL {
             return target.url
         case .github:
             return target.url
-        case .apron, .debug:
+        case .apron, .telegram, .debug:
             return nil
         }
     }
