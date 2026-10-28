@@ -140,7 +140,8 @@ final class TelegramTests: XCTestCase {
             "action": .object(TLObject("messageActionChatEditTitle", ["title": .string("Friends")])),
         ]))
         XCTAssertTrue(service.isService)
-        XCTAssertEqual(service.text, "Group renamed to “Friends”")
+        // Without a sender, the actor is "Someone", as in Telegram.
+        XCTAssertEqual(service.text, "Someone changed the group name to “Friends”")
     }
 
     func testMediaURLRoundTripsItsLocation() throws {
@@ -203,6 +204,45 @@ final class TelegramTests: XCTestCase {
         XCTAssertEqual(TelegramClient.statusUpdate(status, userId: 185_733_531), .lastSeen(Date(timeIntervalSince1970: 1_793_170_332)))
         XCTAssertNil(TelegramClient.statusUpdate(status, userId: 1))
         XCTAssertEqual(TelegramMember.Status.recently.text, "last seen recently")
+    }
+
+    // MARK: Spoilers
+
+    func testSpoilerEntitiesAndMaskedPreview() {
+        let message = TelegramClient.message(TLObject("message", [
+            "id": .int(1), "date": .int(0), "message": .string("the answer is 42 ok"),
+            "media": .object(TLObject("messageMediaPhoto", [:])),
+            "entities": .vector([.object(TLObject("messageEntitySpoiler", ["offset": .int(14), "length": .int(2)]))]),
+        ]))
+        XCTAssertEqual(message.spoilers, [NSRange(location: 14, length: 2)])
+        XCTAssertFalse(message.previewText.contains("42"))
+        XCTAssertTrue(message.previewText.hasSuffix("the answer is ⠿⠿⠿ ok"))
+    }
+
+    func testServiceAccountLoginCodeIsHidden() {
+        let text = "Login code: 12345. Do not give this code to anyone.\n\nSent 2026-10-28 at 10:00."
+        XCTAssertEqual(SpoilerText.loginCodeRanges(in: text), [NSRange(location: 12, length: 5)])
+        let web = "This is your login code:\nAb3d-Ef6g\n\nDo not give this code to anyone."
+        XCTAssertEqual(SpoilerText.mask(web, ranges: SpoilerText.loginCodeRanges(in: web)), "This is your login code:\n⠿⠿⠿⠿⠿⠿⠿⠿\n\nDo not give this code to anyone.")
+        let message = TelegramClient.message(TLObject("message", [
+            "id": .int(2), "date": .int(0), "message": .string(text),
+            "peer_id": .object(TLObject("peerUser", ["user_id": .long(777_000)])),
+        ]))
+        XCTAssertEqual(message.spoilers, [NSRange(location: 12, length: 5)])
+        let other = TelegramClient.message(TLObject("message", [
+            "id": .int(3), "date": .int(0), "message": .string(text),
+            "peer_id": .object(TLObject("peerUser", ["user_id": .long(42)])),
+        ]))
+        XCTAssertNil(other.spoilers)
+    }
+
+    func testServiceAccountPushHidesTheCode() {
+        let userInfo: [AnyHashable: Any] = [
+            "aps": ["alert": ["loc-key": "MESSAGE_TEXT", "loc-args": ["Telegram", "Login code: 12345. Do not give this code to anyone."]]],
+            "custom": ["from_id": "777000"],
+        ]
+        let push = TelegramPushNotification.make(userInfo: userInfo) { _, _ in nil }
+        XCTAssertEqual(push?.body, "Login code: ⠿⠿⠿⠿⠿. Do not give this code to anyone.")
     }
 
     // MARK: Push

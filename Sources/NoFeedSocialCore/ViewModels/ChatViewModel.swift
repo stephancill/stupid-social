@@ -1,5 +1,6 @@
 import Foundation
 import ImageIO
+import NoFeedSocialPush
 
 /// Someone shown in a chat: a message sender, reactor, or mention suggestion.
 public struct ChatUser: Hashable, Identifiable, Codable, Sendable {
@@ -48,6 +49,8 @@ public struct ChatMessage: Hashable, Identifiable, Sendable {
     public let isNotice: Bool
     /// Sent by the user and not yet confirmed by the network: shown at once, with a sending indicator.
     public let isSending: Bool
+    /// Parts of `text` hidden until tapped (UTF-16 ranges); plain text only.
+    public let spoilers: [NSRange]
 
     public init(
         id: String,
@@ -61,6 +64,7 @@ public struct ChatMessage: Hashable, Identifiable, Sendable {
         isOwn: Bool,
         isNotice: Bool = false,
         isSending: Bool = false,
+        spoilers: [NSRange] = [],
     ) {
         self.id = id
         self.sender = sender
@@ -73,6 +77,7 @@ public struct ChatMessage: Hashable, Identifiable, Sendable {
         self.isOwn = isOwn
         self.isNotice = isNotice
         self.isSending = isSending
+        self.spoilers = spoilers
     }
 
     /// The message with `image` in place of its first image or pending upload, such as the picked file for a
@@ -92,6 +97,7 @@ public struct ChatMessage: Hashable, Identifiable, Sendable {
         return ChatMessage(
             id: id, sender: sender, timestamp: timestamp, text: text, isMarkdown: isMarkdown, embeds: embeds,
             replyToId: replyToId, isDeleted: isDeleted, isOwn: isOwn, isNotice: isNotice, isSending: isSending,
+            spoilers: spoilers,
         )
     }
 
@@ -103,7 +109,7 @@ public struct ChatMessage: Hashable, Identifiable, Sendable {
     /// One line describing the message, for reply quotes and the composer's reply preview.
     public var previewText: String {
         if isDeleted { return "Message deleted" }
-        if let text, !text.isEmpty { return text }
+        if let text, !text.isEmpty { return SpoilerText.mask(text, ranges: spoilers) }
         for embed in embeds {
             switch embed {
             case .image: return "Photo"
@@ -482,7 +488,7 @@ public class ChatViewModel: ObservableObject {
     /// One line for the Chats list: the text with mentions by name, or what was shared.
     private func summaryBody(for message: ChatMessage) -> String {
         if let text = message.text, !text.isEmpty {
-            return showingMentionNames(text).replacingOccurrences(of: "\n", with: " ")
+            return showingMentionNames(SpoilerText.mask(text, ranges: message.spoilers)).replacingOccurrences(of: "\n", with: " ")
         }
         switch message.embeds.first {
         case let .audio(_, title, _, _, _, _), let .card(title, _, _, _, _):

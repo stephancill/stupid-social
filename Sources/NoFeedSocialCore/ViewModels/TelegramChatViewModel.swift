@@ -416,6 +416,7 @@ public final class TelegramChatViewModel: ChatViewModel {
             embeds: embeds,
             replyToId: message.replyToId.map(String.init),
             isOwn: message.isOutgoing,
+            spoilers: text == message.caption ? message.spoilers ?? [] : [],
         )
     }
 }

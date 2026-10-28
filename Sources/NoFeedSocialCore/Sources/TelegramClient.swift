@@ -1,4 +1,5 @@
 import Foundation
+import NoFeedSocialPush
 
 /// A user, basic group or supergroup, with the access hash its input peer needs.
 public struct TelegramPeer: Hashable, Codable, Sendable {
@@ -45,6 +46,9 @@ public struct TelegramMessage: Codable, Sendable, Hashable {
     public let text: String
     /// The message's own text, empty for media without a caption.
     public var caption: String = ""
+    /// Hidden parts of `caption` (UTF-16 ranges): spoiler entities, and the login code in messages from Telegram's
+    /// service account. Optional so chat snapshots saved before it existed still decode.
+    public var spoilers: [NSRange]?
     public var embeds: [TelegramEmbed] = []
     public var reactions: [TelegramReaction] = []
     public var reactors: [TelegramReactor] = []
@@ -53,6 +57,14 @@ public struct TelegramMessage: Codable, Sendable, Hashable {
     public let replyToId: Int32?
     /// A service message such as "joined the group", shown as a caption.
     public let isService: Bool
+
+    /// `text` with its spoilers masked, for the Chats list.
+    public var previewText: String {
+        guard let spoilers, !spoilers.isEmpty, !caption.isEmpty, text.hasSuffix(caption) else { return text }
+        // The caption ends the line, after a media label such as "Photo · ".
+        let shift = text.utf16.count - caption.utf16.count
+        return SpoilerText.mask(text, ranges: spoilers.map { NSRange(location: $0.location + shift, length: $0.length) })
+    }
 }
 
 /// Someone in a group, as its member list shows them.
@@ -604,7 +616,7 @@ public actor TelegramClient {
             }
             let top = messages["\(Self.peerKey(peerObject)):\(dialog["top_message"]?.int ?? 0)"]
             let latest = top.map { Self.message($0, selfId: stored.account?.userId) }
-            var preview = latest?.text.replacingOccurrences(of: "\n", with: " ")
+            var preview = latest?.previewText.replacingOccurrences(of: "\n", with: " ")
             if let latest, let body = preview, !latest.isService {
                 if latest.isOutgoing {
                     preview = "You: \(body)"
@@ -935,11 +947,19 @@ public actor TelegramClient {
             }
         }
         let reactions = TelegramMediaParser.reactions(of: message)
+        var spoilers: [NSRange] = message.objects("entities").filter { $0.name == "messageEntitySpoiler" }.compactMap { entity in
+            guard let offset = entity["offset"]?.int, let length = entity["length"]?.int else { return nil }
+            return NSRange(location: Int(offset), length: Int(length))
+        }
+        if senderId == SpoilerText.telegramServiceUserId, !isService {
+            spoilers += SpoilerText.loginCodeRanges(in: caption)
+        }
         return TelegramMessage(
             id: message["id"]?.int ?? 0,
             date: Date(timeIntervalSince1970: TimeInterval(message["date"]?.int ?? 0)),
             text: text,
             caption: isService ? "" : caption,
+            spoilers: spoilers.isEmpty ? nil : spoilers,
             embeds: embeds,
             reactions: reactions.totals,
             reactors: reactions.reactors,

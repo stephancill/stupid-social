@@ -44,7 +44,7 @@ public struct TelegramPushNotification: Equatable, Sendable {
         }
         // The text alone for text messages, since the title already names the sender; otherwise Telegram's line,
         // such as "Ann sent you a photo".
-        let body: String
+        var body: String
         if key == "MESSAGE_TEXT" || key == "CHAT_MESSAGE_TEXT", let text = args.last {
             body = text
         } else if let key, let line = localized(key, args) {
@@ -53,6 +53,10 @@ public struct TelegramPushNotification: Equatable, Sendable {
             body = line
         } else {
             return nil
+        }
+        // Pushes carry no entities, but the service account's login code is found by shape.
+        if senderId == SpoilerText.telegramServiceUserId {
+            body = SpoilerText.mask(body, ranges: SpoilerText.loginCodeRanges(in: body))
         }
         return TelegramPushNotification(title: title, body: body, senderId: senderId, conversationId: chat.key)
     }

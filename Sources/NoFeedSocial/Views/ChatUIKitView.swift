@@ -48,6 +48,8 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     private var attributedCache: [String: NSAttributedString] = [:]
     /// Item keys back to message ids; see `itemKey(for:)`.
     private var messageIdByKey: [String: String] = [:]
+    /// Messages whose spoilers were tapped open; they stay open while the chat is.
+    private var revealedSpoilers: Set<String> = []
     private var isNearBottom = true
     /// Follows the newest message: set when the room opens at the bottom or the user scrolls back down,
     /// cleared when the user scrolls away. Layout changes while pinned re-anchor to the bottom.
@@ -199,6 +201,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
                         self?.showProfile(ChatUser(id: userId, name: nil, avatarURL: nil))
                     },
                     openLink: { [weak self] url in self?.openLink(url) },
+                    revealSpoilers: { [weak self] in self?.revealSpoilers(of: id) },
                 ),
                 availableWidth: collectionView.bounds.width > 0 ? collectionView.bounds.width : view.bounds.width,
             )
@@ -707,7 +710,8 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
 
     private func attributedBody(for message: ChatMessage, isOwn: Bool) -> NSAttributedString? {
         guard !message.isDeleted, let text = message.text, !text.isEmpty else { return nil }
-        let key = "\(message.id)|\(isOwn)|\(text)"
+        let hidesSpoilers = !message.spoilers.isEmpty && !revealedSpoilers.contains(message.id)
+        let key = "\(message.id)|\(isOwn)|\(hidesSpoilers)|\(text)"
         if let cached = attributedCache[key] {
             return cached
         }
@@ -725,8 +729,20 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
             font: isSystem ? .preferredFont(forTextStyle: .footnote) : .preferredFont(forTextStyle: .body),
             formatsQuotes: message.isMarkdown,
         )
-        attributedCache[key] = rendered
-        return rendered
+        guard hidesSpoilers else {
+            attributedCache[key] = rendered
+            return rendered
+        }
+        let hidden = NSMutableAttributedString(attributedString: rendered)
+        let color = isOwn ? UIColor.white : UIColor.label
+        for range in message.spoilers where NSMaxRange(range) <= hidden.length {
+            // A hidden link or mention reveals the spoiler instead of opening.
+            hidden.removeAttribute(.chatLink, range: range)
+            hidden.removeAttribute(.chatMention, range: range)
+            hidden.addAttributes([.foregroundColor: UIColor.clear, .chatSpoiler: color], range: range)
+        }
+        attributedCache[key] = hidden
+        return hidden
     }
 
     /// Opens at the "New Messages" divider when there is one, like Telegram, otherwise at the newest message.
@@ -1322,6 +1338,15 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         textView.becomeFirstResponder()
     }
 
+    private func revealSpoilers(of id: String) {
+        guard revealedSpoilers.insert(id).inserted else { return }
+        var snapshot = dataSource.snapshot()
+        let item = Item.message(itemKey(for: id))
+        guard snapshot.itemIdentifiers.contains(item) else { return }
+        snapshot.reconfigureItems([item])
+        dataSource.apply(snapshot, animatingDifferences: false)
+    }
+
     private func toggleReaction(_ emoji: String, on id: String) {
         guard messagesById[id]?.isNotice == false else { return }
         reactionHaptic.selectionChanged()
@@ -1504,6 +1529,7 @@ private final class ChatMessageCell: UICollectionViewListCell, UIGestureRecogniz
         var previewURL: (String) async -> URL? = { _ in nil }
         var showMentionedUser: (String) -> Void = { _ in }
         var openLink: (URL) -> Void = { _ in }
+        var revealSpoilers: () -> Void = {}
     }
 
     private static let timeFormatter: DateFormatter = {
@@ -1810,6 +1836,7 @@ private final class ChatMessageCell: UICollectionViewListCell, UIGestureRecogniz
     ) {
         self.actions = actions
         bodyLabel.showMention = { [weak self] userId in self?.actions.showMentionedUser(userId) }
+        bodyLabel.revealSpoilers = { [weak self] in self?.actions.revealSpoilers() }
         bodyLabel.openLink = { [weak self] url in self?.actions.openLink(url) }
         isOwn = layout.isOwn
         imageTasks.forEach { $0.cancel() }
@@ -2594,6 +2621,8 @@ private extension NSAttributedString.Key {
     static let chatMention = NSAttributedString.Key("ChatMention")
     /// A block quote line, drawn with a bar at its leading edge.
     static let chatQuote = NSAttributedString.Key("ChatQuote")
+    /// Hidden spoiler text, drawn as dots in the attribute's color until tapped.
+    static let chatSpoiler = NSAttributedString.Key("ChatSpoiler")
 }
 
 /// The composer. Return on a hardware keyboard sends and Shift-Return adds a line; the on-screen keyboard's
@@ -2642,10 +2671,12 @@ private final class ChatLinkLabel: UILabel {
     private enum Target {
         case link(URL)
         case mention(String)
+        case spoiler
     }
 
     var showMention: (String) -> Void = { _ in }
     var openLink: (URL) -> Void = { _ in }
+    var revealSpoilers: () -> Void = {}
     private lazy var linkTap = UITapGestureRecognizer(target: self, action: #selector(tapped(_:)))
 
     override init(frame: CGRect) {
@@ -2672,6 +2703,8 @@ private final class ChatLinkLabel: UILabel {
             openLink(url)
         case let .mention(userId):
             showMention(userId)
+        case .spoiler:
+            revealSpoilers()
         case nil:
             break
         }
@@ -2681,12 +2714,78 @@ private final class ChatLinkLabel: UILabel {
     private var quoteBars: [CALayer] = []
 
     override var attributedText: NSAttributedString? {
-        didSet { setNeedsLayout() }
+        didSet {
+            setNeedsLayout()
+            accessibilityLabel = attributedText.flatMap(Self.spokenText)
+        }
+    }
+
+    /// Hidden spoilers are read as "spoiler" rather than their text; `nil` when there are none.
+    private static func spokenText(_ text: NSAttributedString) -> String? {
+        let spoken = NSMutableString(string: text.string)
+        var hasSpoiler = false
+        text.enumerateAttribute(.chatSpoiler, in: NSRange(location: 0, length: text.length), options: .reverse) { value, range, _ in
+            guard value != nil else { return }
+            hasSpoiler = true
+            spoken.replaceCharacters(in: range, with: "spoiler")
+        }
+        return hasSpoiler ? spoken as String : nil
     }
 
     override func layoutSubviews() {
         super.layoutSubviews()
         layoutQuoteBars()
+        layoutSpoilers()
+    }
+
+    /// Dotted patches over hidden spoiler text, one per line it spans.
+    private var spoilerPatches: [CALayer] = []
+
+    private func layoutSpoilers() {
+        var patches: [(CGRect, UIColor)] = []
+        if let text = attributedText, text.length > 0 {
+            var spoilers: [(NSRange, UIColor)] = []
+            text.enumerateAttribute(.chatSpoiler, in: NSRange(location: 0, length: text.length)) { value, range, _ in
+                if let color = value as? UIColor { spoilers.append((range, color)) }
+            }
+            if !spoilers.isEmpty, let (storage, layoutManager, container, offset) = layout(in: text) {
+                defer { withExtendedLifetime(storage) {} }
+                for (range, color) in spoilers {
+                    let glyphs = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+                    layoutManager.enumerateEnclosingRects(forGlyphRange: glyphs, withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0), in: container) { rect, _ in
+                        patches.append((rect.offsetBy(dx: 0, dy: offset).insetBy(dx: -1, dy: 1), color))
+                    }
+                }
+            }
+        }
+        while spoilerPatches.count < patches.count {
+            let patch = CALayer()
+            patch.cornerRadius = 4
+            patch.masksToBounds = true
+            layer.addSublayer(patch)
+            spoilerPatches.append(patch)
+        }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for (index, patch) in spoilerPatches.enumerated() {
+            patch.isHidden = index >= patches.count
+            guard index < patches.count else { continue }
+            patch.frame = patches[index].0
+            patch.backgroundColor = Self.dots(patches[index].1).cgColor
+        }
+        CATransaction.commit()
+    }
+
+    /// A pattern of small dots in `color`, like Telegram's spoiler dust.
+    private static func dots(_ color: UIColor) -> UIColor {
+        let size = CGSize(width: 5, height: 5)
+        let image = UIGraphicsImageRenderer(size: size).image { _ in
+            color.withAlphaComponent(0.55).setFill()
+            UIBezierPath(ovalIn: CGRect(x: 1, y: 1, width: 1.6, height: 1.6)).fill()
+            color.withAlphaComponent(0.3).setFill()
+            UIBezierPath(ovalIn: CGRect(x: 3, y: 3, width: 1.4, height: 1.4)).fill()
+        }
+        return UIColor(patternImage: image)
     }
 
     /// Lays the bars out as `target(at:)` lays out the text.
@@ -2754,6 +2853,9 @@ private final class ChatLinkLabel: UILabel {
         let glyphRect = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: container)
         guard glyphRect.insetBy(dx: -6, dy: -4).contains(location) else { return nil }
         let index = layoutManager.characterIndexForGlyph(at: glyph)
+        if text.attribute(.chatSpoiler, at: index, effectiveRange: nil) != nil {
+            return .spoiler
+        }
         // A link wins over a mention inside it, such as `https://example.com/@bob`.
         if let url = text.attribute(.chatLink, at: index, effectiveRange: nil) as? URL {
             return .link(url)
