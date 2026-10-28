@@ -62,7 +62,7 @@ public struct TelegramMember: Identifiable, Hashable, Sendable {
     }
 
     /// Telegram's last-seen status: exact for people who share it, otherwise only roughly.
-    public enum Status: Hashable, Sendable {
+    public enum Status: Codable, Hashable, Sendable {
         case online
         case lastSeen(Date)
         case recently
@@ -627,6 +627,7 @@ public actor TelegramClient {
                 titleNamesPeople: peer.kind == .user,
                 // Muted chats have `mute_until` in the future (2147483647 for "forever").
                 isMuted: TimeInterval(dialog["notify_settings"]?.object?["mute_until"]?.int ?? 0) > Date().timeIntervalSince1970,
+                telegramUserStatus: peer.kind == .user ? users[peer.id].flatMap(Self.userStatus) : nil,
             )
         }
     }
@@ -643,9 +644,7 @@ public actor TelegramClient {
         if peer.kind == .user {
             let user = result.objects("users").first { $0["id"]?.long == peer.id }
             title = user?.flag("self") == true ? "Saved Messages" : user.map(Self.name(of:)) ?? "Telegram"
-            if let user, !user.flag("self"), !user.flag("bot") {
-                userStatus = Self.status(of: user["status"]?.object)
-            }
+            userStatus = user.flatMap(Self.userStatus)
         } else {
             let chat = result.objects("chats").first { $0["id"]?.long == peer.id }
             title = chat?["title"]?.string ?? "Group"
@@ -785,6 +784,12 @@ public actor TelegramClient {
             )
         }
         return TelegramMemberList(members: members, count: max(count, members.count))
+    }
+
+    /// A person's status as a private chat shows it; `nil` for yourself (Saved Messages) and bots.
+    static func userStatus(_ user: TLObject) -> TelegramMember.Status? {
+        guard !user.flag("self"), !user.flag("bot") else { return nil }
+        return status(of: user["status"]?.object)
     }
 
     static func status(of status: TLObject?) -> TelegramMember.Status {

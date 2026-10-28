@@ -9,7 +9,7 @@ struct ChatsView: View {
     let spotifyChat: (_ chatId: String, _ title: String) -> (() -> ChatViewModel)?
     /// The chat for an Instagram thread and title; `nil` when Instagram isn't connected.
     let instagramChat: (_ threadFbid: String, _ title: String) -> (() -> ChatViewModel)?
-    let telegramChat: (_ peer: TelegramPeer, _ title: String) -> () -> TelegramChatViewModel
+    let telegramChat: (_ peer: TelegramPeer, _ title: String, _ userStatus: TelegramMember.Status?) -> () -> TelegramChatViewModel
     /// The chat for an X Chat conversation and title; `nil` until the XChat PIN unlocks it.
     let xChat: (_ conversationId: String, _ title: String) -> (() -> ChatViewModel)?
     /// Whether a chat is pushed, so the home pager can stop paging.
@@ -17,6 +17,9 @@ struct ChatsView: View {
     /// A chat to open, such as from a tapped notification; cleared once opened.
     @Binding var openRequest: ChatSummary.Destination?
     @State private var selection: ChatSummary?
+    /// A requested chat the list doesn't have yet, such as a Telegram chat from a notification at launch; it
+    /// opens once a load lists it.
+    @State private var waitingRequest: ChatSummary.Destination?
     /// What a link asked to show in the chat it opened.
     @State private var focus: (destination: ChatSummary.Destination, focus: NotificationRouter.ChatFocus)?
     @State private var isShowingArchive = false
@@ -98,22 +101,35 @@ struct ChatsView: View {
             focus = NotificationRouter.shared.pendingFocus.map { (request, $0) }
             NotificationRouter.shared.pendingFocus = nil
             guard selection?.destination != request else { return }
-            let chat = chat(for: request)
-            guard selection != nil else {
-                selection = chat
+            guard let chat = chat(for: request) else {
+                waitingRequest = request
                 return
             }
-            // A destination that is showing isn't replaced when its item changes, so close it, then open the chat.
-            selection = nil
-            Task {
-                try? await Task.sleep(for: .milliseconds(450))
-                selection = chat
-            }
+            waitingRequest = nil
+            open(chat)
+        }
+        .onChange(of: viewModel.chats + viewModel.archivedChats) { _, _ in
+            guard let request = waitingRequest, let chat = chat(for: request) else { return }
+            waitingRequest = nil
+            open(chat)
         }
         // Reloads on returning from a chat too, so unread counts and latest messages stay current.
         .task(id: selection == nil) {
             guard selection == nil else { return }
             await viewModel.load()
+        }
+    }
+
+    private func open(_ chat: ChatSummary) {
+        guard selection != nil else {
+            selection = chat
+            return
+        }
+        // A destination that is showing isn't replaced when its item changes, so close it, then open the chat.
+        selection = nil
+        Task {
+            try? await Task.sleep(for: .milliseconds(450))
+            selection = chat
         }
     }
 
@@ -191,7 +207,7 @@ struct ChatsView: View {
                 ContentUnavailableView("Instagram Not Connected", systemImage: "camera")
             }
         case let .telegram(peer):
-            TelegramChatView(viewModel: opened(telegramChat(peer, chat.title)(), chat: chat))
+            TelegramChatView(viewModel: opened(telegramChat(peer, chat.title, chat.telegramUserStatus)(), chat: chat))
         case let .x(conversationId):
             if let makeChat = xChat(conversationId, chat.title) {
                 NetworkChatView(viewModel: opened(makeChat(), chat: chat))

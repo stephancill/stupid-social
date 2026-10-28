@@ -37,7 +37,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void,
     ) {
-        let thread = notification.request.content.threadIdentifier
+        let content = notification.request.content
+        let thread = Self.telegramPeer(content.userInfo).map { NotificationRouter.telegramThread($0) } ?? content.threadIdentifier
         nonisolated(unsafe) let completion = completionHandler
         Task { @MainActor in
             completion(NotificationRouter.shared.openThreads.contains(thread) ? [] : [.banner, .list, .sound])
@@ -90,26 +91,14 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
 }
 
 extension AppDelegate {
-    /// The chat a Telegram push is about, from its `custom` fields (core.telegram.org/api/push-updates): a
-    /// supergroup, a basic group, or else the sender of a private message. Values may be strings or numbers. The
-    /// access hash comes from the Chats list when the chat opens.
+    /// The chat a Telegram push is about. The access hash comes from the Chats list when the chat opens.
     nonisolated static func telegramPeer(_ userInfo: [AnyHashable: Any]) -> TelegramPeer? {
-        guard userInfo["loc_key"] != nil || (userInfo["aps"] as? [String: Any])?["alert"].flatMap({ ($0 as? [String: Any])?["loc-key"] }) != nil else { return nil }
-        let custom = userInfo["custom"] as? [String: Any] ?? userInfo as? [String: Any] ?? [:]
-        func id(_ key: String) -> Int64? {
-            if let number = custom[key] as? NSNumber { return number.int64Value }
-            return (custom[key] as? String).flatMap { Int64($0) }
+        switch TelegramPushChat(userInfo: userInfo) {
+        case let .user(id): TelegramPeer(kind: .user, id: id, accessHash: 0)
+        case let .chat(id): TelegramPeer(kind: .chat, id: id, accessHash: 0)
+        case let .channel(id): TelegramPeer(kind: .channel, id: id, accessHash: 0)
+        case nil: nil
         }
-        if let channel = id("channel_id") {
-            return TelegramPeer(kind: .channel, id: channel, accessHash: 0)
-        }
-        if let chat = id("chat_id") {
-            return TelegramPeer(kind: .chat, id: chat, accessHash: 0)
-        }
-        if let user = id("from_id") {
-            return TelegramPeer(kind: .user, id: user, accessHash: 0)
-        }
-        return nil
     }
 }
 
@@ -202,6 +191,29 @@ final class NotificationRouter: ObservableObject {
 
     func roomDidClose(serverURL: URL, roomId: String) {
         openThreads.remove(ApronPushNotification.threadIdentifier(serverURL: serverURL, roomId: roomId))
+    }
+
+    /// Marks a Telegram chat on screen and clears its delivered notifications, matched by the chat they name
+    /// rather than their thread, which Telegram sets when the extension doesn't run.
+    func telegramChatDidOpen(_ peer: TelegramPeer) {
+        let thread = Self.telegramThread(peer)
+        openThreads.insert(thread)
+        Task {
+            let center = UNUserNotificationCenter.current()
+            let ids = await center.deliveredNotifications()
+                .filter { AppDelegate.telegramPeer($0.request.content.userInfo).map(Self.telegramThread) == thread }
+                .map(\.request.identifier)
+            center.removeDeliveredNotifications(withIdentifiers: ids)
+        }
+    }
+
+    func telegramChatDidClose(_ peer: TelegramPeer) {
+        openThreads.remove(Self.telegramThread(peer))
+    }
+
+    /// The access hash isn't in pushes, so chats match on kind and id.
+    nonisolated static func telegramThread(_ peer: TelegramPeer) -> String {
+        "telegram|\(peer.kind.rawValue):\(peer.id)"
     }
 
     /// Posts a reply typed into a notification. On success the room's notifications are cleared; on failure a

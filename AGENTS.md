@@ -51,6 +51,8 @@ Sources/
     ApronPushStore.swift
     ApronPushNotification.swift
     TelegramPushNotification.swift  # Telegram push → sender and text; TelegramAvatarStore for the extension
+    CommunicationNotification.swift # INSendMessageIntent donation and content update, shared with Debug
+    PushExtensionLog.swift          # What the extension did per push, shown in Settings → Debug
   NoFeedSocialNotificationService/  # Notification Service Extension: decrypts Apron pushes
     NotificationService.swift
   NoFeedSocialCore/                 # Shared core (models, services, sources)

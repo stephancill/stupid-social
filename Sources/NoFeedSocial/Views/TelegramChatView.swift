@@ -19,6 +19,12 @@ struct TelegramChatView: View {
         .navigationDestination(isPresented: $showsMembers) {
             TelegramMembersView(viewModel: viewModel)
         }
+        .onAppear {
+            NotificationRouter.shared.telegramChatDidOpen(viewModel.peer)
+        }
+        .onDisappear {
+            NotificationRouter.shared.telegramChatDidClose(viewModel.peer)
+        }
     }
 }
 

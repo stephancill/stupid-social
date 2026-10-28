@@ -30,6 +30,8 @@ public struct ChatSummary: Identifiable, Hashable, Codable, Sendable {
     public let titleNamesPeople: Bool
     /// Optional so chat lists cached before it existed still decode.
     private let muted: Bool?
+    /// The other person's last-seen status in a Telegram private chat, so the chat opens showing it.
+    public let telegramUserStatus: TelegramMember.Status?
 
     /// Whether the user muted the chat on its network, so its unread count is shown quietly.
     public var isMuted: Bool {
@@ -49,6 +51,7 @@ public struct ChatSummary: Identifiable, Hashable, Codable, Sendable {
         namesSenderInPreview: Bool = true,
         titleNamesPeople: Bool = false,
         isMuted: Bool = false,
+        telegramUserStatus: TelegramMember.Status? = nil,
     ) {
         self.id = id
         self.network = network
@@ -62,6 +65,7 @@ public struct ChatSummary: Identifiable, Hashable, Codable, Sendable {
         self.namesSenderInPreview = namesSenderInPreview
         self.titleNamesPeople = titleNamesPeople
         muted = isMuted
+        self.telegramUserStatus = telegramUserStatus
     }
 }
 

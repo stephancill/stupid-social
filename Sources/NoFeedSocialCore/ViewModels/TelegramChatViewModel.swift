@@ -6,7 +6,7 @@ import Foundation
 @MainActor
 public final class TelegramChatViewModel: ChatViewModel {
     private let client: TelegramClient
-    private let peer: TelegramPeer
+    public let peer: TelegramPeer
     private var loaded: [Int32: TelegramMessage] = [:]
     private var names: [Int64: String] = [:]
     private var avatars: [Int64: URL] = [:]
@@ -34,13 +34,18 @@ public final class TelegramChatViewModel: ChatViewModel {
         peer.kind != .user
     }
 
-    public init(client: TelegramClient, peer: TelegramPeer, title: String, snapshotCache: ChatSnapshotCache = ChatSnapshotCache()) {
+    public init(client: TelegramClient, peer: TelegramPeer, title: String, userStatus: TelegramMember.Status? = nil, snapshotCache: ChatSnapshotCache = ChatSnapshotCache()) {
         self.client = client
         self.peer = peer
         self.snapshotCache = snapshotCache
         super.init(network: .telegram, title: title, subtitle: "Telegram", canReply: true, offersAttachments: true)
         showsSenderNames = peer.kind != .user
         restoreSnapshot()
+        // The Chats list's status is newer than the snapshot's.
+        if let userStatus {
+            self.userStatus = userStatus
+            subtitle = userStatus.text
+        }
     }
 
     /// Fetches the member list each time it opens, so statuses are current.
@@ -68,6 +73,8 @@ public final class TelegramChatViewModel: ChatViewModel {
         let readInboxMaxId: Int32
         let title: String
         let subtitle: String
+        /// Saved so a private chat's "last seen" shows, freshly worded, as it opens.
+        var userStatus: TelegramMember.Status?
     }
 
     private var snapshotKey: String {
@@ -83,7 +90,8 @@ public final class TelegramChatViewModel: ChatViewModel {
         avatars = snapshot.avatars
         readInboxMaxId = snapshot.readInboxMaxId
         title = snapshot.title
-        subtitle = snapshot.subtitle
+        userStatus = snapshot.userStatus
+        subtitle = userStatus?.text ?? snapshot.subtitle
         // The divider is in the first render, rather than appearing once history arrives.
         firstUnreadMessageId = loaded.values.sorted { $0.id < $1.id }.map(chatMessage).first(where: isUnread)?.id
         publish()
@@ -92,7 +100,7 @@ public final class TelegramChatViewModel: ChatViewModel {
     private func saveSnapshot() {
         let newest = loaded.values.sorted { $0.id < $1.id }.suffix(ChatSnapshotCache.messageLimit)
         snapshotCache.save(
-            Snapshot(messages: Array(newest), names: names, avatars: avatars, readInboxMaxId: readInboxMaxId, title: title, subtitle: subtitle),
+            Snapshot(messages: Array(newest), names: names, avatars: avatars, readInboxMaxId: readInboxMaxId, title: title, subtitle: subtitle, userStatus: userStatus),
             key: snapshotKey,
         )
     }

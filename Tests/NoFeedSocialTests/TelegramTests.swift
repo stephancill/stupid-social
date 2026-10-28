@@ -231,6 +231,23 @@ final class TelegramTests: XCTestCase {
         XCTAssertEqual(push?.conversationId, "channel:99")
     }
 
+    func testPushWithTopLevelFieldsAndLocalizedAlert() {
+        let userInfo: [AnyHashable: Any] = [
+            "aps": ["alert": ["title": "Ann", "body": "hi there"]],
+            "from_id": 42,
+        ]
+        let push = TelegramPushNotification.make(userInfo: userInfo) { _, _ in nil }
+        XCTAssertEqual(push?.title, "Ann")
+        XCTAssertEqual(push?.body, "hi there")
+        XCTAssertEqual(push?.conversationId, "user:42")
+        XCTAssertEqual(TelegramPushChat(userInfo: userInfo), .user(42))
+    }
+
+    func testApronPushIsNotTelegram() {
+        XCTAssertNil(TelegramPushChat(userInfo: ["apron": ["server": "https://example.com"], "from_id": "1"]))
+        XCTAssertNil(TelegramPushChat(userInfo: ["webpush": "abc"]))
+    }
+
     func testChannelPostPushHasNoPerson() {
         let userInfo: [AnyHashable: Any] = [
             "aps": ["alert": ["loc-key": "CHANNEL_MESSAGE_TEXT", "loc-args": ["News", "Headline"]]],

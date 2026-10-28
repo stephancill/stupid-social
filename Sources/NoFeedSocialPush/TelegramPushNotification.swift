@@ -14,44 +14,89 @@ public struct TelegramPushNotification: Equatable, Sendable {
     /// The notification for a push's `userInfo`, or `nil` for one that isn't from a person. `localized` formats a
     /// `loc-key` with its arguments, from the app's strings.
     public static func make(userInfo: [AnyHashable: Any], localized: (String, [String]) -> String?) -> TelegramPushNotification? {
+        guard let chat = TelegramPushChat(userInfo: userInfo) else { return nil }
+        let fields = TelegramPushChat.fields(userInfo)
         let alert = (userInfo["aps"] as? [String: Any])?["alert"] as? [String: Any]
-        guard let key = alert?["loc-key"] as? String ?? userInfo["loc_key"] as? String else { return nil }
+        let key = alert?["loc-key"] as? String ?? userInfo["loc_key"] as? String
         let args = alert?["loc-args"] as? [String] ?? userInfo["loc_args"] as? [String] ?? []
-        let custom = userInfo["custom"] as? [String: Any] ?? [:]
         func id(_ name: String) -> Int64? {
-            if let number = custom[name] as? NSNumber { return number.int64Value }
-            return (custom[name] as? String).flatMap { Int64($0) }
+            TelegramPushChat.id(fields[name])
         }
 
-        let conversationId: String
         let senderId: Int64
         let title: String
-        if let chat = id("channel_id").map({ "channel:\($0)" }) ?? id("chat_id").map({ "chat:\($0)" }) {
-            // A group message from a person; posts and messages sent as a channel or group have no person.
-            guard key.hasPrefix("CHAT_"), id("chat_from_broadcast_id") == nil, id("chat_from_group_id") == nil,
-                  let from = id("chat_from_id"), args.count >= 2
-            else { return nil }
-            conversationId = chat
-            senderId = from
-            title = "\(args[0]) in \(args[1])"
-        } else if let from = id("from_id"), key.hasPrefix("MESSAGE_"), let sender = args.first {
-            conversationId = "user:\(from)"
-            senderId = from
+        switch chat {
+        case let .user(id):
+            senderId = id
+            guard let sender = key?.hasPrefix("MESSAGE_") == true ? args.first : alert?["title"] as? String else { return nil }
             title = sender
-        } else {
-            return nil
+        case .chat, .channel:
+            // A group message from a person; posts and messages sent as a channel or group have no person.
+            guard id("chat_from_broadcast_id") == nil, id("chat_from_group_id") == nil, let from = id("chat_from_id") else { return nil }
+            senderId = from
+            if let key {
+                guard key.hasPrefix("CHAT_"), args.count >= 2 else { return nil }
+                title = "\(args[0]) in \(args[1])"
+            } else {
+                guard let group = alert?["title"] as? String else { return nil }
+                title = group
+            }
         }
         // The text alone for text messages, since the title already names the sender; otherwise Telegram's line,
         // such as "Ann sent you a photo".
         let body: String
         if key == "MESSAGE_TEXT" || key == "CHAT_MESSAGE_TEXT", let text = args.last {
             body = text
-        } else if let line = localized(key, args) {
+        } else if let key, let line = localized(key, args) {
+            body = line
+        } else if let line = alert?["body"] as? String {
             body = line
         } else {
             return nil
         }
-        return TelegramPushNotification(title: title, body: body, senderId: senderId, conversationId: conversationId)
+        return TelegramPushNotification(title: title, body: body, senderId: senderId, conversationId: chat.key)
+    }
+}
+
+/// The chat a Telegram push is about, from its `custom` fields (core.telegram.org/api/push-updates), which may
+/// also come at the top level, as strings or numbers: a supergroup, a basic group, or else the sender of a private
+/// message. Apron pushes and the app's own notifications aren't Telegram's.
+public enum TelegramPushChat: Hashable, Sendable {
+    case user(Int64)
+    case chat(Int64)
+    case channel(Int64)
+
+    public init?(userInfo: [AnyHashable: Any]) {
+        guard userInfo[ApronPushNotification.userInfoKey] == nil, userInfo["webpush"] == nil else { return nil }
+        let fields = Self.fields(userInfo)
+        if let id = Self.id(fields["channel_id"]) {
+            self = .channel(id)
+        } else if let id = Self.id(fields["chat_id"]) {
+            self = .chat(id)
+        } else if let id = Self.id(fields["from_id"]) {
+            self = .user(id)
+        } else {
+            return nil
+        }
+    }
+
+    /// The peer key the app uses (`user:…`, `chat:…`, `channel:…`).
+    public var key: String {
+        switch self {
+        case let .user(id): "user:\(id)"
+        case let .chat(id): "chat:\(id)"
+        case let .channel(id): "channel:\(id)"
+        }
+    }
+
+    static func fields(_ userInfo: [AnyHashable: Any]) -> [String: Any] {
+        if let custom = userInfo["custom"] as? [String: Any] { return custom }
+        return Dictionary(userInfo.compactMap { key, value in (key as? String).map { ($0, value) } }, uniquingKeysWith: { first, _ in first })
+    }
+
+    static func id(_ value: Any?) -> Int64? {
+        if let number = value as? NSNumber { return number.int64Value }
+        return (value as? String).flatMap { Int64($0) }
     }
 }
 
@@ -62,6 +107,12 @@ public struct TelegramAvatarStore: Sendable {
 
     public init(container: URL? = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: ApronPushStore.appGroup)) {
         directory = container?.appending(path: "telegram-avatars", directoryHint: .isDirectory)
+    }
+
+    /// The users whose avatars are saved, for Settings → Debug.
+    public var userIds: [Int64] {
+        guard let directory, let files = try? FileManager.default.contentsOfDirectory(atPath: directory.path()) else { return [] }
+        return files.compactMap { Int64($0.replacingOccurrences(of: ".jpg", with: "")) }.sorted()
     }
 
     public func load(userId: Int64) -> Data? {

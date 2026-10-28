@@ -17,15 +17,19 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
         if let telegram = TelegramPushNotification.make(userInfo: request.content.userInfo, localized: Self.localized),
            let content = request.content.mutableCopy() as? UNMutableNotificationContent
         {
-            content.threadIdentifier = "telegram|\(telegram.conversationId)"
+            telegram.prepare(content)
             self.contentHandler = contentHandler
             fallback = content
             nonisolated(unsafe) let prepared = content
             Task {
-                let communication = await Self.communicationContent(for: telegram, content: prepared)
+                let communication = await CommunicationNotification.telegram(telegram, content: prepared)
                 self.finish(communication ?? prepared)
             }
             return
+        }
+        if let chat = TelegramPushChat(userInfo: request.content.userInfo) {
+            // A Telegram push left as it came, such as a channel post; logged so Debug shows the extension ran.
+            PushExtensionLog().append(PushExtensionLog.Entry(network: "telegram", chat: chat.key, hasAvatar: false, updateError: "not from a person"))
         }
         guard let ciphertext = request.content.userInfo["webpush"] as? String,
               let body = Data(base64URLEncoded: ciphertext),
@@ -74,7 +78,7 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
     }
 
     /// The content updated from a donated incoming-message intent, so it shows the sender's avatar; `nil` when the
-    /// donation or update fails.
+    /// update fails.
     private static func communicationContent(for notification: ApronPushNotification, content: UNMutableNotificationContent) async -> UNNotificationContent? {
         // A one-to-one message from "<sender> in <room>" rather than a group conversation, which iOS would title
         // with the room alone. The person stays per sender, so their avatar is the same in every room.
@@ -86,57 +90,13 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
             contactIdentifier: nil,
             customIdentifier: "\(notification.serverURL.absoluteString)|\(notification.senderId)",
         )
-        let intent = INSendMessageIntent(
-            recipients: nil,
-            outgoingMessageType: .outgoingMessageText,
-            content: notification.body,
-            speakableGroupName: nil,
-            conversationIdentifier: notification.threadIdentifier,
-            serviceName: nil,
+        return await CommunicationNotification.content(
+            content,
             sender: sender,
-            attachments: nil,
+            body: notification.body,
+            conversation: notification.threadIdentifier,
+            log: PushExtensionLog.Entry(network: "apron", chat: notification.roomId, hasAvatar: sender.image != nil),
         )
-        let interaction = INInteraction(intent: intent, response: nil)
-        interaction.direction = .incoming
-        do {
-            try await interaction.donate()
-            return try content.updating(from: intent)
-        } catch {
-            return nil
-        }
-    }
-
-    private static func communicationContent(for notification: TelegramPushNotification, content: UNMutableNotificationContent) async -> UNNotificationContent? {
-        let sender = await INPerson(
-            personHandle: INPersonHandle(value: String(notification.senderId), type: .unknown),
-            nameComponents: nil,
-            displayName: notification.title,
-            image: TelegramAvatarStore().load(userId: notification.senderId).map { INImage(imageData: $0) },
-            contactIdentifier: nil,
-            customIdentifier: "telegram|\(notification.senderId)",
-        )
-        let intent = INSendMessageIntent(
-            recipients: nil,
-            outgoingMessageType: .outgoingMessageText,
-            content: notification.body,
-            speakableGroupName: nil,
-            conversationIdentifier: notification.conversationId,
-            serviceName: nil,
-            sender: sender,
-            attachments: nil,
-        )
-        let interaction = INInteraction(intent: intent, response: nil)
-        interaction.direction = .incoming
-        do {
-            try await interaction.donate()
-            let updated = try content.updating(from: intent)
-            // The intent sets the sender as the title; the body is still Telegram's whole line.
-            guard let mutable = updated.mutableCopy() as? UNMutableNotificationContent else { return updated }
-            mutable.body = notification.body
-            return mutable
-        } catch {
-            return nil
-        }
     }
 
     /// A Telegram `loc-key` line from the app's strings (the extension has none of its own), as iOS would show it.
