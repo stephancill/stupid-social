@@ -1017,7 +1017,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         return UITargetedPreview(view: bubble, parameters: parameters)
     }
 
-    /// Long press: a row of quick reactions, then Reply, More Reactions and Copy.
+    /// Long press: a row of quick reactions ending in More Reactions, then Reply and Copy.
     func collectionView(_: UICollectionView, contextMenuConfigurationForItemsAt indexPaths: [IndexPath], point _: CGPoint) -> UIContextMenuConfiguration? {
         guard let indexPath = indexPaths.first,
               case let .message(id) = dataSource.itemIdentifier(for: indexPath),
@@ -1032,20 +1032,21 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
             var children: [UIMenuElement] = []
             if canReact {
                 let mine = Set(viewModel.yourEmojis(on: id))
-                let quick = UIMenu(options: .displayInline, preferredElementSize: .small, children: ChatViewModel.quickReactions.prefix(4).map { emoji in
+                // A row of small elements holds four, so three reactions leave room for More Reactions.
+                let emojis = ChatViewModel.quickReactions.prefix(3).map { emoji in
                     UIAction(title: emoji, state: mine.contains(emoji) ? .on : .off) { [weak self] _ in self?.toggleReaction(emoji, on: id) }
-                })
+                }
+                // In a row of small elements an action shows its image alone; the title stays for VoiceOver.
+                let more = UIAction(title: "More Reactions", image: UIImage(systemName: "face.smiling")) { [weak self] _ in
+                    self?.presentReactionPicker(for: id)
+                }
+                let quick = UIMenu(options: .displayInline, preferredElementSize: .small, children: emojis + [more])
                 children.append(quick)
             }
             var actions: [UIMenuElement] = []
             if canReply {
                 actions.append(UIAction(title: "Reply", image: UIImage(systemName: "arrowshape.turn.up.left")) { [weak self] _ in
                     self?.beginReply(to: id)
-                })
-            }
-            if canReact {
-                actions.append(UIAction(title: "More Reactions", image: UIImage(systemName: "face.smiling")) { [weak self] _ in
-                    self?.presentReactionPicker(for: id)
                 })
             }
             if !text.isEmpty {
