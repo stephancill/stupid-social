@@ -99,12 +99,19 @@ public final class TelegramFileURLProtocol: URLProtocol, @unchecked Sendable {
         }
     }
 
-    /// A user's avatar goes to the App Group too, for the notification extension to show on their messages.
+    /// User and group avatars go to the App Group too, for the notification extension to show: a private message
+    /// with its sender's photo, a group message with the group's.
     private static func saveForNotifications(url: URL, data: Data) {
-        guard let key = TelegramMediaURL.parse(url)?.key, key.hasPrefix("avatar-user:"),
-              let userId = key.dropFirst("avatar-user:".count).split(separator: "-").first.flatMap({ Int64($0) })
+        guard let key = TelegramMediaURL.parse(url)?.key, key.hasPrefix("avatar-") else { return }
+        let peer = key.dropFirst("avatar-".count)
+        guard let colon = peer.firstIndex(of: ":"),
+              let id = peer[peer.index(after: colon)...].split(separator: "-").first.flatMap({ Int64($0) })
         else { return }
-        TelegramAvatarStore().save(data, userId: userId)
+        switch peer[..<colon] {
+        case "user": TelegramAvatarStore().save(data, userId: id)
+        case "chat", "channel": TelegramAvatarStore().save(data, groupId: id)
+        default: break
+        }
     }
 
     private struct Loader: @unchecked Sendable {

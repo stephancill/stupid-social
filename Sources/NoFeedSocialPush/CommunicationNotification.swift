@@ -5,22 +5,32 @@ import Foundation
 /// Turns notification content into a Communication Notification from a person, which shows their avatar. Used
 /// by the notification extension, and by Settings → Debug to post the same thing locally.
 public enum CommunicationNotification {
-    /// A Telegram message from its sender, with the avatar the app saved.
+    /// A Telegram message from its sender, with the photos the app saved: the sender's in a private chat, and the
+    /// group's in a group, shown as a group conversation.
     public static func telegram(_ notification: TelegramPushNotification, content: UNMutableNotificationContent) async -> UNNotificationContent? {
+        let store = TelegramAvatarStore()
         let sender = INPerson(
             personHandle: INPersonHandle(value: String(notification.senderId), type: .unknown),
             nameComponents: nil,
-            displayName: notification.title,
-            image: TelegramAvatarStore().load(userId: notification.senderId).map { INImage(imageData: $0) },
+            displayName: notification.group == nil ? notification.title : notification.senderName,
+            image: store.load(userId: notification.senderId).map { INImage(imageData: $0) },
             contactIdentifier: nil,
             customIdentifier: "telegram|\(notification.senderId)",
         )
+        let group = notification.group.map { group in
+            (name: group.name, image: store.load(groupId: group.id).map { INImage(imageData: $0) })
+        }
         return await self.content(
             content,
             sender: sender,
             body: notification.body,
             conversation: notification.conversationId,
-            log: PushExtensionLog.Entry(network: "telegram", chat: notification.conversationId, hasAvatar: sender.image != nil),
+            group: group,
+            log: PushExtensionLog.Entry(
+                network: "telegram",
+                chat: notification.conversationId,
+                hasAvatar: group.map { $0.image != nil } ?? (sender.image != nil),
+            ),
         )
     }
 
@@ -32,18 +42,27 @@ public enum CommunicationNotification {
         sender: INPerson,
         body: String,
         conversation: String,
+        group: (name: String, image: INImage?)? = nil,
         log: PushExtensionLog.Entry,
     ) async -> UNNotificationContent? {
+        // iOS shows a group conversation, titled with the group and pictured with its image, for an intent with a
+        // group name and more than one recipient.
+        let recipients = group.map { _ in
+            [sender, INPerson(personHandle: INPersonHandle(value: "me", type: .unknown), nameComponents: nil, displayName: nil, image: nil, contactIdentifier: nil, customIdentifier: nil, isMe: true)]
+        }
         let intent = INSendMessageIntent(
-            recipients: nil,
+            recipients: recipients,
             outgoingMessageType: .outgoingMessageText,
             content: body,
-            speakableGroupName: nil,
+            speakableGroupName: group.map { INSpeakableString(spokenPhrase: $0.name) },
             conversationIdentifier: conversation,
             serviceName: nil,
             sender: sender,
             attachments: nil,
         )
+        if let image = group?.image {
+            intent.setImage(image, forParameterNamed: \.speakableGroupName)
+        }
         let interaction = INInteraction(intent: intent, response: nil)
         interaction.direction = .incoming
         var log = log

@@ -269,6 +269,8 @@ final class TelegramTests: XCTestCase {
         XCTAssertEqual(push?.body, "Ann sent a photo to the group Friends (CHAT_MESSAGE_PHOTO)")
         XCTAssertEqual(push?.senderId, 42)
         XCTAssertEqual(push?.conversationId, "channel:99")
+        XCTAssertEqual(push?.senderName, "Ann")
+        XCTAssertEqual(push?.group, TelegramPushNotification.Group(id: 99, name: "Friends"))
     }
 
     func testPushWithTopLevelFieldsAndLocalizedAlert() {

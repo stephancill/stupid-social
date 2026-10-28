@@ -8,8 +8,21 @@ public struct TelegramPushNotification: Equatable, Sendable {
     public let title: String
     public let body: String
     public let senderId: Int64
+    public let senderName: String
+    /// A group message's group, whose photo the notification shows; `nil` in a private chat.
+    public let group: Group?
     /// The chat's peer key (`user:…`, `chat:…`, `channel:…`), so a chat's notifications are one conversation.
     public let conversationId: String
+
+    public struct Group: Equatable, Sendable {
+        public let id: Int64
+        public let name: String
+
+        public init(id: Int64, name: String) {
+            self.id = id
+            self.name = name
+        }
+    }
 
     /// The notification for a push's `userInfo`, or `nil` for one that isn't from a person. `localized` formats a
     /// `loc-key` with its arguments, from the app's strings.
@@ -24,22 +37,29 @@ public struct TelegramPushNotification: Equatable, Sendable {
         }
 
         let senderId: Int64
+        let senderName: String
         let title: String
+        var group: Group?
         switch chat {
         case let .user(id):
             senderId = id
             guard let sender = key?.hasPrefix("MESSAGE_") == true ? args.first : alert?["title"] as? String else { return nil }
+            senderName = sender
             title = sender
-        case .chat, .channel:
+        case let .chat(groupId), let .channel(groupId):
             // A group message from a person; posts and messages sent as a channel or group have no person.
             guard id("chat_from_broadcast_id") == nil, id("chat_from_group_id") == nil, let from = id("chat_from_id") else { return nil }
             senderId = from
             if let key {
                 guard key.hasPrefix("CHAT_"), args.count >= 2 else { return nil }
+                senderName = args[0]
+                group = Group(id: groupId, name: args[1])
                 title = "\(args[0]) in \(args[1])"
             } else {
-                guard let group = alert?["title"] as? String else { return nil }
-                title = group
+                guard let groupName = alert?["title"] as? String else { return nil }
+                senderName = groupName
+                group = Group(id: groupId, name: groupName)
+                title = groupName
             }
         }
         // The text alone for text messages, since the title already names the sender; otherwise Telegram's line,
@@ -58,7 +78,7 @@ public struct TelegramPushNotification: Equatable, Sendable {
         if senderId == SpoilerText.telegramServiceUserId {
             body = SpoilerText.mask(body, ranges: SpoilerText.loginCodeRanges(in: body))
         }
-        return TelegramPushNotification(title: title, body: body, senderId: senderId, conversationId: chat.key)
+        return TelegramPushNotification(title: title, body: body, senderId: senderId, senderName: senderName, group: group, conversationId: chat.key)
     }
 }
 
@@ -113,6 +133,17 @@ public struct TelegramAvatarStore: Sendable {
         directory = container?.appending(path: "telegram-avatars", directoryHint: .isDirectory)
     }
 
+    /// A group's photo by its id, for basic groups and supergroups alike: the app's avatar keys don't always say
+    /// which kind a chat is.
+    public func load(groupId: Int64) -> Data? {
+        guard let directory else { return nil }
+        return try? Data(contentsOf: directory.appending(path: "group-\(groupId).jpg"))
+    }
+
+    public func save(_ data: Data, groupId: Int64) {
+        write(data, name: "group-\(groupId).jpg")
+    }
+
     /// The users whose avatars are saved, for Settings → Debug.
     public var userIds: [Int64] {
         guard let directory, let files = try? FileManager.default.contentsOfDirectory(atPath: directory.path()) else { return [] }
@@ -125,8 +156,12 @@ public struct TelegramAvatarStore: Sendable {
     }
 
     public func save(_ data: Data, userId: Int64) {
+        write(data, name: "\(userId).jpg")
+    }
+
+    private func write(_ data: Data, name: String) {
         guard let directory else { return }
-        let file = directory.appending(path: "\(userId).jpg")
+        let file = directory.appending(path: name)
         if (try? Data(contentsOf: file)) == data { return }
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         // Readable by the extension after the first unlock, when a push may arrive with the phone locked.
