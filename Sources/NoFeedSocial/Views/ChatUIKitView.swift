@@ -1888,6 +1888,13 @@ private final class ChatMessageCell: UICollectionViewListCell, UIGestureRecogniz
             image.layer.cornerRadius = 16
             image.layer.maskedCorners = corners
         }
+        // The views above are rebuilt on every configure and start with a zero frame. A reconfigure inside an
+        // animation, such as a reaction arriving, would grow them from the corner, so they take their frames first.
+        UIView.performWithoutAnimation {
+            for stack in [mediaStack, embedsStack, reactionsRow] {
+                stack.layoutIfNeeded()
+            }
+        }
         let timeOnImage = hasMedia && !hasContent
         timeBackground.isHidden = !timeOnImage
         if timeOnImage {
