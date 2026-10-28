@@ -43,8 +43,11 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     private var orderedMessages: [ChatMessage] = []
     private var indexById: [String: Int] = [:]
     /// What each cell was configured from: its message and its place in a sender group.
+    /// Keyed by item key (`itemKey(for:)`), so a sent message compares with its "sending" copy.
     private var renderedMessages: [String: (message: ChatMessage, layout: ChatBubbleLayout, reply: ChatReplyQuote?)] = [:]
     private var attributedCache: [String: NSAttributedString] = [:]
+    /// Item keys back to message ids; see `itemKey(for:)`.
+    private var messageIdByKey: [String: String] = [:]
     private var isNearBottom = true
     /// Follows the newest message: set when the room opens at the bottom or the user scrolls back down,
     /// cleared when the user scrolls away. Layout changes while pinned re-anchor to the bottom.
@@ -203,8 +206,8 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         let dividerRegistration = UICollectionView.CellRegistration<ChatUnreadDividerCell, Item> { _, _, _ in }
         dataSource = UICollectionViewDiffableDataSource(collectionView: collectionView) { collectionView, indexPath, item in
             switch item {
-            case let .message(id):
-                collectionView.dequeueConfiguredReusableCell(using: messageRegistration, for: indexPath, item: id)
+            case let .message(key):
+                collectionView.dequeueConfiguredReusableCell(using: messageRegistration, for: indexPath, item: self.messageId(forKey: key))
             case .unreadDivider:
                 collectionView.dequeueConfiguredReusableCell(using: dividerRegistration, for: indexPath, item: item)
             }
@@ -467,9 +470,10 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         indexById = Dictionary(messages.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { _, latest in latest })
         var snapshot = NSDiffableDataSourceSnapshot<Section, Item>()
         snapshot.appendSections([.messages])
-        let items = messages.map { Item.message($0.id) }
+        messageIdByKey = Dictionary(messages.map { (itemKey(for: $0.id), $0.id) }, uniquingKeysWith: { _, latest in latest })
+        let items = messages.map { Item.message(itemKey(for: $0.id)) }
         var rows = items
-        if let firstUnread = viewModel.firstUnreadMessageId, let index = rows.firstIndex(of: .message(firstUnread)) {
+        if let firstUnread = viewModel.firstUnreadMessageId, let index = rows.firstIndex(of: .message(itemKey(for: firstUnread))) {
             rows.insert(.unreadDivider, at: index)
         }
         snapshot.appendItems(rows, toSection: .messages)
@@ -481,10 +485,11 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         for (index, message) in messages.enumerated() {
             let layout = bubbleLayout(at: index)
             let reply = message.replyToId.map(replyQuote(for:))
-            if let rendered = renderedMessages[message.id], rendered.message != message || rendered.layout != layout || rendered.reply != reply {
-                changed.append(.message(message.id))
+            let key = itemKey(for: message.id)
+            if let rendered = renderedMessages[key], rendered.message != message || rendered.layout != layout || rendered.reply != reply {
+                changed.append(.message(key))
             }
-            renderedMessages[message.id] = (message, layout, reply)
+            renderedMessages[key] = (message, layout, reply)
         }
         snapshot.reconfigureItems(changed)
 
@@ -514,10 +519,22 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
             isAnchoredToDivider = true
             scrollToDivider()
         } else if wasAtBottom, !hasLater {
-            // At the bottom, new messages and cells that grew push the list up rather than under the input.
-            scrollToBottom(animated: true)
+            // At the bottom, new messages and cells that grew push the list up rather than under the input. A sent
+            // message replacing its "sending" copy adds nothing: its new cell starts at an estimated height, so the
+            // list settles at the bottom before it draws, rather than jumping and sliding back.
+            scrollToBottom(animated: items.count > previousIds.count)
         }
         DispatchQueue.main.async { [weak self] in self?.reportVisibleRead() }
+    }
+
+    /// A sent message stays under the item of its "sending" copy, so confirming it reconfigures that cell rather
+    /// than replacing it with a new one, whose estimated height would make the list jump.
+    private func itemKey(for messageId: String) -> String {
+        viewModel.sentLocalIds[messageId] ?? messageId
+    }
+
+    private func messageId(forKey key: String) -> String {
+        messageIdByKey[key] ?? key
     }
 
     /// The quote shown in a reply, including targets outside the loaded window while they load.
@@ -541,7 +558,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         attributedCache.removeAll()
         var snapshot = dataSource.snapshot()
         let changed = items(in: .messages, of: snapshot).filter { item in
-            guard case let .message(id) = item, let message = messagesById[id] else { return false }
+            guard case let .message(key) = item, let message = messagesById[messageId(forKey: key)] else { return false }
             let quoted = message.replyToId.flatMap { viewModel.message(withId: $0)?.text } ?? ""
             return (message.text ?? "").contains("@") || quoted.contains("@")
         }
@@ -554,11 +571,12 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     private func reconfigureReplies() {
         var snapshot = dataSource.snapshot()
         let replies = items(in: .messages, of: snapshot).filter { item in
-            guard case let .message(id) = item, let target = messagesById[id]?.replyToId, var rendered = renderedMessages[id] else { return false }
+            guard case let .message(key) = item, let target = messagesById[messageId(forKey: key)]?.replyToId,
+                  var rendered = renderedMessages[key] else { return false }
             let reply = replyQuote(for: target)
             guard rendered.reply != reply else { return false }
             rendered.reply = reply
-            renderedMessages[id] = rendered
+            renderedMessages[key] = rendered
             return true
         }
         guard !replies.isEmpty else { return }
@@ -570,7 +588,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         guard let target = pendingJumpTarget else { return }
         pendingJumpTarget = nil
         viewModel.clearJumpTarget()
-        guard let message = viewModel.message(withId: target), let indexPath = dataSource.indexPath(for: .message(message.id)) else { return }
+        guard let message = viewModel.message(withId: target), let indexPath = dataSource.indexPath(for: .message(itemKey(for: message.id))) else { return }
         isPinnedToBottom = false
         isAnchoredToDivider = false
         collectionView.layoutIfNeeded()
@@ -952,8 +970,8 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         let visibleBottom = collectionView.contentOffset.y + collectionView.bounds.height - collectionView.adjustedContentInset.bottom
         var newest: Int?
         for indexPath in collectionView.indexPathsForVisibleItems {
-            guard case let .message(id) = dataSource.itemIdentifier(for: indexPath),
-                  let index = indexById[id], !orderedMessages[index].isNotice,
+            guard case let .message(key) = dataSource.itemIdentifier(for: indexPath),
+                  let index = indexById[messageId(forKey: key)], !orderedMessages[index].isNotice,
                   let frame = collectionView.layoutAttributesForItem(at: indexPath)?.frame,
                   frame.maxY <= visibleBottom + 1
             else { continue }
@@ -1020,7 +1038,8 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     /// Long press: a row of quick reactions ending in More Reactions, then Reply and Copy.
     func collectionView(_: UICollectionView, contextMenuConfigurationForItemsAt indexPaths: [IndexPath], point _: CGPoint) -> UIContextMenuConfiguration? {
         guard let indexPath = indexPaths.first,
-              case let .message(id) = dataSource.itemIdentifier(for: indexPath),
+              case let .message(key) = dataSource.itemIdentifier(for: indexPath),
+              case let id = messageId(forKey: key),
               let message = messagesById[id], message.isUserMessage
         else { return nil }
         let canReact = viewModel.canReact && !message.isDeleted
@@ -1389,7 +1408,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         guard !changedIds.isEmpty else { return }
         var snapshot = dataSource.snapshot()
         let present = Set(items(in: .messages, of: snapshot))
-        let changed = changedIds.map(Item.message).filter(present.contains)
+        let changed = changedIds.map { Item.message(itemKey(for: $0)) }.filter(present.contains)
         guard !changed.isEmpty else { return }
         snapshot.reconfigureItems(changed)
         applyKeepingBottom(snapshot, animated: hasScrolledInitially)

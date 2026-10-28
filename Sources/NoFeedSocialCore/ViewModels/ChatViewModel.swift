@@ -255,6 +255,11 @@ public class ChatViewModel: ObservableObject {
     private var outgoing: [ChatMessage] = []
     /// Confirmed message id → its sending copy, which stays until the message is in `history`.
     private var awaitingHistory: [String: String] = [:]
+    /// "Sending" ids → the history ids when they were sent, so the sent message is recognized if history brings it
+    /// before the send returns its id.
+    private var historyAtSend: [String: Set<String>] = [:]
+    /// Sent messages' ids → the "sending" id they were shown under, so the chat keeps their cell once confirmed.
+    public private(set) var sentLocalIds: [String: String] = [:]
     /// Confirmed message id → the image the user picked. The message keeps showing it, so the swap from the
     /// sending copy doesn't reload the image or change its size.
     private var pickedImages: [String: ChatEmbed] = [:]
@@ -330,6 +335,7 @@ public class ChatViewModel: ObservableObject {
     func sendOptimistically(text: String, attachment: ChatAttachment?, replyToId: String?, deliver: () async throws -> String?) async {
         errorMessage = nil
         let localId = "sending-\(UUID().uuidString)"
+        historyAtSend[localId] = Set(history.map(\.id))
         let image = attachment.flatMap { Self.localImage(attachment: $0, id: localId) }
         outgoing.append(ChatMessage(
             id: localId,
@@ -351,9 +357,11 @@ public class ChatViewModel: ObservableObject {
                 pickedImages[id] = image
                 awaitingHistory[id] = localId
             } else {
+                historyAtSend[localId] = nil
                 outgoing.removeAll { $0.id == localId }
             }
         } catch {
+            historyAtSend[localId] = nil
             outgoing.removeAll { $0.id == localId }
             if draft.isEmpty, self.attachment == nil {
                 draft = text
@@ -396,9 +404,20 @@ public class ChatViewModel: ObservableObject {
     }
 
     private func composeMessages() {
+        // A pushed update can bring the sent message before the send returns its id; showing both copies until then
+        // would add a row and take it away again.
+        for local in outgoing {
+            guard let before = historyAtSend[local.id], !awaitingHistory.values.contains(local.id) else { continue }
+            let claimed = Set(awaitingHistory.keys).union(sentLocalIds.keys)
+            if let sent = history.last(where: { $0.isOwn && !before.contains($0.id) && !claimed.contains($0.id) && $0.text == local.text }) {
+                awaitingHistory[sent.id] = local.id
+            }
+        }
         let ids = Set(history.map(\.id))
         for (id, localId) in awaitingHistory where ids.contains(id) {
             awaitingHistory[id] = nil
+            sentLocalIds[id] = localId
+            historyAtSend[localId] = nil
             outgoing.removeAll { $0.id == localId }
         }
         let shown = holdsRestoredMessages ? [] : history.map { message in pickedImages[message.id].map(message.showing) ?? message } + outgoing
