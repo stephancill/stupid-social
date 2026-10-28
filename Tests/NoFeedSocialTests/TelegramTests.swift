@@ -1,5 +1,6 @@
 import Foundation
 @testable import NoFeedSocialCore
+import NoFeedSocialPush
 import XCTest
 
 /// Vectors come from `scripts/telegram-client.py`, whose handshake and calls are checked against Telegram.
@@ -192,6 +193,50 @@ final class TelegramTests: XCTestCase {
         XCTAssertFalse(TelegramClient.update(status, concerns: dm))
         XCTAssertTrue(TelegramClient.update(shortMessage, concerns: dm))
         XCTAssertFalse(TelegramClient.update(shortMessage, concerns: group))
+    }
+
+    func testStatusUpdatesForTheirUser() {
+        let status = TLObject("updateShort", ["update": .object(TLObject("updateUserStatus", [
+            "user_id": .long(185_733_531),
+            "status": .object(TLObject("userStatusOffline", ["was_online": .int(1_793_170_332)])),
+        ]))])
+        XCTAssertEqual(TelegramClient.statusUpdate(status, userId: 185_733_531), .lastSeen(Date(timeIntervalSince1970: 1_793_170_332)))
+        XCTAssertNil(TelegramClient.statusUpdate(status, userId: 1))
+        XCTAssertEqual(TelegramMember.Status.recently.text, "last seen recently")
+    }
+
+    // MARK: Push
+
+    func testPrivateTextPushShowsTheSenderAndText() {
+        let userInfo: [AnyHashable: Any] = [
+            "aps": ["alert": ["loc-key": "MESSAGE_TEXT", "loc-args": ["Ann", "hi there"]], "mutable-content": 1],
+            "custom": ["from_id": "42", "msg_id": "7"],
+        ]
+        let push = TelegramPushNotification.make(userInfo: userInfo) { _, _ in nil }
+        XCTAssertEqual(push?.title, "Ann")
+        XCTAssertEqual(push?.body, "hi there")
+        XCTAssertEqual(push?.senderId, 42)
+        XCTAssertEqual(push?.conversationId, "user:42")
+    }
+
+    func testGroupPushNamesTheGroupAndKeepsTheLineForMedia() {
+        let userInfo: [AnyHashable: Any] = [
+            "aps": ["alert": ["loc-key": "CHAT_MESSAGE_PHOTO", "loc-args": ["Ann", "Friends"]]],
+            "custom": ["channel_id": 99, "chat_from_id": 42],
+        ]
+        let push = TelegramPushNotification.make(userInfo: userInfo) { key, args in "\(args[0]) sent a photo to the group \(args[1]) (\(key))" }
+        XCTAssertEqual(push?.title, "Ann in Friends")
+        XCTAssertEqual(push?.body, "Ann sent a photo to the group Friends (CHAT_MESSAGE_PHOTO)")
+        XCTAssertEqual(push?.senderId, 42)
+        XCTAssertEqual(push?.conversationId, "channel:99")
+    }
+
+    func testChannelPostPushHasNoPerson() {
+        let userInfo: [AnyHashable: Any] = [
+            "aps": ["alert": ["loc-key": "CHANNEL_MESSAGE_TEXT", "loc-args": ["News", "Headline"]]],
+            "custom": ["channel_id": 99],
+        ]
+        XCTAssertNil(TelegramPushNotification.make(userInfo: userInfo) { _, _ in nil })
     }
 
     // MARK: Live

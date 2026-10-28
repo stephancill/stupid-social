@@ -5,7 +5,8 @@ import NoFeedSocialPush
 
 /// Decrypts Apron pushes the relay forwards as `webpush` ciphertext and shows them as messages from the sender,
 /// with their avatar, through an `INSendMessageIntent` (Communication Notifications). A push it can't read keeps
-/// the relay's generic alert, since dropping a notification needs an entitlement.
+/// the relay's generic alert, since dropping a notification needs an entitlement. Telegram pushes become messages
+/// from their sender the same way, with the avatar the app saved.
 @objc(NotificationService)
 final class NotificationService: UNNotificationServiceExtension, @unchecked Sendable {
     // The system calls in on one thread at a time: `didReceive`, then possibly `serviceExtensionTimeWillExpire`.
@@ -13,6 +14,19 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
     private var fallback: UNNotificationContent?
 
     override func didReceive(_ request: UNNotificationRequest, withContentHandler contentHandler: @escaping (UNNotificationContent) -> Void) {
+        if let telegram = TelegramPushNotification.make(userInfo: request.content.userInfo, localized: Self.localized),
+           let content = request.content.mutableCopy() as? UNMutableNotificationContent
+        {
+            content.threadIdentifier = "telegram|\(telegram.conversationId)"
+            self.contentHandler = contentHandler
+            fallback = content
+            nonisolated(unsafe) let prepared = content
+            Task {
+                let communication = await Self.communicationContent(for: telegram, content: prepared)
+                self.finish(communication ?? prepared)
+            }
+            return
+        }
         guard let ciphertext = request.content.userInfo["webpush"] as? String,
               let body = Data(base64URLEncoded: ciphertext),
               let notification = Self.notification(for: body),
@@ -90,6 +104,46 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
         } catch {
             return nil
         }
+    }
+
+    private static func communicationContent(for notification: TelegramPushNotification, content: UNMutableNotificationContent) async -> UNNotificationContent? {
+        let sender = await INPerson(
+            personHandle: INPersonHandle(value: String(notification.senderId), type: .unknown),
+            nameComponents: nil,
+            displayName: notification.title,
+            image: TelegramAvatarStore().load(userId: notification.senderId).map { INImage(imageData: $0) },
+            contactIdentifier: nil,
+            customIdentifier: "telegram|\(notification.senderId)",
+        )
+        let intent = INSendMessageIntent(
+            recipients: nil,
+            outgoingMessageType: .outgoingMessageText,
+            content: notification.body,
+            speakableGroupName: nil,
+            conversationIdentifier: notification.conversationId,
+            serviceName: nil,
+            sender: sender,
+            attachments: nil,
+        )
+        let interaction = INInteraction(intent: intent, response: nil)
+        interaction.direction = .incoming
+        do {
+            try await interaction.donate()
+            let updated = try content.updating(from: intent)
+            // The intent sets the sender as the title; the body is still Telegram's whole line.
+            guard let mutable = updated.mutableCopy() as? UNMutableNotificationContent else { return updated }
+            mutable.body = notification.body
+            return mutable
+        } catch {
+            return nil
+        }
+    }
+
+    /// A Telegram `loc-key` line from the app's strings (the extension has none of its own), as iOS would show it.
+    private static func localized(_ key: String, _ args: [String]) -> String? {
+        let app = Bundle.main.bundleURL.deletingLastPathComponent().deletingLastPathComponent()
+        guard let template = Bundle(url: app)?.localizedString(forKey: key, value: nil, table: nil), template != key else { return nil }
+        return String(format: template, arguments: args)
     }
 
     /// The avatar's image, or `nil` when there is none or it doesn't load quickly.

@@ -129,17 +129,8 @@ private struct TelegramMemberRow: View {
 }
 
 private extension TelegramMember {
-    /// Like Telegram: "online", "last seen 5 minutes ago", or roughly when the exact time is private.
     var statusText: String? {
-        if isBot { return "bot" }
-        switch status {
-        case .online: return "online"
-        case let .lastSeen(date): return "last seen \(date.formatted(.relative(presentation: .named)))"
-        case .recently: return "last seen recently"
-        case .lastWeek: return "last seen within a week"
-        case .lastMonth: return "last seen within a month"
-        case .unknown: return "last seen a long time ago"
-        }
+        isBot ? "bot" : status.text
     }
 
     /// Most recently seen first; rough statuses sort after exact times within their range.

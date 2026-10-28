@@ -16,6 +16,9 @@ public final class TelegramChatViewModel: ChatViewModel {
     private var pollTask: Task<Void, Never>?
     private var refreshTask: Task<Void, Never>?
     private var observer: UUID?
+    private var statusObserver: UUID?
+    /// The other person's last-seen status in a private chat, which the subtitle shows.
+    private var userStatus: TelegramMember.Status?
     private let pollInterval: Duration = .seconds(30)
     private let snapshotCache: ChatSnapshotCache
     private var hasLoadedHistory = false
@@ -122,6 +125,11 @@ public final class TelegramChatViewModel: ChatViewModel {
             observer = await client.addUpdateObserver(peer: peer) { [weak self] in
                 Task { @MainActor in self?.scheduleRefresh() }
             }
+            if peer.kind == .user {
+                statusObserver = await client.addStatusObserver(userId: peer.id) { [weak self] status in
+                    Task { @MainActor in self?.apply(status: status) }
+                }
+            }
             startPolling()
         } catch {
             state = .disconnected(error.localizedDescription)
@@ -132,10 +140,11 @@ public final class TelegramChatViewModel: ChatViewModel {
         pollTask?.cancel()
         pollTask = nil
         refreshTask?.cancel()
-        if let observer {
-            self.observer = nil
-            Task { [client] in await client.removeUpdateObserver(observer) }
+        for id in [observer, statusObserver].compactMap(\.self) {
+            Task { [client] in await client.removeUpdateObserver(id) }
         }
+        observer = nil
+        statusObserver = nil
         saveSnapshot()
     }
 
@@ -144,7 +153,13 @@ public final class TelegramChatViewModel: ChatViewModel {
         if dialog.readInboxMaxId > readInboxMaxId {
             readInboxMaxId = dialog.readInboxMaxId
         }
-        subtitle = dialog.memberCount.map { "\($0) members" } ?? "Telegram"
+        userStatus = dialog.userStatus
+        subtitle = dialog.memberCount.map { "\($0) members" } ?? userStatus?.text ?? "Telegram"
+    }
+
+    private func apply(status: TelegramMember.Status) {
+        userStatus = status
+        subtitle = status.text
     }
 
     private func startPolling() {
@@ -153,8 +168,15 @@ public final class TelegramChatViewModel: ChatViewModel {
                 try? await Task.sleep(for: pollInterval)
                 guard !Task.isCancelled, let self else { return }
                 await refreshNewest()
+                await refreshStatus()
             }
         }
+    }
+
+    /// Status pushes don't come for everyone, and "last seen 5 minutes ago" ages, so the poll reads it again.
+    private func refreshStatus() async {
+        guard userStatus != nil, let dialog = try? await client.dialogState(peer: peer) else { return }
+        apply(dialog)
     }
 
     /// Updates arrive in bursts (the message, then read and typing updates), so one refresh follows each burst.

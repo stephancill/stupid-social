@@ -787,13 +787,20 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     private func applyKeepingBottom(_ snapshot: NSDiffableDataSourceSnapshot<Section, Item>, animated: Bool = false) {
         let wasAtBottom = isPinnedToBottom && hasScrolledInitially && !hasLater
         if animated, !isAnchoredToDivider {
-            // Grow the cells and follow the bottom in one animation, so the list moves up with the growth.
+            // Grow the cells and follow the bottom in one animation, so the list moves up with the growth. Away
+            // from the bottom, the lowest visible message stays put, so growth above it also moves content up.
             collectionView.layoutIfNeeded()
+            let anchor = wasAtBottom ? nil : lowestVisibleItem()
             UIView.animate(withDuration: 0.3, delay: 0, options: [.curveEaseOut, .allowUserInteraction, .beginFromCurrentState]) {
                 self.dataSource.apply(snapshot, animatingDifferences: false)
                 self.collectionView.layoutIfNeeded()
                 if wasAtBottom {
                     self.collectionView.contentOffset.y = self.bottomOffset
+                } else if let anchor, let indexPath = self.dataSource.indexPath(for: anchor.item),
+                          let frame = self.collectionView.layoutAttributesForItem(at: indexPath)?.frame
+                {
+                    let target = frame.maxY - anchor.screenMaxY
+                    self.collectionView.contentOffset.y = min(max(target, -self.collectionView.adjustedContentInset.top), self.bottomOffset)
                 }
             }
             return
@@ -804,6 +811,18 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         } else if wasAtBottom {
             scrollToBottom(animated: true)
         }
+    }
+
+    /// The last item showing above the composer, with its bottom edge's distance from the top of the content offset.
+    private func lowestVisibleItem() -> (item: Item, screenMaxY: CGFloat)? {
+        let visibleBottom = collectionView.contentOffset.y + collectionView.bounds.height - collectionView.adjustedContentInset.bottom
+        let indexPath = collectionView.indexPathsForVisibleItems
+            .filter { (collectionView.layoutAttributesForItem(at: $0)?.frame.minY ?? .infinity) < visibleBottom }
+            .max()
+        guard let indexPath, let item = dataSource.itemIdentifier(for: indexPath),
+              let frame = collectionView.layoutAttributesForItem(at: indexPath)?.frame
+        else { return nil }
+        return (item, frame.maxY - collectionView.contentOffset.y)
     }
 
     private func send() {

@@ -1,4 +1,5 @@
 import Foundation
+import NoFeedSocialPush
 
 /// Rich content in a Telegram message, kept `Codable` for the chat snapshot; the chat maps it to `ChatEmbed`.
 public enum TelegramEmbed: Codable, Hashable, Sendable {
@@ -89,12 +90,21 @@ public final class TelegramFileURLProtocol: URLProtocol, @unchecked Sendable {
         loadTask = Task {
             do {
                 let data = try await telegram.file(at: url)
+                Self.saveForNotifications(url: url, data: data)
                 guard !Task.isCancelled else { return }
                 loader.finish(url: url, data: data)
             } catch {
                 loader.fail(error)
             }
         }
+    }
+
+    /// A user's avatar goes to the App Group too, for the notification extension to show on their messages.
+    private static func saveForNotifications(url: URL, data: Data) {
+        guard let key = TelegramMediaURL.parse(url)?.key, key.hasPrefix("avatar-user:"),
+              let userId = key.dropFirst("avatar-user:".count).split(separator: "-").first.flatMap({ Int64($0) })
+        else { return }
+        TelegramAvatarStore().save(data, userId: userId)
     }
 
     private struct Loader: @unchecked Sendable {

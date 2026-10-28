@@ -61,6 +61,8 @@ public final class ApronChatViewModel: ChatViewModel {
     private static var typingFrameTimes: [URL: [Date]] = [:]
     private let typingFrameBudget = 7
     private var typingStopTask: Task<Void, Never>?
+    /// Recomputes a DM's "last seen …" subtitle, which ages while the chat is open.
+    private var subtitleTask: Task<Void, Never>?
 
     /// Set when the Chats list knows of unread messages, which may all be newer than the cache.
     private let expectsUnread: Bool
@@ -162,6 +164,14 @@ public final class ApronChatViewModel: ChatViewModel {
             }
             updateNotifications()
             state = .connected
+            subtitleTask?.cancel()
+            subtitleTask = Task { [weak self] in
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(30))
+                    guard let self else { return }
+                    updateSubtitle()
+                }
+            }
             if let message = focusMessageId {
                 focusMessageId = nil
                 await jump(to: message)
@@ -206,6 +216,8 @@ public final class ApronChatViewModel: ChatViewModel {
 
     /// Leaves the room. The connection is shared with the feed, so only this chat's observer goes away.
     override public func disconnect() {
+        subtitleTask?.cancel()
+        subtitleTask = nil
         saveCache()
         stopTyping()
         stopObserving()
@@ -437,6 +449,18 @@ public final class ApronChatViewModel: ChatViewModel {
                     return lhs.displayName.localizedStandardCompare(rhs.displayName) == .orderedAscending
                 }
         }
+        updateSubtitle()
+    }
+
+    /// A DM shows the other person's status in place of the server, when the server reports it: "last seen …"
+    /// when it sends `seen` with an offline status (§4.5.2).
+    private func updateSubtitle() {
+        let others = (members ?? []).filter { !isOwnUser($0) }
+        let other = titleIsMemberNames && others.count == 1 ? others[0] : nil
+        let status = other.flatMap { user in
+            user.lastSeen.map { "last seen \($0.formatted(.relative(presentation: .named)))" } ?? presence(of: user)?.text
+        }
+        subtitle = status ?? serverURL.host() ?? serverURL.absoluteString
     }
 
     /// Whether the user is reachable now, `nil` when the server doesn't say (§4.5.1). Your own entry follows

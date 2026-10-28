@@ -179,6 +179,17 @@ public enum ApronPresence: Hashable, Sendable {
         case .offline, .other: false
         }
     }
+
+    /// The status as a DM's subtitle shows it, lowercase like Telegram's "online".
+    public var text: String {
+        switch self {
+        case .online: "online"
+        case .idle: "idle"
+        case .doNotDisturb: "do not disturb"
+        case .offline: "offline"
+        case let .other(value): value
+        }
+    }
 }
 
 public struct ApronRoom: Decodable, Hashable, Sendable {

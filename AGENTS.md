@@ -50,6 +50,7 @@ Sources/
     WebPushDecryptor.swift
     ApronPushStore.swift
     ApronPushNotification.swift
+    TelegramPushNotification.swift  # Telegram push → sender and text; TelegramAvatarStore for the extension
   NoFeedSocialNotificationService/  # Notification Service Extension: decrypts Apron pushes
     NotificationService.swift
   NoFeedSocialCore/                 # Shared core (models, services, sources)

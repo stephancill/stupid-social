@@ -69,6 +69,18 @@ public struct TelegramMember: Identifiable, Hashable, Sendable {
         case lastWeek
         case lastMonth
         case unknown
+
+        /// Like Telegram: "online", "last seen 5 minutes ago", or roughly when the exact time is private.
+        public var text: String {
+            switch self {
+            case .online: "online"
+            case let .lastSeen(date): "last seen \(date.formatted(.relative(presentation: .named)))"
+            case .recently: "last seen recently"
+            case .lastWeek: "last seen within a week"
+            case .lastMonth: "last seen within a month"
+            case .unknown: "last seen a long time ago"
+            }
+        }
     }
 
     public let id: Int64
@@ -100,6 +112,8 @@ public struct TelegramDialogState: Sendable {
     public let title: String
     public let isGroup: Bool
     public let memberCount: Int?
+    /// The other person's last-seen status in a private chat; `nil` in groups, Saved Messages and with bots.
+    public let userStatus: TelegramMember.Status?
     public let readInboxMaxId: Int32
     public let readOutboxMaxId: Int32
 }
@@ -407,6 +421,30 @@ public actor TelegramClient {
         }
     }
 
+    /// Calls `observer` with a user's new status when Telegram pushes `updateUserStatus` for them.
+    public func addStatusObserver(userId: Int64, _ observer: @escaping @Sendable (TelegramMember.Status) -> Void) -> UUID {
+        let id = UUID()
+        observers[id] = { update in
+            if let status = Self.statusUpdate(update, userId: userId) {
+                observer(status)
+            }
+        }
+        return id
+    }
+
+    static func statusUpdate(_ update: TLObject, userId: Int64) -> TelegramMember.Status? {
+        switch update.name {
+        case "updateShort":
+            update["update"]?.object.flatMap { statusUpdate($0, userId: userId) }
+        case "updates", "updatesCombined":
+            update.objects("updates").lazy.compactMap { statusUpdate($0, userId: userId) }.last
+        case "updateUserStatus" where update["user_id"]?.long == userId:
+            status(of: update["status"]?.object)
+        default:
+            nil
+        }
+    }
+
     public func removeUpdateObserver(_ id: UUID) {
         observers[id] = nil
     }
@@ -601,9 +639,13 @@ public actor TelegramClient {
         else { throw TelegramError.protocolViolation("no dialog") }
         let title: String
         var memberCount: Int?
+        var userStatus: TelegramMember.Status?
         if peer.kind == .user {
             let user = result.objects("users").first { $0["id"]?.long == peer.id }
             title = user?.flag("self") == true ? "Saved Messages" : user.map(Self.name(of:)) ?? "Telegram"
+            if let user, !user.flag("self"), !user.flag("bot") {
+                userStatus = Self.status(of: user["status"]?.object)
+            }
         } else {
             let chat = result.objects("chats").first { $0["id"]?.long == peer.id }
             title = chat?["title"]?.string ?? "Group"
@@ -613,6 +655,7 @@ public actor TelegramClient {
             title: title,
             isGroup: peer.kind != .user,
             memberCount: memberCount,
+            userStatus: userStatus,
             readInboxMaxId: dialog["read_inbox_max_id"]?.int ?? 0,
             readOutboxMaxId: dialog["read_outbox_max_id"]?.int ?? 0,
         )

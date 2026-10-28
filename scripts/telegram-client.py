@@ -1174,6 +1174,8 @@ def main():
     members.add_argument("--peer", required=True)
     members.add_argument("--limit", type=int, default=200)
     members.add_argument("--json", action="store_true")
+    peer_status = sub.add_parser("peer-status", help="a private chat's last-seen status, as messages.getPeerDialogs returns it")
+    peer_status.add_argument("--peer", required=True)
     raw = sub.add_parser("raw")
     raw.add_argument("--method", required=True)
     raw.add_argument("--json", default="{}")
@@ -1276,6 +1278,11 @@ def main():
             statuses[status] = statuses.get(status, 0) + 1
         print("roles", roles)
         print("statuses", statuses)
+    elif args.command == "peer-status":
+        result = client.call({"_": "messages.getPeerDialogs", "peers": [{"_": "inputDialogPeer", "peer": client.input_peer(args.peer)}]})
+        user_id = int(args.peer.split(":")[1])
+        user = next((u for u in result["users"] if u["id"] == user_id), {})
+        print(json.dumps({"self": bool(user.get("self")), "bot": bool(user.get("bot")), "status": to_json(user.get("status"))}, indent=1))
     elif args.command == "send":
         method = {"_": "messages.sendMessage", "peer": client.input_peer(args.peer), "message": args.text, "random_id": secrets.randbits(63)}
         if args.reply_to:
