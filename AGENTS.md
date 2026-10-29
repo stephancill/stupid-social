@@ -171,7 +171,7 @@ Outside `Sources/`: `NotificationService/` holds the extension's Info.plist and 
 
 ## Usage Metrics
 
-- The app reports anonymous usage and errors to Stupid Metrics (`metrics.stupidtech.net`, source in `../stupid-metrics`). `docs/PLAN.md` § Usage Metrics has the requirements.
+- The app reports anonymous usage and errors to stupid metrics (`metrics.stupidtech.net`, source in `../stupid-metrics`). `docs/PLAN.md` § Usage Metrics has the requirements.
 - Every event and error goes through `AppMetrics` (`NoFeedSocialCore/Services/AppMetrics.swift`); call sites never use `StupidMetrics` directly. Add new events there, and list them in `docs/IMPLEMENTATION.md` § Usage metrics.
 - Properties are only networks, triggers, outcomes and similar low-cardinality values: never account names, handles, message or notification text, URLs, ids or tokens. Report errors with `StupidMetrics.error(_:error:)`, which sends only the type and case, never `localizedDescription`.
 - `Vendor/StupidMetrics` is a copy of a tagged release: change the package in `../stupid-metrics`, tag it, then run `scripts/vendor-stupid-metrics.sh <tag>`.
