@@ -136,12 +136,16 @@ final class AppContainer {
         guard let component = services.component(id: accountId), component.credentials.hasXChatKeys(),
               let client = component.xChatClient, let liveFeed = component.xChatLiveFeed
         else { return nil }
-        return { XChatViewModel(client: client, liveFeed: liveFeed, accountId: accountId, conversationId: conversationId, title: title) }
+        return { AdapterChatViewModel(adapter: XChatAdapter(client: client, liveFeed: liveFeed, conversationId: conversationId, title: title), accountId: accountId) }
     }
 
-    func telegramChatFactory(accountId: String, peer: TelegramPeer, title: String, userStatus: ChatPresence?) -> (() -> TelegramChatViewModel)? {
+    /// The chat and its group's member list.
+    func telegramChatFactory(accountId: String, peer: TelegramPeer, title: String, userStatus: ChatPresence?) -> (chat: () -> ChatViewModel, members: () -> TelegramMembersViewModel)? {
         guard let client = services.component(id: accountId)?.telegramClient else { return nil }
-        return { TelegramChatViewModel(client: client, accountId: accountId, peer: peer, title: title, userStatus: userStatus) }
+        return (
+            chat: { AdapterChatViewModel(adapter: TelegramChatAdapter(client: client, peer: peer, title: title, userStatus: userStatus), accountId: accountId) },
+            members: { TelegramMembersViewModel(client: client, peer: peer) },
+        )
     }
 
     func loadDemoData() {

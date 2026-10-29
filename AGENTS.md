@@ -95,9 +95,11 @@ Sources/
       TelegramMTProto.swift         # MTProto transport, auth key exchange, encrypted session actor
       TelegramClient.swift          # Telegram account: DCs, sign-in, dialogs, history, send, read, files, push
       TelegramMedia.swift           # tgfile: URLs and their URLProtocol, media/avatar/reaction parsing
+      TelegramChatAdapter.swift     # Telegram chat adapter: history, pushed updates, send, replies, media, reactions, read cursor
       XChatThrift.swift             # Thrift binary protocol values and coder for X Chat events
       XChatCrypto.swift             # X Chat crypto: ECIES key unwrap, XSalsa20-Poly1305 secretbox, franking, signing
       XChatClient.swift             # X Chat (encrypted X DMs): GraphQL inbox/history/send/read, Juicebox key recovery
+      XChatAdapter.swift            # X Chat adapter: decrypted history, live events, send, reactions, read marker
     Resources/
       TelegramSchema.tl             # Telegram TL schema (scripts/telegram-schema.py); TelegramAPI.json is gitignored
     Storage/
@@ -113,7 +115,7 @@ Sources/
       ApronReadStore.swift            # Apron read cursors (server truth or iCloud KVS)
       ApronMessageCache.swift         # Recent Apron messages per room for instant chat open
       ChatDraftStore.swift            # Unsent composer text per chat (by chatKey), every network
-      ChatSnapshotCache.swift         # Last messages and metadata per Spotify/Instagram/Telegram chat for instant open
+      ChatSnapshotCache.swift         # Last messages and metadata per adapter chat (by chatKey) for instant open
     ViewModels/
       FeedViewModel.swift
       ProfileSearchViewModel.swift
@@ -121,13 +123,12 @@ Sources/
       SettingsViewModel.swift
       ApronServersViewModel.swift
       ChatViewModel.swift            # Shared chat models (ChatMessage, ChatUser, ChatEmbed) and base view model: drafts, polling, unread, read markers, sending
-      AdapterChatViewModel.swift     # ChatAdapter protocol (+ ChatReactionSending, ChatAudioPreviewing) and the view model that drives one
+      AdapterChatViewModel.swift     # ChatAdapter protocol and its optional abilities (reactions, audio previews, live updates, quoted messages), and the view model that drives one
       ChatListViewModel.swift        # Chats list: ChatSummary, ChatListProvider (one per network), merged list
       ApronChatViewModel.swift
       ApronLinkViewModel.swift       # What an opened Apron link offers: add server, sign in, join, open
-      TelegramChatViewModel.swift    # Telegram chat: history, pushed updates, send, replies, read cursor
+      TelegramMembersViewModel.swift # Telegram group member list, opened from the chat title
       TelegramConnectionViewModel.swift # Telegram sign-in steps
-      XChatViewModel.swift           # X Chat conversation: decrypted history, live events, send, reactions, read marker
       XChatUnlockViewModel.swift     # X Chat PIN unlock and Forget Keys
 ```
 

@@ -4,7 +4,20 @@ import Foundation
 /// slow poll as a fallback), sends text, replies, photos and files, reacts, and moves the read cursor as
 /// messages are read. Media, avatars and link previews load lazily through `tgfile:` URLs.
 @MainActor
-public final class TelegramChatViewModel: ChatViewModel {
+public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatLiveUpdating, ChatReferenceResolving {
+    public let network = SocialNetwork.telegram
+    public let canReply = true
+    public let acceptsAttachments = true
+    /// A fallback to pushed updates; it also re-reads a private chat's "last seen", which ages.
+    public let pollInterval: Duration? = .seconds(30)
+    public var onChange: (() -> Void)?
+    public private(set) var info: ChatInfo
+    public private(set) var messages: [ChatMessage] = []
+    public private(set) var reactions: [String: [ChatReaction]] = [:]
+    public private(set) var hasEarlierMessages = false
+    public private(set) var referencedMessages: [String: ChatMessage] = [:]
+    public private(set) var unavailableReferences: Set<String> = []
+
     private let client: TelegramClient
     public let peer: TelegramPeer
     private var loaded: [Int32: TelegramMessage] = [:]
@@ -17,52 +30,25 @@ public final class TelegramChatViewModel: ChatViewModel {
     private var statusObserver: UUID?
     /// The other person's last-seen status in a private chat, which the subtitle shows.
     private var userStatus: ChatPresence?
-    private let pollInterval: Duration = .seconds(30)
-    private let snapshotCache: ChatSnapshotCache
+    /// The Chats list's status, which is newer than a snapshot's.
+    private let listedStatus: ChatPresence?
     private var hasLoadedHistory = false
     /// Reply targets being fetched, so a refresh doesn't ask for them again.
     private var pendingReferences: Set<Int32> = []
 
-    /// The group's members once `loadMembers()` has run; `nil` while loading or for a private chat.
-    @Published public private(set) var members: TelegramMemberList?
-    @Published public private(set) var membersError: String?
-
-    /// Groups list their members from the title; private chats have none to list.
-    public var isGroup: Bool {
-        peer.kind != .user
-    }
-
-    public init(client: TelegramClient, accountId: String, peer: TelegramPeer, title: String, userStatus: ChatPresence? = nil, snapshotCache: ChatSnapshotCache = ChatSnapshotCache()) {
+    public init(client: TelegramClient, peer: TelegramPeer, title: String, userStatus: ChatPresence? = nil) {
         self.client = client
         self.peer = peer
-        self.snapshotCache = snapshotCache
-        super.init(network: .telegram, chatKey: "\(accountId)|telegram:\(peer.key)", title: title, subtitle: "Telegram", canReply: true, offersAttachments: true)
-        showsSenderNames = peer.kind != .user
-        restoreSnapshot()
-        // The Chats list's status is newer than the snapshot's.
-        if let userStatus {
-            self.userStatus = userStatus
-            subtitle = userStatus.text
-        }
+        listedStatus = userStatus
+        self.userStatus = userStatus
+        info = ChatInfo(title: title, subtitle: userStatus?.text ?? "Telegram", showsSenderNames: peer.kind != .user)
     }
 
-    /// Fetches the member list each time it opens, so statuses are current.
-    public func loadMembers() async {
-        guard isGroup else { return }
-        membersError = nil
-        do {
-            members = try await client.members(peer: peer)
-        } catch {
-            membersError = Self.membersErrorText(error)
-        }
+    public var key: String {
+        "telegram:\(peer.key)"
     }
 
-    private static func membersErrorText(_ error: Error) -> String {
-        if case let TelegramError.rpc(_, message) = error, message == "CHAT_ADMIN_REQUIRED" {
-            return "This group's admins have hidden its member list."
-        }
-        return error.localizedDescription
-    }
+    // MARK: Snapshot
 
     private struct Snapshot: Codable {
         let messages: [TelegramMessage]
@@ -75,105 +61,79 @@ public final class TelegramChatViewModel: ChatViewModel {
         var userStatus: ChatPresence?
     }
 
-    private var snapshotKey: String {
-        chatKey
-    }
-
-    private func restoreSnapshot() {
-        guard let snapshot = snapshotCache.load(Snapshot.self, key: snapshotKey) else { return }
+    public func restore(snapshot data: Data) {
+        guard let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data) else { return }
         for message in snapshot.messages {
             loaded[message.id] = message
         }
         names = snapshot.names
         avatars = snapshot.avatars
         readInboxMaxId = snapshot.readInboxMaxId
-        title = snapshot.title
-        userStatus = snapshot.userStatus
-        subtitle = userStatus?.text ?? snapshot.subtitle
-        // The divider is in the first render, rather than appearing once history arrives.
-        firstUnreadMessageId = loaded.values.sorted { $0.id < $1.id }.map(chatMessage).first(where: isUnread)?.id
+        userStatus = listedStatus ?? snapshot.userStatus
+        info.title = snapshot.title
+        info.subtitle = userStatus?.text ?? snapshot.subtitle
         publish()
     }
 
-    private func saveSnapshot() {
+    public func snapshot() -> Data? {
         let newest = loaded.values.sorted { $0.id < $1.id }.suffix(ChatSnapshotCache.messageLimit)
-        snapshotCache.save(
-            Snapshot(messages: Array(newest), names: names, avatars: avatars, readInboxMaxId: readInboxMaxId, title: title, subtitle: subtitle, userStatus: userStatus),
-            key: snapshotKey,
-        )
+        return try? JSONEncoder().encode(Snapshot(
+            messages: Array(newest), names: names, avatars: avatars, readInboxMaxId: readInboxMaxId,
+            title: info.title, subtitle: info.subtitle, userStatus: userStatus,
+        ))
     }
 
-    override public func connect() async {
-        guard !isPolling else { return }
-        if messages.isEmpty {
-            state = .connecting
+    // MARK: Loading
+
+    /// The dialog (title, member count, read cursor, status) and the newest page together.
+    public func loadNewest() async throws {
+        async let dialog = client.dialogState(peer: peer)
+        async let page = client.history(peer: peer)
+        let (state, history) = try await (dialog, page)
+        // Quoted messages outside the page load before the chat shows, so replies don't wait on them.
+        await resolveReferences(in: history)
+        apply(state)
+        if !hasLoadedHistory {
+            hasLoadedHistory = true
+            hasEarlierMessages = history.hasMore
         }
-        errorMessage = nil
-        do {
-            async let dialog = client.dialogState(peer: peer)
-            async let page = client.history(peer: peer)
-            let (state, history) = try await (dialog, page)
-            // Quoted messages outside the page load before the chat shows, so replies don't wait on them.
-            await resolveReferences(in: history)
-            apply(state)
-            if !hasLoadedHistory {
-                hasLoadedHistory = true
-                hasEarlierMessages = history.hasMore
+        merge(history)
+    }
+
+    private func apply(_ dialog: TelegramDialogState) {
+        info.title = dialog.title
+        if dialog.readInboxMaxId > readInboxMaxId {
+            readInboxMaxId = dialog.readInboxMaxId
+        }
+        userStatus = dialog.userStatus
+        info.subtitle = dialog.memberCount.map { "\($0) members" } ?? userStatus?.text ?? "Telegram"
+    }
+
+    public func startFollowing() async {
+        guard observer == nil else { return }
+        observer = await client.addUpdateObserver(peer: peer) { [weak self] in
+            Task { @MainActor in self?.scheduleRefresh() }
+        }
+        if peer.kind == .user {
+            statusObserver = await client.addStatusObserver(userId: peer.id) { [weak self] status in
+                Task { @MainActor in self?.apply(status: status) }
             }
-            merge(history)
-            placeUnreadDivider()
-            saveSnapshot()
-            canAttach = true
-            canReact = true
-            self.state = .connected
-            observer = await client.addUpdateObserver(peer: peer) { [weak self] in
-                Task { @MainActor in self?.scheduleRefresh() }
-            }
-            if peer.kind == .user {
-                statusObserver = await client.addStatusObserver(userId: peer.id) { [weak self] status in
-                    Task { @MainActor in self?.apply(status: status) }
-                }
-            }
-            startPolling(every: pollInterval)
-        } catch {
-            state = .disconnected(error.localizedDescription)
         }
     }
 
-    override public func disconnect() {
-        stopPolling()
+    public func stopFollowing() {
         refreshTask?.cancel()
         for id in [observer, statusObserver].compactMap(\.self) {
             Task { [client] in await client.removeUpdateObserver(id) }
         }
         observer = nil
         statusObserver = nil
-        saveSnapshot()
-    }
-
-    private func apply(_ dialog: TelegramDialogState) {
-        title = dialog.title
-        if dialog.readInboxMaxId > readInboxMaxId {
-            readInboxMaxId = dialog.readInboxMaxId
-        }
-        userStatus = dialog.userStatus
-        subtitle = dialog.memberCount.map { "\($0) members" } ?? userStatus?.text ?? "Telegram"
     }
 
     private func apply(status: ChatPresence) {
         userStatus = status
-        subtitle = status.text
-    }
-
-    override func poll() async {
-        await refreshNewest()
-        await refreshStatus()
-    }
-
-    /// Status pushes don't come for everyone, and "last seen 5 minutes ago" ages, so the poll reads it again.
-    private func refreshStatus() async {
-        guard userStatus != nil, let dialog = try? await client.dialogState(peer: peer) else { return }
-        apply(dialog)
+        info.subtitle = status.text
+        onChange?()
     }
 
     /// Updates arrive in bursts (the message, then read and typing updates), so one refresh follows each burst.
@@ -192,74 +152,66 @@ public final class TelegramChatViewModel: ChatViewModel {
         merge(page)
     }
 
-    override public func loadEarlier() async {
-        guard let oldest = loaded.keys.min(), !isLoadingEarlier else { return }
-        isLoadingEarlier = true
-        defer { isLoadingEarlier = false }
-        do {
-            let page = try await client.history(peer: peer, offsetId: oldest)
-            hasEarlierMessages = page.hasMore
-            await resolveReferences(in: page)
-            merge(page)
-        } catch {
-            errorMessage = error.localizedDescription
-        }
+    public func loadEarlier() async throws {
+        guard let oldest = loaded.keys.min() else { return }
+        let page = try await client.history(peer: peer, offsetId: oldest)
+        hasEarlierMessages = page.hasMore
+        await resolveReferences(in: page)
+        merge(page)
     }
 
-    /// Sends optimistically (see `sendOptimistically`): text is added as sent, and media waits for Telegram's
-    /// copy (its photo sizes and file reference), which the refresh after sending loads.
-    override public func send() async {
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        let attachment = attachment
-        guard !text.isEmpty || attachment != nil, state == .connected else { return }
-        let replyTo = replyingTo.flatMap { Int32($0.id) }
-        await sendOptimistically(text: text, attachment: attachment, replyToId: replyTo.map(String.init)) {
-            let id = if let attachment {
-                try await client.sendMedia(
-                    peer: peer,
-                    data: attachment.data,
-                    mimeType: attachment.mimeType,
-                    filename: attachment.filename,
-                    isImage: attachment.isImage,
-                    caption: text,
-                    replyTo: replyTo,
-                )
-            } else {
-                try await client.send(peer: peer, text: text, replyTo: replyTo)
-            }
-            if attachment == nil, let id {
-                loaded[id] = TelegramMessage(id: id, date: Date(), text: text, caption: text, senderId: nil, isOutgoing: true, replyToId: replyTo, isService: false)
-                publish()
-            } else {
-                scheduleRefresh()
-            }
-            return id.map(String.init)
+    /// Text is added as sent; media waits for Telegram's copy (its photo sizes and file reference), which the
+    /// refresh after sending loads.
+    public func send(_ message: ChatOutgoing) async throws -> String? {
+        let replyTo = message.replyToId.flatMap { Int32($0) }
+        let id = if let attachment = message.attachment {
+            try await client.sendMedia(
+                peer: peer,
+                data: attachment.data,
+                mimeType: attachment.mimeType,
+                filename: attachment.filename,
+                isImage: attachment.isImage,
+                caption: message.text,
+                replyTo: replyTo,
+            )
+        } else {
+            try await client.send(peer: peer, text: message.text, replyTo: replyTo)
         }
+        if message.attachment == nil, let id {
+            loaded[id] = TelegramMessage(id: id, date: Date(), text: message.text, caption: message.text, senderId: nil, isOutgoing: true, replyToId: replyTo, isService: false)
+            publish()
+        } else {
+            scheduleRefresh()
+        }
+        return id.map(String.init)
     }
 
-    /// Moves Telegram's read cursor to the newest message shown, shortly after, when that passes an unread one.
-    override public func markRead(upTo message: ChatMessage) {
+    // MARK: Read position
+
+    public func isAfterReadPosition(_ message: ChatMessage) -> Bool {
+        (Int32(message.id) ?? 0) > readInboxMaxId
+    }
+
+    /// Moves Telegram's read cursor to the newest message shown when that passes an unread one.
+    public func markRead(upTo message: ChatMessage) -> (@MainActor () async throws -> Void)? {
         guard let id = Int32(message.id), id > readInboxMaxId,
               loaded.values.contains(where: { !$0.isOutgoing && $0.id > readInboxMaxId && $0.id <= id })
-        else { return }
+        else { return nil }
         readInboxMaxId = id
-        updateUnreadCount()
-        scheduleReadMarker { [client, peer] in
-            try await client.markRead(peer: peer, maxId: id)
-        }
+        return { [client, peer] in try await client.markRead(peer: peer, maxId: id) }
     }
 
     // MARK: Reactions
 
-    override public func yourEmojis(on messageId: String) -> [String] {
+    public func yourEmojis(on messageId: String) -> [String] {
         guard let id = Int32(messageId) else { return [] }
         return (loaded[id]?.reactions ?? []).filter(\.isMine).map(\.emoji)
     }
 
     /// Telegram keeps one reaction per person without Premium, so a new emoji replaces yours and your current
     /// one removes it. Shown right away, then replaced by Telegram's totals, or put back if it fails.
-    override public func toggleReaction(_ emoji: String, on messageId: String) async {
-        guard canReact, let id = Int32(messageId), let message = loaded[id] else { return }
+    public func toggleReaction(_ emoji: String, on messageId: String) async throws {
+        guard let id = Int32(messageId), let message = loaded[id] else { return }
         let previous = (message.reactions, message.reactors)
         let removing = message.reactions.contains { $0.isMine && $0.emoji == emoji }
         var totals = message.reactions.compactMap { reaction -> TelegramReaction? in
@@ -280,7 +232,7 @@ public final class TelegramChatViewModel: ChatViewModel {
             }
         } catch {
             setReactions(previous.0, reactors: previous.1, on: id)
-            errorMessage = error.localizedDescription
+            throw error
         }
     }
 
@@ -290,7 +242,7 @@ public final class TelegramChatViewModel: ChatViewModel {
         publish()
     }
 
-    override public func reactors(of emoji: String, on messageId: String) -> [ChatReactor] {
+    public func reactors(of emoji: String, on messageId: String) -> [ChatReactor] {
         guard let id = Int32(messageId) else { return [] }
         return (loaded[id]?.reactors ?? []).filter { $0.emoji == emoji }.map { reactor in
             ChatReactor(
@@ -342,12 +294,9 @@ public final class TelegramChatViewModel: ChatViewModel {
                 .map { ChatReaction(emoji: $0.emoji, count: $0.count, includesYou: $0.isMine) }
                 .sorted { ($0.count, $0.emoji) > ($1.count, $1.emoji) }
         }
-        publish(history: sorted.map(chatMessage), reactions: totals)
-        updateUnreadCount()
-    }
-
-    override func isAfterReadPosition(_ message: ChatMessage) -> Bool {
-        (Int32(message.id) ?? 0) > readInboxMaxId
+        reactions = totals
+        messages = sorted.map(chatMessage)
+        onChange?()
     }
 
     private func chatMessage(_ message: TelegramMessage) -> ChatMessage {
@@ -366,7 +315,7 @@ public final class TelegramChatViewModel: ChatViewModel {
         } else {
             ChatUser(
                 id: message.senderId.map(String.init) ?? peer.key,
-                name: message.senderId.flatMap { names[$0] } ?? title,
+                name: message.senderId.flatMap { names[$0] } ?? info.title,
                 avatarURL: (message.senderId ?? (peer.kind == .user ? peer.id : nil)).flatMap { avatars[$0] },
             )
         }

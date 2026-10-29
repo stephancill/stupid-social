@@ -100,6 +100,34 @@ final class AdapterChatViewModelTests: XCTestCase {
         chat.disconnect()
     }
 
+    func testLiveAdaptersFollowWhileOpenAndPushedMessagesShow() async {
+        let adapter = FakeLiveAdapter()
+        adapter.pages = [[message(1)], [message(1)]]
+        let chat = makeChat(adapter)
+        await chat.connect()
+        await chat.connect()
+        XCTAssertEqual(adapter.followCount, 1, "connecting again while open doesn't follow twice")
+        adapter.push(message(2))
+        XCTAssertEqual(chat.messages.map(\.id), ["1", "2"])
+        chat.disconnect()
+        XCTAssertFalse(adapter.isFollowing)
+        await chat.connect()
+        XCTAssertEqual(adapter.followCount, 2, "reconnects after leaving")
+        chat.disconnect()
+    }
+
+    func testReferencedMessagesComeFromTheAdapter() async {
+        let adapter = FakeLiveAdapter()
+        adapter.pages = [[message(1)]]
+        adapter.referencedMessages = ["0": message(0)]
+        adapter.unavailableReferences = ["-1"]
+        let chat = makeChat(adapter)
+        await chat.connect()
+        XCTAssertEqual(chat.message(withId: "0")?.text, "Message 0")
+        XCTAssertTrue(chat.isUnavailableReference("-1"))
+        chat.disconnect()
+    }
+
     private func makeChat(_ adapter: FakeAdapter) -> AdapterChatViewModel {
         let suite = "AdapterChatViewModelTests-\(UUID().uuidString)"
         return AdapterChatViewModel(
@@ -147,6 +175,10 @@ private class FakeAdapter: ChatAdapter {
 
     func loadEarlier() async throws {}
 
+    func append(_ message: ChatMessage) {
+        messages.append(message)
+    }
+
     func send(_ message: ChatOutgoing) async throws -> String? {
         sent.append(message)
         let id = "sent-\(sent.count)"
@@ -179,6 +211,28 @@ private class FakeAdapter: ChatAdapter {
     func restore(snapshot data: Data) {
         guard let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data) else { return }
         messages = snapshot.ids.map { message($0) }
+    }
+}
+
+@MainActor
+private final class FakeLiveAdapter: FakeAdapter, ChatLiveUpdating, ChatReferenceResolving {
+    private(set) var followCount = 0
+    private(set) var isFollowing = false
+    var referencedMessages: [String: ChatMessage] = [:]
+    var unavailableReferences: Set<String> = []
+
+    func startFollowing() async {
+        followCount += 1
+        isFollowing = true
+    }
+
+    func stopFollowing() {
+        isFollowing = false
+    }
+
+    func push(_ pushed: ChatMessage) {
+        append(pushed)
+        onChange?()
     }
 }
 

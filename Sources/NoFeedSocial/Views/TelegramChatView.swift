@@ -3,34 +3,36 @@ import SwiftUI
 
 /// A Telegram chat: the shared chat, with the member list opened from the title in groups.
 struct TelegramChatView: View {
-    @StateObject private var viewModel: TelegramChatViewModel
+    @StateObject private var viewModel: ChatViewModel
+    @StateObject private var members: TelegramMembersViewModel
     @State private var showsMembers = false
 
-    init(viewModel: @autoclosure @escaping () -> TelegramChatViewModel) {
+    init(viewModel: @autoclosure @escaping () -> ChatViewModel, members: @autoclosure @escaping () -> TelegramMembersViewModel) {
         _viewModel = StateObject(wrappedValue: viewModel())
+        _members = StateObject(wrappedValue: members())
     }
 
     var body: some View {
         ChatView(
             viewModel: viewModel,
-            onTitleTap: viewModel.isGroup ? { showsMembers = true } : nil,
+            onTitleTap: members.isGroup ? { showsMembers = true } : nil,
             keepsConnection: showsMembers,
         )
         .navigationDestination(isPresented: $showsMembers) {
-            TelegramMembersView(viewModel: viewModel)
+            TelegramMembersView(viewModel: members)
         }
         .onAppear {
-            NotificationRouter.shared.telegramChatDidOpen(viewModel.peer)
+            NotificationRouter.shared.telegramChatDidOpen(members.peer)
         }
         .onDisappear {
-            NotificationRouter.shared.telegramChatDidClose(viewModel.peer)
+            NotificationRouter.shared.telegramChatDidClose(members.peer)
         }
     }
 }
 
 /// A Telegram group's members, online ones first, as Telegram lists them.
 struct TelegramMembersView: View {
-    @ObservedObject var viewModel: TelegramChatViewModel
+    @ObservedObject var viewModel: TelegramMembersViewModel
 
     var body: some View {
         Group {
@@ -50,7 +52,7 @@ struct TelegramMembersView: View {
                         }
                     }
                 }
-            } else if let error = viewModel.membersError {
+            } else if let error = viewModel.errorMessage {
                 ContentUnavailableView("No Member List", systemImage: "person.2", description: Text(error))
             } else {
                 ProgressView()
@@ -58,8 +60,8 @@ struct TelegramMembersView: View {
         }
         .navigationTitle(memberTitle)
         .navigationBarTitleDisplayMode(.inline)
-        .task { await viewModel.loadMembers() }
-        .refreshable { await viewModel.loadMembers() }
+        .task { await viewModel.load() }
+        .refreshable { await viewModel.load() }
     }
 
     private func memberSection(_ title: String?, _ members: [TelegramMember]) -> some View {

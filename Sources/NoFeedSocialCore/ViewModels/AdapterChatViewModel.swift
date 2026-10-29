@@ -6,11 +6,14 @@ public struct ChatInfo: Equatable, Sendable {
     public var subtitle: String
     /// Names head each sender's group of bubbles; one-to-one chats turn them off.
     public var showsSenderNames: Bool
+    /// The title is made of member names, such as an untitled group, so name redaction applies to it.
+    public var titleIsMemberNames: Bool
 
-    public init(title: String, subtitle: String, showsSenderNames: Bool = true) {
+    public init(title: String, subtitle: String, showsSenderNames: Bool = true, titleIsMemberNames: Bool = false) {
         self.title = title
         self.subtitle = subtitle
         self.showsSenderNames = showsSenderNames
+        self.titleIsMemberNames = titleIsMemberNames
     }
 }
 
@@ -84,11 +87,31 @@ public protocol ChatAudioPreviewing: ChatAdapter {
     func audioPreviewURL(for previewId: String) async -> URL?
 }
 
+/// Updates the network pushes while the chat is open. The adapter applies them and calls `onChange`; a network
+/// can also name a `pollInterval` as a fallback.
+@MainActor
+public protocol ChatLiveUpdating: ChatAdapter {
+    /// Called once the newest messages have loaded.
+    func startFollowing() async
+    func stopFollowing()
+}
+
+/// Messages that replies quote but that aren't among the loaded ones.
+@MainActor
+public protocol ChatReferenceResolving: ChatAdapter {
+    var referencedMessages: [String: ChatMessage] { get }
+    /// Quoted messages the network couldn't return, such as deleted ones.
+    var unavailableReferences: Set<String> { get }
+}
+
 /// The shared chat screen's model for a network that has a `ChatAdapter`.
 @MainActor
 public final class AdapterChatViewModel: ChatViewModel {
-    private let adapter: any ChatAdapter
+    public let adapter: any ChatAdapter
     private let snapshotCache: ChatSnapshotCache
+    /// From a successful `connect()` until `disconnect()`; `connect()` runs again when the app becomes active.
+    private var isOpen = false
+    private var isConnecting = false
 
     public init(adapter: any ChatAdapter, accountId: String, snapshotCache: ChatSnapshotCache = ChatSnapshotCache(), draftStore: ChatDraftStore = ChatDraftStore()) {
         self.adapter = adapter
@@ -112,7 +135,9 @@ public final class AdapterChatViewModel: ChatViewModel {
     }
 
     override public func connect() async {
-        guard !isPolling else { return }
+        guard !isOpen, !isConnecting else { return }
+        isConnecting = true
+        defer { isConnecting = false }
         if messages.isEmpty {
             state = .connecting
         }
@@ -124,7 +149,11 @@ public final class AdapterChatViewModel: ChatViewModel {
             saveSnapshot()
             canReact = adapter is any ChatReactionSending
             canAttach = adapter.acceptsAttachments
+            isOpen = true
             state = .connected
+            if let live = adapter as? any ChatLiveUpdating {
+                await live.startFollowing()
+            }
             if let interval = adapter.pollInterval {
                 startPolling(every: interval)
             }
@@ -134,7 +163,9 @@ public final class AdapterChatViewModel: ChatViewModel {
     }
 
     override public func disconnect() {
+        isOpen = false
         stopPolling()
+        (adapter as? any ChatLiveUpdating)?.stopFollowing()
         saveSnapshot()
     }
 
@@ -209,8 +240,17 @@ public final class AdapterChatViewModel: ChatViewModel {
             subtitle = info.subtitle
         }
         showsSenderNames = info.showsSenderNames
+        titleIsMemberNames = info.titleIsMemberNames
         if hasEarlierMessages != adapter.hasEarlierMessages {
             hasEarlierMessages = adapter.hasEarlierMessages
+        }
+        if let resolving = adapter as? any ChatReferenceResolving {
+            if referencedMessages != resolving.referencedMessages {
+                referencedMessages = resolving.referencedMessages
+            }
+            if unavailableReferences != resolving.unavailableReferences {
+                unavailableReferences = resolving.unavailableReferences
+            }
         }
         publish(history: adapter.messages, reactions: adapter.reactions)
         updateUnreadCount()

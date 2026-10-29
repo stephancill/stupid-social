@@ -1,10 +1,23 @@
 import Foundation
 
 /// One X Chat conversation: decrypts its events, pages its history, follows new events from X's chat WebSocket
-/// (`XChatLiveFeed`), sends text and reactions, and moves the viewer's read marker as messages are read. Reactions, edits and deletes are events of their own, applied to the messages
-/// they name by sequence id.
+/// (`XChatLiveFeed`), sends text and reactions, and moves the viewer's read marker as messages are read.
+/// Reactions, edits and deletes are events of their own, applied to the messages they name by sequence id.
 @MainActor
-public final class XChatViewModel: ChatViewModel {
+public final class XChatAdapter: ChatAdapter, ChatReactionSending, ChatLiveUpdating, ChatReferenceResolving {
+    public let network = SocialNetwork.x
+    public let canReply = false
+    public let acceptsAttachments = false
+    public let pollInterval: Duration? = nil
+    public var onChange: (() -> Void)?
+    public private(set) var info: ChatInfo
+    public private(set) var messages: [ChatMessage] = []
+    public private(set) var reactions: [String: [ChatReaction]] = [:]
+    public private(set) var hasEarlierMessages = false
+    /// Replies render from the decrypted reply preview when the original isn't loaded.
+    public private(set) var referencedMessages: [String: ChatMessage] = [:]
+    public let unavailableReferences: Set<String> = []
+
     private let client: XChatClient
     private let conversationId: String
     /// Every loaded event by sequence id, with what its message decrypted to (nil when it didn't).
@@ -15,47 +28,40 @@ public final class XChatViewModel: ChatViewModel {
     private var conversationToken: String?
     /// The viewer's read marker, locally ahead of X while a mark is pending.
     private var readUntil: Int64 = 0
-    private var hasMoreEarlier = false
     private var hasLoadedHistory = false
     private let liveFeed: XChatLiveFeed
     private var observation: UUID?
 
-    public init(client: XChatClient, liveFeed: XChatLiveFeed, accountId: String, conversationId: String, title: String) {
+    public init(client: XChatClient, liveFeed: XChatLiveFeed, conversationId: String, title: String) {
         self.client = client
         self.liveFeed = liveFeed
         self.conversationId = conversationId
-        super.init(network: .x, chatKey: "\(accountId)|x:\(conversationId)", title: title, subtitle: "X", canReply: false)
+        info = ChatInfo(title: title, subtitle: "X")
     }
 
-    override public func connect() async {
-        guard observation == nil else { return }
-        if messages.isEmpty {
-            state = .connecting
-        }
-        errorMessage = nil
-        do {
-            let conversation = try await client.conversation(conversationId)
-            viewerId = await client.viewerId
-            apply(conversation)
-            let page = try await client.eventPage(conversationId: conversationId)
-            if !hasLoadedHistory {
-                hasLoadedHistory = true
-                hasMoreEarlier = page.hasMore
-                hasEarlierMessages = page.hasMore
-            }
-            await merge(page.events)
-            placeUnreadDivider()
-            canReact = true
-            state = .connected
-            follow()
-        } catch {
-            state = .disconnected(error.localizedDescription)
-        }
+    public var key: String {
+        "x:\(conversationId)"
     }
 
-    override public func disconnect() {
-        observation.map(liveFeed.removeObserver)
-        observation = nil
+    /// Decrypting needs the account's keys, so nothing is cached between visits.
+    public func snapshot() -> Data? {
+        nil
+    }
+
+    public func restore(snapshot _: Data) {}
+
+    // MARK: Loading
+
+    public func loadNewest() async throws {
+        let conversation = try await client.conversation(conversationId)
+        viewerId = await client.viewerId
+        apply(conversation)
+        let page = try await client.eventPage(conversationId: conversationId)
+        if !hasLoadedHistory {
+            hasLoadedHistory = true
+            hasEarlierMessages = page.hasMore
+        }
+        await merge(page.events)
     }
 
     private func apply(_ conversation: XChatConversationInfo) {
@@ -66,15 +72,16 @@ public final class XChatViewModel: ChatViewModel {
             people[viewerId] = ChatUser(id: viewerId, name: "You", avatarURL: nil)
             readUntil = max(readUntil, XChatClient.readUntil(conversation.readEvents, userId: viewerId))
         }
-        showsSenderNames = conversation.isGroup
+        info.showsSenderNames = conversation.isGroup
         if conversation.isGroup {
-            titleIsMemberNames = true
-            subtitle = "\(conversation.others.count + 1) members"
+            info.titleIsMemberNames = true
+            info.subtitle = "\(conversation.others.count + 1) members"
         }
     }
 
     /// Pushed events merge as they arrive; after a reconnect the newest page fills in what the socket missed.
-    private func follow() {
+    public func startFollowing() async {
+        guard observation == nil else { return }
         observation = liveFeed.observe(
             conversationId: conversationId,
             onEvents: { [weak self] events in Task { await self?.merge(events) } },
@@ -82,45 +89,44 @@ public final class XChatViewModel: ChatViewModel {
         )
     }
 
+    public func stopFollowing() {
+        observation.map(liveFeed.removeObserver)
+        observation = nil
+    }
+
     private func refreshNewest() async {
         guard let page = try? await client.eventPage(conversationId: conversationId) else { return }
         await merge(page.events)
     }
 
-    override public func loadEarlier() async {
-        guard hasMoreEarlier, !isLoadingEarlier, let oldest = events.values.min(by: { $0.sequence < $1.sequence }) else { return }
-        isLoadingEarlier = true
-        defer { isLoadingEarlier = false }
-        do {
-            let page = try await client.eventPage(conversationId: conversationId, beforeSequenceId: oldest.sequenceId)
-            hasMoreEarlier = page.hasMore && !page.events.isEmpty
-            hasEarlierMessages = hasMoreEarlier
-            await merge(page.events)
-        } catch {
-            errorMessage = error.localizedDescription
-        }
+    public func loadEarlier() async throws {
+        guard hasEarlierMessages, let oldest = events.values.min(by: { $0.sequence < $1.sequence }) else { return }
+        let page = try await client.eventPage(conversationId: conversationId, beforeSequenceId: oldest.sequenceId)
+        hasEarlierMessages = page.hasMore && !page.events.isEmpty
+        await merge(page.events)
     }
 
-    /// Sends optimistically (see `sendOptimistically`); X answers with the stored event, which takes its place.
-    override public func send() async {
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, state == .connected else { return }
-        await sendOptimistically(text: text, attachment: nil, replyToId: nil) {
-            let event = try await client.sendText(text, conversationId: conversationId, token: conversationToken)
-            await merge([event])
-            return event.sequenceId
-        }
+    /// X answers with the stored event, which takes the sending copy's place.
+    public func send(_ message: ChatOutgoing) async throws -> String? {
+        let event = try await client.sendText(message.text, conversationId: conversationId, token: conversationToken)
+        await merge([event])
+        return event.sequenceId
     }
 
-    /// X keeps one read marker per person, so this moves it to the newest message shown, shortly after, whenever
-    /// that passes an unread message from someone else.
-    override public func markRead(upTo message: ChatMessage) {
+    // MARK: Read position
+
+    public func isAfterReadPosition(_ message: ChatMessage) -> Bool {
+        (Int64(message.id) ?? 0) > readUntil
+    }
+
+    /// X keeps one read marker per person, so this moves it to the newest message shown whenever that passes an
+    /// unread message from someone else.
+    public func markRead(upTo message: ChatMessage) -> (@MainActor () async throws -> Void)? {
         guard let sequence = Int64(message.id), sequence > readUntil,
               events.values.contains(where: { $0.senderId != viewerId && $0.sequence > readUntil && $0.sequence <= sequence && $0.messageCreate != nil })
-        else { return }
+        else { return nil }
         readUntil = sequence
-        updateUnreadCount()
-        scheduleReadMarker { [client, conversationId, sequenceId = message.id] in
+        return { [client, conversationId, sequenceId = message.id] in
             try await client.markRead(upTo: sequenceId, conversationId: conversationId)
         }
     }
@@ -207,9 +213,7 @@ public final class XChatViewModel: ChatViewModel {
                 continue
             }
         }
-        if referencedMessages != references {
-            referencedMessages = references
-        }
+        referencedMessages = references
 
         var totals: [String: [ChatReaction]] = [:]
         for (target, reactions) in reactionsByTarget where !reactions.isEmpty {
@@ -217,12 +221,9 @@ public final class XChatViewModel: ChatViewModel {
                 .map { emoji, reactions in ChatReaction(emoji: emoji, count: reactions.count, includesYou: reactions.contains { $0.sender == viewerId }) }
                 .sorted { ($0.count, $0.emoji) > ($1.count, $1.emoji) }
         }
-        publish(history: chatMessages, reactions: totals)
-        updateUnreadCount()
-    }
-
-    override func isAfterReadPosition(_ message: ChatMessage) -> Bool {
-        (Int64(message.id) ?? 0) > readUntil
+        reactions = totals
+        messages = chatMessages
+        onChange?()
     }
 
     private func person(_ id: String) -> ChatUser {
@@ -250,23 +251,18 @@ public final class XChatViewModel: ChatViewModel {
 
     // MARK: Reactions
 
-    override public func yourEmojis(on messageId: String) -> [String] {
+    public func yourEmojis(on messageId: String) -> [String] {
         reactions[messageId]?.filter(\.includesYou).map(\.emoji) ?? []
     }
 
     /// Adds the emoji, or removes it when it's already yours. Shown once X stores the reaction event.
-    override public func toggleReaction(_ emoji: String, on messageId: String) async {
-        guard canReact else { return }
+    public func toggleReaction(_ emoji: String, on messageId: String) async throws {
         let remove = yourEmojis(on: messageId).contains(emoji)
-        do {
-            let event = try await client.sendReaction(emoji, on: messageId, remove: remove, conversationId: conversationId, token: conversationToken)
-            await merge([event])
-        } catch {
-            errorMessage = error.localizedDescription
-        }
+        let event = try await client.sendReaction(emoji, on: messageId, remove: remove, conversationId: conversationId, token: conversationToken)
+        await merge([event])
     }
 
-    override public func reactors(of emoji: String, on messageId: String) -> [ChatReactor] {
+    public func reactors(of emoji: String, on messageId: String) -> [ChatReactor] {
         var current: [String: XChatEvent] = [:]
         for event in events.values.sorted(by: { $0.sequence < $1.sequence }) {
             guard case let .some(.some(.reaction(target, reactionEmoji, added))) = entries[event.sequenceId], target == messageId, reactionEmoji == emoji else { continue }
