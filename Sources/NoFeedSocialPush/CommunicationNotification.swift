@@ -7,10 +7,15 @@ import Foundation
 public enum CommunicationNotification {
     /// A Telegram message from its sender, with the photos the app saved: the sender's in a private chat, and the
     /// group's in a group, shown as a group conversation. A group push that names only the group shows the group as
-    /// the sender, as Telegram's own app does, since a group conversation would show its name twice.
+    /// the sender, as Telegram's own app does, since a group conversation would show its name twice. Without a saved
+    /// photo, the initials the app's chats show stand in, rather than the app icon.
     public static func telegram(_ notification: TelegramPushNotification, content: UNMutableNotificationContent) async -> UNNotificationContent? {
         let store = TelegramAvatarStore()
-        let groupImage = notification.group.flatMap { store.load(groupId: $0.id) }.map { INImage(imageData: $0) }
+        let groupPhoto = notification.group.flatMap { store.load(groupId: $0.id) }
+        let groupImage = notification.group.map { chat in
+            INImage(imageData: groupPhoto ?? InitialsAvatar.png(name: chat.name, colorKey: String(chat.id)))
+        }
+        let senderPhoto = store.load(userId: notification.senderId)
         let sender: INPerson
         var group: (name: String, image: INImage?)?
         if let chat = notification.group, notification.senderName == nil {
@@ -23,11 +28,12 @@ public enum CommunicationNotification {
                 customIdentifier: "telegram|group-\(chat.id)",
             )
         } else {
+            let name = notification.senderName ?? notification.title
             sender = INPerson(
                 personHandle: INPersonHandle(value: String(notification.senderId), type: .unknown),
                 nameComponents: nil,
-                displayName: notification.senderName ?? notification.title,
-                image: store.load(userId: notification.senderId).map { INImage(imageData: $0) },
+                displayName: name,
+                image: INImage(imageData: senderPhoto ?? InitialsAvatar.png(name: name, colorKey: String(notification.senderId))),
                 contactIdentifier: nil,
                 customIdentifier: "telegram|\(notification.senderId)",
             )
@@ -42,7 +48,7 @@ public enum CommunicationNotification {
             log: PushExtensionLog.Entry(
                 network: "telegram",
                 chat: notification.conversationId,
-                hasAvatar: notification.group == nil ? sender.image != nil : groupImage != nil,
+                hasAvatar: notification.group == nil ? senderPhoto != nil : groupPhoto != nil,
             ),
         )
     }

@@ -62,6 +62,7 @@ Sources/
     CommunicationNotification.swift # INSendMessageIntent donation and content update, shared with Debug
     PushExtensionLog.swift          # What the extension did per push, shown in Settings → Debug
     SpoilerText.swift               # Spoiler masking and the Telegram service account's login codes
+    ChatUserColor.swift             # Per-user accent colors and the initials avatar, for chats and notifications
   NoFeedSocialNotificationService/  # Notification Service Extension: decrypts Apron pushes
     NotificationService.swift
   NoFeedSocialCore/                 # Shared core (models, services, sources)

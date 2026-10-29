@@ -1,4 +1,5 @@
 import NoFeedSocialCore
+import NoFeedSocialPush
 import SwiftUI
 
 /// Every chat across networks, newest first; the page to the left of the feed.
@@ -506,7 +507,7 @@ struct ChatAvatarImage: View {
             if let colorKey {
                 ZStack {
                     Color(uiColor: ChatUserColor.color(for: colorKey))
-                    Text(title.split(separator: " ").prefix(2).compactMap(\.first).map(String.init).joined().uppercased())
+                    Text(InitialsAvatar.initials(of: title))
                         .font(.system(size: size * 0.39, weight: .semibold))
                         .foregroundStyle(.white)
                 }

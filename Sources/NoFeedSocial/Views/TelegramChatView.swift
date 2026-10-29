@@ -1,4 +1,5 @@
 import NoFeedSocialCore
+import NoFeedSocialPush
 import SwiftUI
 
 /// A Telegram chat: the shared chat, with the member list opened from the title in groups.

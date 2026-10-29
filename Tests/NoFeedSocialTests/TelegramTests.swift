@@ -1,6 +1,7 @@
 import Foundation
 @testable import NoFeedSocialCore
 import NoFeedSocialPush
+import UIKit
 import XCTest
 
 /// Vectors come from `scripts/telegram-client.py`, whose handshake and calls are checked against Telegram.
@@ -283,6 +284,13 @@ final class TelegramTests: XCTestCase {
         XCTAssertEqual(push?.body, "hi there")
         XCTAssertEqual(push?.senderId, 42)
         XCTAssertEqual(push?.conversationId, "user:42")
+    }
+
+    func testInitialsStandInForAMissingPhoto() throws {
+        XCTAssertEqual(InitialsAvatar.initials(of: "ann marie smith"), "AM")
+        XCTAssertEqual(InitialsAvatar.initials(of: "Ann"), "A")
+        let image = try XCTUnwrap(UIImage(data: InitialsAvatar.png(name: "Ann", colorKey: "42", size: 60)))
+        XCTAssertEqual(image.size, CGSize(width: 60, height: 60))
     }
 
     func testGroupPushNamesTheGroupAndKeepsTheLineForMedia() {

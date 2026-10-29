@@ -1,4 +1,5 @@
 import NoFeedSocialCore
+import NoFeedSocialPush
 import UIKit
 
 /// The boundary above the first unread message: a hairline either side of a "New Messages" label.
@@ -59,15 +60,6 @@ struct ChatBubbleLayout: Hashable, CustomStringConvertible {
 
     var description: String {
         [isOwn, isSystem, showsName, showsAvatar, startsGroup].map { $0 ? "1" : "0" }.joined()
-    }
-}
-
-/// Stable per-user accent, like Telegram's name colors. `hashValue` is seeded per launch, so sum the scalars.
-enum ChatUserColor {
-    private static let palette: [UIColor] = [.systemRed, .systemOrange, .systemPurple, .systemGreen, .systemTeal, .systemBlue, .systemPink]
-
-    static func color(for userId: String) -> UIColor {
-        palette[userId.unicodeScalars.reduce(0) { $0 + Int($1.value) } % palette.count]
     }
 }
 
@@ -854,7 +846,7 @@ final class ChatAvatarView: UIView {
 
     func configure(name: String, color: UIColor, url: URL?) {
         backgroundColor = color
-        initialsLabel.text = name.split(separator: " ").prefix(2).compactMap(\.first).map(String.init).joined().uppercased()
+        initialsLabel.text = InitialsAvatar.initials(of: name)
         guard url != self.url else { return }
         reset()
         self.url = url
