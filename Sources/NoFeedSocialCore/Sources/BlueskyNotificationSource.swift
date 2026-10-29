@@ -1,6 +1,6 @@
 import Foundation
 
-public struct BlueskyNotificationSource: NotificationFetching, AccountValidating, ProfileFetching, NotificationTargetDetailFetching {
+public struct BlueskyNotificationSource: NotificationFetching, ProfileFetching, NotificationTargetDetailFetching {
     public let network: SocialNetwork = .bluesky
 
     private let client: BlueskyClient
@@ -9,20 +9,6 @@ public struct BlueskyNotificationSource: NotificationFetching, AccountValidating
     public init(client: BlueskyClient, metadataStore: AccountMetadataStore) {
         self.client = client
         self.metadataStore = metadataStore
-    }
-
-    public func validateAccount() async throws -> AccountStatus {
-        guard (try? client.hasCredentials()) == true else { return .notConfigured }
-        do {
-            _ = try await client.validateAccount()
-            return .valid
-        } catch {
-            if var account = metadataStore.blueskyAccount {
-                account.status = .invalidCredentials
-                metadataStore.blueskyAccount = account
-            }
-            return .serviceError(error.localizedDescription)
-        }
     }
 
     public func fetchNotifications(reason _: RefreshReason) async throws -> [NotificationItem] {

@@ -227,10 +227,6 @@ public struct XClient {
         return XVerifiedUser(screenName: user.screenName, name: user.name, idStr: user.idStr)
     }
 
-    func hasCredentials() throws -> Bool {
-        try credentialStore.loadXCredentials() != nil
-    }
-
     public func setFollowing(userId: String, follow: Bool) async throws {
         var fields = friendshipFields()
         fields["user_id"] = userId

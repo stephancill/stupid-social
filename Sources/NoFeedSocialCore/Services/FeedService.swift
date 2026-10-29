@@ -6,7 +6,6 @@ public struct FeedAccountSources {
     public let accountId: String
     public let network: SocialNetwork
     public var notifications: (any NotificationFetching)?
-    public var validators: [any AccountValidating]
     public var profiles: (any ProfileFetching)?
     public var targetDetails: (any NotificationTargetDetailFetching)?
     public var relationships: (any RelationshipMutating)?
@@ -15,7 +14,6 @@ public struct FeedAccountSources {
         accountId: String,
         network: SocialNetwork,
         notifications: (any NotificationFetching)? = nil,
-        validators: [any AccountValidating] = [],
         profiles: (any ProfileFetching)? = nil,
         targetDetails: (any NotificationTargetDetailFetching)? = nil,
         relationships: (any RelationshipMutating)? = nil,
@@ -23,7 +21,6 @@ public struct FeedAccountSources {
         self.accountId = accountId
         self.network = network
         self.notifications = notifications
-        self.validators = validators
         self.profiles = profiles
         self.targetDetails = targetDetails
         self.relationships = relationships

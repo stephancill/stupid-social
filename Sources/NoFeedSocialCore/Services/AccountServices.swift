@@ -9,7 +9,6 @@ public final class AccountComponents {
     public let credentials: KeychainCredentialStore
 
     public private(set) var notificationSource: (any NotificationFetching)?
-    public private(set) var validators: [any AccountValidating] = []
     public private(set) var profileFetcher: (any ProfileFetching)?
     public private(set) var targetDetailFetcher: (any NotificationTargetDetailFetching)?
     public private(set) var relationshipMutator: (any RelationshipMutating)?
@@ -40,7 +39,6 @@ public final class AccountComponents {
             let source = XNotificationSource(client: client, metadataStore: metadata)
             xClient = client
             notificationSource = source
-            validators = [source]
             profileFetcher = source
             targetDetailFetcher = source
             relationshipMutator = source
@@ -61,7 +59,6 @@ public final class AccountComponents {
         case .farcaster:
             let source = FarcasterNotificationSource(client: farcasterClient, metadataStore: metadata)
             notificationSource = source
-            validators = [source]
             profileFetcher = source
             targetDetailFetcher = source
         case .instagram:
@@ -70,7 +67,6 @@ public final class AccountComponents {
             instagramClient = client
             instagramSource = source
             notificationSource = source
-            validators = [source]
             profileFetcher = source
             targetDetailFetcher = source
             relationshipMutator = source
@@ -80,14 +76,12 @@ public final class AccountComponents {
             spotifyClient = client
             spotifyActivitySource = activity
             spotifyMessagesSource = SpotifyMessagesSource(client: client, metadataStore: metadata)
-            validators = [activity]
             profileFetcher = activity
         case .bluesky:
             let client = BlueskyClient(credentialStore: credentials)
             let source = BlueskyNotificationSource(client: client, metadataStore: metadata)
             blueskyClient = client
             notificationSource = source
-            validators = [source]
             profileFetcher = source
             targetDetailFetcher = source
         case .github:
@@ -97,7 +91,6 @@ public final class AccountComponents {
             let source = GitHubNotificationSource(client: GitHubClient(), feedLoader: loader, credentialStore: credentials, metadataStore: metadata)
             githubActivitySource = activity
             notificationSource = source
-            validators = [activity, source]
             profileFetcher = source
             targetDetailFetcher = source
         case .telegram:
@@ -126,7 +119,6 @@ public final class AccountComponents {
             accountId: accountId,
             network: network,
             notifications: notificationSource,
-            validators: validators,
             profiles: profileFetcher,
             targetDetails: targetDetailFetcher,
             relationships: relationshipMutator,

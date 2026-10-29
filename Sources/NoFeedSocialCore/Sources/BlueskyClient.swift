@@ -74,10 +74,6 @@ public final class BlueskyClient: @unchecked Sendable {
         }
     }
 
-    public func hasCredentials() throws -> Bool {
-        try credentialStore.loadBlueskyCredentials() != nil
-    }
-
     public func startOAuth(loginHint: String?) async throws -> BlueskyOAuthSession {
         let normalizedLoginHint = loginHint?.trimmingCharacters(in: .whitespacesAndNewlines)
         let context = try await oauthContext(loginHint: normalizedLoginHint)

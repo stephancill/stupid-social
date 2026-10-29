@@ -102,10 +102,6 @@ public final class InstagramClient {
         )
     }
 
-    func hasCredentials() throws -> Bool {
-        try credentialStore.loadInstagramCredentials() != nil
-    }
-
     func notifications(
         enabledCategories: Set<InstagramNotificationCategory>,
         accountUsername: String? = nil,

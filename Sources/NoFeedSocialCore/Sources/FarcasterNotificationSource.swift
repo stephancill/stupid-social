@@ -1,6 +1,6 @@
 import Foundation
 
-public struct FarcasterNotificationSource: NotificationFetching, AccountValidating, ProfileFetching, NotificationTargetDetailFetching {
+public struct FarcasterNotificationSource: NotificationFetching, ProfileFetching, NotificationTargetDetailFetching {
     public let network: SocialNetwork = .farcaster
 
     private let client: FarcasterClient
@@ -9,22 +9,6 @@ public struct FarcasterNotificationSource: NotificationFetching, AccountValidati
     public init(client: FarcasterClient, metadataStore: AccountMetadataStore) {
         self.client = client
         self.metadataStore = metadataStore
-    }
-
-    public func validateAccount() async throws -> AccountStatus {
-        guard let account = metadataStore.farcasterAccount else {
-            return .notConfigured
-        }
-
-        do {
-            _ = try await client.user(byUsername: account.username)
-            return .valid
-        } catch {
-            var updated = account
-            updated.status = .invalidCredentials
-            metadataStore.farcasterAccount = updated
-            return .serviceError(error.localizedDescription)
-        }
     }
 
     public func fetchNotifications(reason _: RefreshReason) async throws -> [NotificationItem] {

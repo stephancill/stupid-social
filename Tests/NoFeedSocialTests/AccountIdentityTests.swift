@@ -121,18 +121,7 @@ final class AccountIdentityTests: XCTestCase {
             _ = try await source.fetchStoryReels()
             XCTFail("Expected the page request to fail")
         } catch { XCTAssertEqual(metadata.instagramAccount, original) }
-        guard case .serviceError = try await source.validateAccount() else { return XCTFail("Expected a service error rather than invalid credentials") }
-        XCTAssertEqual(metadata.instagramAccount?.status, .serviceError)
-        XCTAssertEqual(metadata.instagramAccount?.username, "example")
-        XCTAssertEqual(metadata.instagramAccount?.enabledCategories, [.likes])
-        XCTAssertEqual(metadata.instagramAccount?.storiesEnabled, false)
-        XCTAssertEqual(metadata.instagramAccount?.directMediaSharesEnabled, false)
         XCTAssertNotNil(try store.loadInstagramCredentials())
-        IdentityURLProtocol.handler = { _ in (200, instagramHomepage) }
-        let status = try await source.validateAccount()
-        XCTAssertEqual(status, .valid)
-        XCTAssertEqual(metadata.instagramAccount?.status, .valid)
-        XCTAssertEqual(metadata.instagramAccount?.enabledCategories, [.likes])
     }
 
     @MainActor

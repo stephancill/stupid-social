@@ -1,7 +1,7 @@
 import Foundation
 
 @MainActor
-public final class GitHubNotificationSource: NotificationFetching, AccountValidating, ProfileFetching, NotificationTargetDetailFetching {
+public final class GitHubNotificationSource: NotificationFetching, ProfileFetching, NotificationTargetDetailFetching {
     public let network: SocialNetwork = .github
 
     private let client: GitHubClient
@@ -14,21 +14,6 @@ public final class GitHubNotificationSource: NotificationFetching, AccountValida
         self.feedLoader = feedLoader
         self.credentialStore = credentialStore
         self.metadataStore = metadataStore
-    }
-
-    public func validateAccount() async throws -> AccountStatus {
-        guard let credentials = try credentialStore.loadGitHubCredentials() else {
-            return .notConfigured
-        }
-        do {
-            _ = try await fetch(credentials: credentials)
-            return .valid
-        } catch SourceError.notConfigured {
-            markInvalid()
-            return .invalidCredentials
-        } catch {
-            return .serviceError(error.localizedDescription)
-        }
     }
 
     public func fetchNotifications(reason _: RefreshReason) async throws -> [NotificationItem] {

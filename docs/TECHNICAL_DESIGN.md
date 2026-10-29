@@ -151,7 +151,6 @@ Suggested protocol:
 protocol NotificationSource {
     var network: SocialNetwork { get }
 
-    func validateAccount() async throws -> AccountStatus
     func fetchUnreadCount() async throws -> Int?
     func fetchNotifications(reason: RefreshReason) async throws -> [NotificationItem]
     func fetchProfile(id: String) async throws -> NetworkProfile

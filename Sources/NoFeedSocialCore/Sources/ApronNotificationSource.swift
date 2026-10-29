@@ -4,7 +4,7 @@ import OSLog
 /// Lists the joined rooms of every saved Apron server for the Chats screen, each with its latest message and
 /// unread count, and reports whether any server is configured.
 @MainActor
-public final class ApronNotificationSource: AccountValidating, ChatListProvider {
+public final class ApronNotificationSource: ChatListProvider {
     public let network: SocialNetwork = .apron
 
     private let service: ApronService
@@ -15,10 +15,6 @@ public final class ApronNotificationSource: AccountValidating, ChatListProvider 
 
     public init(service: ApronService) {
         self.service = service
-    }
-
-    public func validateAccount() async throws -> AccountStatus {
-        service.servers.isEmpty ? .notConfigured : .valid
     }
 
     /// Every joined room on every server with its latest message, for the Chats list. Unlike the feed, rooms

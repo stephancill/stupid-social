@@ -1,7 +1,7 @@
 import Foundation
 
 @MainActor
-public final class SpotifyActivitySource: ActivityFetching, AccountValidating, ProfileFetching {
+public final class SpotifyActivitySource: ActivityFetching, ProfileFetching {
     public let network: SocialNetwork = .spotify
 
     private let client: SpotifyClient
@@ -13,30 +13,6 @@ public final class SpotifyActivitySource: ActivityFetching, AccountValidating, P
         self.client = client
         self.metadataStore = metadataStore
         self.audioAnalysisStore = audioAnalysisStore
-    }
-
-    public func validateAccount() async throws -> AccountStatus {
-        do {
-            let username = try await client.validateAccount()
-            metadataStore.spotifyAccount = SpotifyAccountMetadata(
-                accountId: "spotify",
-                username: username,
-                status: .valid,
-            )
-            return .valid
-        } catch SourceError.notConfigured {
-            if var account = metadataStore.spotifyAccount {
-                account.status = .invalidCredentials
-                metadataStore.spotifyAccount = account
-            }
-            return .notConfigured
-        } catch {
-            if var account = metadataStore.spotifyAccount {
-                account.status = .invalidCredentials
-                metadataStore.spotifyAccount = account
-            }
-            return .serviceError(error.localizedDescription)
-        }
     }
 
     public func fetchActivity(reason _: RefreshReason) async throws -> [SpotifyActivityItem] {

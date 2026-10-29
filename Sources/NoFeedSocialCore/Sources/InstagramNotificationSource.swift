@@ -1,7 +1,7 @@
 import Foundation
 
 @MainActor
-public final class InstagramNotificationSource: NotificationFetching, AccountValidating, ProfileFetching, NotificationTargetDetailFetching, StoryFetching, StoryPosting, RelationshipMutating {
+public final class InstagramNotificationSource: NotificationFetching, ProfileFetching, NotificationTargetDetailFetching, StoryFetching, StoryPosting, RelationshipMutating {
     public let network: SocialNetwork = .instagram
 
     private let client: InstagramClient
@@ -60,33 +60,6 @@ public final class InstagramNotificationSource: NotificationFetching, AccountVal
 
     public func deleteStory(mediaId: String, isVideo: Bool) async throws {
         try await client.deleteStory(mediaId: mediaId, isVideo: isVideo)
-    }
-
-    public func validateAccount() async throws -> AccountStatus {
-        do {
-            let user = try await client.currentUserProfile()
-            let existing = metadataStore.instagramAccount
-            metadataStore.instagramAccount = InstagramAccountMetadata(
-                accountId: String(user.pk),
-                username: user.username,
-                avatarURL: user.profilePicURL,
-                status: .valid,
-                enabledCategories: existing?.enabledCategories,
-                storiesEnabled: existing?.storiesEnabled ?? true,
-                directMediaSharesEnabled: existing?.directMediaSharesEnabled ?? true,
-            )
-            return .valid
-        } catch SourceError.notConfigured {
-            invalidateAccount()
-            return .notConfigured
-        } catch {
-            let status = AccountStatus.serviceError(error.localizedDescription)
-            if var account = metadataStore.instagramAccount {
-                account.status = .serviceError
-                metadataStore.instagramAccount = account
-            }
-            return status
-        }
     }
 
     public func fetchNotifications(reason _: RefreshReason) async throws -> [NotificationItem] {

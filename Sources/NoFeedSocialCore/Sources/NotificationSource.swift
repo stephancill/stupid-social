@@ -5,10 +5,6 @@ public protocol SocialSource: Sendable {
     var network: SocialNetwork { get }
 }
 
-public protocol AccountValidating: SocialSource {
-    func validateAccount() async throws -> AccountStatus
-}
-
 public protocol NotificationFetching: SocialSource {
     func fetchNotifications(reason: RefreshReason) async throws -> [NotificationItem]
 }

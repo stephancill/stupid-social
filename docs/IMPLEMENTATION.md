@@ -62,7 +62,7 @@ How the app works today, by topic: decisions and their reasons, endpoint and pro
 - `CachedAsyncImage` (shared `StoryImageCache`) replaces `AsyncImage` for avatars. Optional stable `cacheKey` (`instagram-avatar-<userId>`, `spotify-avatar-<userURI>`) because Instagram signs `profile_pic_url` differently between `reels_tray` calls; on URL miss it keeps the keyed image while fetching
 
 ### Models & helpers
-- `AccountStatusSnapshot` has `.networkUnavailable` and `.serviceError` besides valid/invalid/not configured; `validateAccount()` sets `.invalidCredentials` on failure but keeps `.notConfigured` for never-configured accounts. `FeedViewModel.performCredentialHealthCheck()` validates every configured source at startup
+- `AccountStatusSnapshot` has `.networkUnavailable` and `.serviceError` besides valid/invalid/not configured. Status is set when an account connects and when the GitHub and Instagram sources see an auth failure while fetching (they mark the account invalid); there is no separate health check of every account at startup
 - `NotificationActor.timestamp` is optional per-actor action time (Farcaster only); `NotificationTarget` has `imageURL` and an unused `album` field
 - `Date.compactRelativeTime` (`NoFeedSocialCore/Date+RelativeTime.swift`): shared compact relative time (`now`, `1m`, `12h`, `1d`, `2w`, `1mo`, `1y`)
 - `RefreshTiming.measure` emits an `os_signpost` interval plus duration log (subsystem `tech.stupid.StupidSocial`, category `Refresh`) around per-source fetches and cache writes in `FeedService`, story branches in `StoryBarViewModel`, Instagram tray/per-reel, Spotify buddylist/per-track

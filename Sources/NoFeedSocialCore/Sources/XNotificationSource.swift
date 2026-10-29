@@ -1,6 +1,6 @@
 import Foundation
 
-public struct XNotificationSource: NotificationFetching, AccountValidating, ProfileFetching, NotificationTargetDetailFetching, RelationshipMutating {
+public struct XNotificationSource: NotificationFetching, ProfileFetching, NotificationTargetDetailFetching, RelationshipMutating {
     public let network: SocialNetwork = .x
 
     private let client: XClient
@@ -9,22 +9,6 @@ public struct XNotificationSource: NotificationFetching, AccountValidating, Prof
     public init(client: XClient, metadataStore: AccountMetadataStore) {
         self.client = client
         self.metadataStore = metadataStore
-    }
-
-    public func validateAccount() async throws -> AccountStatus {
-        guard (try? client.hasCredentials()) == true else {
-            return .notConfigured
-        }
-        do {
-            _ = try await client.verifiedUser()
-            return .valid
-        } catch {
-            if var account = metadataStore.xAccount {
-                account.status = .invalidCredentials
-                metadataStore.xAccount = account
-            }
-            return .serviceError(error.localizedDescription)
-        }
     }
 
     public func fetchNotifications(reason _: RefreshReason) async throws -> [NotificationItem] {
