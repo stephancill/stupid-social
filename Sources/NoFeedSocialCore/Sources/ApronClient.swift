@@ -6,6 +6,8 @@ public enum ApronError: LocalizedError, Equatable {
     case timedOut
     case closed
     case noUsableAuthScheme([String])
+    /// The server answered the WebSocket handshake with this HTTP status instead of upgrading.
+    case rejected(status: Int)
 
     public static let deniedCode = -32001
 
@@ -16,6 +18,9 @@ public enum ApronError: LocalizedError, Equatable {
         case .timedOut: "The Apron server did not respond."
         case .closed: "The connection to the Apron server closed."
         case let .noUsableAuthScheme(schemes): "This server needs a sign-in method the app does not support (\(schemes.joined(separator: ", ")))."
+        case let .rejected(status) where status == 503 || status == 429:
+            "The Apron server is too busy to accept connections right now (HTTP \(status)). Try again later."
+        case let .rejected(status): "The Apron server refused the connection (HTTP \(status))."
         }
     }
 
@@ -150,10 +155,17 @@ public final class ApronConnection {
                 @unknown default: break
                 }
             } catch {
-                finish(error: error)
+                finish(error: handshakeRejection ?? error)
                 return
             }
         }
+    }
+
+    /// URLSession reports a refused upgrade as `badServerResponse`; the status says why (a 503 when a
+    /// server is at capacity, a 401, a 404 for a wrong path).
+    private var handshakeRejection: ApronError? {
+        guard let response = task.response as? HTTPURLResponse, response.statusCode != 101 else { return nil }
+        return .rejected(status: response.statusCode)
     }
 
     private func handle(_ data: Data) {
