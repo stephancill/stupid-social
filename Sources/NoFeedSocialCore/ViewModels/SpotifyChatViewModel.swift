@@ -15,7 +15,6 @@ public final class SpotifyChatViewModel: ChatViewModel {
     private var tracks: [String: SpotifyTrackMetadata] = [:]
     private var pendingShares: Set<String> = []
     private var previewURLs: [String: URL] = [:]
-    private var pollTask: Task<Void, Never>?
     private let snapshotCache: ChatSnapshotCache
     /// Whether the first page came from Spotify this visit; until then the messages are the cached snapshot.
     private var hasLoadedHistory = false
@@ -32,7 +31,7 @@ public final class SpotifyChatViewModel: ChatViewModel {
         self.chatId = chatId
         self.viewerUsername = viewerUsername
         self.snapshotCache = snapshotCache
-        super.init(network: .spotify, title: title, subtitle: "Spotify", canReply: false)
+        super.init(network: .spotify, chatKey: "spotify:\(chatId)", title: title, subtitle: "Spotify", canReply: false)
         restoreSnapshot()
     }
 
@@ -49,7 +48,7 @@ public final class SpotifyChatViewModel: ChatViewModel {
     }
 
     private var snapshotKey: String {
-        "spotify:\(chatId)"
+        chatKey
     }
 
     private func restoreSnapshot() {
@@ -76,7 +75,7 @@ public final class SpotifyChatViewModel: ChatViewModel {
     }
 
     override public func connect() async {
-        guard pollTask == nil else { return }
+        guard !isPolling else { return }
         if messages.isEmpty {
             state = .connecting
         }
@@ -108,26 +107,19 @@ public final class SpotifyChatViewModel: ChatViewModel {
             merge(page.messages)
             saveSnapshot()
             state = .connected
-            startPolling()
+            startPolling(every: pollInterval)
         } catch {
             state = .disconnected(error.localizedDescription)
         }
     }
 
     override public func disconnect() {
-        pollTask?.cancel()
-        pollTask = nil
+        stopPolling()
         saveSnapshot()
     }
 
-    private func startPolling() {
-        pollTask = Task { [weak self, pollInterval] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: pollInterval)
-                guard !Task.isCancelled, let self else { return }
-                await refreshNewest()
-            }
-        }
+    override func poll() async {
+        await refreshNewest()
     }
 
     private func refreshNewest() async {

@@ -110,16 +110,16 @@ Sources/
       StorySeenSync.swift             # iCloud KVS seen-state sync (Spotify/GitHub)
       ApronReadStore.swift            # Apron read cursors (server truth or iCloud KVS)
       ApronMessageCache.swift         # Recent Apron messages per room for instant chat open
-      ApronDraftStore.swift           # Unsent Apron composer text per room
-      ChatSnapshotCache.swift         # Last messages and metadata per Spotify/Instagram chat for instant open
+      ChatDraftStore.swift            # Unsent composer text per chat (by chatKey), every network
+      ChatSnapshotCache.swift         # Last messages and metadata per Spotify/Instagram/Telegram chat for instant open
     ViewModels/
       FeedViewModel.swift
       ProfileSearchViewModel.swift
       StoryBarViewModel.swift
       SettingsViewModel.swift
       ApronServersViewModel.swift
-      ChatViewModel.swift            # Shared chat models (ChatMessage, ChatUser, ChatEmbed) and base view model
-      ChatListViewModel.swift        # Chats list: ChatSummary, merged from Apron and Spotify
+      ChatViewModel.swift            # Shared chat models (ChatMessage, ChatUser, ChatEmbed) and base view model: drafts, polling, unread, read markers, sending
+      ChatListViewModel.swift        # Chats list: ChatSummary, merged from every chat network
       ApronChatViewModel.swift
       ApronLinkViewModel.swift       # What an opened Apron link offers: add server, sign in, join, open
       SpotifyChatViewModel.swift     # Spotify Messages chat: history, polling, send, seen, track metadata
@@ -166,6 +166,19 @@ Outside `Sources/`: `NotificationService/` holds the extension's Info.plist and 
 - Never log credentials, cookie headers, tokens, or derived auth values.
 - Keep notification item cache local-only for the MVP.
 - Keep the normalized notification schema minimal unless `docs/PLAN.md` is updated.
+
+## Chat Framework
+
+Chat is one framework with an adapter per network; `docs/TECHNICAL_DESIGN.md` § Chat Framework has the target shape and the migration status. Read it before changing chat code.
+
+- Shared chat code (`ChatViewModel`, `ChatListViewModel`, `ChatsView`, `ChatView`, `ChatUIKitView` and its helpers) never names a network, casts to a network's type, or branches on `SocialNetwork` or `ChatSummary.Destination`. The one exception is the place that turns a destination into a chat, until the adapter registry replaces it.
+- A network-specific need becomes a capability or an overridable hook any network could use (like `linkTarget(for:)`), never a special case in shared code.
+- Behavior users expect to match across chats belongs to the framework: drafts, polling, read-marker debouncing, unread counting and the divider, snapshots, optimistic sending, links. A network uses the shared version (`startPolling(every:)`/`poll()`, `isAfterReadPosition(_:)`, `scheduleReadMarker`, `sendOptimistically`) rather than writing its own; if the shared one doesn't fit, extend it.
+- Network chat code only translates between the network and the shared models (`ChatMessage`, `ChatEmbed`, `ChatReaction`, `ChatSummary`); it doesn't do UI work.
+- Every capability a network declares (`canReply`, `canReact`, `canAttach`, …) is implemented; never leave a declared action as the base class's no-op.
+- Adding a network should only take its adapter, its list rows, a `Destination` case and its one place in the destination-to-chat switch. If it needs more, extend the framework first.
+- Every chat has a `chatKey` (`<network>:<id>`), used for drafts and snapshots.
+- Shared behavior is covered in `ChatViewModelTests`; network mapping is tested against recorded pages without the UI.
 
 ## Network Integration
 

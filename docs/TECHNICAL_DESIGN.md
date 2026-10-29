@@ -449,6 +449,32 @@ X Chat replaced X DMs in 2025 and is end-to-end encrypted. The app is a native c
 - **Chat (`XChatViewModel`):** history from the conversation page plus older pages; events are kept by sequence id, and edits, deletes and reactions are applied to the messages they name. Message ids are sequence ids. Replies render from the decrypted reply preview when the original isn't loaded. Sending replies is off: it needs the re-encrypted quoted source event, which isn't validated yet.
 - **Unlock (`XChatUnlockViewModel`, Settings → X):** the PIN field, Unlock, and Forget Keys (with a confirmation).
 
+## Chat Framework
+
+Chat is one framework with an adapter per chat network (Apron, Telegram, Instagram Direct, Spotify Messages, X Chat). The framework owns everything a user would expect to behave the same in every chat; an adapter only translates between its network and the framework's models. The rules for working on it are in AGENTS.md § Chat Framework. This section is written without platform specifics so another client of the same networks can follow it.
+
+**Framework (shared):**
+
+- Display models: message, user, embed (image, card, audio, pending upload), reaction totals, reactors, attachment.
+- The chat screen and its state: connection state, history paging (earlier, and later for windows that don't reach the newest message), jumping to a message, the "New Messages" divider, unread count, replies, reactions, mentions, typing names, composer and draft.
+- Behavior: optimistic sending (see Sending), drafts per chat, polling or following pushed updates, debounced read markers, unread counting from the adapter's read position, the per-chat snapshot that opens a chat with content, and in-chat links.
+- The Chats list: rows from every network merged newest first, archived rows apart, a cached list at launch, a network that fails keeps its previous rows, and an open chat keeps its row current.
+
+**Adapter (per network):**
+
+- A conversation adapter, with no UI state: declares its capabilities; loads the newest page and earlier pages as framework messages; either delivers pushed updates or names a poll interval; sends text and attachments and returns the network's id for the message; moves the read position; sets reactions; optionally lists members, resolves links into this chat, and gives a link to a message.
+- A list provider: the network's rows for the main list and the archive, and live row updates when the network pushes them.
+- A destination (the network's id for a chat) that the one registry turns into a conversation adapter, or into why it can't open (not connected, locked).
+
+**Rules:** shared code never names a network or casts to one; a network-specific need becomes an optional capability any network could use; every declared capability is implemented (no silent no-ops); adapters are tested against recorded pages without the UI.
+
+**Migration** (each step ships on its own; the current state is in IMPLEMENTATION.md § Chats & chat screen):
+
+1. Done: shared behavior moved into the base view model (drafts for every network, polling, unread counting and the divider, debounced read markers, in-chat links), and the shared UI no longer casts to Apron.
+2. A list provider per network, so the Chats list holds a list of providers instead of five clients and their special cases (Telegram's archive folder, X's archived inbox rows, Telegram's user status on a row).
+3. A conversation adapter protocol and one final chat view model driven by it; Spotify and Instagram first, then X Chat and Telegram. One snapshot cache for every network (Apron's log-id merge rule included), so X Chat gains one.
+4. Apron last (paged windows, typing, mentions, commands, markdown), which tests whether the protocol is complete; members become a capability, replacing the Apron- and Telegram-specific chat screens.
+
 ## Sending
 
 `ChatViewModel` owns optimistic sending for every network. Networks publish their messages as `history`; `messages` is `history` followed by the user's messages still sending (`ChatMessage.isSending`, drawn with a clock beside the time). `sendOptimistically(text:attachment:replyToId:deliver:)` adds the sending copy (a picked image is written to a temporary file and shown from it), clears the composer, and runs the network's `deliver`, which sends and returns the network's id for the message. The copy stays until a message with that id is in `history` (Apron's broadcast, Telegram's refresh, the copy Instagram and Spotify add), so it never blinks out; the confirmed message then keeps showing the picked image (`pickedImages`), so the swap doesn't reload the image or change its size. A failure removes the copy and puts the text and attachment back in an empty composer. Apron commands don't use it, since a command may post nothing.

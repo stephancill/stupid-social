@@ -169,8 +169,18 @@ public enum ChatConnectionState: Equatable {
     case disconnected(String?)
 }
 
+/// Where a link in a chat's messages points within that same chat.
+public enum ChatLinkTarget: Equatable {
+    /// The chat itself, which is already showing.
+    case chat
+    case message(String)
+    case user(String)
+}
+
 /// What the shared chat screen shows and does. Each network subclasses it, publishes its messages as
-/// `ChatMessage`s, and overrides the actions it supports; the capability flags hide the rest of the UI.
+/// `ChatMessage`s, and overrides the actions it supports; the capability flags hide the rest of the UI. Behavior
+/// every network shares (drafts, polling, unread counting, the divider, read-marker debouncing, optimistic
+/// sending) lives here, and networks use it rather than keeping their own.
 @MainActor
 public class ChatViewModel: ObservableObject {
     /// What the chat shows: the network's `history`, then the user's messages still sending.
@@ -209,8 +219,9 @@ public class ChatViewModel: ObservableObject {
     @Published public internal(set) var canReact = false
     /// Per-message reaction totals, keyed by message id.
     @Published public internal(set) var reactions: [String: [ChatReaction]] = [:]
+    /// Kept per chat across visits.
     @Published public var draft = "" {
-        didSet { draftWasSet() }
+        didSet { draftStore.setDraft(draft, key: chatKey) }
     }
 
     @Published public var attachment: ChatAttachment?
@@ -247,6 +258,8 @@ public class ChatViewModel: ObservableObject {
 
     /// The chat's network, whose icon leads the subtitle.
     public let network: SocialNetwork
+    /// Identifies the chat across visits, such as for its draft: the network, a colon, and the network's id for it.
+    public let chatKey: String
     /// Whether swipe-to-reply and the Reply action are offered.
     public let canReply: Bool
     /// Whether the composer has an attachments button; `canAttach` enables it once the network allows uploads.
@@ -274,14 +287,29 @@ public class ChatViewModel: ObservableObject {
     var summaryDidChange: ((_ latest: ChatMessage?, _ body: String?, _ unreadCount: Int) -> Void)?
     private var messagesById: [String: ChatMessage] = [:]
     private var renderedTextCache: [String: AttributedString] = [:]
+    private let draftStore: ChatDraftStore
+    private var pollTask: Task<Void, Never>?
+    private var readSendTask: Task<Void, Never>?
 
-    init(network: SocialNetwork, title: String, subtitle: String, canReply: Bool, offersAttachments: Bool = false, mentionPattern: NSRegularExpression? = nil) {
+    init(
+        network: SocialNetwork,
+        chatKey: String,
+        title: String,
+        subtitle: String,
+        canReply: Bool,
+        offersAttachments: Bool = false,
+        mentionPattern: NSRegularExpression? = nil,
+        draftStore: ChatDraftStore = ChatDraftStore(),
+    ) {
         self.network = network
+        self.chatKey = chatKey
         self.title = title
         self.subtitle = subtitle
         self.canReply = canReply
         self.offersAttachments = offersAttachments
         self.mentionPattern = mentionPattern
+        self.draftStore = draftStore
+        draft = draftStore.draft(key: chatKey)
     }
 
     public var canSend: Bool {
@@ -321,6 +349,73 @@ public class ChatViewModel: ObservableObject {
     /// The user has seen everything up to and including this message.
     public func markRead(upTo _: ChatMessage) {}
 
+    // MARK: Polling
+
+    /// Whether the chat is polling, which networks also read as "already connected".
+    var isPolling: Bool {
+        pollTask != nil
+    }
+
+    /// Calls `poll()` every `interval` until `stopPolling()`, for networks without pushed updates or as a
+    /// fallback to them.
+    func startPolling(every interval: Duration) {
+        pollTask?.cancel()
+        pollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: interval)
+                guard !Task.isCancelled, let self else { return }
+                await poll()
+            }
+        }
+    }
+
+    func stopPolling() {
+        pollTask?.cancel()
+        pollTask = nil
+    }
+
+    /// One poll, such as fetching the newest page; networks that call `startPolling(every:)` override it.
+    func poll() async {}
+
+    // MARK: Unread
+
+    /// Whether the message is past the user's read position; networks that track one override this, and
+    /// `isUnread`, `updateUnreadCount()` and `placeUnreadDivider()` build on it.
+    func isAfterReadPosition(_: ChatMessage) -> Bool {
+        false
+    }
+
+    func isUnread(_ message: ChatMessage) -> Bool {
+        message.isUserMessage && !message.isOwn && isAfterReadPosition(message)
+    }
+
+    /// Counts `history`, since `messages` may be held back while the chat opens.
+    func updateUnreadCount() {
+        let count = history.count(where: isUnread)
+        if unreadCount != count {
+            unreadCount = count
+        }
+    }
+
+    /// Puts the "New Messages" divider above the first unread message, unless this visit already placed it. It
+    /// reads `history`, since `messages` stays empty while restored messages are held (see `expectUnread()`).
+    func placeUnreadDivider() {
+        if firstUnreadMessageId == nil {
+            firstUnreadMessageId = history.first(where: isUnread)?.id
+        }
+    }
+
+    /// Tells the network the new read position shortly after it moves, so reading a burst of messages sends one
+    /// mark: each call replaces the one still waiting. Failures are ignored, since the next read sends it again.
+    func scheduleReadMarker(_ send: @escaping @MainActor () async throws -> Void) {
+        readSendTask?.cancel()
+        readSendTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(600))
+            guard self != nil, !Task.isCancelled else { return }
+            try? await send()
+        }
+    }
+
     // MARK: Composing
 
     public func send() async {
@@ -329,9 +424,6 @@ public class ChatViewModel: ObservableObject {
 
     /// Call as the user edits the draft, for typing indications.
     public func draftDidChange() {}
-
-    /// Runs whenever `draft` is assigned, such as to keep it across visits.
-    func draftWasSet() {}
 
     /// The optimistic send every network shares: the message shows at once as sending and the composer clears;
     /// `deliver` sends it and returns the network's id for it (nil when unknown). The sending copy stays until a
@@ -511,6 +603,24 @@ public class ChatViewModel: ObservableObject {
 
     public func avatarURL(for user: ChatUser) -> URL? {
         user.avatarURL
+    }
+
+    // MARK: Links
+
+    /// A link to the message to share, offered as Copy Link; `nil` when the network has none.
+    public func link(toMessage _: String) -> URL? {
+        nil
+    }
+
+    /// What a link in this chat's messages points at in this same chat, which the chat then shows; `nil` opens
+    /// it as usual.
+    public func linkTarget(for _: URL) -> ChatLinkTarget? {
+        nil
+    }
+
+    /// The base for relative links in this chat's messages, such as an Apron room's server.
+    public var linkBaseURL: URL? {
+        nil
     }
 
     public func message(withId id: String) -> ChatMessage? {

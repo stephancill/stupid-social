@@ -230,7 +230,7 @@ final class ChatImageViewerController: UIViewController, UIScrollViewDelegate, U
             do {
                 let (data, _) = try await URLSession.shared.data(from: url)
                 guard await PHPhotoLibrary.requestAuthorization(for: .addOnly) == .authorized else {
-                    throw ApronImageSaveError.denied
+                    throw ChatImageSaveError.denied
                 }
                 try await Self.addToPhotos(data)
                 self?.setSaving(false, saved: true)
@@ -258,7 +258,7 @@ final class ChatImageViewerController: UIViewController, UIScrollViewDelegate, U
     }
 
     private func showSaveError(_ error: Error) {
-        let message = (error as? ApronImageSaveError) == .denied
+        let message = (error as? ChatImageSaveError) == .denied
             ? "Allow stupid social to add photos in Settings to save images."
             : error.localizedDescription
         let alert = UIAlertController(title: "Couldn't Save Image", message: message, preferredStyle: .alert)
@@ -267,6 +267,6 @@ final class ChatImageViewerController: UIViewController, UIScrollViewDelegate, U
     }
 }
 
-private enum ApronImageSaveError: Error {
+private enum ChatImageSaveError: Error {
     case denied
 }

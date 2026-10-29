@@ -1089,7 +1089,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
                     UIPasteboard.general.string = text
                 })
             }
-            if let link = (viewModel as? ApronChatViewModel)?.link(toMessage: id) {
+            if let link = viewModel.link(toMessage: id) {
                 actions.append(UIAction(title: "Copy Link", image: UIImage(systemName: "link")) { _ in
                     UIPasteboard.general.url = link
                 })
@@ -1099,21 +1099,22 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         })
     }
 
-    /// Apron links open in the app, relative ones against this room's server; a link to a message or member of
-    /// this room shows it here. Message text is untrusted, so otherwise only web and mail links open.
+    /// A link to a message or member of this chat shows it here; app links (such as Apron links, relative ones
+    /// against `linkBaseURL`) open in the app. Message text is untrusted, so otherwise only web and mail links open.
     private func openLink(_ url: URL) {
-        let room = viewModel as? ApronChatViewModel
-        if let room, ApronLink.isLink(url), let link = try? ApronLink(url: url, contentServer: room.serverURL),
-           link.token == nil, link.serverURL == room.serverURL, link.room == room.roomId
-        {
-            if let user = link.user {
-                showProfile(ChatUser(id: user, name: nil, avatarURL: nil))
-            } else if let message = link.message {
-                Task { await viewModel.jump(to: message) }
-            }
+        switch viewModel.linkTarget(for: url) {
+        case let .user(user):
+            showProfile(ChatUser(id: user, name: nil, avatarURL: nil))
             return
+        case let .message(message):
+            Task { await viewModel.jump(to: message) }
+            return
+        case .chat:
+            return
+        case nil:
+            break
         }
-        guard !NotificationRouter.shared.open(url, contentServer: room?.serverURL) else { return }
+        guard !NotificationRouter.shared.open(url, contentServer: viewModel.linkBaseURL) else { return }
         guard ["http", "https", "mailto"].contains(url.scheme?.lowercased()) else { return }
         UIApplication.shared.open(url)
     }

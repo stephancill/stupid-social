@@ -40,7 +40,6 @@ public final class ApronChatViewModel: ChatViewModel {
     private var tracksCursors = false
     /// The cursor last sent to the server, so `activity` goes out only when it moves.
     private var sentReadMessageId: Int64 = 0
-    private var readSendTask: Task<Void, Never>?
     private var cacheSaveTask: Task<Void, Never>?
     private var ownUserIds: Set<String>
     private var observerToken: UUID?
@@ -75,13 +74,21 @@ public final class ApronChatViewModel: ChatViewModel {
         self.service = service
         self.serverURL = serverURL
         self.roomId = roomId
-        super.init(network: .apron, title: title ?? roomId, subtitle: serverURL.host() ?? serverURL.absoluteString, canReply: true, offersAttachments: true, mentionPattern: ApronMention.pattern)
-        draft = service.draftStore.draft(serverURL: serverURL, roomId: roomId)
+        super.init(
+            network: .apron,
+            chatKey: Self.chatKey(serverURL: serverURL, roomId: roomId),
+            title: title ?? roomId,
+            subtitle: serverURL.host() ?? serverURL.absoluteString,
+            canReply: true,
+            offersAttachments: true,
+            mentionPattern: ApronMention.pattern,
+            draftStore: service.draftStore,
+        )
     }
 
-    /// Kept per room across visits.
-    override func draftWasSet() {
-        service.draftStore.setDraft(draft, serverURL: serverURL, roomId: roomId)
+    /// Matches the room's `ChatSummary.id`.
+    static func chatKey(serverURL: URL, roomId: String) -> String {
+        "apron:\(serverURL.absoluteString)|\(roomId)"
     }
 
     /// The live session's media origins, or the cached ones until it is up.
@@ -887,16 +894,15 @@ public final class ApronChatViewModel: ChatViewModel {
         service.readStore.markRead(messageId, serverURL: serverURL, roomId: roomId, serverTracksCursors: tracksCursors)
         updateUnreadCount()
         guard let session, session.server.has("activity") else { return }
-        readSendTask?.cancel()
-        readSendTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(600))
-            guard let self, !Task.isCancelled, messageId > sentReadMessageId else { return }
+        scheduleReadMarker { [weak self, roomId] in
+            guard let self, messageId > sentReadMessageId else { return }
             sentReadMessageId = messageId
-            try? await session.connection.markRead(roomId: roomId, messageId: String(messageId))
+            try await session.connection.markRead(roomId: roomId, messageId: String(messageId))
         }
     }
 
-    private func updateUnreadCount() {
+    /// Counts the room's kept messages rather than `history`, which may be an older window.
+    override func updateUnreadCount() {
         let cursor = readCursor ?? .max
         let count = snapshots.values.count(where: { countsAsUnread($0, after: cursor) })
         if unreadCount != count {
@@ -952,13 +958,28 @@ public final class ApronChatViewModel: ChatViewModel {
         users[user.userId] ?? reactionAuthors[user.userId] ?? user
     }
 
-    /// The kept or recorded user behind a chat user, such as a tapped avatar, for the profile screen.
     /// A link to share for a message the server has numbered (SPEC.md §1: the web form).
-    public func link(toMessage messageId: String) -> URL? {
+    override public func link(toMessage messageId: String) -> URL? {
         guard ApronLink.isMessageId(messageId) else { return nil }
         return ApronLink(serverURL: serverURL, room: roomId, message: messageId).webURL
     }
 
+    /// An Apron link to a message or member of this room, relative ones against its server.
+    override public func linkTarget(for url: URL) -> ChatLinkTarget? {
+        guard ApronLink.isLink(url), let link = try? ApronLink(url: url, contentServer: serverURL),
+              link.token == nil, link.serverURL == serverURL, link.room == roomId
+        else { return nil }
+        if let user = link.user {
+            return .user(user)
+        }
+        return link.message.map(ChatLinkTarget.message) ?? .chat
+    }
+
+    override public var linkBaseURL: URL? {
+        serverURL
+    }
+
+    /// The kept or recorded user behind a chat user, such as a tapped avatar, for the profile screen.
     public func apronUser(for user: ChatUser) -> ApronUser {
         users[user.id] ?? reactionAuthors[user.id]
             ?? ApronUser(userId: user.id, name: user.name == user.id ? nil : user.name, avatar: user.avatarURL?.absoluteString, roles: nil)

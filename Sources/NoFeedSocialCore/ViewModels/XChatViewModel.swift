@@ -17,7 +17,6 @@ public final class XChatViewModel: ChatViewModel {
     private var readUntil: Int64 = 0
     private var hasMoreEarlier = false
     private var hasLoadedHistory = false
-    private var readSendTask: Task<Void, Never>?
     private let liveFeed: XChatLiveFeed
     private var observation: UUID?
 
@@ -25,7 +24,7 @@ public final class XChatViewModel: ChatViewModel {
         self.client = client
         self.liveFeed = liveFeed
         self.conversationId = conversationId
-        super.init(network: .x, title: title, subtitle: "X", canReply: false)
+        super.init(network: .x, chatKey: "x:\(conversationId)", title: title, subtitle: "X", canReply: false)
     }
 
     override public func connect() async {
@@ -45,9 +44,7 @@ public final class XChatViewModel: ChatViewModel {
                 hasEarlierMessages = page.hasMore
             }
             await merge(page.events)
-            if firstUnreadMessageId == nil {
-                firstUnreadMessageId = messages.first { isUnread($0) }?.id
-            }
+            placeUnreadDivider()
             canReact = true
             state = .connected
             follow()
@@ -123,11 +120,8 @@ public final class XChatViewModel: ChatViewModel {
         else { return }
         readUntil = sequence
         updateUnreadCount()
-        readSendTask?.cancel()
-        readSendTask = Task { [weak self, client, conversationId, sequenceId = message.id] in
-            try? await Task.sleep(for: .milliseconds(600))
-            guard self != nil, !Task.isCancelled else { return }
-            try? await client.markRead(upTo: sequenceId, conversationId: conversationId)
+        scheduleReadMarker { [client, conversationId, sequenceId = message.id] in
+            try await client.markRead(upTo: sequenceId, conversationId: conversationId)
         }
     }
 
@@ -227,16 +221,8 @@ public final class XChatViewModel: ChatViewModel {
         updateUnreadCount()
     }
 
-    private func isUnread(_ message: ChatMessage) -> Bool {
-        message.isUserMessage && !message.isOwn && (Int64(message.id) ?? 0) > readUntil
-    }
-
-    private func updateUnreadCount() {
-        // `history`, since `messages` may be held back while the chat opens.
-        let count = history.count(where: isUnread)
-        if unreadCount != count {
-            unreadCount = count
-        }
+    override func isAfterReadPosition(_ message: ChatMessage) -> Bool {
+        (Int64(message.id) ?? 0) > readUntil
     }
 
     private func person(_ id: String) -> ChatUser {

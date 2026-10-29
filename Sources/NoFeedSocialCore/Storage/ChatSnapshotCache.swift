@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 
-/// The last state of each Spotify and Instagram chat, kept on this device so a chat opens with its recent
+/// The last state of each Spotify, Instagram and Telegram chat, kept on this device so a chat opens with its recent
 /// messages, names and share details while it refreshes, instead of empty.
 public final class ChatSnapshotCache {
     public static let messageLimit = 50

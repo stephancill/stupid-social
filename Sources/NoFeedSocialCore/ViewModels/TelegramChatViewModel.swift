@@ -12,8 +12,6 @@ public final class TelegramChatViewModel: ChatViewModel {
     private var avatars: [Int64: URL] = [:]
     /// Telegram's read cursor for incoming messages, locally ahead while a mark is pending.
     private var readInboxMaxId: Int32 = 0
-    private var readSendTask: Task<Void, Never>?
-    private var pollTask: Task<Void, Never>?
     private var refreshTask: Task<Void, Never>?
     private var observer: UUID?
     private var statusObserver: UUID?
@@ -38,7 +36,7 @@ public final class TelegramChatViewModel: ChatViewModel {
         self.client = client
         self.peer = peer
         self.snapshotCache = snapshotCache
-        super.init(network: .telegram, title: title, subtitle: "Telegram", canReply: true, offersAttachments: true)
+        super.init(network: .telegram, chatKey: "telegram:\(peer.key)", title: title, subtitle: "Telegram", canReply: true, offersAttachments: true)
         showsSenderNames = peer.kind != .user
         restoreSnapshot()
         // The Chats list's status is newer than the snapshot's.
@@ -78,7 +76,7 @@ public final class TelegramChatViewModel: ChatViewModel {
     }
 
     private var snapshotKey: String {
-        "telegram:\(peer.key)"
+        chatKey
     }
 
     private func restoreSnapshot() {
@@ -106,7 +104,7 @@ public final class TelegramChatViewModel: ChatViewModel {
     }
 
     override public func connect() async {
-        guard pollTask == nil else { return }
+        guard !isPolling else { return }
         if messages.isEmpty {
             state = .connecting
         }
@@ -123,9 +121,7 @@ public final class TelegramChatViewModel: ChatViewModel {
                 hasEarlierMessages = history.hasMore
             }
             merge(history)
-            if firstUnreadMessageId == nil {
-                firstUnreadMessageId = messages.first { isUnread($0) }?.id
-            }
+            placeUnreadDivider()
             saveSnapshot()
             canAttach = true
             canReact = true
@@ -138,15 +134,14 @@ public final class TelegramChatViewModel: ChatViewModel {
                     Task { @MainActor in self?.apply(status: status) }
                 }
             }
-            startPolling()
+            startPolling(every: pollInterval)
         } catch {
             state = .disconnected(error.localizedDescription)
         }
     }
 
     override public func disconnect() {
-        pollTask?.cancel()
-        pollTask = nil
+        stopPolling()
         refreshTask?.cancel()
         for id in [observer, statusObserver].compactMap(\.self) {
             Task { [client] in await client.removeUpdateObserver(id) }
@@ -170,15 +165,9 @@ public final class TelegramChatViewModel: ChatViewModel {
         subtitle = status.text
     }
 
-    private func startPolling() {
-        pollTask = Task { [weak self, pollInterval] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: pollInterval)
-                guard !Task.isCancelled, let self else { return }
-                await refreshNewest()
-                await refreshStatus()
-            }
-        }
+    override func poll() async {
+        await refreshNewest()
+        await refreshStatus()
     }
 
     /// Status pushes don't come for everyone, and "last seen 5 minutes ago" ages, so the poll reads it again.
@@ -255,11 +244,8 @@ public final class TelegramChatViewModel: ChatViewModel {
         else { return }
         readInboxMaxId = id
         updateUnreadCount()
-        readSendTask?.cancel()
-        readSendTask = Task { [weak self, client, peer] in
-            try? await Task.sleep(for: .milliseconds(600))
-            guard self != nil, !Task.isCancelled else { return }
-            try? await client.markRead(peer: peer, maxId: id)
+        scheduleReadMarker { [client, peer] in
+            try await client.markRead(peer: peer, maxId: id)
         }
     }
 
@@ -360,16 +346,8 @@ public final class TelegramChatViewModel: ChatViewModel {
         updateUnreadCount()
     }
 
-    private func isUnread(_ message: ChatMessage) -> Bool {
-        message.isUserMessage && !message.isOwn && (Int32(message.id) ?? 0) > readInboxMaxId
-    }
-
-    private func updateUnreadCount() {
-        // `history`, since `messages` may be held back while the chat opens.
-        let count = history.count(where: isUnread)
-        if unreadCount != count {
-            unreadCount = count
-        }
+    override func isAfterReadPosition(_ message: ChatMessage) -> Bool {
+        (Int32(message.id) ?? 0) > readInboxMaxId
     }
 
     private func chatMessage(_ message: TelegramMessage) -> ChatMessage {

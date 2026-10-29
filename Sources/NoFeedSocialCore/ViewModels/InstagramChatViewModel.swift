@@ -15,8 +15,6 @@ public final class InstagramChatViewModel: ChatViewModel {
     private var legacyThreadId: String?
     /// Where the viewer's read receipt is, locally ahead of Instagram while a mark is pending.
     private var readAt: Date?
-    private var readSendTask: Task<Void, Never>?
-    private var pollTask: Task<Void, Never>?
     private let pollInterval: Duration = .seconds(20)
     private let snapshotCache: ChatSnapshotCache
     /// Whether the thread came from Instagram this visit; until then the messages are the cached snapshot.
@@ -26,7 +24,7 @@ public final class InstagramChatViewModel: ChatViewModel {
         self.client = client
         self.threadFbid = threadFbid
         self.snapshotCache = snapshotCache
-        super.init(network: .instagram, title: title, subtitle: "Instagram", canReply: true)
+        super.init(network: .instagram, chatKey: "instagram:\(threadFbid)", title: title, subtitle: "Instagram", canReply: true)
         restoreSnapshot()
     }
 
@@ -43,7 +41,7 @@ public final class InstagramChatViewModel: ChatViewModel {
     }
 
     private var snapshotKey: String {
-        "instagram:\(threadFbid)"
+        chatKey
     }
 
     private func restoreSnapshot() {
@@ -73,7 +71,7 @@ public final class InstagramChatViewModel: ChatViewModel {
     }
 
     override public func connect() async {
-        guard pollTask == nil else { return }
+        guard !isPolling else { return }
         if messages.isEmpty {
             state = .connecting
         }
@@ -87,21 +85,18 @@ public final class InstagramChatViewModel: ChatViewModel {
                 hasEarlierMessages = nextCursor != nil
             }
             merge(thread.messages)
-            if firstUnreadMessageId == nil {
-                firstUnreadMessageId = messages.first { isUnread($0) }?.id
-            }
+            placeUnreadDivider()
             saveSnapshot()
             canReact = true
             state = .connected
-            startPolling()
+            startPolling(every: pollInterval)
         } catch {
             state = .disconnected(error.localizedDescription)
         }
     }
 
     override public func disconnect() {
-        pollTask?.cancel()
-        pollTask = nil
+        stopPolling()
         saveSnapshot()
     }
 
@@ -125,17 +120,7 @@ public final class InstagramChatViewModel: ChatViewModel {
         subtitle = thread.isGroup == true ? "\(thread.others.count + 1) members" : "Instagram"
     }
 
-    private func startPolling() {
-        pollTask = Task { [weak self, pollInterval] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: pollInterval)
-                guard !Task.isCancelled, let self else { return }
-                await refreshNewest()
-            }
-        }
-    }
-
-    private func refreshNewest() async {
+    override func poll() async {
         guard let thread = try? await client.directThread(threadFbid: threadFbid) else { return }
         apply(thread: thread)
         merge(thread.messages)
@@ -189,11 +174,8 @@ public final class InstagramChatViewModel: ChatViewModel {
         else { return }
         readAt = shown
         updateUnreadCount()
-        readSendTask?.cancel()
-        readSendTask = Task { [weak self, client, threadFbid, messageId = message.id] in
-            try? await Task.sleep(for: .milliseconds(600))
-            guard self != nil, !Task.isCancelled else { return }
-            try? await client.markDirectRead(threadFbid: threadFbid, threadId: legacyThreadId, messageId: messageId)
+        scheduleReadMarker { [client, threadFbid, messageId = message.id] in
+            try await client.markDirectRead(threadFbid: threadFbid, threadId: legacyThreadId, messageId: messageId)
         }
     }
 
@@ -222,16 +204,8 @@ public final class InstagramChatViewModel: ChatViewModel {
         updateUnreadCount()
     }
 
-    private func isUnread(_ message: ChatMessage) -> Bool {
-        message.isUserMessage && !message.isOwn && (message.timestamp ?? .distantPast) > (readAt ?? .distantPast)
-    }
-
-    private func updateUnreadCount() {
-        // `history`, since `messages` may be held back while the chat opens.
-        let count = history.count(where: isUnread)
-        if unreadCount != count {
-            unreadCount = count
-        }
+    override func isAfterReadPosition(_ message: ChatMessage) -> Bool {
+        (message.timestamp ?? .distantPast) > (readAt ?? .distantPast)
     }
 
     /// Instagram stores emoji without the variation selector (❤️ comes back as ❤), so one that matches a quick
