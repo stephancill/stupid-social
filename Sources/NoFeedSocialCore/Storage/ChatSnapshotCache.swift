@@ -1,8 +1,9 @@
 import CryptoKit
 import Foundation
 
-/// The last state of each chat on a network without a cache of its own (every one but Apron), kept on this
-/// device so a chat opens with its recent messages, names and share details while it refreshes, instead of empty.
+/// The last state of each chat, kept on this device so a chat opens with its recent messages, names and share
+/// details while it refreshes, instead of empty. Keys are `ChatViewModel.chatKey`s; snapshots are grouped by
+/// the key's account (the part before the first `|`), so an account's snapshots can be removed together.
 public final class ChatSnapshotCache {
     public static let messageLimit = 50
     private let directory: URL
@@ -25,12 +26,22 @@ public final class ChatSnapshotCache {
     }
 
     func save(data: Data, key: String) {
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try? data.write(to: fileURL(key: key), options: .atomic)
+        let url = fileURL(key: key)
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? data.write(to: url, options: .atomic)
+    }
+
+    /// Removes every snapshot of an account, such as an Apron server that was removed.
+    public func removeAll(accountId: String) {
+        try? FileManager.default.removeItem(at: directory.appending(path: Self.digest(accountId), directoryHint: .isDirectory))
     }
 
     private func fileURL(key: String) -> URL {
-        let digest = SHA256.hash(data: Data(key.utf8))
-        return directory.appending(path: digest.map { String(format: "%02x", $0) }.joined() + ".json")
+        let account = key.split(separator: "|", maxSplits: 1).first.map(String.init) ?? key
+        return directory.appending(path: Self.digest(account), directoryHint: .isDirectory).appending(path: Self.digest(key) + ".json")
+    }
+
+    private static func digest(_ string: String) -> String {
+        SHA256.hash(data: Data(string.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 }

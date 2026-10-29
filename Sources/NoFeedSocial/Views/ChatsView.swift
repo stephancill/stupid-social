@@ -189,9 +189,14 @@ struct ChatsView: View {
             let focus = focus?.destination == chat.destination ? focus?.focus : nil
             ApronChatView(
                 viewModel: {
-                    let room = ApronChatViewModel(service: apronService, serverURL: serverURL, roomId: roomId, title: chat.title, expectsUnread: chat.unreadCount > 0)
+                    let room = AdapterChatViewModel(
+                        adapter: ApronChatAdapter(service: apronService, serverURL: serverURL, roomId: roomId, title: chat.title),
+                        accountId: Account.apronId(serverURL: serverURL),
+                        snapshotCache: apronService.snapshotCache,
+                        draftStore: apronService.draftStore,
+                    )
                     room.focusMessageId = focus?.messageId
-                    return viewModel.follow(room, chatId: chat.id)
+                    return opened(room, chat: chat)
                 }(),
                 profileUserId: focus?.userId,
             )

@@ -9,6 +9,7 @@ public final class InstagramChatAdapter: ChatAdapter, ChatReactionSending {
     public let acceptsAttachments = false
     public let pollInterval: Duration? = .seconds(20)
     public var onChange: (() -> Void)?
+    public let acceptsReactions = true
     public private(set) var info: ChatInfo
     public private(set) var messages: [ChatMessage] = []
     public private(set) var reactions: [String: [ChatReaction]] = [:]

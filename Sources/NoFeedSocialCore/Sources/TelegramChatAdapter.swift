@@ -11,6 +11,9 @@ public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatLi
     /// A fallback to pushed updates; it also re-reads a private chat's "last seen", which ages.
     public let pollInterval: Duration? = .seconds(30)
     public var onChange: (() -> Void)?
+    public var onConnectionLost: ((Error?) -> Void)?
+    public var onError: ((Error) -> Void)?
+    public let acceptsReactions = true
     public private(set) var info: ChatInfo
     public private(set) var messages: [ChatMessage] = []
     public private(set) var reactions: [String: [ChatReaction]] = [:]

@@ -90,6 +90,7 @@ Sources/
       DebugNotificationsClient.swift / DebugNotificationSource.swift
       ApronModels.swift / ApronClient.swift / ApronNotificationSource.swift  # Apron Chat Protocol WebSocket client
       ApronLink.swift               # Apron links (link.apron.chat and apron:): parse, validate, write
+      ApronChatAdapter.swift        # Apron room chat adapter: history, windows, live frames, typing, mentions, commands, reactions, read cursor
       TelegramTL.swift              # TL schema parsing and generic encoder/decoder
       TelegramCrypto.swift          # BigUInt, AES-IGE, RSA_PAD, factorization, SRP
       TelegramMTProto.swift         # MTProto transport, auth key exchange, encrypted session actor
@@ -113,7 +114,6 @@ Sources/
       GitHubActivitySeenStore.swift
       StorySeenSync.swift             # iCloud KVS seen-state sync (Spotify/GitHub)
       ApronReadStore.swift            # Apron read cursors (server truth or iCloud KVS)
-      ApronMessageCache.swift         # Recent Apron messages per room for instant chat open
       ChatDraftStore.swift            # Unsent composer text per chat (by chatKey), every network
       ChatSnapshotCache.swift         # Last messages and metadata per adapter chat (by chatKey) for instant open
     ViewModels/
@@ -123,9 +123,9 @@ Sources/
       SettingsViewModel.swift
       ApronServersViewModel.swift
       ChatViewModel.swift            # Shared chat models (ChatMessage, ChatUser, ChatEmbed) and base view model: drafts, polling, unread, read markers, sending
-      AdapterChatViewModel.swift     # ChatAdapter protocol and its optional abilities (reactions, audio previews, live updates, quoted messages), and the view model that drives one
+      AdapterChatViewModel.swift     # ChatAdapter protocol and its optional abilities, and the view model that drives one (every network)
       ChatListViewModel.swift        # Chats list: ChatSummary, ChatListProvider (one per network), merged list
-      ApronChatViewModel.swift
+      ApronRoomViewModel.swift       # Apron room members, profiles and notification level, kept current by the room's adapter
       ApronLinkViewModel.swift       # What an opened Apron link offers: add server, sign in, join, open
       TelegramMembersViewModel.swift # Telegram group member list, opened from the chat title
       TelegramConnectionViewModel.swift # Telegram sign-in steps
@@ -171,17 +171,17 @@ Outside `Sources/`: `NotificationService/` holds the extension's Info.plist and 
 
 ## Chat Framework
 
-Chat is one framework with an adapter per network; `docs/TECHNICAL_DESIGN.md` § Chat Framework has the target shape and the migration status. Read it before changing chat code.
+Chat is one framework with an adapter per network; `docs/TECHNICAL_DESIGN.md` § Chat Framework has the design and the reasons. Read it before changing chat code.
 
-- Shared chat code (`ChatViewModel`, `ChatListViewModel`, `ChatsView`, `ChatView`, `ChatUIKitView` and its helpers) never names a network, casts to a network's type, or branches on `SocialNetwork` or `ChatSummary.Destination`. The one exception is the place that turns a destination into a chat, until the adapter registry replaces it.
-- A network-specific need becomes a capability or an overridable hook any network could use (like `linkTarget(for:)`), never a special case in shared code.
-- Behavior users expect to match across chats belongs to the framework: drafts, polling, read-marker debouncing, unread counting and the divider, snapshots, optimistic sending, links. A network uses the shared version (`startPolling(every:)`/`poll()`, `isAfterReadPosition(_:)`, `scheduleReadMarker`, `sendOptimistically`) rather than writing its own; if the shared one doesn't fit, extend it.
-- Network chat code only translates between the network and the shared models (`ChatMessage`, `ChatEmbed`, `ChatReaction`, `ChatSummary`); it doesn't do UI work.
-- Every capability a network declares (`canReply`, `canReact`, `canAttach`, …) is implemented; never leave a declared action as the base class's no-op.
-- A network's Chats rows come from its `ChatListProvider` conformance; each account contributes one through `AccountComponents.chatListProvider`, and the list scopes the rows to that account. Live row changes use `updateChats(_:accountId:)` or `replaceChats(where:with:)`.
-- Adding a network should only take its adapter, its `ChatListProvider` (and its line in `AccountComponents.chatListProvider`), a `Destination` case and its one place in the destination-to-chat switch. If it needs more, extend the framework first.
-- Every chat has a `chatKey` (`<account id>|<network>:<id>`), used for drafts and snapshots; two accounts can share a chat, so keys always include the account.
-- Shared behavior is covered in `ChatViewModelTests`; network mapping is tested against recorded pages without the UI.
+- Shared chat code (`ChatViewModel`, `AdapterChatViewModel`, `ChatListViewModel`, `ChatsView`, `ChatView`, `ChatUIKitView` and its helpers) never names a network, casts to a network's type, or branches on `SocialNetwork` or `ChatSummary.Destination`. The one exception is `ChatsView`'s switch that turns a destination into a chat.
+- A network joins chat through a `ChatAdapter` (one conversation) and a `ChatListProvider` (its Chats rows). `AdapterChatViewModel` drives every adapter; don't subclass `ChatViewModel` for a network.
+- Adapters only translate between the network and the shared models (`ChatMessage`, `ChatEmbed`, `ChatReaction`, `ChatSummary`, `ChatInfo`). They hold no `@Published` state and do no UI work; they call `onChange` when what they show changes. State a network-specific screen needs (members, profiles) lives in that screen's own view model, which the adapter may keep current (`ApronRoomViewModel`).
+- Behavior users expect to match across chats belongs to the framework: connecting and reconnecting, polling, paging, unread counting and the divider, read-marker debouncing, snapshots, drafts, optimistic sending. An adapter supplies the network's part (`loadNewest`, `isAfterReadPosition`, `markRead` returning the send, `snapshot`); if the shared behavior doesn't fit, extend the framework.
+- An optional ability is its own protocol (`ChatReactionSending`, `ChatLiveUpdating`, `ChatWindowing`, `ChatTyping`, `ChatMentioning`, `ChatCommanding`, `ChatLinking`, …), and the UI offers it exactly when the adapter conforms. A new network-specific need becomes such a protocol any network could adopt, never a special case in shared code or a flag that can disagree with the code.
+- Each account contributes its `ChatListProvider` through `AccountComponents.chatListProvider`, and the list scopes rows to that account. Live row changes use `updateChats(_:accountId:)` or `replaceChats(where:with:)`.
+- Adding a network takes its adapter, its `ChatListProvider` (and its line in `AccountComponents.chatListProvider`), a `Destination` case and its case in `ChatsView`'s switch. If it needs more, extend the framework first.
+- Every chat has a `chatKey` (`<account id>|<adapter key>`), used for drafts and snapshots; two accounts can share a chat, so keys always include the account.
+- Framework behavior is covered in `ChatViewModelTests`, `AdapterChatViewModelTests` (fake adapters) and `ChatListViewModelTests`; network mapping is tested against recorded pages without the UI.
 
 ## Network Integration
 

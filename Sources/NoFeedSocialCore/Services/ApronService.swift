@@ -19,7 +19,7 @@ public final class ApronService {
     private var sharedSessions: [URL: ApronSession] = [:]
     private var pendingSessions: [URL: Task<ApronSession, Error>] = [:]
     public let readStore: ApronReadStore
-    public let messageCache = ApronMessageCache()
+    public let snapshotCache = ChatSnapshotCache()
     public let draftStore = ChatDraftStore()
     public let push: ApronPushService
     /// The servers last seen in the account store, to notice ones added or removed on another device.
@@ -170,8 +170,8 @@ public final class ApronService {
         }
         closeSessions(for: serverURL)
         readStore.removeServer(serverURL)
-        messageCache.removeServer(serverURL)
-        draftStore.removeDrafts(keyPrefix: ApronChatViewModel.chatKey(serverURL: serverURL, roomId: ""))
+        snapshotCache.removeAll(accountId: Account.apronId(serverURL: serverURL))
+        draftStore.removeDrafts(keyPrefix: "\(Account.apronId(serverURL: serverURL))|")
     }
 
     /// The app's one signed-in connection to a saved server, opened on first use and shared by the feed,

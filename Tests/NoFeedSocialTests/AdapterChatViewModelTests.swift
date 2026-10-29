@@ -116,6 +116,50 @@ final class AdapterChatViewModelTests: XCTestCase {
         chat.disconnect()
     }
 
+    func testALostConnectionShowsAndReconnectsOnTheNextConnect() async {
+        let adapter = FakeLiveAdapter()
+        adapter.pages = [[message(1)], [message(1)]]
+        let chat = makeChat(adapter)
+        await chat.connect()
+        adapter.onConnectionLost?(URLError(.networkConnectionLost))
+        guard case .disconnected = chat.state else { return XCTFail("expected disconnected, got \(chat.state)") }
+        adapter.onConnectionLost?(nil)
+        XCTAssertEqual(chat.state, .connecting, "closed by the app itself: nothing to report")
+        await chat.connect()
+        XCTAssertEqual(chat.state, .connected)
+        chat.disconnect()
+    }
+
+    func testCommandsRunWithoutASendingCopy() async {
+        let adapter = FakeWindowingAdapter()
+        adapter.pages = [[message(1)]]
+        let chat = makeChat(adapter)
+        await chat.connect()
+        chat.draft = "/nick ada"
+        await chat.send()
+        XCTAssertEqual(adapter.commands, ["/nick ada"])
+        XCTAssertTrue(adapter.sent.isEmpty)
+        XCTAssertEqual(chat.draft, "")
+        XCTAssertEqual(chat.messages.map(\.id), ["1"])
+        chat.disconnect()
+    }
+
+    func testJumpingOutsideTheLoadedMessagesShowsAWindow() async {
+        let adapter = FakeWindowingAdapter()
+        adapter.pages = [[message(50)]]
+        let chat = makeChat(adapter)
+        await chat.connect()
+        await chat.jump(to: "10")
+        XCTAssertEqual(chat.jumpTarget, "10")
+        XCTAssertTrue(chat.hasLaterMessages)
+        await chat.jump(to: "404")
+        XCTAssertEqual(chat.errorMessage, "That message is no longer available.")
+        await chat.jumpToLatest()
+        XCTAssertFalse(chat.hasLaterMessages)
+        XCTAssertEqual(chat.messages.map(\.id), ["50"])
+        chat.disconnect()
+    }
+
     func testReferencedMessagesComeFromTheAdapter() async {
         let adapter = FakeLiveAdapter()
         adapter.pages = [[message(1)]]
@@ -128,7 +172,7 @@ final class AdapterChatViewModelTests: XCTestCase {
         chat.disconnect()
     }
 
-    private func makeChat(_ adapter: FakeAdapter) -> AdapterChatViewModel {
+    private func makeChat(_ adapter: FakeAdapter) -> AdapterChatViewModel<FakeAdapter> {
         let suite = "AdapterChatViewModelTests-\(UUID().uuidString)"
         return AdapterChatViewModel(
             adapter: adapter,
@@ -179,6 +223,10 @@ private class FakeAdapter: ChatAdapter {
         messages.append(message)
     }
 
+    func replace(with messages: [ChatMessage]) {
+        self.messages = messages
+    }
+
     func send(_ message: ChatOutgoing) async throws -> String? {
         sent.append(message)
         let id = "sent-\(sent.count)"
@@ -216,6 +264,8 @@ private class FakeAdapter: ChatAdapter {
 
 @MainActor
 private final class FakeLiveAdapter: FakeAdapter, ChatLiveUpdating, ChatReferenceResolving {
+    var onConnectionLost: ((Error?) -> Void)?
+    var onError: ((Error) -> Void)?
     private(set) var followCount = 0
     private(set) var isFollowing = false
     var referencedMessages: [String: ChatMessage] = [:]
@@ -236,8 +286,45 @@ private final class FakeLiveAdapter: FakeAdapter, ChatLiveUpdating, ChatReferenc
     }
 }
 
+/// Messages 1–100 exist on the "network"; a window holds the message and the five after it.
+@MainActor
+private final class FakeWindowingAdapter: FakeAdapter, ChatWindowing, ChatCommanding {
+    private(set) var hasLaterMessages = false
+    private(set) var commands: [String] = []
+    private var latest: [ChatMessage] = []
+
+    override func loadNewest() async throws {
+        try await super.loadNewest()
+        latest = messages
+    }
+
+    func loadLater() async throws {}
+
+    func showWindow(around messageId: String) async throws -> Bool {
+        guard let id = Int(messageId), (1 ... 100).contains(id) else { return false }
+        replace(with: (id ... id + 5).map { message($0) })
+        hasLaterMessages = true
+        return true
+    }
+
+    func showLatest() async throws {
+        replace(with: latest)
+        hasLaterMessages = false
+    }
+
+    func isCommand(_ text: String) -> Bool {
+        text.hasPrefix("/")
+    }
+
+    func sendCommand(_ text: String, replyToId _: String?) async throws {
+        commands.append(text)
+    }
+}
+
 @MainActor
 private final class FakeReactingAdapter: FakeAdapter, ChatReactionSending {
+    let acceptsReactions = true
+
     func yourEmojis(on messageId: String) -> [String] {
         reactions[messageId]?.filter(\.includesYou).map(\.emoji) ?? []
     }

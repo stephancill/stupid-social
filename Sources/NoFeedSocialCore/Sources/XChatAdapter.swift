@@ -10,6 +10,9 @@ public final class XChatAdapter: ChatAdapter, ChatReactionSending, ChatLiveUpdat
     public let acceptsAttachments = false
     public let pollInterval: Duration? = nil
     public var onChange: (() -> Void)?
+    public var onConnectionLost: ((Error?) -> Void)?
+    public var onError: ((Error) -> Void)?
+    public let acceptsReactions = true
     public private(set) var info: ChatInfo
     public private(set) var messages: [ChatMessage] = []
     public private(set) var reactions: [String: [ChatReaction]] = [:]

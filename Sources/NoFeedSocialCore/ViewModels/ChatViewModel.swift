@@ -199,10 +199,10 @@ public enum ChatLinkTarget: Equatable {
     case user(String)
 }
 
-/// What the shared chat screen shows and does. Each network subclasses it, publishes its messages as
-/// `ChatMessage`s, and overrides the actions it supports; the capability flags hide the rest of the UI. Behavior
-/// every network shares (drafts, polling, unread counting, the divider, read-marker debouncing, optimistic
-/// sending) lives here, and networks use it rather than keeping their own.
+/// What the shared chat screen shows and does: the screen's state and the behavior every chat shares (drafts,
+/// polling, unread counting, the divider, read-marker debouncing, optimistic sending). `AdapterChatViewModel`,
+/// its one subclass, drives it from a network's `ChatAdapter`; an action the adapter doesn't offer keeps the
+/// no-op here, and the capability flags hide it from the UI.
 @MainActor
 public class ChatViewModel: ObservableObject {
     /// What the chat shows: the network's `history`, then the user's messages still sending.
@@ -408,7 +408,7 @@ public class ChatViewModel: ObservableObject {
     }
 
     func isUnread(_ message: ChatMessage) -> Bool {
-        message.isUserMessage && !message.isOwn && isAfterReadPosition(message)
+        message.isUserMessage && !message.isOwn && !message.isDeleted && isAfterReadPosition(message)
     }
 
     /// Counts `history`, since `messages` may be held back while the chat opens.

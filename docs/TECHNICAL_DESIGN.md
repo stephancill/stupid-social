@@ -462,9 +462,9 @@ Chat is one framework with an adapter per chat network (Apron, Telegram, Instagr
 
 **Adapter (per network):**
 
-- A conversation adapter, with no UI state: declares its capabilities; loads the newest page and earlier pages as framework messages; either delivers pushed updates or names a poll interval; sends text and attachments and returns the network's id for the message; moves the read position; sets reactions; optionally lists members, resolves links into this chat, and gives a link to a message.
+- A conversation adapter, with no UI state: says what the chat is (title, subtitle, whether names head bubbles); loads the newest page and earlier pages as framework messages; names a poll interval or follows pushed updates; sends text and attachments and returns the network's id for the message; reports and moves the read position; keeps a snapshot for the next visit. Optional abilities, each its own protocol so the screen offers exactly what the adapter implements: reactions, audio previews, live updates and a lost connection, quoted messages outside the loaded ones, windows of older history around a message, typing, mentions, commands, and in-chat links. Screens a network adds (member lists, profiles) have their own view models.
 - A list provider: the network's rows for the main list and the archive, and live row updates when the network pushes them.
-- A destination (the network's id for a chat) that the one registry turns into a conversation adapter, or into why it can't open (not connected, locked).
+- A destination (the network's id for a chat) that one switch in the Chats screen turns into an adapter and the chat, or into why it can't open (not connected, locked).
 
 **Rules:** shared code never names a network or casts to one; a network-specific need becomes an optional capability any network could use; every declared capability is implemented (no silent no-ops); adapters are tested against recorded pages without the UI.
 
@@ -472,8 +472,8 @@ Chat is one framework with an adapter per chat network (Apron, Telegram, Instagr
 
 1. Done: shared behavior moved into the base view model (drafts for every network, polling, unread counting and the divider, debounced read markers, in-chat links), and the shared UI no longer casts to Apron.
 2. Done: a list provider per network, so the Chats list holds a list of providers instead of five clients and their special cases (Telegram's archive folder, X's archived inbox rows). Rows carry a framework presence (online or last seen) instead of Telegram's user status, and live updates replace rows through generic calls.
-3. Done for Spotify, Instagram, Telegram and X Chat: a conversation adapter protocol with optional abilities as separate protocols, and one final chat view model driven by it. Telegram's member list is its own screen model. One snapshot cache for every network (Apron's log-id merge rule included), so X Chat gains one.
-4. Apron last (paged windows, typing, mentions, commands, markdown), which tests whether the protocol is complete; members become a capability, replacing the Apron- and Telegram-specific chat screens.
+3. Done: a conversation adapter protocol with optional abilities as separate protocols, and one final chat view model driven by it. Telegram's member list is its own screen model. One snapshot cache for every network (Apron's log-id merge rule included), so X Chat gains one.
+4. Done: Apron, with older windows, typing, mentions, commands and links as optional abilities and a lost connection reported to the framework; its cache moved onto the shared snapshot cache. Member lists stayed network screens rather than becoming one capability: Telegram's and Apron's differ (roles and last-seen versus presence, notification levels and profiles), so each has its own screen model (`TelegramMembersViewModel`, `ApronRoomViewModel`) beside the shared chat, and the Chats switch builds both. Every network is now an adapter, and `ChatViewModel`'s only subclass is `AdapterChatViewModel`.
 
 ## Sending
 

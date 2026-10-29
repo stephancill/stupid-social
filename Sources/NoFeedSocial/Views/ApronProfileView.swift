@@ -5,7 +5,7 @@ import SwiftUI
 /// (§4.5), roles (§3.3.4) and bio (`ext.bio`). Reads the chat's kept object, so live changes show.
 struct ApronProfileView: View {
     @AppStorage("redactionEnabled") private var redactionEnabled = false
-    @ObservedObject var viewModel: ApronChatViewModel
+    @ObservedObject var viewModel: ApronRoomViewModel
     let user: ApronUser
 
     var body: some View {

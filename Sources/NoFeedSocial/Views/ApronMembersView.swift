@@ -4,7 +4,7 @@ import SwiftUI
 /// The open room's members, from the chat's live member list (§4.2.1, §4.2.2), split into online and offline
 /// when the server reports statuses (§4.5).
 struct ApronMembersView: View {
-    @ObservedObject var viewModel: ApronChatViewModel
+    @ObservedObject var viewModel: ApronRoomViewModel
 
     var body: some View {
         Group {
@@ -29,7 +29,7 @@ struct ApronMembersView: View {
                         }
                     }
                 }
-            } else if viewModel.state == .connected {
+            } else if viewModel.isConnected {
                 // Servers without `rooms` don't list members (§4.2.1).
                 ContentUnavailableView("No Member List", systemImage: "person.2", description: Text("This server doesn't list room members."))
             } else {

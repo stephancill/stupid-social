@@ -29,8 +29,9 @@ public struct ChatOutgoing {
 /// owns the screen's state and the behavior every chat shares: connecting, polling, paging, unread counting and
 /// the divider, read-marker debouncing, snapshots, drafts and optimistic sending.
 ///
-/// Optional abilities are separate protocols (`ChatReactionSending`, `ChatAudioPreviewing`), so a chat offers
-/// an action exactly when its adapter implements it.
+/// Optional abilities are separate protocols (reactions, audio previews, live updates, quoted messages, windows
+/// of older history, typing, mentions, commands, links), so a chat offers an action exactly when its adapter
+/// implements it.
 @MainActor
 public protocol ChatAdapter: AnyObject {
     var network: SocialNetwork { get }
@@ -38,7 +39,8 @@ public protocol ChatAdapter: AnyObject {
     var key: String { get }
     /// Whether messages can be sent as replies.
     var canReply: Bool { get }
-    /// Whether messages can carry a photo or file.
+    /// Whether messages can carry a photo or file. Read again once connected, since a server may not allow
+    /// uploads; before that, whether it might.
     var acceptsAttachments: Bool { get }
     /// How often to fetch the newest messages while the chat is open; `nil` when the network pushes them and the
     /// adapter calls `onChange`.
@@ -63,11 +65,11 @@ public protocol ChatAdapter: AnyObject {
     /// Whether the message is past the user's read position on the network.
     func isAfterReadPosition(_ message: ChatMessage) -> Bool
     /// Moves the read position up to the message, if that passes unread messages, and returns what tells the
-    /// network, which the framework sends shortly after; `nil` when nothing moved.
+    /// network, which the framework sends shortly after; `nil` when there is nothing to send.
     func markRead(upTo message: ChatMessage) -> (@MainActor () async throws -> Void)?
     func reactors(of emoji: String, on messageId: String) -> [ChatReactor]
 
-    /// What the chat showed, for opening with it next time; `nil` before anything loaded.
+    /// What the chat showed, for opening with it next time; `nil` when there is nothing to keep.
     func snapshot() -> Data?
     func restore(snapshot: Data)
 }
@@ -75,6 +77,8 @@ public protocol ChatAdapter: AnyObject {
 /// Reacting to messages.
 @MainActor
 public protocol ChatReactionSending: ChatAdapter {
+    /// Read once connected, since a server may not allow reactions.
+    var acceptsReactions: Bool { get }
     func yourEmojis(on messageId: String) -> [String]
     /// Adds the emoji, or removes it when you already reacted with it. The adapter shows the change at once
     /// and puts it back if the network refuses it.
@@ -91,6 +95,10 @@ public protocol ChatAudioPreviewing: ChatAdapter {
 /// can also name a `pollInterval` as a fallback.
 @MainActor
 public protocol ChatLiveUpdating: ChatAdapter {
+    /// Set by the framework: the connection closed, with an error unless the app closed it itself.
+    var onConnectionLost: ((Error?) -> Void)? { get set }
+    /// Set by the framework: something failed outside a call it made, such as an upload after its message posted.
+    var onError: ((Error) -> Void)? { get set }
     /// Called once the newest messages have loaded.
     func startFollowing() async
     func stopFollowing()
@@ -104,16 +112,66 @@ public protocol ChatReferenceResolving: ChatAdapter {
     var unavailableReferences: Set<String> { get }
 }
 
+/// Showing a window of older history around a message, without loading everything in between.
+@MainActor
+public protocol ChatWindowing: ChatAdapter {
+    /// True while the messages are an older window that doesn't reach the newest message.
+    var hasLaterMessages: Bool { get }
+    func loadLater() async throws
+    /// Shows a window around the message; `false` when the network no longer has it.
+    func showWindow(around messageId: String) async throws -> Bool
+    /// Leaves an older window for the newest messages.
+    func showLatest() async throws
+}
+
+/// Typing indications, both ways.
+@MainActor
+public protocol ChatTyping: ChatAdapter {
+    /// Names of the other users typing, in the order they started.
+    var typingNames: [String] { get }
+    /// Called as the user edits the draft.
+    func draftDidChange(_ draft: String)
+}
+
+/// `@` mentions in message text.
+@MainActor
+public protocol ChatMentioning: ChatAdapter {
+    /// Matches a mention, such as `@user_id`, which shows by name and is tappable.
+    var mentionPattern: NSRegularExpression { get }
+    /// User id → name.
+    var mentionNames: [String: String] { get }
+    func mentionSuggestions(for query: String) -> [ChatUser]
+}
+
+/// Text that runs a command rather than posting a message, which may post nothing.
+@MainActor
+public protocol ChatCommanding: ChatAdapter {
+    func isCommand(_ text: String) -> Bool
+    func sendCommand(_ text: String, replyToId: String?) async throws
+}
+
+/// Links to messages, and links in messages that point into the chat itself.
+@MainActor
+public protocol ChatLinking: ChatAdapter {
+    func link(toMessage messageId: String) -> URL?
+    func linkTarget(for url: URL) -> ChatLinkTarget?
+    var linkBaseURL: URL? { get }
+}
+
 /// The shared chat screen's model for a network that has a `ChatAdapter`.
 @MainActor
-public final class AdapterChatViewModel: ChatViewModel {
-    public let adapter: any ChatAdapter
+public final class AdapterChatViewModel<Adapter: ChatAdapter>: ChatViewModel {
+    public let adapter: Adapter
+    /// A message to show once the chat loads, such as from a link.
+    public var focusMessageId: String?
     private let snapshotCache: ChatSnapshotCache
-    /// From a successful `connect()` until `disconnect()`; `connect()` runs again when the app becomes active.
+    /// From a successful `connect()` until `disconnect()` or a lost connection; `connect()` runs again when the
+    /// app becomes active.
     private var isOpen = false
     private var isConnecting = false
+    private var snapshotSaveTask: Task<Void, Never>?
 
-    public init(adapter: any ChatAdapter, accountId: String, snapshotCache: ChatSnapshotCache = ChatSnapshotCache(), draftStore: ChatDraftStore = ChatDraftStore()) {
+    public init(adapter: Adapter, accountId: String, snapshotCache: ChatSnapshotCache = ChatSnapshotCache(), draftStore: ChatDraftStore = ChatDraftStore()) {
         self.adapter = adapter
         self.snapshotCache = snapshotCache
         super.init(
@@ -123,9 +181,14 @@ public final class AdapterChatViewModel: ChatViewModel {
             subtitle: adapter.info.subtitle,
             canReply: adapter.canReply,
             offersAttachments: adapter.acceptsAttachments,
+            mentionPattern: (adapter as? any ChatMentioning)?.mentionPattern,
             draftStore: draftStore,
         )
         adapter.onChange = { [weak self] in self?.adapterDidChange() }
+        if let live = adapter as? any ChatLiveUpdating {
+            live.onConnectionLost = { [weak self] error in self?.connectionLost(error) }
+            live.onError = { [weak self] error in self?.errorMessage = error.localizedDescription }
+        }
         if let snapshot = snapshotCache.data(key: chatKey) {
             adapter.restore(snapshot: snapshot)
         }
@@ -145,9 +208,13 @@ public final class AdapterChatViewModel: ChatViewModel {
         do {
             try await adapter.loadNewest()
             adapterDidChange()
+            // A divider placed from the snapshot goes when history replaced the messages it sat on.
+            if let divider = firstUnreadMessageId, message(withId: divider) == nil {
+                firstUnreadMessageId = nil
+            }
             placeUnreadDivider()
             saveSnapshot()
-            canReact = adapter is any ChatReactionSending
+            canReact = (adapter as? any ChatReactionSending)?.acceptsReactions ?? false
             canAttach = adapter.acceptsAttachments
             isOpen = true
             state = .connected
@@ -157,7 +224,12 @@ public final class AdapterChatViewModel: ChatViewModel {
             if let interval = adapter.pollInterval {
                 startPolling(every: interval)
             }
+            if let focusMessageId {
+                self.focusMessageId = nil
+                await jump(to: focusMessageId)
+            }
         } catch {
+            (adapter as? any ChatLiveUpdating)?.stopFollowing()
             state = .disconnected(error.localizedDescription)
         }
     }
@@ -166,7 +238,16 @@ public final class AdapterChatViewModel: ChatViewModel {
         isOpen = false
         stopPolling()
         (adapter as? any ChatLiveUpdating)?.stopFollowing()
+        snapshotSaveTask?.cancel()
         saveSnapshot()
+    }
+
+    /// Without an error the app closed the connection itself (it went to the background) and reconnects when
+    /// active again, so there is nothing to report.
+    private func connectionLost(_ error: Error?) {
+        isOpen = false
+        stopPolling()
+        state = error.map { .disconnected($0.localizedDescription) } ?? .connecting
     }
 
     override func poll() async {
@@ -186,12 +267,75 @@ public final class AdapterChatViewModel: ChatViewModel {
         adapterDidChange()
     }
 
-    /// Sends optimistically (see `sendOptimistically`).
+    // MARK: Windows
+
+    override public func loadLater() async {
+        guard let windowing = adapter as? any ChatWindowing, hasLaterMessages, !isLoadingLater else { return }
+        isLoadingLater = true
+        defer { isLoadingLater = false }
+        do {
+            try await windowing.loadLater()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        adapterDidChange()
+    }
+
+    /// Scrolls to a loaded message, or shows a window around one that isn't.
+    override public func jump(to messageId: String) async {
+        if message(withId: messageId) != nil, referencedMessages[messageId] == nil {
+            jumpTarget = messageId
+            return
+        }
+        guard let windowing = adapter as? any ChatWindowing else { return }
+        do {
+            guard try await windowing.showWindow(around: messageId) else {
+                errorMessage = "That message is no longer available."
+                return
+            }
+            adapterDidChange()
+            jumpTarget = messageId
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    override public func jumpToLatest() async {
+        if let windowing = adapter as? any ChatWindowing, hasLaterMessages {
+            do {
+                try await windowing.showLatest()
+                adapterDidChange()
+            } catch {
+                errorMessage = error.localizedDescription
+                return
+            }
+        }
+        scrollToLatestRequest += 1
+    }
+
+    // MARK: Composing
+
+    /// Sends optimistically (see `sendOptimistically`); a command waits for the network instead, since it may
+    /// post nothing.
     override public func send() async {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let attachment = adapter.acceptsAttachments ? attachment : nil
         guard !text.isEmpty || attachment != nil, state == .connected else { return }
         let replyToId = canReply ? replyingTo?.id : nil
+        if let commanding = adapter as? any ChatCommanding, commanding.isCommand(text) {
+            isSending = true
+            errorMessage = nil
+            defer { isSending = false }
+            do {
+                try await commanding.sendCommand(text, replyToId: replyToId)
+                draft = ""
+                self.attachment = nil
+                replyingTo = nil
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            return
+        }
         await sendOptimistically(text: text, attachment: attachment, replyToId: replyToId) { [adapter] in
             let id = try await adapter.send(ChatOutgoing(text: text, attachment: attachment, replyToId: replyToId))
             adapterDidChange()
@@ -199,22 +343,37 @@ public final class AdapterChatViewModel: ChatViewModel {
         }
     }
 
+    override public func draftDidChange() {
+        (adapter as? any ChatTyping)?.draftDidChange(draft)
+    }
+
+    override public func mentionSuggestions(for query: String) -> [ChatUser] {
+        (adapter as? any ChatMentioning)?.mentionSuggestions(for: query) ?? []
+    }
+
+    // MARK: Read position
+
+    /// The read position moves at once (the count follows it); the network hears shortly after.
     override public func markRead(upTo message: ChatMessage) {
-        guard let send = adapter.markRead(upTo: message) else { return }
+        let send = adapter.markRead(upTo: message)
         updateUnreadCount()
-        scheduleReadMarker(send)
+        if let send {
+            scheduleReadMarker(send)
+        }
     }
 
     override func isAfterReadPosition(_ message: ChatMessage) -> Bool {
         adapter.isAfterReadPosition(message)
     }
 
+    // MARK: Reactions
+
     override public func yourEmojis(on messageId: String) -> [String] {
         (adapter as? any ChatReactionSending)?.yourEmojis(on: messageId) ?? []
     }
 
     override public func toggleReaction(_ emoji: String, on messageId: String) async {
-        guard let reacting = adapter as? any ChatReactionSending else { return }
+        guard canReact, let reacting = adapter as? any ChatReactionSending else { return }
         do {
             try await reacting.toggleReaction(emoji, on: messageId)
         } catch {
@@ -231,6 +390,22 @@ public final class AdapterChatViewModel: ChatViewModel {
         await (adapter as? any ChatAudioPreviewing)?.audioPreviewURL(for: previewId)
     }
 
+    // MARK: Links
+
+    override public func link(toMessage messageId: String) -> URL? {
+        (adapter as? any ChatLinking)?.link(toMessage: messageId)
+    }
+
+    override public func linkTarget(for url: URL) -> ChatLinkTarget? {
+        (adapter as? any ChatLinking)?.linkTarget(for: url)
+    }
+
+    override public var linkBaseURL: URL? {
+        (adapter as? any ChatLinking)?.linkBaseURL
+    }
+
+    // MARK: Publishing
+
     private func adapterDidChange() {
         let info = adapter.info
         if title != info.title {
@@ -244,6 +419,15 @@ public final class AdapterChatViewModel: ChatViewModel {
         if hasEarlierMessages != adapter.hasEarlierMessages {
             hasEarlierMessages = adapter.hasEarlierMessages
         }
+        if let windowing = adapter as? any ChatWindowing, hasLaterMessages != windowing.hasLaterMessages {
+            hasLaterMessages = windowing.hasLaterMessages
+        }
+        if let typing = adapter as? any ChatTyping, typingNames != typing.typingNames {
+            typingNames = typing.typingNames
+        }
+        if let mentioning = adapter as? any ChatMentioning, mentionNames != mentioning.mentionNames {
+            mentionNames = mentioning.mentionNames
+        }
         if let resolving = adapter as? any ChatReferenceResolving {
             if referencedMessages != resolving.referencedMessages {
                 referencedMessages = resolving.referencedMessages
@@ -254,6 +438,18 @@ public final class AdapterChatViewModel: ChatViewModel {
         }
         publish(history: adapter.messages, reactions: adapter.reactions)
         updateUnreadCount()
+        scheduleSnapshotSave()
+    }
+
+    /// Saves shortly after changes while open, so the snapshot survives the app being killed in a chat.
+    private func scheduleSnapshotSave() {
+        guard isOpen else { return }
+        snapshotSaveTask?.cancel()
+        snapshotSaveTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled else { return }
+            self?.saveSnapshot()
+        }
     }
 
     private func saveSnapshot() {
