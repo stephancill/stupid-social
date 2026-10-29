@@ -54,6 +54,8 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     private var messageIdByKey: [String: String] = [:]
     /// Messages whose spoilers were tapped open; they stay open while the chat is.
     private var revealedSpoilers: Set<String> = []
+    /// Messages in this chat with a reminder, by id, and when it is due.
+    private var reminderDates: [String: Date] = [:]
     /// Message embeds tapped open to their full text, as `<message id>|<embed index>`; they stay open while the
     /// chat is.
     private var expandedEmbeds: Set<String> = []
@@ -183,6 +185,8 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         let dismissTap = UITapGestureRecognizer(target: self, action: #selector(dismissKeyboard))
         dismissTap.cancelsTouchesInView = false
         collectionView.addGestureRecognizer(dismissTap)
+        collectionView.addGestureRecognizer(messagePress)
+        collectionView.addGestureRecognizer(messageLift)
         collectionView.showsVerticalScrollIndicator = false
         if #available(iOS 26.0, *) {
             // UIKit's equivalent of `.scrollEdgeEffectStyle(.soft, for: .top)`: messages soften under the bar.
@@ -199,6 +203,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
             let layout = bubbleLayout(at: index)
             let reply = message.replyToId.map(replyQuote(for:))
             prefetchReactorAvatars(on: message)
+            cell.bubbleView.alpha = id == focusedMessageId ? 0 : 1
             cell.configure(
                 message: message,
                 layout: layout,
@@ -235,6 +240,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
                     customEmoji: { [weak self] key in self?.viewModel.customEmojis[key] },
                     customEmojiImageDidLoad: { [weak self] in self?.customEmojiImagesDidLoad() },
                 ),
+                reminderDue: message.isDeleted ? nil : reminderDates[id],
                 availableWidth: collectionView.bounds.width > 0 ? collectionView.bounds.width : view.bounds.width,
             )
         }
@@ -475,6 +481,13 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         }.store(in: &cancellables)
         NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)
             .sink { [weak self] _ in self?.reportVisibleRead() }
+            .store(in: &cancellables)
+        reminderDates = viewModel.reminderTarget.map { ChatReminderStore.dueDates(in: $0) } ?? [:]
+        // Every minute too, so "Due in" counts down.
+        NotificationCenter.default.publisher(for: ChatReminderStore.remindersDidChange)
+            .map { _ in () }
+            .merge(with: Timer.publish(every: 60, on: .main, in: .common).autoconnect().map { _ in () })
+            .sink { [weak self] in self?.reloadReminders() }
             .store(in: &cancellables)
         viewModel.$typingNames.sink { [weak self] names in self?.updateTypingIndicator(names) }.store(in: &cancellables)
         viewModel.$scrollToLatestRequest.dropFirst().sink { [weak self] _ in
@@ -1179,52 +1192,164 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         return UITargetedPreview(view: bubble, parameters: parameters)
     }
 
-    /// Long press: a row of quick reactions ending in More Reactions, then Reply and Copy.
-    func collectionView(_: UICollectionView, contextMenuConfigurationForItemsAt indexPaths: [IndexPath], point _: CGPoint) -> UIContextMenuConfiguration? {
-        guard let indexPath = indexPaths.first,
+    /// A long press on a message lifts it (`liftMessage`); the context menu is left for presses beside bubbles.
+    func collectionView(_: UICollectionView, contextMenuConfigurationForItemsAt indexPaths: [IndexPath], point: CGPoint) -> UIContextMenuConfiguration? {
+        guard let indexPath = indexPaths.first, focusTarget(at: point) == nil,
               case let .message(key) = dataSource.itemIdentifier(for: indexPath),
-              case let id = messageId(forKey: key),
-              let message = messagesById[id], message.isUserMessage
+              let menu = messageMenu(for: messageId(forKey: key))
         else { return nil }
-        let canReact = viewModel.canReact && !message.isDeleted
-        let canReply = viewModel.canReply && !message.isDeleted
+        return UIContextMenuConfiguration(actionProvider: { _ in menu.uiMenu })
+    }
+
+    /// The message whose bubble is at a point in the list, when it has a menu to show.
+    private func focusTarget(at point: CGPoint) -> (id: String, cell: ChatMessageCell)? {
+        guard let indexPath = collectionView.indexPathForItem(at: point),
+              case let .message(key) = dataSource.itemIdentifier(for: indexPath),
+              let cell = collectionView.cellForItem(at: indexPath) as? ChatMessageCell,
+              cell.isFocusTarget(at: collectionView.convert(point, to: cell)),
+              case let id = messageId(forKey: key),
+              messageMenu(for: id) != nil
+        else { return nil }
+        return (id, cell)
+    }
+
+    /// Shrinks the bubble while the finger rests, before `messageLift` lifts it, as a context menu's press does.
+    private lazy var messagePress: UILongPressGestureRecognizer = {
+        let press = UILongPressGestureRecognizer(target: self, action: #selector(pressMessage))
+        press.minimumPressDuration = 0.1
+        press.cancelsTouchesInView = false
+        press.delegate = messagePressFilter
+        return press
+    }()
+
+    private lazy var messageLift: UILongPressGestureRecognizer = {
+        let press = UILongPressGestureRecognizer(target: self, action: #selector(liftMessage))
+        press.minimumPressDuration = 0.45
+        press.delegate = messagePressFilter
+        return press
+    }()
+
+    private lazy var messagePressFilter = ChatGestureFilter { [weak self] gesture in
+        guard let self, presentedViewController == nil else { return false }
+        return focusTarget(at: gesture.location(in: collectionView)) != nil
+    }
+
+    private var pressedCell: ChatMessageCell?
+    private var pressStart = CGPoint.zero
+    /// The lifted message, whose bubble stays hidden in the list until it settles back.
+    private var focusedMessageId: String?
+
+    @objc private func pressMessage(_ gesture: UILongPressGestureRecognizer) {
+        switch gesture.state {
+        case .began:
+            pressStart = gesture.location(in: collectionView)
+            pressedCell = focusTarget(at: pressStart)?.cell
+            pressedCell?.setPressed(true)
+        case .changed:
+            // A press that has begun doesn't fail when the finger moves, so a drag lets go of the bubble here.
+            let location = gesture.location(in: collectionView)
+            if hypot(location.x - pressStart.x, location.y - pressStart.y) > 10 {
+                gesture.isEnabled = false
+                gesture.isEnabled = true
+            }
+        case .ended, .cancelled, .failed:
+            // A lift takes the bubble as it is; otherwise it springs back.
+            if focusedMessageId == nil {
+                pressedCell?.setPressed(false)
+            }
+            pressedCell = nil
+        default:
+            break
+        }
+    }
+
+    @objc private func liftMessage(_ gesture: UILongPressGestureRecognizer) {
+        guard gesture.state == .began,
+              let target = focusTarget(at: gesture.location(in: collectionView)),
+              let message = messagesById[target.id],
+              let menu = messageMenu(for: target.id)
+        else { return }
+        let id = target.id
+        let bubble = target.cell.bubbleView
+        let snapshot = target.cell.focusSnapshot()
+        let sourceFrame = bubbleFrameInWindow(bubble)
+        focusedMessageId = id
+        bubble.alpha = 0
+        let focus = ChatMessageFocusController(
+            snapshot: snapshot,
+            sourceFrame: sourceFrame,
+            currentSourceFrame: { [weak self] in
+                guard let self, let indexPath = dataSource.indexPath(for: .message(itemKey(for: id))),
+                      let cell = collectionView.cellForItem(at: indexPath) as? ChatMessageCell
+                else { return nil }
+                return bubbleFrameInWindow(cell.bubbleView)
+            },
+            isOwn: message.isOwn,
+            menu: menu,
+            openLink: { [weak self] in self?.openLink($0) },
+            didClose: { [weak self] in
+                guard let self else { return }
+                focusedMessageId = nil
+                if let indexPath = dataSource.indexPath(for: .message(itemKey(for: id))),
+                   let cell = collectionView.cellForItem(at: indexPath) as? ChatMessageCell
+                {
+                    cell.bubbleView.alpha = 1
+                }
+            },
+        )
+        present(focus, animated: false)
+    }
+
+    /// The bubble's frame in the window without the press's shrink.
+    private func bubbleFrameInWindow(_ bubble: UIView) -> CGRect {
+        let center = bubble.superview?.convert(bubble.center, to: nil) ?? .zero
+        return CGRect(x: center.x - bubble.bounds.width / 2, y: center.y - bubble.bounds.height / 2, width: bubble.bounds.width, height: bubble.bounds.height)
+    }
+
+    private func messageMenu(for id: String) -> ChatMessageMenu? {
+        guard let message = messagesById[id], message.isUserMessage else { return nil }
         let text = message.isDeleted ? "" : message.text ?? ""
-        guard canReact || canReply || !text.isEmpty else { return nil }
-        return UIContextMenuConfiguration(actionProvider: { [weak self] _ in
-            guard let self else { return nil }
-            var children: [UIMenuElement] = []
-            if canReact {
-                let mine = Set(viewModel.yourEmojis(on: id))
-                // A row of small elements holds four, so three reactions leave room for More Reactions.
-                let emojis = ChatViewModel.quickReactions.prefix(3).map { emoji in
-                    UIAction(title: emoji, state: mine.contains(emoji) ? .on : .off) { [weak self] _ in self?.toggleReaction(emoji, on: id) }
-                }
-                // In a row of small elements an action shows its image alone; the title stays for VoiceOver.
-                let more = UIAction(title: "More Reactions", image: UIImage(systemName: "face.smiling")) { [weak self] _ in
-                    self?.presentReactionPicker(for: id)
-                }
-                let quick = UIMenu(options: .displayInline, preferredElementSize: .small, children: emojis + [more])
-                children.append(quick)
+        var menu = ChatMessageMenu()
+        if viewModel.canReact, !message.isDeleted {
+            let mine = Set(viewModel.yourEmojis(on: id))
+            // A row of small elements holds four, so three reactions leave room for More Reactions.
+            menu.reactions = ChatViewModel.quickReactions.prefix(3).map { emoji in
+                ChatMessageMenu.Action(title: emoji, isOn: mine.contains(emoji)) { [weak self] in self?.toggleReaction(emoji, on: id) }
             }
-            var actions: [UIMenuElement] = []
-            if canReply {
-                actions.append(UIAction(title: "Reply", image: UIImage(systemName: "arrowshape.turn.up.left")) { [weak self] _ in
-                    self?.beginReply(to: id)
-                })
+            menu.reactions.append(ChatMessageMenu.Action(title: "More Reactions", image: UIImage(systemName: "face.smiling")) { [weak self] in
+                self?.presentReactionPicker(for: id)
+            })
+        }
+        if viewModel.canReply, !message.isDeleted {
+            menu.items.append(.action(ChatMessageMenu.Action(title: "Reply", image: UIImage(systemName: "arrowshape.turn.up.left")) { [weak self] in
+                self?.beginReply(to: id)
+            }))
+        }
+        if !text.isEmpty {
+            menu.items.append(.action(ChatMessageMenu.Action(title: "Copy", image: UIImage(systemName: "doc.on.doc")) {
+                UIPasteboard.general.string = text
+            }))
+        }
+        if let link = viewModel.link(toMessage: id) {
+            menu.items.append(.action(ChatMessageMenu.Action(title: "Copy Link", image: UIImage(systemName: "link")) {
+                UIPasteboard.general.url = link
+            }))
+        }
+        // A message with a reminder offers Mark as Done in place of Remind Me.
+        if let target = viewModel.reminderTarget, reminderDates[id] != nil {
+            menu.items.append(.action(ChatMessageMenu.Action(title: "Mark as Done", image: UIImage(systemName: "checkmark.circle")) {
+                ChatReminderStore.markDone(messageId: id, in: target)
+            }))
+        } else if let target = viewModel.reminderTarget, !message.isDeleted {
+            var delays = ChatReminderStore.Delay.allCases.map { delay in
+                ChatMessageMenu.Action(title: delay.title) { [weak self] in self?.remind(of: message, in: target, at: delay.dueDate()) }
             }
-            if !text.isEmpty {
-                actions.append(UIAction(title: "Copy", image: UIImage(systemName: "doc.on.doc")) { _ in
-                    UIPasteboard.general.string = text
-                })
-            }
-            if let link = viewModel.link(toMessage: id) {
-                actions.append(UIAction(title: "Copy Link", image: UIImage(systemName: "link")) { _ in
-                    UIPasteboard.general.url = link
-                })
-            }
-            children.append(UIMenu(options: .displayInline, children: actions))
-            return UIMenu(children: children)
-        })
+            delays.append(ChatMessageMenu.Action(title: "Custom…", image: UIImage(systemName: "calendar")) { [weak self] in
+                self?.presentReminderDatePicker(for: message, in: target)
+            })
+            menu.items.append(.submenu(title: "Remind Me", image: UIImage(systemName: "alarm"), children: delays))
+        }
+        return menu.isEmpty ? nil : menu
     }
 
     /// A link to a message or member of this chat shows it here; app links (such as Apron links, relative ones
@@ -1629,10 +1754,48 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         replyPreview.isHidden = true
     }
 
+    private func presentReminderDatePicker(for message: ChatMessage, in target: ChatReminderTarget) {
+        let picker = UIHostingController(rootView: ChatReminderDatePicker(
+            onSet: { [weak self] date in
+                self?.dismiss(animated: true)
+                self?.remind(of: message, in: target, at: date)
+            },
+            onCancel: { [weak self] in self?.dismiss(animated: true) },
+        ))
+        picker.sheetPresentationController?.detents = [.large()]
+        present(picker, animated: true)
+    }
+
+    private func remind(of message: ChatMessage, in target: ChatReminderTarget, at dueDate: Date) {
+        Task {
+            do {
+                _ = try await ChatReminderStore.schedule(message, in: target, dueDate: dueDate)
+            } catch {
+                let alert = UIAlertController(title: "Reminder Not Set", message: error.localizedDescription, preferredStyle: .alert)
+                alert.addAction(UIAlertAction(title: "OK", style: .default))
+                present(alert, animated: true)
+            }
+        }
+    }
+
     private func beginReply(to id: String) {
         guard let message = messagesById[id] else { return }
         viewModel.startReply(to: message)
         textView.becomeFirstResponder()
+    }
+
+    /// Reconfigures messages whose reminder changed, and those with one, whose "Due in" moves on.
+    private func reloadReminders() {
+        guard let target = viewModel.reminderTarget else { return }
+        let old = reminderDates
+        reminderDates = ChatReminderStore.dueDates(in: target)
+        var snapshot = dataSource.snapshot()
+        let items = Set(old.keys).union(reminderDates.keys)
+            .map { Item.message(itemKey(for: $0)) }
+            .filter { snapshot.itemIdentifiers.contains($0) }
+        guard !items.isEmpty else { return }
+        snapshot.reconfigureItems(items)
+        dataSource.apply(snapshot, animatingDifferences: false)
     }
 
     private func revealSpoilers(of id: String) {

@@ -84,6 +84,14 @@ private struct ChatTitlePill: View {
         let content = HStack(spacing: 8) {
             if let avatar {
                 ChatAvatarImage(url: avatar.url, title: title, size: 32, colorKey: avatar.colorKey)
+                    .overlay(alignment: .bottomTrailing) {
+                        // An opaque backing, since some badges (such as Spotify's round logo) have transparent corners.
+                        NetworkBadgeIcon(network: network, size: 12)
+                            .clipShape(Circle())
+                            .padding(1)
+                            .background(Color(uiColor: .systemBackground), in: Circle())
+                            .offset(x: 2, y: 2)
+                    }
             }
             VStack(spacing: 0) {
                 Text(title)
@@ -91,10 +99,13 @@ private struct ChatTitlePill: View {
                     .lineLimit(1)
                 if !subtitle.isEmpty {
                     HStack(spacing: 4) {
-                        NetworkBadgeIcon(network: network, size: 12)
+                        // Without an avatar to carry it, the network icon leads the subtitle.
+                        if avatar == nil {
+                            NetworkBadgeIcon(network: network, size: 12)
+                        }
                         Text(subtitle)
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(subtitle == ChatPresence.online.text ? AnyShapeStyle(.blue) : AnyShapeStyle(.secondary))
                             .lineLimit(1)
                     }
                 }

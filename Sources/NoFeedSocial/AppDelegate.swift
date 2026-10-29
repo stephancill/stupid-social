@@ -38,6 +38,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void,
     ) {
         let content = notification.request.content
+        if content.userInfo[ChatReminder.userInfoKey] != nil {
+            Task { @MainActor in NotificationCenter.default.post(name: ChatReminderStore.reminderDidFire, object: nil) }
+        }
         let thread = Self.telegramPeer(content.userInfo).map { NotificationRouter.telegramThread($0) } ?? content.threadIdentifier
         nonisolated(unsafe) let completion = completionHandler
         Task { @MainActor in
@@ -54,6 +57,16 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     ) {
         nonisolated(unsafe) let completion = completionHandler
         let content = response.notification.request.content
+        if let reminderId = content.userInfo[ChatReminder.userInfoKey] as? String {
+            let opens = response.actionIdentifier == UNNotificationDefaultActionIdentifier
+            Task { @MainActor in
+                if opens {
+                    NotificationRouter.shared.openReminder(id: reminderId)
+                }
+                completion()
+            }
+            return
+        }
         if let peer = Self.telegramPeer(content.userInfo) {
             let opens = response.actionIdentifier == UNNotificationDefaultActionIdentifier
             Task { @MainActor in
@@ -176,6 +189,14 @@ final class NotificationRouter: ObservableObject {
         } else {
             linkRequest = .link(link)
         }
+    }
+
+    /// Opens a reminder's chat at its message. The reminder stays in the feed until the user removes it there.
+    func openReminder(id: String) {
+        guard let reminder = ChatReminderStore.reminder(id: id) else { return }
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [ChatReminder.itemIdPrefix + id])
+        pendingFocus = ChatFocus(messageId: reminder.messageId)
+        pendingChat = reminder.destination
     }
 
     func openRoom(of link: ApronLink) {

@@ -85,7 +85,11 @@ struct FeedView: View {
                 Section {
                     ForEach(Array(notificationItems.enumerated()), id: \.element.id) { index, displayItem in
                         Button {
-                            notificationDetailSelection = displayItem
+                            if let reminderId = reminderId(of: displayItem) {
+                                NotificationRouter.shared.openReminder(id: reminderId)
+                            } else {
+                                notificationDetailSelection = displayItem
+                            }
                         } label: {
                             NotificationRow(displayItem: displayItem)
                                 // A plain button only hit-tests drawn content; make the whole row tappable.
@@ -93,9 +97,18 @@ struct FeedView: View {
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .contextMenu {
+                            // The home pager can take a row's horizontal swipe, so Remove is on long press too.
+                            if let reminderId = reminderId(of: displayItem) {
+                                removeReminderButton(reminderId)
+                            }
+                        }
                         .compactListRowInsets()
                         .listRowSeparator(index == 0 ? .hidden : .visible, edges: .top)
                         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                            if let reminderId = reminderId(of: displayItem) {
+                                removeReminderButton(reminderId)
+                            }
                             if let url = targetPostURL(for: displayItem) {
                                 Button {
                                     openURL(url)
@@ -218,7 +231,21 @@ struct FeedView: View {
         viewModel.errorMessage ?? storyViewModel.errorMessage ?? "Refresh failed."
     }
 
+    private func removeReminderButton(_ id: String) -> some View {
+        Button(role: .destructive) {
+            ChatReminderStore.remove(id: id)
+        } label: {
+            Label("Remove Reminder", systemImage: "trash")
+        }
+    }
+
+    private func reminderId(of displayItem: DisplayNotificationItem) -> String? {
+        guard displayItem.id.hasPrefix(ChatReminder.itemIdPrefix) else { return nil }
+        return String(displayItem.id.dropFirst(ChatReminder.itemIdPrefix.count))
+    }
+
     private func targetPostURL(for displayItem: DisplayNotificationItem) -> URL? {
+        guard reminderId(of: displayItem) == nil else { return nil }
         guard let target = displayItem.item.target else { return nil }
         return NotificationTargetURL.resolve(network: displayItem.item.network, target: target)
     }
@@ -848,7 +875,7 @@ private struct NotificationRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            NotificationTypeIcon(type: displayItem.item.type)
+            NotificationTypeIcon(type: displayItem.item.type, isReminder: displayItem.id.hasPrefix(ChatReminder.itemIdPrefix))
                 .padding(.top, 2)
 
             VStack(alignment: .leading, spacing: 6) {
@@ -1041,6 +1068,8 @@ private extension Color {
 
 private struct NotificationTypeIcon: View {
     let type: NotificationType
+    /// A chat message the user asked to be reminded of, shown as a bookmark rather than by its type.
+    var isReminder = false
 
     var body: some View {
         Image(systemName: systemName)
@@ -1051,7 +1080,10 @@ private struct NotificationTypeIcon: View {
     }
 
     private var systemName: String {
-        switch type {
+        if isReminder {
+            return "bookmark.fill"
+        }
+        return switch type {
         case .reaction:
             "heart.fill"
         case .reply:
@@ -1072,7 +1104,10 @@ private struct NotificationTypeIcon: View {
     }
 
     private var color: Color {
-        switch type {
+        if isReminder {
+            return .orange
+        }
+        return switch type {
         case .reaction:
             .pink
         case .reply:
@@ -1093,7 +1128,10 @@ private struct NotificationTypeIcon: View {
     }
 
     private var accessibilityLabel: String {
-        switch type {
+        if isReminder {
+            return "Reminder"
+        }
+        return switch type {
         case .reaction:
             "Reaction"
         case .reply:

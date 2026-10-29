@@ -424,6 +424,10 @@ public class ChatViewModel: ObservableObject {
     public let offersAttachments: Bool
     /// `@user_id` mentions in message text, highlighted and tappable; `nil` when the network has none.
     public let mentionPattern: NSRegularExpression?
+    /// Where a reminder set on one of this chat's messages reopens it; the Remind Me action is offered when set.
+    public var reminderTarget: ChatReminderTarget?
+    /// A message to show once the chat loads, such as from a link or a reminder.
+    public var focusMessageId: String?
 
     public static let quickReactions = ["👍", "❤️", "😂", "🔥", "😮", "🙏"]
     public static let unreadBadgeCap = 50

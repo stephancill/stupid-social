@@ -197,8 +197,6 @@ public protocol ChatLinking: ChatAdapter {
 @MainActor
 public final class AdapterChatViewModel<Adapter: ChatAdapter>: ChatViewModel {
     public let adapter: Adapter
-    /// A message to show once the chat loads, such as from a link.
-    public var focusMessageId: String?
     private let snapshotCache: ChatSnapshotCache
     /// From a successful `connect()` until `disconnect()` or a lost connection; `connect()` runs again when the
     /// app becomes active.

@@ -108,7 +108,38 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
         bubble
     }
 
+    /// Shrinks the bubble while a press may become a long press, as a context menu does.
+    func setPressed(_ pressed: Bool) {
+        UIView.animate(withDuration: pressed ? 0.35 : 0.25, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) {
+            self.bubble.transform = pressed ? CGAffineTransform(scaleX: 0.96, y: 0.96) : .identity
+        }
+    }
+
+    /// Whether a long press here lifts the message: on the bubble, not on its reaction chips, which have their own menu.
+    func isFocusTarget(at point: CGPoint) -> Bool {
+        guard !bubble.isHidden, bubble.frame.contains(point) else { return false }
+        return reactionsContainer.isHidden || !reactionsContainer.convert(reactionsContainer.bounds, to: self).contains(point)
+    }
+
+    /// The bubble as drawn, for the focus overlay to lift, with its text and where it sits so it can be selected.
+    func focusSnapshot() -> ChatFocusSnapshot {
+        bubble.transform = .identity
+        // Drawn rather than snapshotted, so a bubble taller than the screen comes out whole.
+        let image = UIGraphicsImageRenderer(bounds: bubble.bounds).image { _ in
+            bubble.drawHierarchy(in: bubble.bounds, afterScreenUpdates: true)
+        }
+        let hasText = !bodyLabel.isHidden && bodyLabel.attributedText != nil
+        return ChatFocusSnapshot(
+            image: image,
+            cornerRadius: bubble.layer.cornerRadius,
+            text: hasText ? bodyLabel.attributedText : nil,
+            textFrame: bodyLabel.convert(bodyLabel.bounds, to: bubble),
+        )
+    }
+
     private let nameLabel = UILabel()
+    /// "Due in …" on a message with a reminder.
+    private let reminderLabel = UILabel()
     private let replyView = ChatReplyQuoteView()
     private let bodyLabel = ChatLinkLabel()
     private let embedsStack = UIStackView()
@@ -158,6 +189,7 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
         contentView.addSubview(avatarView)
 
         nameLabel.font = UIFont.preferredFont(forTextStyle: .subheadline).withWeight(.semibold)
+        reminderLabel.font = UIFont.preferredFont(forTextStyle: .footnote).withWeight(.semibold)
         bodyLabel.numberOfLines = 0
         embedsStack.axis = .vertical
         // Embeds always span the bubble, which takes its full width when it has any.
@@ -182,7 +214,7 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
 
         // Header (name, quote), media, then content (text, other embeds, reactions); each section sets its own
         // margins in `configure`, so images can run to the bubble's edges while text keeps its padding.
-        for (section, views) in [(headerStack, [nameLabel, replyView]), (contentStack, [bodyLabel, embedsStack, reactionsContainer, timeSpacer])] {
+        for (section, views) in [(headerStack, [reminderLabel, nameLabel, replyView]), (contentStack, [bodyLabel, embedsStack, reactionsContainer, timeSpacer])] {
             views.forEach(section.addArrangedSubview)
             section.axis = .vertical
             section.spacing = 4
@@ -391,6 +423,7 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
         embeds: [ChatEmbed],
         reactions: [ChatReaction],
         actions: Actions,
+        reminderDue: Date? = nil,
         availableWidth: CGFloat,
     ) {
         self.actions = actions
@@ -424,6 +457,7 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
             avatarView.configure(name: DebugRedaction.name(message.sender.name), color: accent, url: avatarURL)
         }
 
+        configureReminder(due: reminderDue, isOwn: layout.isOwn)
         nameLabel.isHidden = !layout.showsName
         nameLabel.text = DebugRedaction.name(message.sender.name)
         nameLabel.textColor = accent
@@ -476,7 +510,7 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
         embedsStack.isHidden = otherEmbeds == 0
         configureReactions(reactions, canReact: actions.canReact)
 
-        let hasHeader = layout.showsName || reply != nil
+        let hasHeader = layout.showsName || reply != nil || reminderDue != nil
         let hasMedia = !mediaStack.arrangedSubviews.isEmpty
         let hasContent = text != nil || otherEmbeds > 0 || !reactions.isEmpty || !hasMedia
         // After cards the time needs its own line; reactions leave it room beside them, and on a lone image it sits on it.
@@ -519,6 +553,7 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
             isOwn: layout.isOwn,
             parts: [
                 nameLabel.isHidden ? nil : nameLabel.intrinsicContentSize.width,
+                reminderLabel.isHidden ? nil : reminderLabel.intrinsicContentSize.width,
                 replyView.isHidden ? nil : replyView.naturalWidth,
                 bodyLabel.attributedText.map { Self.textWidth($0, max: Self.maxContentWidth(availableWidth: availableWidth, isOwn: layout.isOwn)) },
                 embedsStack.isHidden ? nil : Self.maxContentWidth(availableWidth: availableWidth, isOwn: layout.isOwn),
@@ -563,6 +598,35 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
     }
 
     /// Reaction chips inside the bubble: filled when you reacted, tinted otherwise. Tapping toggles yours (§4.7).
+    /// A message with a reminder is outlined, with when it is due above its text.
+    private func configureReminder(due: Date?, isOwn: Bool) {
+        reminderLabel.isHidden = due == nil
+        bubble.layer.borderWidth = due == nil ? 0 : 2
+        bubble.layer.borderColor = UIColor.systemOrange.cgColor
+        guard let due else { return }
+        let color: UIColor = isOwn ? .white : .systemOrange
+        let icon = NSTextAttachment(image: UIImage(systemName: "alarm.fill")!.withTintColor(color, renderingMode: .alwaysOriginal))
+        let text = NSMutableAttributedString(attachment: icon)
+        text.append(NSAttributedString(string: " " + Self.reminderText(due: due)))
+        text.addAttributes([.foregroundColor: color, .font: reminderLabel.font!], range: NSRange(location: 0, length: text.length))
+        reminderLabel.attributedText = text
+    }
+
+    private static let dueFormatter: DateComponentsFormatter = {
+        let formatter = DateComponentsFormatter()
+        formatter.unitsStyle = .short
+        formatter.maximumUnitCount = 1
+        formatter.allowedUnits = [.day, .hour, .minute]
+        return formatter
+    }()
+
+    static func reminderText(due: Date, now: Date = Date()) -> String {
+        let interval = due.timeIntervalSince(now)
+        guard interval > 0 else { return "Reminder due" }
+        // Rounded up, so a reminder 30 seconds away reads "1 min" rather than nothing.
+        return "Due in " + (dueFormatter.string(from: max(60, (interval / 60).rounded(.up) * 60)) ?? "")
+    }
+
     private func configureReactions(_ reactions: [ChatReaction], canReact: Bool) {
         reactionsRow.arrangedSubviews.forEach { $0.removeFromSuperview() }
         chipEmojis = [:]

@@ -45,6 +45,7 @@ Sources/
       ChatTextViews.swift           # Chat composer text view, link/mention label and tap gestures
       ChatAttributedText.swift      # Inline Markdown to UIKit attributes for chat messages
       ChatReactionPicker.swift      # "More Reactions" emoji sheet, custom emoji by category first
+      ChatMessageFocusView.swift    # Long-press menu model, the focus overlay that lifts a message, reminder date picker
       ChatCustomEmojiImages.swift   # Custom emoji images (downsampled, cached) for text, chips, picker and the composer strip
       ChatAudioPreview.swift        # Inline audio preview player and track card for chat messages
       ChatImageViewer.swift         # Full-screen chat image viewer: zoom, swipe to dismiss, save to Photos
@@ -131,6 +132,7 @@ Sources/
       ApronReactionStore.swift        # Which reactions to your Apron messages you've seen, per room (this device)
       ChatDraftStore.swift            # Unsent composer text per chat (by chatKey), every network
       ChatSnapshotCache.swift         # Last messages and metadata per adapter chat (by chatKey) for instant open
+      ChatReminderStore.swift         # Message reminders: local notifications and due items in the feed (this device)
     ViewModels/
       FeedViewModel.swift
       ProfileSearchViewModel.swift

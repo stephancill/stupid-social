@@ -14,7 +14,7 @@ public struct DemoChatListProvider: ChatListProvider {
 }
 
 enum DemoChats {
-    struct Chat: Sendable {
+    struct Chat {
         let id: String
         let network: SocialNetwork
         let title: String

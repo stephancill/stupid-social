@@ -46,10 +46,9 @@ public final class FeedService {
     }
 
     public func loadCachedFeed() throws -> [DisplayNotificationItem] {
-        if DemoData.isDemoMode {
-            return DemoData.feedItems().map(DisplayNotificationItem.init)
-        }
-        return try cacheStore.loadRecent().map(DisplayNotificationItem.init)
+        // Due chat reminders stay in the feed until opened, so they sort in by due date rather than expire.
+        let items = try (DemoData.isDemoMode ? DemoData.feedItems() : cacheStore.loadRecent()) + ChatReminderStore.due().map(\.feedItem)
+        return items.sorted { $0.timestamp > $1.timestamp }.map(DisplayNotificationItem.init)
     }
 
     public func manualRefresh() async throws -> [DisplayNotificationItem] {

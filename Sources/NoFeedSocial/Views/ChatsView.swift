@@ -16,6 +16,8 @@ struct ChatsView: View {
     let xChat: (_ accountId: String, _ conversationId: String, _ title: String) -> (() -> ChatViewModel)?
     /// The chat for a Bluesky account's conversation and title; `nil` when the account is gone.
     let blueskyChat: (_ accountId: String, _ convoId: String, _ title: String) -> (() -> ChatViewModel)?
+    /// An account's settings, opened from the connection errors; `nil` for a connection that isn't an account.
+    let accountSettings: (_ accountId: String) -> AnyView?
     /// Whether a chat is pushed, so the home pager can stop paging.
     @Binding var isShowingChat: Bool
     /// A chat to open, such as from a tapped notification; cleared once opened.
@@ -27,6 +29,7 @@ struct ChatsView: View {
     /// What a link asked to show in the chat it opened.
     @State private var focus: (destination: ChatSummary.Destination, focus: NotificationRouter.ChatFocus)?
     @State private var isShowingArchive = false
+    @State private var settingsAccountId: String?
     @State private var query = ""
     /// With the search bar in the navigation bar's drawer, rows present while the bar first lays out start the
     /// list collapsed to the inline title, so saved chats are inserted just after the screen appears.
@@ -80,12 +83,12 @@ struct ChatsView: View {
         .toolbar {
             if viewModel.connections.contains(where: { $0.error != nil }) {
                 ToolbarItem(placement: .primaryAction) {
-                    ConnectionErrorsButton(viewModel: viewModel)
+                    ConnectionErrorsButton(viewModel: viewModel, accountSettings: accountSettings) { settingsAccountId = $0 }
                 }
             }
         }
         .searchBar(text: $query, placement: .navigationBarDrawer(displayMode: .always))
-        .onChange(of: selection == nil && !isShowingArchive) { _, isOnList in
+        .onChange(of: selection == nil && !isShowingArchive && settingsAccountId == nil) { _, isOnList in
             isShowingChat = !isOnList
             if isOnList {
                 focus = nil
@@ -96,6 +99,9 @@ struct ChatsView: View {
         }
         .navigationDestination(isPresented: $isShowingArchive) {
             ArchivedChatsView(viewModel: viewModel) { AnyView(destination(for: $0)) }
+        }
+        .navigationDestination(item: $settingsAccountId) { accountId in
+            accountSettings(accountId)
         }
         .onChange(of: openRequest, initial: true) { _, request in
             guard let request else { return }
@@ -156,6 +162,10 @@ struct ChatsView: View {
         if chat.unreadCount > 0 {
             chatViewModel.expectUnread()
         }
+        chatViewModel.reminderTarget = ChatReminderTarget(destination: chat.destination, accountId: chat.accountId, network: chat.network, chatTitle: chat.title)
+        if focus?.destination == chat.destination, let messageId = focus?.focus.messageId {
+            chatViewModel.focusMessageId = messageId
+        }
         return viewModel.follow(chatViewModel, chatId: chat.id)
     }
 
@@ -172,7 +182,6 @@ struct ChatsView: View {
                         snapshotCache: apronService.snapshotCache,
                         draftStore: apronService.draftStore,
                     )
-                    room.focusMessageId = focus?.messageId
                     return opened(room, chat: chat)
                 }(),
                 profileUserId: focus?.userId,
@@ -311,6 +320,8 @@ private struct ArchivedChatsRow: View {
 /// failed connection and why.
 private struct ConnectionErrorsButton: View {
     @ObservedObject var viewModel: ChatListViewModel
+    let accountSettings: (_ accountId: String) -> AnyView?
+    let openSettings: (_ accountId: String) -> Void
     @State private var isShowingErrors = false
 
     var body: some View {
@@ -328,8 +339,11 @@ private struct ConnectionErrorsButton: View {
         .accessibilityLabel("Connection errors")
         .accessibilityValue(failedNetworks.map(\.displayName).joined(separator: ", "))
         .popover(isPresented: $isShowingErrors) {
-            ConnectionErrorsList(viewModel: viewModel)
-                .presentationCompactAdaptation(.popover)
+            ConnectionErrorsList(viewModel: viewModel, accountSettings: accountSettings) { accountId in
+                isShowingErrors = false
+                openSettings(accountId)
+            }
+            .presentationCompactAdaptation(.popover)
         }
     }
 
@@ -345,23 +359,25 @@ private struct ConnectionErrorsButton: View {
 
 private struct ConnectionErrorsList: View {
     @ObservedObject var viewModel: ChatListViewModel
+    let accountSettings: (_ accountId: String) -> AnyView?
+    let openSettings: (_ accountId: String) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             ForEach(viewModel.connections.filter { $0.error != nil }) { connection in
                 HStack(spacing: 8) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Label {
-                            Text(connection.label)
-                        } icon: {
-                            NetworkBadgeIcon(network: connection.network)
+                    // Tapping the connection opens its account's settings, such as to sign in again.
+                    if accountSettings(connection.id) != nil {
+                        Button {
+                            openSettings(connection.id)
+                        } label: {
+                            details(of: connection)
+                                .contentShape(Rectangle())
                         }
-                        Text(connection.error ?? "")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
+                        .buttonStyle(.plain)
+                    } else {
+                        details(of: connection)
                     }
-                    Spacer(minLength: 0)
                     Button {
                         Task { await viewModel.load() }
                     } label: {
@@ -375,6 +391,23 @@ private struct ConnectionErrorsList: View {
         }
         .padding()
         .frame(width: 300, alignment: .leading)
+    }
+
+    private func details(of connection: ChatConnectionStatus) -> some View {
+        HStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 2) {
+                Label {
+                    Text(connection.label)
+                } icon: {
+                    NetworkBadgeIcon(network: connection.network)
+                }
+                Text(connection.error ?? "")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
     }
 }
 
@@ -475,8 +508,9 @@ private struct ChatSummaryAvatar: View {
             .overlay(alignment: .bottomTrailing) {
                 // An opaque backing, since some badges (such as Spotify's round logo) have transparent corners.
                 NetworkBadgeIcon(network: chat.network, size: 16)
+                    .clipShape(Circle())
                     .padding(1.5)
-                    .background(Color(uiColor: .systemBackground), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .background(Color(uiColor: .systemBackground), in: Circle())
                     .offset(x: 2, y: 2)
             }
     }
