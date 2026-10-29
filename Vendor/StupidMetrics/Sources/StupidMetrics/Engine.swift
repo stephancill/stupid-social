@@ -36,7 +36,7 @@ actor Engine {
         defaults: UserDefaults = .standard,
         transport: @escaping Transport = { try await URLSession.shared.data(for: $0) },
         makeContext: (String) -> MetricContext = { DeviceContext.current(installId: $0) },
-        resolveEnvironment: @escaping @Sendable () async -> String = { await DeviceContext.environment() }
+        resolveEnvironment: @escaping @Sendable () async -> String = { DeviceContext.environment() }
     ) {
         self.configuration = configuration
         self.directory = directory

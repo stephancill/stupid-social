@@ -1,5 +1,4 @@
 import Foundation
-import StoreKit
 
 enum DeviceContext {
     static func current(installId: String, bundle: Bundle = .main) -> MetricContext {
@@ -51,20 +50,21 @@ enum DeviceContext {
 
     /// `simulator`, `development` (signed with a provisioning profile, e.g. installed
     /// from Xcode or a device build), `testflight`, `appstore`, or `unknown`.
-    static func environment(bundle: Bundle = .main) async -> String {
+    ///
+    /// TestFlight and the App Store are told apart by the receipt's file name
+    /// (`sandboxReceipt` on TestFlight). `appStoreReceiptURL` is deprecated in favour of
+    /// StoreKit's `AppTransaction`, but that needs the network and failed on a TestFlight
+    /// install, reporting `unknown`; the receipt path is local. It's read through KVC to
+    /// avoid the deprecation warning in every app that links this package.
+    static func environment(bundle: Bundle = .main) -> String {
         #if targetEnvironment(simulator)
             return "simulator"
         #else
             if bundle.url(forResource: "embedded", withExtension: "mobileprovision") != nil {
                 return "development"
             }
-            guard let transaction = try? await AppTransaction.shared else { return "unknown" }
-            switch transaction.unsafePayloadValue.environment {
-            case .production: return "appstore"
-            case .sandbox: return "testflight"
-            case .xcode: return "development"
-            default: return "unknown"
-            }
+            guard let receipt = bundle.value(forKey: "appStoreReceiptURL") as? URL else { return "unknown" }
+            return receipt.lastPathComponent == "sandboxReceipt" ? "testflight" : "appstore"
         #endif
     }
 }

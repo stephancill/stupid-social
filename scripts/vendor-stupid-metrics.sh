@@ -4,7 +4,7 @@
 # so the sources are copied rather than resolved by SwiftPM.
 set -euo pipefail
 
-TAG="${1:-v0.2.0}"
+TAG="${1:-v0.2.1}"
 REPO="git@github.com:stephancill/stupid-metrics.git"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
