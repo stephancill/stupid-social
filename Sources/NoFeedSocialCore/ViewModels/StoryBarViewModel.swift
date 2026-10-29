@@ -10,9 +10,12 @@ public final class StoryBarViewModel: ObservableObject {
     @Published public private(set) var storyBarNextPageLoading = false
     @Published public var errorMessage: String?
 
-    private let instagramSource: InstagramNotificationSource?
-    private let spotifyActivitySource: (any ActivityFetching)?
-    private let githubActivitySource: (any GitHubActivityFetching)?
+    /// Every account's sources, read on each use so added and removed accounts take effect.
+    private let instagramSources: @MainActor () -> [InstagramNotificationSource]
+    private let spotifyActivitySources: @MainActor () -> [any ActivityFetching]
+    private let githubActivitySources: @MainActor () -> [any GitHubActivityFetching]
+    /// Reel owner id → the Instagram account whose tray listed it, which marks it seen and likes its slides.
+    private var instagramSourceByOwner: [String: InstagramNotificationSource] = [:]
     private let spotifySeenStore: SpotifyActivitySeenStore
     private let githubSeenStore: GitHubActivitySeenStore
     private let seenSync: StorySeenSync?
@@ -24,16 +27,16 @@ public final class StoryBarViewModel: ObservableObject {
     private var inFlightStoryBarContentFetch: Task<Void, Never>?
 
     public init(
-        instagramSource: InstagramNotificationSource?,
-        spotifyActivitySource: (any ActivityFetching)? = nil,
-        githubActivitySource: (any GitHubActivityFetching)? = nil,
+        instagramSources: @escaping @MainActor () -> [InstagramNotificationSource],
+        spotifyActivitySources: @escaping @MainActor () -> [any ActivityFetching] = { [] },
+        githubActivitySources: @escaping @MainActor () -> [any GitHubActivityFetching] = { [] },
         spotifySeenStore: SpotifyActivitySeenStore = SpotifyActivitySeenStore(),
         githubSeenStore: GitHubActivitySeenStore = GitHubActivitySeenStore(),
         seenSync: StorySeenSync? = nil,
     ) {
-        self.instagramSource = instagramSource
-        self.spotifyActivitySource = spotifyActivitySource
-        self.githubActivitySource = githubActivitySource
+        self.instagramSources = instagramSources
+        self.spotifyActivitySources = spotifyActivitySources
+        self.githubActivitySources = githubActivitySources
         self.spotifySeenStore = spotifySeenStore
         self.githubSeenStore = githubSeenStore
         self.seenSync = seenSync
@@ -46,6 +49,15 @@ public final class StoryBarViewModel: ObservableObject {
                 Task { @MainActor in self?.refreshSeenState() }
             }
         }
+    }
+
+    /// The first Instagram account, whose own story leads the bar and which the composer posts to.
+    private var instagramSource: InstagramNotificationSource? {
+        instagramSources().first
+    }
+
+    private func instagramSource(forOwner ownerId: String?) -> InstagramNotificationSource? {
+        ownerId.flatMap { instagramSourceByOwner[$0] } ?? instagramSource
     }
 
     public func fetchInstagramStories() async {
@@ -114,7 +126,7 @@ public final class StoryBarViewModel: ObservableObject {
         }
         ownInstagramStoryReel = preservingOptimisticStorySlide(in: ownReel)
         orderedInstagramStoryReels = instagramReels
-        hasMoreInstagramStoryReels = instagramSource?.hasMoreStoryReels ?? false
+        hasMoreInstagramStoryReels = instagramSources().contains { $0.hasMoreStoryReels }
         storyBarItems = mergedStoryBarItems(instagramReels: instagramReels, spotifyItems: fetchedSpots, githubItems: fetchedGitHub)
         storyBarContentLoaded = true
         storyBarLoading = false
@@ -132,13 +144,21 @@ public final class StoryBarViewModel: ObservableObject {
 
     public func loadNextStoryBarPage() async {
         guard !storyBarLoading, !storyBarNextPageLoading, hasMoreInstagramStoryReels else { return }
-        guard let instagramSource, instagramSource.storiesEnabled else { return }
+        let sources = instagramSources().filter { $0.storiesEnabled && $0.hasMoreStoryReels }
+        guard !sources.isEmpty else { return }
         storyBarNextPageLoading = true
         defer { storyBarNextPageLoading = false }
 
         do {
-            let nextReels = try await instagramSource.fetchNextStoryReelPage()
-            hasMoreInstagramStoryReels = instagramSource.hasMoreStoryReels
+            var nextReels: [InstagramStoryReel] = []
+            for source in sources {
+                let page = try await source.fetchNextStoryReelPage()
+                for reel in page where instagramSourceByOwner[reel.user.id] == nil {
+                    instagramSourceByOwner[reel.user.id] = source
+                }
+                nextReels += page
+            }
+            hasMoreInstagramStoryReels = instagramSources().contains { $0.hasMoreStoryReels }
             guard !nextReels.isEmpty else { return }
 
             let existingReelIds = Set(orderedInstagramStoryReels.map(\.id))
@@ -153,10 +173,12 @@ public final class StoryBarViewModel: ObservableObject {
                 }
             }
 
+            var seenOwners = Set(orderedInstagramStoryReels.map(\.user.id))
+            appendedReels = appendedReels.filter { seenOwners.insert($0.user.id).inserted }
             orderedInstagramStoryReels.append(contentsOf: appendedReels)
             storyBarItems = mergedStoryBarItems(instagramReels: orderedInstagramStoryReels, spotifyItems: spotifyActivityItems, githubItems: githubActivityGroups)
         } catch {
-            hasMoreInstagramStoryReels = instagramSource.hasMoreStoryReels
+            hasMoreInstagramStoryReels = instagramSources().contains { $0.hasMoreStoryReels }
         }
     }
 
@@ -193,7 +215,9 @@ public final class StoryBarViewModel: ObservableObject {
     }
 
     public func setInstagramStoryLiked(mediaId: String, liked: Bool) async throws {
-        guard let instagramSource else { throw SourceError.notConfigured }
+        let ownerId = (orderedInstagramStoryReels + [ownInstagramStoryReel].compactMap(\.self))
+            .first { $0.slides.contains { $0.id == mediaId } }?.user.id
+        guard let instagramSource = instagramSource(forOwner: ownerId) else { throw SourceError.notConfigured }
         if !DemoData.isDemoMode {
             try await instagramSource.setStoryLiked(mediaId: mediaId, liked: liked)
         }
@@ -281,7 +305,7 @@ public final class StoryBarViewModel: ObservableObject {
 
     private func markSeenOnInstagram(slides: [InstagramStorySlide]) async {
         do {
-            try await instagramSource?.markReelAsSeen(slides: slides)
+            try await instagramSource(forOwner: slides.first?.ownerId)?.markReelAsSeen(slides: slides)
         } catch {
             errorMessage = "Could not mark Instagram story as seen: \(error.localizedDescription)"
         }
@@ -364,36 +388,53 @@ public final class StoryBarViewModel: ObservableObject {
         }
     }
 
+    /// Every Instagram account's tray, each person once (from the first account that follows them). `nil`
+    /// when every account failed, so the bar keeps what it showed.
     private func instagramReels() async -> [InstagramStoryReel]? {
-        guard let instagramSource, instagramSource.storiesEnabled else { return [] }
-        do {
-            return try await RefreshTiming.measure("story-instagram-reels") {
-                try await instagramSource.fetchStoryReels()
+        let sources = instagramSources().filter(\.storiesEnabled)
+        guard !sources.isEmpty else { return [] }
+        var reels: [InstagramStoryReel] = []
+        var owners: [String: InstagramNotificationSource] = [:]
+        var failed = 0
+        for source in sources {
+            do {
+                let fetched = try await RefreshTiming.measure("story-instagram-reels") {
+                    try await source.fetchStoryReels()
+                }
+                for reel in fetched where owners[reel.user.id] == nil {
+                    owners[reel.user.id] = source
+                    reels.append(reel)
+                }
+            } catch SourceError.notConfigured {
+                continue
+            } catch {
+                failed += 1
             }
-        } catch SourceError.notConfigured {
-            return []
-        } catch {
+        }
+        if failed == sources.count {
             return nil
         }
+        instagramSourceByOwner = owners
+        return reels
     }
 
     private func spotifyItems() async -> [SpotifyActivityItem] {
-        guard let spotifyActivitySource else { return [] }
-        do {
-            let activity = try await RefreshTiming.measure("story-spotify-activity") {
-                try await spotifyActivitySource.fetchActivity(reason: .manual)
+        var activity: [SpotifyActivityItem] = []
+        for source in spotifyActivitySources() {
+            if let fetched = try? await RefreshTiming.measure("story-spotify-activity", {
+                try await source.fetchActivity(reason: .manual)
+            }) {
+                activity += fetched
             }
-            var seenUserURIs = Set<String>()
-            return activity
-                .sorted { $0.timestamp > $1.timestamp }
-                .filter { item in
-                    seenUserURIs.insert(item.userURI).inserted
-                }
-                .map(spotifyItemWithSeenState)
-                .sorted(by: spotifySortedUnreadFirst)
-        } catch {
-            return []
         }
+        var seenUserURIs = Set<String>()
+        return activity
+            .sorted { $0.timestamp > $1.timestamp }
+            .filter { item in
+                seenUserURIs.insert(item.userURI).inserted
+            }
+            .map(spotifyItemWithSeenState)
+            .sorted(by: spotifySortedUnreadFirst)
     }
 
     private func spotifyItemWithSeenState(_ item: SpotifyActivityItem) -> SpotifyActivityItem {
@@ -421,22 +462,24 @@ public final class StoryBarViewModel: ObservableObject {
         return lhs.timestamp > rhs.timestamp
     }
 
+    /// Every GitHub account's activity, each actor once (from the first account that sees them).
     private func githubItems() async -> [GitHubActivityGroup] {
-        guard let githubActivitySource else { return [] }
-        do {
-            return try await RefreshTiming.measure("story-github-activity") {
-                try await githubActivitySource.fetchGitHubActivity(reason: .manual)
-            }.map { group in
-                GitHubActivityGroup(
-                    actor: group.actor,
-                    activities: group.activities,
-                    isSeen: githubSeenStore.isSeen(actorId: group.actor.id, activityTimestamp: group.timestamp),
-                )
-            }
-            .sorted(by: githubSortedUnreadFirst)
-        } catch {
-            return []
+        var groups: [GitHubActivityGroup] = []
+        var seenActors = Set<String>()
+        for source in githubActivitySources() {
+            guard let fetched = try? await RefreshTiming.measure("story-github-activity", {
+                try await source.fetchGitHubActivity(reason: .manual)
+            }) else { continue }
+            groups += fetched.filter { seenActors.insert($0.actor.id).inserted }
         }
+        return groups.map { group in
+            GitHubActivityGroup(
+                actor: group.actor,
+                activities: group.activities,
+                isSeen: githubSeenStore.isSeen(actorId: group.actor.id, activityTimestamp: group.timestamp),
+            )
+        }
+        .sorted(by: githubSortedUnreadFirst)
     }
 
     /// Orders GitHub groups unread-first, then by newest activity.

@@ -3,21 +3,27 @@ import Foundation
 @MainActor
 public final class DebugNotificationSource: NotificationFetching, AccountValidating {
     public let network: SocialNetwork = .debug
+    /// The debug server is a device setting, so its items belong to this one fixed account id.
+    public static let accountId = "debug"
+
+    public var feedSources: FeedAccountSources {
+        FeedAccountSources(accountId: Self.accountId, network: .debug, notifications: self, validators: [self])
+    }
 
     private let client: DebugNotificationsClient
-    private let metadataStore: AccountMetadataStore
+    private let accountStore: AccountStore
 
-    public init(client: DebugNotificationsClient, metadataStore: AccountMetadataStore) {
+    public init(client: DebugNotificationsClient, accountStore: AccountStore) {
         self.client = client
-        self.metadataStore = metadataStore
+        self.accountStore = accountStore
     }
 
     public func validateAccount() async throws -> AccountStatus {
-        metadataStore.debugAccount == nil ? .notConfigured : .valid
+        accountStore.debugAccount == nil ? .notConfigured : .valid
     }
 
     public func fetchNotifications(reason _: RefreshReason) async throws -> [NotificationItem] {
-        guard let account = metadataStore.debugAccount else {
+        guard let account = accountStore.debugAccount else {
             throw SourceError.notConfigured
         }
 

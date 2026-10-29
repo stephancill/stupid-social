@@ -13,7 +13,7 @@ public struct ApronSession: Sendable {
 /// Owns the user's Apron server list and opens authenticated connections to them.
 @MainActor
 public final class ApronService {
-    private let metadataStore: AccountMetadataStore
+    private let accountStore: AccountStore
     private let keychainStore: KeychainCredentialStore
     private let agent: String
     private var sharedSessions: [URL: ApronSession] = [:]
@@ -22,65 +22,57 @@ public final class ApronService {
     public let messageCache = ApronMessageCache()
     public let draftStore = ApronDraftStore()
     public let push: ApronPushService
-    private let serverSync: ApronServerSync
+    /// The servers last seen in the account store, to notice ones added or removed on another device.
+    private var knownServers: Set<URL>
 
     public init(
-        metadataStore: AccountMetadataStore,
+        accountStore: AccountStore,
         keychainStore: KeychainCredentialStore,
         readStore: ApronReadStore = ApronReadStore(),
-        serverSync: ApronServerSync = ApronServerSync(),
         push: ApronPushService = ApronPushService(),
     ) {
         self.push = push
-        self.metadataStore = metadataStore
+        self.accountStore = accountStore
         self.keychainStore = keychainStore
         self.readStore = readStore
-        self.serverSync = serverSync
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
         agent = "stupid-social/\(version)"
-        applySyncedServers()
-        NotificationCenter.default.addObserver(forName: ApronServerSync.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
+        knownServers = []
+        knownServers = Set(servers.map(\.serverURL))
+        NotificationCenter.default.addObserver(forName: AccountStore.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self, self.applySyncedServers() else { return }
+                guard let self, self.applyServerChanges() else { return }
                 NotificationCenter.default.post(name: ApronLiveFeed.serversDidChangeNotification, object: nil)
             }
         }
     }
 
-    /// Adds servers saved on other devices and drops ones removed there. Servers saved before syncing existed
-    /// are recorded first, so they reach the other devices. A synced server signs in on first use, with the
-    /// token from the iCloud Keychain when there is one.
-    @discardableResult
-    private func applySyncedServers() -> Bool {
-        for server in metadataStore.apronServers
-            where ApronServerSync.isSynced(server.serverURL) && serverSync.entries[server.serverURL.absoluteString] == nil
-        {
-            serverSync.recordAdded(server.serverURL, requestedName: server.requestedName)
+    /// Drops what this device kept for servers removed, here or on another device. A server added on another
+    /// device signs in on first use, with the token from the iCloud Keychain when there is one.
+    private func applyServerChanges() -> Bool {
+        let current = Set(servers.map(\.serverURL))
+        guard current != knownServers else { return false }
+        for removed in knownServers.subtracting(current) {
+            forgetServer(removed)
         }
-        var changed = false
-        for (key, entry) in serverSync.entries.sorted(by: { $0.value.changedAt < $1.value.changedAt }) {
-            guard let serverURL = URL(string: key) else { continue }
-            let isSaved = server(for: serverURL) != nil
-            if entry.removed, isSaved {
-                forgetServer(serverURL)
-                changed = true
-            } else if !entry.removed, !isSaved {
-                metadataStore.apronServers.append(ApronServerMetadata(
-                    serverURL: serverURL,
-                    requestedName: entry.requestedName,
-                    user: nil,
-                    agent: nil,
-                    welcome: nil,
-                    status: .valid,
-                ))
-                changed = true
-            }
-        }
-        return changed
+        knownServers = current
+        return true
     }
 
+    /// Apron accounts, one per server, with what each server said at this device's last sign-in.
     public var servers: [ApronServerMetadata] {
-        metadataStore.apronServers
+        accountStore.accounts(network: .apron).compactMap { account in
+            guard let serverURL = account.serverURL else { return nil }
+            let info = accountStore.apronInfo(id: account.id)
+            return ApronServerMetadata(
+                serverURL: serverURL,
+                requestedName: account.preferences.apronRequestedName,
+                user: info?.user,
+                agent: info?.agent,
+                welcome: info?.welcome,
+                status: accountStore.status(id: account.id) ?? .valid,
+            )
+        }
     }
 
     public func server(for serverURL: URL) -> ApronServerMetadata? {
@@ -163,8 +155,9 @@ public final class ApronService {
 
     public func removeServer(serverURL: URL) {
         forgetServer(serverURL)
+        knownServers.remove(serverURL)
         try? keychainStore.deleteApronToken(serverURL: serverURL)
-        serverSync.recordRemoved(serverURL)
+        accountStore.remove(id: Account.apronId(serverURL: serverURL))
     }
 
     /// Drops a server and what this device kept for it. The token is the Keychain's to sync.
@@ -179,7 +172,6 @@ public final class ApronService {
         readStore.removeServer(serverURL)
         messageCache.removeServer(serverURL)
         draftStore.removeServer(serverURL)
-        metadataStore.apronServers.removeAll { $0.serverURL == serverURL }
     }
 
     /// The app's one signed-in connection to a saved server, opened on first use and shared by the feed,
@@ -272,25 +264,20 @@ public final class ApronService {
             welcome: session.server.welcome,
             status: .valid,
         )
-        var servers = metadataStore.apronServers
-        if let index = servers.firstIndex(where: { $0.serverURL == session.serverURL }) {
-            if servers[index].requestedName != requestedName {
-                serverSync.recordAdded(session.serverURL, requestedName: requestedName)
-            }
-            servers[index] = metadata
-        } else {
-            servers.append(metadata)
-            serverSync.recordAdded(session.serverURL, requestedName: requestedName)
-        }
-        metadataStore.apronServers = servers
+        let id = Account.apronId(serverURL: session.serverURL)
+        var account = accountStore.account(id: id) ?? Account(id: id, network: .apron, serverURL: session.serverURL)
+        account.remoteId = session.you.userId
+        account.displayName = session.you.name
+        account.preferences.apronRequestedName = requestedName
+        accountStore.setApronInfo(ApronSignInInfo(user: session.you, agent: session.server.agent, welcome: session.server.welcome), id: id)
+        accountStore.setStatus(.valid, id: id)
+        knownServers.insert(session.serverURL)
+        accountStore.save(account)
         return metadata
     }
 
     private func updateStatus(serverURL: URL, status: AccountStatusSnapshot) {
-        var servers = metadataStore.apronServers
-        guard let index = servers.firstIndex(where: { $0.serverURL == serverURL }) else { return }
-        servers[index].status = status
-        metadataStore.apronServers = servers
+        accountStore.setStatus(status, id: Account.apronId(serverURL: serverURL))
     }
 }
 

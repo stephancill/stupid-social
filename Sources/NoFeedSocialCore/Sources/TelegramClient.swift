@@ -175,7 +175,8 @@ public actor TelegramClient {
         TelegramAPIConfig.bundled != nil
     }
 
-    private let keychain = KeychainCredentialStore()
+    /// Scoped to the account; its sign-in stays on this device.
+    private let keychain: KeychainCredentialStore
     private var stored: Stored
     private var current: MTProtoSession?
     private var opening: Task<MTProtoSession, Error>?
@@ -188,7 +189,33 @@ public actor TelegramClient {
     private var downloads: [String: Task<Data, Error>] = [:]
     private let mediaDirectory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appending(path: "telegram-media", directoryHint: .isDirectory)
 
-    public init() {
+    public init(keychain: KeychainCredentialStore) {
+        self.keychain = keychain
+        stored = keychain.loadTelegramSession().flatMap { try? JSONDecoder().decode(Stored.self, from: $0) } ?? Stored()
+    }
+
+    /// The account signed in on a saved session, for migrating sessions saved before accounts were scoped.
+    static func signedInAccount(sessionData: Data) -> TelegramAccount? {
+        (try? JSONDecoder().decode(Stored.self, from: sessionData))?.account
+    }
+
+    /// Moves this sign-in to another account id on this device, such as when a new sign-in is an account
+    /// already listed. This client stays signed out.
+    public func moveSession(to other: KeychainCredentialStore) async {
+        await current?.close()
+        current = nil
+        for session in fileSessions.values {
+            await session.close()
+        }
+        fileSessions = [:]
+        stored = Stored()
+        keychain.moveTelegramSession(to: other)
+    }
+
+    /// Loads the sign-in saved for this account, such as one another client moved here.
+    public func reloadSession() async {
+        await current?.close()
+        current = nil
         stored = keychain.loadTelegramSession().flatMap { try? JSONDecoder().decode(Stored.self, from: $0) } ?? Stored()
     }
 
@@ -542,7 +569,9 @@ public actor TelegramClient {
     /// Registers this device's APNs token (hex) so Telegram pushes new messages straight to the app (token type 1,
     /// using the APNs certificate uploaded on my.telegram.org). Telegram suggests repeating it daily, so the app
     /// does at every launch. Muted chats aren't pushed.
-    public func registerPush(deviceToken: String, sandbox: Bool) async throws {
+    /// `otherUserIds` are the other Telegram accounts signed in on this device, which Telegram asks for so it
+    /// can tell their pushes apart.
+    public func registerPush(deviceToken: String, sandbox: Bool, otherUserIds: [Int64] = []) async throws {
         try requireAccount()
         _ = try await invoke(TLObject("account.registerDevice", [
             "no_muted": .bool(true),
@@ -550,7 +579,7 @@ public actor TelegramClient {
             "token": .string(deviceToken),
             "app_sandbox": .bool(sandbox),
             "secret": .bytes(Data()),
-            "other_uids": .vector([]),
+            "other_uids": .vector(otherUserIds.map { .long($0) }),
         ]))
         stored.pushToken = deviceToken
         save()
@@ -585,6 +614,15 @@ public actor TelegramClient {
 
     /// The main chat list (folder 0), or the Archive (folder 1), without broadcast channels. Leaving out
     /// `folder_id` returns both folders mixed.
+    /// The signed-in account's own profile photo as a `tgfile:` URL, `nil` without one
+    /// (`scripts/telegram-client.py avatar --peer self`).
+    public func ownAvatarURL() async throws -> URL? {
+        try requireAccount()
+        let users = try await invoke(TLObject("users.getUsers", ["id": .vector([.object(TLObject("inputUserSelf"))])])).vector ?? []
+        guard let user = users.first?.object, let id = user["id"]?.long else { return nil }
+        return TelegramMediaParser.avatarURL(photo: user["photo"]?.object, inputPeer: TLObject("inputPeerSelf"), key: "user:\(id)")
+    }
+
     public func chatSummaries(archived: Bool = false, limit: Int = 50) async throws -> [ChatSummary] {
         try requireAccount()
         guard let result = try await invoke(TLObject("messages.getDialogs", [

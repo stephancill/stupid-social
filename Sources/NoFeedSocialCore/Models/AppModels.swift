@@ -328,6 +328,8 @@ public struct NetworkProfile: Identifiable, Hashable, Codable, Sendable {
     public let posts: [NetworkProfilePost]
     public let postsNextCursor: String?
     public let hasMorePosts: Bool
+    /// The account that fetched the profile, which follows and notification changes act as.
+    public var accountId: String?
 
     private enum CodingKeys: String, CodingKey {
         case id

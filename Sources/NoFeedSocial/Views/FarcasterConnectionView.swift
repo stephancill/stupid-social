@@ -1,35 +1,31 @@
 import NoFeedSocialCore
 import SwiftUI
 
+/// Adds a Farcaster account by username (`accountId` nil), or shows one account's settings.
 struct FarcasterConnectionView: View {
     @ObservedObject var viewModel: SettingsViewModel
+    let accountId: String?
+    let onDone: () -> Void
     @FocusState private var isFocused: Bool
     @AppStorage(FarcasterExternalClient.storageKey) private var externalClient = FarcasterExternalClient.defaultClient
 
+    private var account: Account? {
+        accountId.flatMap(viewModel.account(id:))
+    }
+
     var body: some View {
         Form {
-            Section {
-                if viewModel.farcasterStatus == .notConfigured {
-                    farcasterUsernameField
-                }
-                LabeledContent("Connection", value: viewModel.farcasterConnectionLabel)
-            }
-
-            if viewModel.farcasterStatus == .notConfigured {
+            if let account {
                 Section {
-                    Button("Save Farcaster Account") {
-                        isFocused = false
-                        Task { await viewModel.saveFarcasterUsername() }
-                    }
+                    LabeledContent("Account", value: viewModel.connectionLabel(for: account))
                 }
-            }
 
-            if viewModel.farcasterStatus != .notConfigured {
                 Section("Notification Types") {
                     ForEach(FarcasterNotificationCategory.allCases, id: \.self) { category in
-                        Toggle(isOn: binding(for: category)) {
-                            Text(category.displayLabel)
-                        }
+                        Toggle(category.displayLabel, isOn: Binding(
+                            get: { viewModel.farcasterCategories(account).contains(category) },
+                            set: { viewModel.setFarcasterCategory(category, enabled: $0, accountId: account.id) },
+                        ))
                     }
                 }
 
@@ -41,35 +37,27 @@ struct FarcasterConnectionView: View {
                     }
                 }
 
+                RemoveAccountSection(viewModel: viewModel, account: account, onRemoved: onDone)
+            } else {
                 Section {
-                    Button("Disconnect", role: .destructive) {
-                        viewModel.disconnectFarcaster()
+                    TextField("Username", text: $viewModel.farcasterUsername)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .focused($isFocused)
+                    Button("Add Account") {
+                        isFocused = false
+                        Task {
+                            if await viewModel.addFarcaster() != nil {
+                                onDone()
+                            }
+                        }
                     }
+                    .disabled(viewModel.isWorking || viewModel.farcasterUsername.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
-            }
-
-            if let message = viewModel.message {
-                Section {
-                    Text(message)
-                        .foregroundStyle(.secondary)
-                }
+                MessageSection(message: viewModel.message)
             }
         }
         .onAppear { viewModel.message = nil }
         .navigationTitle("Farcaster")
-    }
-
-    private var farcasterUsernameField: some View {
-        TextField("Username", text: $viewModel.farcasterUsername)
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled()
-            .focused($isFocused)
-    }
-
-    private func binding(for category: FarcasterNotificationCategory) -> Binding<Bool> {
-        Binding(
-            get: { viewModel.farcasterEnabledCategories.contains(category) },
-            set: { viewModel.toggleFarcasterCategory(category, enabled: $0) },
-        )
     }
 }

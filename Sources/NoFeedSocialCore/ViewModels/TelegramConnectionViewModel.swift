@@ -20,6 +20,8 @@ public final class TelegramConnectionViewModel: ObservableObject {
     private let client: TelegramClient
     /// Called after signing in or out, such as to reload the Chats list.
     public var onChange: (() -> Void)?
+    /// Called with the signed-in account before `onChange`, to save it in the account list.
+    public var onSignIn: ((TelegramAccount) async -> Void)?
 
     public init(client: TelegramClient) {
         self.client = client
@@ -95,6 +97,7 @@ public final class TelegramConnectionViewModel: ObservableObject {
 
     private func finishSignIn() async {
         if let account = await client.account {
+            await onSignIn?(account)
             step = .signedIn(account)
         }
         onChange?()

@@ -39,7 +39,7 @@ final class LiveServiceTests: XCTestCase {
             _ = try store.saveXCredentials(creds)
             sources.append(XNotificationSource(
                 client: XClient(credentialStore: store),
-                metadataStore: accountStore(),
+                metadataStore: accountStore(.x),
             ))
         } else {
             errors.append("X: no credentials")
@@ -47,7 +47,7 @@ final class LiveServiceTests: XCTestCase {
 
         // Farcaster
         if let farcaster = farcasterAccount() {
-            let store = accountStore()
+            let store = accountStore(.farcaster)
             store.farcasterAccount = farcaster
             sources.append(FarcasterNotificationSource(
                 client: FarcasterClient(),
@@ -63,7 +63,7 @@ final class LiveServiceTests: XCTestCase {
             _ = try store.saveInstagramCredentials(instaCreds)
             sources.append(InstagramNotificationSource(
                 client: InstagramClient(credentialStore: store),
-                metadataStore: accountStore(),
+                metadataStore: accountStore(.instagram),
             ))
         } else {
             errors.append("Instagram: no credentials")
@@ -82,10 +82,7 @@ final class LiveServiceTests: XCTestCase {
         )
         let cacheStore = NotificationCacheStore(context: container.mainContext)
         let service = FeedService(
-            notificationSources: sources,
-            accountValidators: [],
-            profileFetchersByNetwork: [:],
-            targetDetailFetchersByNetwork: [:],
+            accountSources: { [sources] in sources.map { FeedAccountSources(accountId: $0.network.rawValue, network: $0.network, notifications: $0) } },
             cacheStore: cacheStore,
         )
 
@@ -159,7 +156,11 @@ final class LiveServiceTests: XCTestCase {
         FarcasterAccountMetadata(username: "stephancill", fid: 1689, status: .valid)
     }
 
-    private func accountStore() -> AccountMetadataStore {
-        AccountMetadataStore()
+    private let accounts = makeTestAccountStore().store
+
+    /// The network's account in a test account store, saved so its metadata can be written.
+    private func accountStore(_ network: SocialNetwork) -> AccountMetadataStore {
+        accounts.save(Account(id: network.rawValue, network: network))
+        return accounts.metadata(for: network.rawValue)
     }
 }

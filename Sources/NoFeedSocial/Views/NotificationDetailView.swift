@@ -108,7 +108,7 @@ struct NotificationDetailView: View {
                 Section("People") {
                     ForEach(displayItem.item.actors, id: \.id) { actor in
                         NavigationLink {
-                            ProfileDetailView(actor: actor, feedService: feedService)
+                            ProfileDetailView(actor: actor, feedService: feedService, accountId: displayItem.item.accountId)
                         } label: {
                             PersonRow(actor: actor)
                         }

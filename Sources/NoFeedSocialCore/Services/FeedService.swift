@@ -1,31 +1,46 @@
 import Foundation
 import OSLog
 
+/// What one account contributes to the feed, profiles and actions.
+public struct FeedAccountSources {
+    public let accountId: String
+    public let network: SocialNetwork
+    public var notifications: (any NotificationFetching)?
+    public var validators: [any AccountValidating]
+    public var profiles: (any ProfileFetching)?
+    public var targetDetails: (any NotificationTargetDetailFetching)?
+    public var relationships: (any RelationshipMutating)?
+
+    public init(
+        accountId: String,
+        network: SocialNetwork,
+        notifications: (any NotificationFetching)? = nil,
+        validators: [any AccountValidating] = [],
+        profiles: (any ProfileFetching)? = nil,
+        targetDetails: (any NotificationTargetDetailFetching)? = nil,
+        relationships: (any RelationshipMutating)? = nil,
+    ) {
+        self.accountId = accountId
+        self.network = network
+        self.notifications = notifications
+        self.validators = validators
+        self.profiles = profiles
+        self.targetDetails = targetDetails
+        self.relationships = relationships
+    }
+}
+
 @MainActor
 public final class FeedService {
-    private let notificationSources: [any NotificationFetching]
-    private let accountValidators: [any AccountValidating]
-    private let profileFetchersByNetwork: [SocialNetwork: any ProfileFetching]
-    private let targetDetailFetchersByNetwork: [SocialNetwork: any NotificationTargetDetailFetching]
-    private let relationshipMutatorsByNetwork: [SocialNetwork: any RelationshipMutating]
+    private let accountSources: @MainActor () -> [FeedAccountSources]
     private let cacheStore: NotificationCacheStore
     private let logger = Logger(subsystem: "tech.stupid.StupidSocial", category: "FeedService")
 
     private var targetDetailsCache: [String: NotificationTargetDetails] = [:]
 
-    public init(
-        notificationSources: [any NotificationFetching],
-        accountValidators: [any AccountValidating],
-        profileFetchersByNetwork: [SocialNetwork: any ProfileFetching],
-        targetDetailFetchersByNetwork: [SocialNetwork: any NotificationTargetDetailFetching],
-        relationshipMutatorsByNetwork: [SocialNetwork: any RelationshipMutating] = [:],
-        cacheStore: NotificationCacheStore,
-    ) {
-        self.notificationSources = notificationSources
-        self.accountValidators = accountValidators
-        self.profileFetchersByNetwork = profileFetchersByNetwork
-        self.targetDetailFetchersByNetwork = targetDetailFetchersByNetwork
-        self.relationshipMutatorsByNetwork = relationshipMutatorsByNetwork
+    /// `accountSources` is read on every use, so accounts added or removed since take effect.
+    public init(accountSources: @escaping @MainActor () -> [FeedAccountSources], cacheStore: NotificationCacheStore) {
+        self.accountSources = accountSources
         self.cacheStore = cacheStore
         // Apron rooms and Spotify Messages chats moved from the feed to the Chats screen; drop the feed items
         // cached before, which would otherwise linger for the 24-hour retention.
@@ -45,13 +60,12 @@ public final class FeedService {
             return try loadCachedFeed()
         }
         logger.info("Manual refresh started")
-        var incoming: [NotificationItem] = []
         var errors: [String] = []
-        var refreshedNetworks = Set<SocialNetwork>()
+        var refreshed = 0
 
-        let refreshResult = await fetchSourcesConcurrently(reason: .manual, timingPrefix: "manual")
+        let results = await fetchSourcesConcurrently(reason: .manual, timingPrefix: "manual")
 
-        for result in refreshResult {
+        for result in results {
             if let error = result.error {
                 switch error {
                 case SourceError.notConfigured:
@@ -64,25 +78,17 @@ public final class FeedService {
                     errors.append("\(result.network.displayName) refresh failed")
                 }
             } else {
-                let items = result.items
-                logger.info("Source refresh finished: \(result.network.rawValue, privacy: .public) \(items.count, privacy: .public) items")
-                incoming.append(contentsOf: items)
-                if !items.isEmpty {
-                    refreshedNetworks.insert(result.network)
-                }
+                logger.info("Source refresh finished: \(result.network.rawValue, privacy: .public) \(result.items.count, privacy: .public) items")
+                refreshed += result.items.count
+                try await replaceCachedItems(of: result)
             }
         }
 
-        if !refreshedNetworks.isEmpty {
-            try await RefreshTiming.measure("manual-cache-replace") {
-                try cacheStore.replaceNetworks(incoming, networks: refreshedNetworks)
-            }
-        }
         try await RefreshTiming.measure("manual-cache-delete-expired") {
             try cacheStore.deleteExpired()
         }
         logger.info("Manual refresh finished")
-        if !errors.isEmpty, incoming.isEmpty {
+        if !errors.isEmpty, refreshed == 0 {
             let cachedItems = try loadCachedFeed()
             if !cachedItems.isEmpty {
                 return cachedItems
@@ -97,12 +103,9 @@ public final class FeedService {
             return
         }
         logger.info("Foreground activation refresh started")
-        var incoming: [NotificationItem] = []
-        var refreshedNetworks = Set<SocialNetwork>()
+        let results = await fetchSourcesConcurrently(reason: .background, timingPrefix: "foreground")
 
-        let refreshResult = await fetchSourcesConcurrently(reason: .background, timingPrefix: "foreground")
-
-        for result in refreshResult {
+        for result in results {
             if let error = result.error {
                 switch error {
                 case SourceError.notConfigured, SourceError.endpointSpikeRequired:
@@ -111,49 +114,54 @@ public final class FeedService {
                     logger.error("Foreground activation source refresh failed: \(result.network.rawValue, privacy: .public) \(String(describing: error), privacy: .public)")
                 }
             } else {
-                let items = result.items
-                logger.info("Foreground activation source refresh finished: \(result.network.rawValue, privacy: .public) \(items.count, privacy: .public) items")
-                incoming.append(contentsOf: items)
-                if !items.isEmpty {
-                    refreshedNetworks.insert(result.network)
-                }
+                logger.info("Foreground activation source refresh finished: \(result.network.rawValue, privacy: .public) \(result.items.count, privacy: .public) items")
+                try await replaceCachedItems(of: result)
             }
         }
-
-        if !refreshedNetworks.isEmpty {
-            try await RefreshTiming.measure("foreground-cache-replace") {
-                try cacheStore.replaceNetworks(incoming, networks: refreshedNetworks)
-            }
-            try await RefreshTiming.measure("foreground-cache-delete-expired") {
-                try cacheStore.deleteExpired()
-            }
+        try await RefreshTiming.measure("foreground-cache-delete-expired") {
+            try cacheStore.deleteExpired()
         }
         logger.info("Foreground activation refresh finished")
     }
 
-    private func fetchSourcesConcurrently(
-        reason: RefreshReason,
-        timingPrefix: String,
-    ) async -> [(network: SocialNetwork, items: [NotificationItem], error: Error?)] {
-        let fetchers: [(network: SocialNetwork, fetch: @MainActor () async throws -> [NotificationItem])] = notificationSources.map { source in
-            (source.network, { try await source.fetchNotifications(reason: reason) })
+    private struct FetchResult {
+        let accountId: String
+        let network: SocialNetwork
+        let items: [NotificationItem]
+        let error: Error?
+    }
+
+    /// Replaces one account's cached items, keeping the old ones when a refresh came back empty. Items of
+    /// accounts that no longer exist go too.
+    private func replaceCachedItems(of result: FetchResult) async throws {
+        try cacheStore.deleteAccounts(notIn: Set(accountSources().map(\.accountId)))
+        guard !result.items.isEmpty else { return }
+        try await RefreshTiming.measure("cache-replace-\(result.network.rawValue)") {
+            try cacheStore.replaceAccount(result.items, network: result.network, accountId: result.accountId)
+        }
+    }
+
+    private func fetchSourcesConcurrently(reason: RefreshReason, timingPrefix: String) async -> [FetchResult] {
+        let fetchers: [(accountId: String, network: SocialNetwork, fetch: @MainActor () async throws -> [NotificationItem])] = accountSources().compactMap { sources in
+            guard let source = sources.notifications else { return nil }
+            return (sources.accountId, sources.network, { try await source.fetchNotifications(reason: reason) })
         }
 
-        return await withTaskGroup(of: (SocialNetwork, [NotificationItem], Error?).self) { group in
+        return await withTaskGroup(of: FetchResult.self) { group in
             for fetcher in fetchers {
                 group.addTask {
                     do {
                         let items = try await RefreshTiming.measure("\(timingPrefix)-source-\(fetcher.network.rawValue)") {
                             try await fetcher.fetch()
                         }
-                        return (fetcher.network, items, nil)
+                        return FetchResult(accountId: fetcher.accountId, network: fetcher.network, items: items.map { $0.scoped(to: fetcher.accountId) }, error: nil)
                     } catch {
-                        return (fetcher.network, [], error)
+                        return FetchResult(accountId: fetcher.accountId, network: fetcher.network, items: [], error: error)
                     }
                 }
             }
 
-            var results: [(network: SocialNetwork, items: [NotificationItem], error: Error?)] = []
+            var results: [FetchResult] = []
             for await result in group {
                 results.append(result)
             }
@@ -162,45 +170,62 @@ public final class FeedService {
     }
 
     public func healthCheckAllSources() async {
-        for source in accountValidators {
+        for source in accountSources().flatMap(\.validators) {
             _ = try? await source.validateAccount()
         }
     }
 
-    public func fetchProfile(for actorId: String, network: SocialNetwork, username: String? = nil) async throws -> NetworkProfile {
+    /// The account's sources, or the network's first account's when no account is named, such as for a
+    /// profile opened from a story.
+    private func sources(network: SocialNetwork, accountId: String?) -> FeedAccountSources? {
+        let all = accountSources().filter { $0.network == network }
+        return all.first { $0.accountId == accountId } ?? all.first
+    }
+
+    public func fetchProfile(for actorId: String, network: SocialNetwork, username: String? = nil, accountId: String? = nil) async throws -> NetworkProfile {
         if DemoData.isDemoMode {
             let actor = DemoData.feedItems().flatMap(\.actors).first { $0.id == actorId && $0.network == network }
             return NetworkProfile(id: actorId, network: network, username: actor?.username ?? username,
                                   displayName: actor?.displayName ?? username, bio: "Sample profile for demonstration.",
                                   avatarURL: actor?.avatarURL, followerCount: 128, followingCount: 64)
         }
-        guard let source = profileFetchersByNetwork[network] else {
+        guard let sources = sources(network: network, accountId: accountId), let source = sources.profiles else {
             throw SourceError.serviceError("No source for network \(network)")
         }
         // X and Instagram can resolve profiles by username; this avoids stale or non-numeric source ids breaking detail lookup.
         let lookupId = (network == .x || network == .instagram) ? (username ?? actorId) : actorId
-        return try await source.fetchProfile(id: lookupId)
+        var profile = try await source.fetchProfile(id: lookupId)
+        profile.accountId = sources.accountId
+        return profile
     }
 
     public func fetchProfilePosts(for profile: NetworkProfile, cursor: String?, count: Int = 12) async throws -> NetworkProfilePostsPage {
-        guard let source = profileFetchersByNetwork[profile.network] else {
+        guard let source = sources(network: profile.network, accountId: profile.accountId)?.profiles else {
             throw SourceError.serviceError("No source for network \(profile.network)")
         }
         let lookupId = profile.network == .instagram ? (profile.username ?? profile.id) : profile.id
         return try await source.fetchProfilePosts(id: lookupId, cursor: cursor, count: count)
     }
 
+    /// Searches with each network's first account, so a network with several accounts lists each person once.
     public func searchProfiles(query: String) async -> [NetworkProfile] {
         let normalized = String(query
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingPrefix("@"))
         guard !normalized.isEmpty else { return [] }
 
+        var searched = Set<SocialNetwork>()
         var profiles: [NetworkProfile] = []
-        for source in profileFetchersByNetwork.values {
+        for sources in accountSources() {
+            guard let source = sources.profiles, searched.insert(sources.network).inserted else { continue }
             do {
-                try await profiles.append(contentsOf: source.searchProfiles(query: normalized))
+                try await profiles.append(contentsOf: source.searchProfiles(query: normalized).map { profile in
+                    var profile = profile
+                    profile.accountId = sources.accountId
+                    return profile
+                })
             } catch SourceError.notConfigured {
+                searched.remove(sources.network)
                 continue
             } catch {
                 logger.info("Profile search failed: \(source.network.rawValue, privacy: .public) \(String(describing: error), privacy: .public)")
@@ -222,7 +247,7 @@ public final class FeedService {
             return cached
         }
 
-        guard let source = targetDetailFetchersByNetwork[item.network] else {
+        guard let source = sources(network: item.network, accountId: item.accountId)?.targetDetails else {
             throw SourceError.serviceError("No source for network \(item.network)")
         }
         let details = try await source.fetchTargetDetails(for: item)
@@ -236,7 +261,7 @@ public final class FeedService {
 
     public func setFollowing(_ profile: NetworkProfile, follow: Bool) async throws {
         guard !DemoData.isDemoMode else { throw SourceError.serviceError("Connect an account after exiting preview content to use this action.") }
-        guard let source = relationshipMutatorsByNetwork[profile.network] else {
+        guard let source = sources(network: profile.network, accountId: profile.accountId)?.relationships else {
             throw SourceError.unsupported
         }
         try await source.setFollowing(profile: profile, follow: follow)
@@ -244,7 +269,7 @@ public final class FeedService {
 
     public func setPostNotifications(_ profile: NetworkProfile, enabled: Bool) async throws {
         guard !DemoData.isDemoMode else { throw SourceError.serviceError("Connect an account after exiting preview content to use this action.") }
-        guard let source = relationshipMutatorsByNetwork[profile.network] else {
+        guard let source = sources(network: profile.network, accountId: profile.accountId)?.relationships else {
             throw SourceError.unsupported
         }
         try await source.setPostNotifications(profile: profile, enabled: enabled)

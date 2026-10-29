@@ -1,36 +1,13 @@
 import NoFeedSocialCore
 import SwiftUI
 
-/// Settings list of Apron servers plus the add-server form.
-struct ApronServersView: View {
+/// Add Account → Apron: signs in to a server, which becomes an account.
+struct ApronAddServerView: View {
     @ObservedObject var viewModel: ApronServersViewModel
+    let onDone: () -> Void
 
     var body: some View {
         Form {
-            if !viewModel.servers.isEmpty {
-                Section("Servers") {
-                    ForEach(viewModel.servers) { server in
-                        NavigationLink {
-                            ApronServerDetailView(viewModel: viewModel, server: server)
-                        } label: {
-                            HStack {
-                                if server.status == .invalidCredentials {
-                                    Circle()
-                                        .fill(.red)
-                                        .frame(width: 8, height: 8)
-                                        .accessibilityLabel("Invalid credentials")
-                                }
-                                Text(server.serverURL.host() ?? server.serverURL.absoluteString)
-                                Spacer()
-                                Text(server.user?.displayName ?? "Guest")
-                                    .font(.callout)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                }
-            }
-
             Section {
                 TextField(ApronServersViewModel.exampleServer, text: $viewModel.serverInput)
                     .textInputAutocapitalization(.never)
@@ -41,7 +18,11 @@ struct ApronServersView: View {
                     .autocorrectionDisabled()
 
                 Button {
-                    Task { await viewModel.addServer() }
+                    Task {
+                        if await viewModel.addServer() {
+                            onDone()
+                        }
+                    }
                 } label: {
                     HStack {
                         Text("Add Server")
@@ -73,7 +54,8 @@ struct ApronServersView: View {
     }
 }
 
-private struct ApronServerDetailView: View {
+/// One Apron account: the server, what it said at sign-in, notifications, the token, and removing it.
+struct ApronServerDetailView: View {
     @ObservedObject var viewModel: ApronServersViewModel
     let server: ApronServerMetadata
     @State private var showRemoveConfirmation = false

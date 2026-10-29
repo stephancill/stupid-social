@@ -195,7 +195,7 @@ public struct GitHubAccountMetadata: Codable, Equatable {
     }
 }
 
-public enum AccountStatusSnapshot: String, Codable, Equatable {
+public enum AccountStatusSnapshot: String, Codable, Equatable, Sendable {
     case notConfigured
     case valid
     case invalidCredentials
@@ -204,92 +204,168 @@ public enum AccountStatusSnapshot: String, Codable, Equatable {
     case serviceError
 }
 
-public final class AccountMetadataStore {
-    private enum Key {
+/// One account's metadata in the per-network shapes the sources read and write. Reads come from the
+/// `AccountStore`; writes change the synced account (handle, avatar, preferences) and the status on this
+/// device. Writing `nil` does nothing: accounts are removed through the store.
+public final class AccountMetadataStore: @unchecked Sendable {
+    public let accountId: String
+    private let store: AccountStore
+
+    init(accountId: String, store: AccountStore) {
+        self.accountId = accountId
+        self.store = store
+    }
+
+    public var account: Account? {
+        store.account(id: accountId)
+    }
+
+    public var status: AccountStatusSnapshot {
+        get { store.status(id: accountId) ?? .valid }
+        set { store.setStatus(newValue, id: accountId) }
+    }
+
+    private func account(_ network: SocialNetwork) -> Account? {
+        account.flatMap { $0.network == network ? $0 : nil }
+    }
+
+    public var xAccount: XAccountMetadata? {
+        get {
+            account(.x).map {
+                XAccountMetadata(accountId: $0.remoteId ?? $0.id, handle: $0.handle, status: status, enabledCategories: $0.preferences.xCategories)
+            }
+        }
+        set {
+            guard let newValue else { return }
+            store.update(id: accountId) {
+                $0.handle = newValue.handle ?? $0.handle
+                $0.preferences.xCategories = newValue.enabledCategories
+            }
+            status = newValue.status
+        }
+    }
+
+    public var farcasterAccount: FarcasterAccountMetadata? {
+        get {
+            account(.farcaster).flatMap { account in
+                guard let fid = account.remoteId.flatMap(UInt64.init) else { return nil }
+                return FarcasterAccountMetadata(username: account.handle ?? "", fid: fid, status: status, enabledCategories: account.preferences.farcasterCategories)
+            }
+        }
+        set {
+            guard let newValue else { return }
+            store.update(id: accountId) {
+                $0.handle = newValue.username
+                $0.remoteId = String(newValue.fid)
+                $0.preferences.farcasterCategories = newValue.enabledCategories
+            }
+            status = newValue.status
+        }
+    }
+
+    public var instagramAccount: InstagramAccountMetadata? {
+        get {
+            account(.instagram).map {
+                InstagramAccountMetadata(
+                    accountId: $0.remoteId ?? $0.id,
+                    username: $0.handle,
+                    avatarURL: $0.avatarURL,
+                    status: status,
+                    enabledCategories: $0.preferences.instagramCategories,
+                    storiesEnabled: $0.preferences.instagramStoriesEnabled ?? true,
+                    directMediaSharesEnabled: $0.preferences.instagramDirectMediaSharesEnabled ?? true,
+                )
+            }
+        }
+        set {
+            guard let newValue else { return }
+            store.update(id: accountId) {
+                if newValue.accountId != $0.id {
+                    $0.remoteId = newValue.accountId
+                }
+                $0.handle = newValue.username ?? $0.handle
+                $0.avatarURL = newValue.avatarURL ?? $0.avatarURL
+                $0.preferences.instagramCategories = newValue.enabledCategories
+                $0.preferences.instagramStoriesEnabled = newValue.storiesEnabled
+                $0.preferences.instagramDirectMediaSharesEnabled = newValue.directMediaSharesEnabled
+            }
+            status = newValue.status
+        }
+    }
+
+    public var spotifyAccount: SpotifyAccountMetadata? {
+        get {
+            account(.spotify).map { SpotifyAccountMetadata(accountId: $0.id, username: $0.handle, status: status) }
+        }
+        set {
+            guard let newValue else { return }
+            store.update(id: accountId) {
+                if let username = newValue.username {
+                    $0.handle = username
+                    $0.remoteId = username
+                }
+            }
+            status = newValue.status
+        }
+    }
+
+    public var blueskyAccount: BlueskyAccountMetadata? {
+        get {
+            account(.bluesky).map { BlueskyAccountMetadata(did: $0.remoteId ?? "", handle: $0.handle, status: status) }
+        }
+        set {
+            guard let newValue else { return }
+            store.update(id: accountId) {
+                if !newValue.did.isEmpty {
+                    $0.remoteId = newValue.did
+                }
+                $0.handle = newValue.handle ?? $0.handle
+            }
+            status = newValue.status
+        }
+    }
+
+    public var githubAccount: GitHubAccountMetadata? {
+        get {
+            account(.github).map { GitHubAccountMetadata(accountId: $0.id, username: $0.handle, status: status) }
+        }
+        set {
+            guard let newValue else { return }
+            store.update(id: accountId) {
+                if let username = newValue.username {
+                    $0.handle = username
+                    $0.remoteId = username
+                }
+            }
+            status = newValue.status
+        }
+    }
+}
+
+/// Where accounts were kept before multi-account support: one per network in UserDefaults. Read once by
+/// `AccountMigration`.
+struct LegacyAccountMetadata {
+    enum Key {
         static let xAccount = "account.x"
         static let farcasterAccount = "account.farcaster"
         static let instagramAccount = "account.instagram"
         static let spotifyAccount = "account.spotify"
         static let blueskyAccount = "account.bluesky"
         static let githubAccount = "account.github"
-        static let debugAccount = "account.debug"
         static let apronServers = "account.apron.servers"
         static let xFollowsMigrated = "account.x.followsMigrated"
+        static let all = [xAccount, farcasterAccount, instagramAccount, spotifyAccount, blueskyAccount, githubAccount, apronServers, xFollowsMigrated]
     }
 
-    private let defaults: UserDefaults
-    private let decoder = JSONDecoder()
-    private let encoder = JSONEncoder()
+    let defaults: UserDefaults
 
-    public init(defaults: UserDefaults = .standard) {
-        self.defaults = defaults
+    func load<T: Decodable>(_ type: T.Type, key: String) -> T? {
+        defaults.data(forKey: key).flatMap { try? JSONDecoder().decode(type, from: $0) }
     }
 
-    public var xAccount: XAccountMetadata? {
-        get {
-            guard var account = load(XAccountMetadata.self, key: Key.xAccount) else { return nil }
-            // One-time migration: enable the new "follows" category for accounts
-            // that predate it. The flag keeps this from overriding a later
-            // user choice to disable X follows.
-            if !defaults.bool(forKey: Key.xFollowsMigrated) {
-                var categories = account.enabledCategories
-                categories.insert(.follows)
-                account.enabledCategories = categories
-                save(account, key: Key.xAccount)
-                defaults.set(true, forKey: Key.xFollowsMigrated)
-            }
-            return account
-        }
-        set { save(newValue, key: Key.xAccount) }
-    }
-
-    public var farcasterAccount: FarcasterAccountMetadata? {
-        get { load(FarcasterAccountMetadata.self, key: Key.farcasterAccount) }
-        set { save(newValue, key: Key.farcasterAccount) }
-    }
-
-    public var instagramAccount: InstagramAccountMetadata? {
-        get { load(InstagramAccountMetadata.self, key: Key.instagramAccount) }
-        set { save(newValue, key: Key.instagramAccount) }
-    }
-
-    public var spotifyAccount: SpotifyAccountMetadata? {
-        get { load(SpotifyAccountMetadata.self, key: Key.spotifyAccount) }
-        set { save(newValue, key: Key.spotifyAccount) }
-    }
-
-    public var blueskyAccount: BlueskyAccountMetadata? {
-        get { load(BlueskyAccountMetadata.self, key: Key.blueskyAccount) }
-        set { save(newValue, key: Key.blueskyAccount) }
-    }
-
-    public var githubAccount: GitHubAccountMetadata? {
-        get { load(GitHubAccountMetadata.self, key: Key.githubAccount) }
-        set { save(newValue, key: Key.githubAccount) }
-    }
-
-    public var debugAccount: DebugAccountMetadata? {
-        get { load(DebugAccountMetadata.self, key: Key.debugAccount) }
-        set { save(newValue, key: Key.debugAccount) }
-    }
-
-    public var apronServers: [ApronServerMetadata] {
-        get { load([ApronServerMetadata].self, key: Key.apronServers) ?? [] }
-        set { save(newValue.isEmpty ? nil : newValue, key: Key.apronServers) }
-    }
-
-    private func load<T: Decodable>(_ type: T.Type, key: String) -> T? {
-        guard let data = defaults.data(forKey: key) else { return nil }
-        return try? decoder.decode(type, from: data)
-    }
-
-    private func save(_ value: (some Encodable)?, key: String) {
-        guard let value else {
+    func removeAll() {
+        for key in Key.all {
             defaults.removeObject(forKey: key)
-            return
         }
-
-        guard let data = try? encoder.encode(value) else { return }
-        defaults.set(data, forKey: key)
     }
 }

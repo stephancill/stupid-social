@@ -7,6 +7,9 @@ struct ProfileDetailView: View {
     let actor: NotificationActor
     let feedService: FeedService
     let initialProfile: NetworkProfile?
+    /// The account the profile is seen from, such as the one a notification came to; `nil` for the network's
+    /// first account.
+    let accountId: String?
     @Environment(\.openURL) private var openURL
     @AppStorage("redactionEnabled") private var redactionEnabled = false
 
@@ -20,10 +23,11 @@ struct ProfileDetailView: View {
     @State private var autoLoadedPostCursors: Set<String> = []
     @State private var isMutatingRelationship = false
 
-    init(actor: NotificationActor, feedService: FeedService, initialProfile: NetworkProfile? = nil) {
+    init(actor: NotificationActor, feedService: FeedService, initialProfile: NetworkProfile? = nil, accountId: String? = nil) {
         self.actor = actor
         self.feedService = feedService
         self.initialProfile = initialProfile
+        self.accountId = accountId ?? initialProfile?.accountId
         _profile = State(initialValue: initialProfile)
         _isLoading = State(initialValue: initialProfile == nil)
     }
@@ -285,6 +289,7 @@ struct ProfileDetailView: View {
                 for: actor.id,
                 network: actor.network,
                 username: actor.username,
+                accountId: accountId,
             )
         } catch {
             if profile == nil {

@@ -86,6 +86,19 @@ public final class NotificationCacheStore {
         try context.save()
     }
 
+    /// Drops items of accounts that were removed, and items cached before accounts were scoped.
+    func deleteAccounts(notIn accountIds: Set<String>) throws {
+        let descriptor = FetchDescriptor<CachedNotification>()
+        var deleted = false
+        for item in try context.fetch(descriptor) where !accountIds.contains(item.accountId) {
+            context.delete(item)
+            deleted = true
+        }
+        if deleted {
+            try context.save()
+        }
+    }
+
     func deleteAccount(network: SocialNetwork, accountId: String) throws {
         let descriptor = FetchDescriptor<CachedNotification>()
         for item in try context.fetch(descriptor) where item.networkRawValue == network.rawValue && item.accountId == accountId {

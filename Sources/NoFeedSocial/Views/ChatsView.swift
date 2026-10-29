@@ -5,13 +5,14 @@ import SwiftUI
 struct ChatsView: View {
     @ObservedObject var viewModel: ChatListViewModel
     let apronService: ApronService
-    /// The chat for a Spotify chat id and title; `nil` when Spotify isn't connected.
-    let spotifyChat: (_ chatId: String, _ title: String) -> (() -> ChatViewModel)?
-    /// The chat for an Instagram thread and title; `nil` when Instagram isn't connected.
-    let instagramChat: (_ threadFbid: String, _ title: String) -> (() -> ChatViewModel)?
-    let telegramChat: (_ peer: TelegramPeer, _ title: String, _ userStatus: TelegramMember.Status?) -> () -> TelegramChatViewModel
-    /// The chat for an X Chat conversation and title; `nil` until the XChat PIN unlocks it.
-    let xChat: (_ conversationId: String, _ title: String) -> (() -> ChatViewModel)?
+    /// The chat for a Spotify account's chat id and title; `nil` when the account is gone.
+    let spotifyChat: (_ accountId: String, _ chatId: String, _ title: String) -> (() -> ChatViewModel)?
+    /// The chat for an Instagram account's thread and title; `nil` when the account is gone.
+    let instagramChat: (_ accountId: String, _ threadFbid: String, _ title: String) -> (() -> ChatViewModel)?
+    /// The chat for a Telegram account's peer; `nil` when the account is gone.
+    let telegramChat: (_ accountId: String, _ peer: TelegramPeer, _ title: String, _ userStatus: TelegramMember.Status?) -> (() -> TelegramChatViewModel)?
+    /// The chat for an X account's conversation and title; `nil` until its X Chat PIN unlocks it.
+    let xChat: (_ accountId: String, _ conversationId: String, _ title: String) -> (() -> ChatViewModel)?
     /// Whether a chat is pushed, so the home pager can stop paging.
     @Binding var isShowingChat: Bool
     /// A chat to open, such as from a tapped notification; cleared once opened.
@@ -195,24 +196,28 @@ struct ChatsView: View {
                 profileUserId: focus?.userId,
             )
         case let .spotify(chatId):
-            if let makeChat = spotifyChat(chatId, chat.title) {
+            if let makeChat = spotifyChat(chat.accountId, chatId, chat.title) {
                 NetworkChatView(viewModel: opened(makeChat(), chat: chat))
             } else {
                 ContentUnavailableView("Spotify Not Connected", systemImage: "music.note")
             }
         case let .instagram(threadFbid):
-            if let makeChat = instagramChat(threadFbid, chat.title) {
+            if let makeChat = instagramChat(chat.accountId, threadFbid, chat.title) {
                 NetworkChatView(viewModel: opened(makeChat(), chat: chat))
             } else {
                 ContentUnavailableView("Instagram Not Connected", systemImage: "camera")
             }
         case let .telegram(peer):
-            TelegramChatView(viewModel: opened(telegramChat(peer, chat.title, chat.telegramUserStatus)(), chat: chat))
+            if let makeChat = telegramChat(chat.accountId, peer, chat.title, chat.telegramUserStatus) {
+                TelegramChatView(viewModel: opened(makeChat(), chat: chat))
+            } else {
+                ContentUnavailableView("Telegram Not Connected", systemImage: "paperplane")
+            }
         case let .x(conversationId):
-            if let makeChat = xChat(conversationId, chat.title) {
+            if let makeChat = xChat(chat.accountId, conversationId, chat.title) {
                 NetworkChatView(viewModel: opened(makeChat(), chat: chat))
             } else {
-                ContentUnavailableView("X Chat Locked", systemImage: "lock", description: Text("Enter your X Chat PIN in Settings → X."))
+                ContentUnavailableView("X Chat Locked", systemImage: "lock", description: Text("Enter your X Chat PIN in this X account's settings."))
             }
         }
     }

@@ -1323,13 +1323,20 @@ def main():
         pathlib.Path(args.output).write_bytes(data)
         print(f"{len(data)} bytes from DC {dc} in {time.time() - started:.1f}s -> {args.output}")
     elif args.command == "avatar":
-        kind, peer_id = args.peer.split(":")
-        result = client.call({"_": "messages.getPeerDialogs", "peers": [{"_": "inputDialogPeer", "peer": client.input_peer(args.peer)}]})
-        owner = next(o for o in result["users"] + result["chats"] if o["id"] == int(peer_id))
+        if args.peer == "self":
+            # The signed-in account's own photo, as Settings shows it: users.getUsers([inputUserSelf]),
+            # downloaded through inputPeerSelf.
+            owner = client.call({"_": "users.getUsers", "id": [{"_": "inputUserSelf"}]})[0]
+            input_peer = {"_": "inputPeerSelf"}
+        else:
+            kind, peer_id = args.peer.split(":")
+            result = client.call({"_": "messages.getPeerDialogs", "peers": [{"_": "inputDialogPeer", "peer": client.input_peer(args.peer)}]})
+            owner = next(o for o in result["users"] + result["chats"] if o["id"] == int(peer_id))
+            input_peer = client.input_peer(args.peer)
         photo = owner.get("photo") or {}
         if "photo_id" not in photo:
             raise SystemExit(f"No photo: {photo.get('_')}")
-        location = {"_": "inputPeerPhotoFileLocation", "peer": client.input_peer(args.peer), "photo_id": photo["photo_id"]}
+        location = {"_": "inputPeerPhotoFileLocation", "peer": input_peer, "photo_id": photo["photo_id"]}
         started = time.time()
         data = client.download(location, photo["dc_id"])
         pathlib.Path(args.output).write_bytes(data)

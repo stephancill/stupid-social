@@ -201,14 +201,15 @@ public actor XChatClient {
     /// GetConversationPageQuery returns events older than `min_local_sequence_id`.
     private static let newestSequenceId = String(Int64.max)
 
-    /// Its own store, as the actor can't share the app's.
-    private let credentialStore = KeychainCredentialStore()
+    /// Scoped to the X account, for its cookies and X Chat keys.
+    private let credentialStore: KeychainCredentialStore
     private let session: URLSession
     private var conversations: [String: XChatConversationInfo] = [:]
     /// Conversation id → key version → 32-byte conversation key.
     private var conversationKeys: [String: [String: Data]] = [:]
 
-    public init(session: URLSession = XClient.defaultSession) {
+    public init(credentialStore: KeychainCredentialStore, session: URLSession = XClient.defaultSession) {
+        self.credentialStore = credentialStore
         self.session = session
     }
 

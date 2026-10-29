@@ -19,21 +19,15 @@ public final class ApronServersViewModel: ObservableObject {
         self.chatList = chatList
         reload()
         // Servers also arrive and leave from other devices through iCloud.
-        NotificationCenter.default.addObserver(forName: ApronLiveFeed.serversDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.reload() }
+        for name in [ApronLiveFeed.serversDidChangeNotification, AccountStore.statusDidChangeNotification] {
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.reload() }
+            }
         }
     }
 
-    public var connectionLabel: String {
-        switch servers.count {
-        case 0: AccountStatus.notConfigured.label
-        case 1: servers[0].serverURL.host() ?? "1 server"
-        default: "\(servers.count) servers"
-        }
-    }
-
-    public var hasInvalidCredentials: Bool {
-        servers.contains { $0.status == .invalidCredentials }
+    public func server(for serverURL: URL) -> ApronServerMetadata? {
+        servers.first { $0.serverURL == serverURL } ?? service.server(for: serverURL)
     }
 
     public func hasToken(_ server: ApronServerMetadata) -> Bool {

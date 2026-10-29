@@ -34,7 +34,10 @@ public enum CredentialSaveResult: Equatable {
     }
 }
 
-public final class KeychainCredentialStore {
+/// Credentials in the iCloud Keychain. A store scoped to an account (`scoped(to:)`) keeps that account's
+/// credentials under its id; the unscoped store reads the one-per-network items from before multi-account
+/// support, which `AccountMigration` uses.
+public final class KeychainCredentialStore: @unchecked Sendable {
     private struct StoredItem {
         let data: Data
         let modifiedAt: Date
@@ -44,6 +47,8 @@ public final class KeychainCredentialStore {
     private let fallbackStore: UserDefaults
     private let prefersSynchronizable: Bool
     private let allowsInsecureFallback: Bool
+    /// The account id whose credentials this store reads and writes.
+    public let scope: String?
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
@@ -52,9 +57,11 @@ public final class KeychainCredentialStore {
         fallbackStore: UserDefaults = .standard,
         prefersSynchronizable: Bool? = nil,
         allowsInsecureFallback: Bool? = nil,
+        scope: String? = nil,
     ) {
         self.service = service
         self.fallbackStore = fallbackStore
+        self.scope = scope
         #if targetEnvironment(simulator)
             self.prefersSynchronizable = prefersSynchronizable ?? false
             self.allowsInsecureFallback = allowsInsecureFallback ?? true
@@ -64,28 +71,74 @@ public final class KeychainCredentialStore {
         #endif
     }
 
+    private init(copying other: KeychainCredentialStore, scope: String) {
+        service = other.service
+        fallbackStore = other.fallbackStore
+        prefersSynchronizable = other.prefersSynchronizable
+        allowsInsecureFallback = other.allowsInsecureFallback
+        self.scope = scope
+    }
+
+    /// The same store for one account's credentials.
+    public func scoped(to accountId: String) -> KeychainCredentialStore {
+        KeychainCredentialStore(copying: self, scope: accountId)
+    }
+
+    /// The scoped account's item, or the network's single item from before accounts were scoped.
+    private func key(_ legacyName: String) -> String {
+        scope ?? legacyName
+    }
+
+    private var xChatKey: String {
+        scope.map { "xchat.\($0)" } ?? "xchat"
+    }
+
+    /// Deletes everything kept for the scoped account: its credentials (an Apron token, a Telegram sign-in…)
+    /// and its X Chat keys.
+    public func deleteAccountCredentials() {
+        guard let scope else { return }
+        try? deleteForAccount(scope)
+        try? deleteForAccount(xChatKey)
+    }
+
+    /// Moves the X Chat keys from the single pre-multi-account item to the scoped account's.
+    func adoptLegacyXChatKeys() {
+        guard scope != nil, let data = try? load(account: "xchat") else { return }
+        if (try? save(data: data, account: xChatKey)) != nil {
+            try? deleteForAccount("xchat")
+        }
+    }
+
+    /// Copies this account's Telegram sign-in to another account id on this device, such as when a new sign-in
+    /// turns out to be an account already listed.
+    func moveTelegramSession(to other: KeychainCredentialStore) {
+        guard let data = loadTelegramSession() else { return }
+        try? other.saveTelegramSession(data)
+        try? deleteTelegramSession()
+    }
+
     public func saveXCredentials(_ credentials: XCredentials) throws -> CredentialSaveResult {
         let data = try encoder.encode(credentials)
-        return try save(data: data, account: "x")
+        return try save(data: data, account: key("x"))
     }
 
     public func loadXCredentials() throws -> XCredentials? {
-        guard let data = try load(account: "x") else { return nil }
+        guard let data = try load(account: key("x")) else { return nil }
         return try decoder.decode(XCredentials.self, from: data)
     }
 
     public func deleteXCredentials() throws {
-        try deleteForAccount("x")
+        try deleteForAccount(key("x"))
     }
 
     /// The XChat private keys, recovered from Juicebox with the PIN; synced like the X cookies, so the PIN is
     /// needed once per Apple account rather than per device.
     func saveXChatKeys(_ keys: XChatKeys) throws {
-        _ = try save(data: encoder.encode(keys), account: "xchat")
+        _ = try save(data: encoder.encode(keys), account: xChatKey)
     }
 
     func loadXChatKeys() throws -> XChatKeys? {
-        guard let data = try load(account: "xchat") else { return nil }
+        guard let data = try load(account: xChatKey) else { return nil }
         return try decoder.decode(XChatKeys.self, from: data)
     }
 
@@ -95,63 +148,63 @@ public final class KeychainCredentialStore {
     }
 
     public func deleteXChatKeys() throws {
-        try deleteForAccount("xchat")
+        try deleteForAccount(xChatKey)
     }
 
     public func saveInstagramCredentials(_ credentials: InstagramCredentials) throws -> CredentialSaveResult {
         let data = try encoder.encode(credentials)
-        return try save(data: data, account: "instagram")
+        return try save(data: data, account: key("instagram"))
     }
 
     public func loadInstagramCredentials() throws -> InstagramCredentials? {
-        guard let data = try load(account: "instagram") else { return nil }
+        guard let data = try load(account: key("instagram")) else { return nil }
         return try decoder.decode(InstagramCredentials.self, from: data)
     }
 
     public func deleteInstagramCredentials() throws {
-        try deleteForAccount("instagram")
+        try deleteForAccount(key("instagram"))
     }
 
     public func saveSpotifyCredentials(_ credentials: SpotifyCredentials) throws -> CredentialSaveResult {
         let data = try encoder.encode(credentials)
-        return try save(data: data, account: "spotify")
+        return try save(data: data, account: key("spotify"))
     }
 
     public func loadSpotifyCredentials() throws -> SpotifyCredentials? {
-        guard let data = try load(account: "spotify") else { return nil }
+        guard let data = try load(account: key("spotify")) else { return nil }
         return try decoder.decode(SpotifyCredentials.self, from: data)
     }
 
     public func deleteSpotifyCredentials() throws {
-        try deleteForAccount("spotify")
+        try deleteForAccount(key("spotify"))
     }
 
     public func saveBlueskyCredentials(_ credentials: BlueskyOAuthCredentials) throws -> CredentialSaveResult {
         let data = try encoder.encode(credentials)
-        return try save(data: data, account: "bluesky")
+        return try save(data: data, account: key("bluesky"))
     }
 
     public func loadBlueskyCredentials() throws -> BlueskyOAuthCredentials? {
-        guard let data = try load(account: "bluesky") else { return nil }
+        guard let data = try load(account: key("bluesky")) else { return nil }
         return try decoder.decode(BlueskyOAuthCredentials.self, from: data)
     }
 
     public func deleteBlueskyCredentials() throws {
-        try deleteForAccount("bluesky")
+        try deleteForAccount(key("bluesky"))
     }
 
     public func saveGitHubCredentials(_ credentials: GitHubCredentials) throws -> CredentialSaveResult {
         let data = try encoder.encode(credentials)
-        return try save(data: data, account: "github")
+        return try save(data: data, account: key("github"))
     }
 
     public func loadGitHubCredentials() throws -> GitHubCredentials? {
-        guard let data = try load(account: "github") else { return nil }
+        guard let data = try load(account: key("github")) else { return nil }
         return try decoder.decode(GitHubCredentials.self, from: data)
     }
 
     public func deleteGitHubCredentials() throws {
-        try deleteForAccount("github")
+        try deleteForAccount(key("github"))
     }
 
     /// Apron bearer tokens are keyed per server URL (§3.2.1); the latest token replaces earlier ones.
@@ -174,39 +227,39 @@ public final class KeychainCredentialStore {
     /// Telegram auth keys stay on this device: each device signs in as its own Telegram session.
     func saveTelegramSession(_ data: Data) throws {
         do {
-            try save(data: data, account: "telegram", synchronizable: false)
+            try save(data: data, account: key("telegram"), synchronizable: false)
         } catch let error as KeychainCredentialStoreError {
             guard allowsInsecureFallback else { throw error }
-            fallbackStore.set(data, forKey: fallbackKey(account: "telegram"))
+            fallbackStore.set(data, forKey: fallbackKey(account: key("telegram")))
         }
     }
 
     func loadTelegramSession() -> Data? {
-        (try? load(account: "telegram", synchronizable: false))?.data ?? fallbackStore.data(forKey: fallbackKey(account: "telegram"))
+        (try? load(account: key("telegram"), synchronizable: false))?.data ?? fallbackStore.data(forKey: fallbackKey(account: key("telegram")))
     }
 
     func deleteTelegramSession() throws {
-        try deleteForAccount("telegram")
+        try deleteForAccount(key("telegram"))
     }
 
     public func xCredentialStorage() throws -> CredentialSaveResult? {
-        try storage(account: "x")
+        try storage(account: key("x"))
     }
 
     public func instagramCredentialStorage() throws -> CredentialSaveResult? {
-        try storage(account: "instagram")
+        try storage(account: key("instagram"))
     }
 
     public func spotifyCredentialStorage() throws -> CredentialSaveResult? {
-        try storage(account: "spotify")
+        try storage(account: key("spotify"))
     }
 
     public func blueskyCredentialStorage() throws -> CredentialSaveResult? {
-        try storage(account: "bluesky")
+        try storage(account: key("bluesky"))
     }
 
     public func githubCredentialStorage() throws -> CredentialSaveResult? {
-        try storage(account: "github")
+        try storage(account: key("github"))
     }
 
     private func deleteForAccount(_ account: String) throws {

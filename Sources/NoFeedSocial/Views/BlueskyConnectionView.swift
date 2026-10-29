@@ -3,15 +3,35 @@ import NoFeedSocialCore
 import SwiftUI
 import UIKit
 
+/// Adds a Bluesky account (`accountId` nil), or shows one account's settings.
 struct BlueskyConnectionView: View {
     @ObservedObject var viewModel: SettingsViewModel
+    let accountId: String?
+    let onDone: () -> Void
     @FocusState private var isFocused: Bool
     @State private var isLoggingIn = false
     @State private var authSession: WebAuthenticationSession?
 
+    private var account: Account? {
+        accountId.flatMap(viewModel.account(id:))
+    }
+
     var body: some View {
         Form {
-            if viewModel.blueskyHandle == nil {
+            if let account {
+                if viewModel.status(for: account.id) == .invalidCredentials {
+                    LoginButtonSection(title: "Reconnect Bluesky") {
+                        viewModel.blueskyLoginHint = account.handle ?? ""
+                        Task { await startLogin() }
+                    }
+                    .disabled(isLoggingIn)
+                }
+                Section {
+                    LabeledContent("Account", value: viewModel.connectionLabel(for: account))
+                }
+                MessageSection(message: viewModel.message)
+                RemoveAccountSection(viewModel: viewModel, account: account, onRemoved: onDone)
+            } else {
                 Section {
                     TextField("Handle or email", text: $viewModel.blueskyLoginHint)
                     #if os(iOS)
@@ -38,30 +58,7 @@ struct BlueskyConnectionView: View {
                 } header: {
                     Text("Login")
                 }
-            }
-
-            Section {
-                HStack {
-                    Text("Connection")
-                    Spacer()
-                    Text(viewModel.blueskyConnectionLabel)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            if viewModel.blueskyHandle != nil || viewModel.blueskyStatus != .notConfigured {
-                Section {
-                    Button("Disconnect", role: .destructive) {
-                        viewModel.disconnectBluesky()
-                    }
-                }
-            }
-
-            if let message = viewModel.message {
-                Section {
-                    Text(message)
-                        .foregroundStyle(.secondary)
-                }
+                MessageSection(message: viewModel.message)
             }
         }
         .onAppear { viewModel.message = nil }
@@ -76,13 +73,18 @@ struct BlueskyConnectionView: View {
         isLoggingIn = true
         defer { isLoggingIn = false }
         do {
-            let oauthSession = try await viewModel.beginBlueskyOAuth()
+            let oauthSession = try await viewModel.beginBlueskyOAuth(reconnecting: accountId)
             let webSession = WebAuthenticationSession(url: oauthSession.authorizationURL, callbackURLScheme: "net.stupidtech") { callbackURL in
                 guard let callbackURL else {
                     viewModel.message = "Bluesky login was cancelled."
                     return
                 }
-                Task { await viewModel.finishBlueskyOAuth(callbackURL: callbackURL, session: oauthSession) }
+                Task {
+                    let added = await viewModel.finishBlueskyOAuth(callbackURL: callbackURL, session: oauthSession)
+                    if added != nil, accountId == nil {
+                        onDone()
+                    }
+                }
             }
             authSession = webSession
             webSession.start()

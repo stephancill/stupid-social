@@ -67,7 +67,7 @@ public struct FarcasterNotificationSource: NotificationFetching, AccountValidati
         guard let target = item.target else {
             throw SourceError.unsupported
         }
-        let authorFid = target.author?.id ?? item.accountId
+        let authorFid = target.author?.id ?? metadataStore.farcasterAccount.map { String($0.fid) } ?? ""
         let likeCount = try await client.reactionCount(castHash: target.id, authorFid: authorFid)
         let cast = try? await client.cast(hash: target.id, fid: authorFid)
         let imageURLs = cast?.embeds?.compactMap { $0.url.flatMap(URL.init) } ?? []

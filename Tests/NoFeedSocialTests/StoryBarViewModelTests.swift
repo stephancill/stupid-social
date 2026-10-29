@@ -5,7 +5,7 @@ import XCTest
 @MainActor
 final class StoryBarViewModelTests: XCTestCase {
     func testStartsAtOldestUnreadInstagramSlide() {
-        let viewModel = StoryBarViewModel(instagramSource: nil)
+        let viewModel = StoryBarViewModel(instagramSources: { [] })
         let selectedItem = storyItem(seenTimestamp: 150)
         let items = viewModel.storyViewerItems(for: selectedItem, in: [selectedItem])
 
@@ -17,7 +17,7 @@ final class StoryBarViewModelTests: XCTestCase {
     }
 
     func testStartsAtOldestInstagramSlideWhenAllAreRead() {
-        let viewModel = StoryBarViewModel(instagramSource: nil)
+        let viewModel = StoryBarViewModel(instagramSources: { [] })
         let selectedItem = storyItem(seenTimestamp: 300)
         let items = viewModel.storyViewerItems(for: selectedItem, in: [selectedItem])
 
@@ -27,7 +27,7 @@ final class StoryBarViewModelTests: XCTestCase {
     func testStartsAtOldestUnreadGitHubSlide() {
         let defaults = makeTestDefaults()
         let viewModel = StoryBarViewModel(
-            instagramSource: nil,
+            instagramSources: { [] },
             githubSeenStore: GitHubActivitySeenStore(defaults: defaults, key: "githubTestSeen"),
         )
         let group = githubGroup()
@@ -42,7 +42,7 @@ final class StoryBarViewModelTests: XCTestCase {
     func testStartsAtOldestGitHubSlideWhenAllAreRead() {
         let defaults = makeTestDefaults()
         let viewModel = StoryBarViewModel(
-            instagramSource: nil,
+            instagramSources: { [] },
             githubSeenStore: GitHubActivitySeenStore(defaults: defaults, key: "githubTestSeen"),
         )
         let selectedItem = StoryBarItem.github(githubGroup())

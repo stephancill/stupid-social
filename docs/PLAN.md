@@ -8,7 +8,7 @@ Build an iOS app with xtool that shows a combined social network notifications f
 
 - Universal iOS app using xtool (previous macOS support was removed).
 - Combined notifications feed for X and Farcaster.
-- One account per supported network.
+- Multiple accounts per network: Settings → Add Account → pick the network, then sign in. Accounts and their preferences sync across the user's devices through iCloud (Key-Value storage for the list, iCloud Keychain for credentials); Telegram sign-ins stay per device.
 - Manual account setup through a minimal settings form.
 - Credentials sync across Apple devices through iCloud Keychain.
 - Notification item cache is local-only in the MVP.
@@ -25,7 +25,6 @@ Build an iOS app with xtool that shows a combined social network notifications f
 ## Out Of Scope For MVP
 
 - Cross-posting.
-- Multiple accounts per network.
 - Syncing full notification items across devices.
 - Backend service for polling or normalization. The one exception is the stateless Apron push relay (see Apron).
 - App lock, Face ID lock, hidden previews, or custom privacy overlay.

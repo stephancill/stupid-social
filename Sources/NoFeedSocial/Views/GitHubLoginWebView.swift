@@ -47,11 +47,16 @@ private func makeWebView(coordinator: Coordinator) -> WKWebView {
     let webView = WKWebView(frame: .zero, configuration: configuration)
     webView.navigationDelegate = coordinator
     coordinator.webView = webView
-    configuration.websiteDataStore.httpCookieStore.add(coordinator)
     #if DEBUG
         webView.isInspectable = true
     #endif
-    webView.load(URLRequest(url: URL(string: "https://github.com/login")!))
+    // Drop the last login's session so this login can be another account.
+    let cookieStore = configuration.websiteDataStore.httpCookieStore
+    Task { @MainActor in
+        await cookieStore.deleteCookies(named: ["user_session", "__Host-user_session_same_site", "logged_in", "dotcom_user"], domainSuffix: "github.com")
+        cookieStore.add(coordinator)
+        webView.load(URLRequest(url: URL(string: "https://github.com/login")!))
+    }
     return webView
 }
 

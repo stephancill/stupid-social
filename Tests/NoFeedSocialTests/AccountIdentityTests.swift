@@ -110,7 +110,9 @@ final class AccountIdentityTests: XCTestCase {
         let (store, suite) = try makeStore()
         defer { cleanUp(store: store, suite: suite) }
         _ = try store.saveInstagramCredentials(InstagramCredentials(sessionId: "session", csrfToken: "csrf", dsUserId: "42", mid: nil))
-        let metadata = try AccountMetadataStore(defaults: XCTUnwrap(UserDefaults(suiteName: suite)))
+        let accounts = makeTestAccountStore(suite: suite).store
+        accounts.save(Account(id: "instagram", network: .instagram, remoteId: "42"))
+        let metadata = accounts.metadata(for: "instagram")
         metadata.instagramAccount = InstagramAccountMetadata(accountId: "42", username: "example", status: .valid, enabledCategories: [.likes], storiesEnabled: false, directMediaSharesEnabled: false)
         let original = metadata.instagramAccount
         let source = InstagramNotificationSource(client: InstagramClient(credentialStore: store, session: makeSession()), metadataStore: metadata)

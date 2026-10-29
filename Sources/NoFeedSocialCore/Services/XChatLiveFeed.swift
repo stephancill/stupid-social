@@ -21,6 +21,7 @@ public final class XChatLiveFeed {
     private static let keepAlive = Data([12, 0, 2, 12, 0, 2, 0, 0, 0])
 
     private let client: XChatClient
+    private let accountId: String
     private let chatList: ChatListViewModel
     private let keychainStore: KeychainCredentialStore
     private let logger = Logger(subsystem: "tech.stupid.StupidSocial", category: "XChatLiveFeed")
@@ -29,8 +30,9 @@ public final class XChatLiveFeed {
     /// Whether a connection has opened before, so the next one has something to catch up on.
     private var hasConnected = false
 
-    public init(client: XChatClient, chatList: ChatListViewModel, keychainStore: KeychainCredentialStore) {
+    public init(client: XChatClient, accountId: String, chatList: ChatListViewModel, keychainStore: KeychainCredentialStore) {
         self.client = client
+        self.accountId = accountId
         self.chatList = chatList
         self.keychainStore = keychainStore
     }
@@ -127,7 +129,7 @@ public final class XChatLiveFeed {
         let events = structures.compactMap { try? XChatEvent($0) }
         guard !events.isEmpty else { return }
         if let summaries = await client.ingest(events) {
-            chatList.updateChats(summaries)
+            chatList.updateChats(summaries, accountId: accountId)
         } else {
             // A conversation the inbox hasn't loaded, such as a new chat.
             Task { await chatList.load() }

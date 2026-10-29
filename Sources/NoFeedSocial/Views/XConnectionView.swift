@@ -1,140 +1,130 @@
 import NoFeedSocialCore
 import SwiftUI
 
+/// Adds an X account (`accountId` nil), or shows one account's settings.
 struct XConnectionView: View {
     @ObservedObject var viewModel: SettingsViewModel
-    @ObservedObject var xChatViewModel: XChatUnlockViewModel
+    let accountId: String?
+    var xChatViewModel: XChatUnlockViewModel?
+    let onDone: () -> Void
     @FocusState private var isFocused: Bool
-    @State private var confirmingForgetKeys = false
     @State private var showingLoginSheet = false
     @AppStorage("devModeEnabled") private var devModeEnabled = false
 
+    private var account: Account? {
+        accountId.flatMap(viewModel.account(id:))
+    }
+
     var body: some View {
         Form {
-            if viewModel.xStatus == .notConfigured {
+            if let account {
+                if viewModel.status(for: account.id) == .invalidCredentials {
+                    LoginButtonSection(title: "Reconnect X") { showingLoginSheet = true }
+                }
+
                 Section {
-                    Button {
-                        showingLoginSheet = true
-                    } label: {
-                        HStack {
-                            Spacer()
-                            Label("Log in to X", systemImage: "safari")
-                            Spacer()
+                    LabeledContent("Account", value: viewModel.connectionLabel(for: account))
+                }
+
+                if let xChatViewModel {
+                    XChatSection(viewModel: xChatViewModel)
+                }
+
+                Section("Notifications") {
+                    ForEach(XNotificationCategory.allCases, id: \.self) { category in
+                        Toggle(category.displayLabel, isOn: Binding(
+                            get: { viewModel.xCategories(account).contains(category) },
+                            set: { viewModel.setXCategory(category, enabled: $0, accountId: account.id) },
+                        ))
+                    }
+                }
+
+                MessageSection(message: viewModel.message)
+                RemoveAccountSection(viewModel: viewModel, account: account, onRemoved: onDone)
+            } else {
+                LoginButtonSection(title: "Log in to X") { showingLoginSheet = true }
+
+                if devModeEnabled {
+                    Section("Manual (Dev)") {
+                        TextField("Cookie header", text: $viewModel.xCookieHeader, axis: .vertical)
+                            .lineLimit(2 ... 4)
+                            .textFieldStyle(.plain)
+                            .focused($isFocused)
+
+                        Button("Save X Credentials") {
+                            isFocused = false
+                            Task {
+                                if await viewModel.addXCookieHeader() != nil {
+                                    onDone()
+                                }
+                            }
                         }
                     }
                 }
-            }
-
-            Section {
-                HStack {
-                    Text("Connection")
-                    Spacer()
-                    Text(viewModel.xConnectionLabel)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            if viewModel.xStatus != .notConfigured {
-                xChatSection
-            }
-
-            if viewModel.xStatus != .notConfigured {
-                Section("Notifications") {
-                    ForEach(XNotificationCategory.allCases, id: \.self) { category in
-                        Toggle(category.displayLabel, isOn: binding(for: category))
-                    }
-                }
-            }
-
-            if devModeEnabled, viewModel.xStatus == .notConfigured {
-                Section("Manual (Dev)") {
-                    TextField("Cookie header", text: $viewModel.xCookieHeader, axis: .vertical)
-                        .lineLimit(2 ... 4)
-                        .textFieldStyle(.plain)
-                        .focused($isFocused)
-
-                    Button("Save X Credentials") {
-                        isFocused = false
-                        Task { await viewModel.saveXCookieHeader() }
-                    }
-                }
-            }
-
-            if viewModel.xStatus != .notConfigured {
-                Section {
-                    Button("Disconnect", role: .destructive) {
-                        viewModel.disconnectX()
-                        xChatViewModel.refresh()
-                    }
-                }
-            }
-
-            if let message = viewModel.message {
-                Section {
-                    Text(message)
-                        .foregroundStyle(.secondary)
-                }
+                MessageSection(message: viewModel.message)
             }
         }
         .onAppear { viewModel.message = nil }
         .navigationTitle("X")
         .sheet(isPresented: $showingLoginSheet) {
             XLoginWebView { credentials in
-                Task { await viewModel.saveXCookies(credentials) }
+                Task {
+                    let added = await viewModel.addX(credentials, reconnecting: accountId)
+                    if added != nil, accountId == nil {
+                        onDone()
+                    }
+                }
             }
         }
     }
+}
 
-    /// X's chats are end-to-end encrypted; the user's X Chat PIN recovers the keys that read them.
-    private var xChatSection: some View {
+/// X's chats are end-to-end encrypted; the user's X Chat PIN recovers the keys that read them.
+private struct XChatSection: View {
+    @ObservedObject var viewModel: XChatUnlockViewModel
+    @State private var confirmingForgetKeys = false
+
+    var body: some View {
         Section {
-            if xChatViewModel.isUnlocked {
+            if viewModel.isUnlocked {
                 LabeledContent("Encrypted Chats", value: "Unlocked")
                 Button("Forget Keys", role: .destructive) {
                     confirmingForgetKeys = true
                 }
-                .confirmationDialog("Forget X Chat keys?", isPresented: $confirmingForgetKeys, titleVisibility: .visible) {
-                    Button("Forget Keys", role: .destructive) {
-                        Task { await xChatViewModel.forgetKeys() }
-                    }
-                } message: {
-                    Text("Your X chats stay on X. You'll need your PIN to read them here again.")
-                }
             } else {
-                SecureField("X Chat PIN", text: $xChatViewModel.pin)
+                SecureField("X Chat PIN", text: $viewModel.pin)
                     .textContentType(.password)
                     .submitLabel(.go)
-                    .onSubmit { Task { await xChatViewModel.unlock() } }
+                    .onSubmit { Task { await viewModel.unlock() } }
                 Button {
-                    Task { await xChatViewModel.unlock() }
+                    Task { await viewModel.unlock() }
                 } label: {
-                    if xChatViewModel.isWorking {
+                    if viewModel.isWorking {
                         ProgressView()
                     } else {
                         Text("Unlock Chats")
                     }
                 }
-                .disabled(!xChatViewModel.canUnlock)
+                .disabled(!viewModel.canUnlock)
             }
-            if let error = xChatViewModel.errorMessage {
+            if let error = viewModel.errorMessage {
                 Text(error)
                     .foregroundStyle(.red)
             }
         } header: {
             Text("Chats")
         } footer: {
-            if !xChatViewModel.isUnlocked {
-                Text("Your X Chat PIN unlocks your encrypted chats on this Apple account. A wrong PIN uses up one of a limited number of tries.")
+            if !viewModel.isUnlocked {
+                Text("Your X Chat PIN unlocks this account's encrypted chats on this Apple account. A wrong PIN uses up one of a limited number of tries.")
             }
         }
-    }
-
-    private func binding(for category: XNotificationCategory) -> Binding<Bool> {
-        Binding(
-            get: { viewModel.xEnabledCategories.contains(category) },
-            set: { enabled in
-                viewModel.toggleXCategory(category, enabled: enabled)
-            },
-        )
+        .alert("Forget X Chat keys?", isPresented: $confirmingForgetKeys) {
+            Button("Cancel", role: .cancel) {}
+            Button("Forget Keys", role: .destructive) {
+                Task { await viewModel.forgetKeys() }
+            }
+        } message: {
+            Text("Your X chats stay on X. You'll need your PIN to read them here again.")
+        }
     }
 }

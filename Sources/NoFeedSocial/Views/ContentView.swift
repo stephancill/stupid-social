@@ -38,13 +38,11 @@ public struct ContentView: View {
             // Apron servers and X Chat stream updates only while the app is in the foreground.
             guard phase == .active else {
                 if phase == .background {
-                    container.apronLiveFeed.stop()
-                    container.xChatLiveFeed.stop()
+                    container.stopLiveFeeds()
                 }
                 return
             }
-            container.apronLiveFeed.start()
-            container.xChatLiveFeed.start()
+            container.startLiveFeeds()
             Task {
                 await foregroundRefreshFeedAndStories(container: container)
             }
@@ -60,10 +58,10 @@ public struct ContentView: View {
                 ChatsView(
                     viewModel: container.chatListViewModel,
                     apronService: container.apronService,
-                    spotifyChat: { container.spotifyChatFactory(chatId: $0, title: $1) },
-                    instagramChat: { container.instagramChatFactory(threadFbid: $0, title: $1) },
-                    telegramChat: { container.telegramChatFactory(peer: $0, title: $1, userStatus: $2) },
-                    xChat: { container.xChatFactory(conversationId: $0, title: $1) },
+                    spotifyChat: { container.spotifyChatFactory(accountId: $0, chatId: $1, title: $2) },
+                    instagramChat: { container.instagramChatFactory(accountId: $0, threadFbid: $1, title: $2) },
+                    telegramChat: { container.telegramChatFactory(accountId: $0, peer: $1, title: $2, userStatus: $3) },
+                    xChat: { container.xChatFactory(accountId: $0, conversationId: $1, title: $2) },
                     isShowingChat: $isShowingChat,
                     openRequest: $notificationRouter.pendingChat,
                 )
@@ -106,15 +104,18 @@ public struct ContentView: View {
 
     private func socialStack(container: AppContainer) -> some View {
         NavigationStack(path: $path) {
-            FeedView(
-                viewModel: container.feedViewModel,
-                storyViewModel: container.storyBarViewModel,
-                spotifyClient: container.spotifyClient,
-                settingsViewModel: container.settingsViewModel,
-                onOpenSettings: { path.append(.settings) },
-                onRefresh: { await refreshFeedAndStories(container: container) },
-                isShowingDetail: $isShowingFeedDetail,
-            )
+            // Re-created when accounts change, so the feed gets the current Spotify account's client.
+            AccountsObserving(services: container.services) {
+                FeedView(
+                    viewModel: container.feedViewModel,
+                    storyViewModel: container.storyBarViewModel,
+                    spotifyClient: container.spotifyClient,
+                    settingsViewModel: container.settingsViewModel,
+                    onOpenSettings: { path.append(.settings) },
+                    onRefresh: { await refreshFeedAndStories(container: container) },
+                    isShowingDetail: $isShowingFeedDetail,
+                )
+            }
             .navigationDestination(for: HomeDestination.self) { destination in
                 switch destination {
                 case .search:
@@ -123,8 +124,6 @@ public struct ContentView: View {
                     SettingsView(
                         viewModel: container.settingsViewModel,
                         apronServersViewModel: container.apronServersViewModel,
-                        telegramConnectionViewModel: container.telegramConnectionViewModel,
-                        xChatUnlockViewModel: container.xChatUnlockViewModel,
                         onLoadDemoData: { container.loadDemoData() },
                         onClearDemoData: { container.clearDemoData() },
                     )
@@ -138,8 +137,7 @@ public struct ContentView: View {
         container = appContainer
         NotificationRouter.shared.apronService = appContainer.apronService
         NotificationRouter.shared.chatList = appContainer.chatListViewModel
-        appContainer.apronLiveFeed.start()
-        appContainer.xChatLiveFeed.start()
+        appContainer.startLiveFeeds()
 
         Task {
             await foregroundRefreshFeedAndStories(container: appContainer)
@@ -147,7 +145,7 @@ public struct ContentView: View {
     }
 
     private func foregroundRefreshFeedAndStories(container: AppContainer) async {
-        await container.settingsViewModel.refreshSyncedConnections()
+        await container.settingsViewModel.repairAccountIdentities()
         async let feedRefresh = container.feedViewModel.refreshOnForegroundActivation()
         async let storyRefresh: Void = container.storyBarViewModel.fetchStoryBarContent()
         _ = await (feedRefresh, storyRefresh)
@@ -176,6 +174,16 @@ public struct ContentView: View {
         }
         .keyboardShortcut("r", modifiers: .command)
         .hidden()
+    }
+}
+
+/// Re-renders its content when accounts are added or removed.
+private struct AccountsObserving<Content: View>: View {
+    @ObservedObject var services: AccountServices
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        content()
     }
 }
 

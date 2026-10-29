@@ -2,6 +2,15 @@ import NoFeedSocialCore
 import SwiftUI
 import WebKit
 
+extension WKHTTPCookieStore {
+    /// Deletes the named cookies on the domain and its subdomains, such as a previous login's session.
+    func deleteCookies(named names: Set<String>, domainSuffix: String) async {
+        for cookie in await allCookies() where names.contains(cookie.name) && cookie.domain.hasSuffix(domainSuffix) {
+            await deleteCookie(cookie)
+        }
+    }
+}
+
 struct XLoginWebView: View {
     @Environment(\.dismiss) private var dismiss
 
@@ -52,13 +61,19 @@ private struct XLoginWKWebView: UIViewRepresentable {
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
         context.coordinator.webView = webView
-        webView.configuration.websiteDataStore.httpCookieStore.add(context.coordinator)
         #if DEBUG
             if #available(iOS 16.4, *) {
                 webView.isInspectable = true
             }
         #endif
-        webView.load(URLRequest(url: url))
+        // The persistent store still holds the last login's session; drop it so this login can be another
+        // account. Device cookies stay, which keeps X from limiting the login.
+        let cookieStore = webView.configuration.websiteDataStore.httpCookieStore
+        Task { @MainActor [coordinator = context.coordinator] in
+            await cookieStore.deleteCookies(named: ["auth_token", "ct0", "twid", "att"], domainSuffix: "x.com")
+            cookieStore.add(coordinator)
+            webView.load(URLRequest(url: url))
+        }
         return webView
     }
 

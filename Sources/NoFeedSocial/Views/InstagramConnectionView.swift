@@ -1,122 +1,99 @@
 import NoFeedSocialCore
 import SwiftUI
 
+/// Adds an Instagram account (`accountId` nil), or shows one account's settings.
 struct InstagramConnectionView: View {
     @ObservedObject var viewModel: SettingsViewModel
+    let accountId: String?
+    let onDone: () -> Void
     @FocusState private var isFocused: Bool
     @State private var showingLoginSheet = false
     @AppStorage("devModeEnabled") private var devModeEnabled = false
 
+    private var account: Account? {
+        accountId.flatMap(viewModel.account(id:))
+    }
+
     var body: some View {
         Form {
-            if needsLogin {
+            if let account {
+                let categories = viewModel.instagramCategories(account)
+                if viewModel.status(for: account.id) == .invalidCredentials {
+                    LoginButtonSection(title: "Reconnect Instagram") { showingLoginSheet = true }
+                }
+
                 Section {
-                    Button {
-                        showingLoginSheet = true
-                    } label: {
-                        HStack {
-                            Spacer()
-                            Label(loginButtonTitle, systemImage: "safari")
-                            Spacer()
-                        }
-                    }
+                    LabeledContent("Account", value: viewModel.connectionLabel(for: account))
                 }
-            }
 
-            Section {
-                HStack {
-                    Text("Connection")
-                    Spacer()
-                    Text(viewModel.instagramConnectionLabel)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            if devModeEnabled, needsLogin {
-                Section("Manual (Dev)") {
-                    TextField("Cookie header", text: $viewModel.instagramCookieHeader, axis: .vertical)
-                        .lineLimit(2 ... 4)
-                        .textFieldStyle(.plain)
-                        .focused($isFocused)
-
-                    Button("Save Instagram Credentials") {
-                        isFocused = false
-                        Task { await viewModel.saveInstagramCookieHeader() }
-                    }
-                }
-            }
-
-            if viewModel.instagramStatus == .valid {
                 Section("Content") {
-                    Toggle("Stories", isOn: $viewModel.instagramStoriesEnabled)
-                        .onChange(of: viewModel.instagramStoriesEnabled) { _, enabled in
-                            viewModel.toggleInstagramStories(enabled: enabled)
-                        }
+                    Toggle("Stories", isOn: Binding(
+                        get: { account.preferences.instagramStoriesEnabled ?? true },
+                        set: { viewModel.setInstagramStories(enabled: $0, accountId: account.id) },
+                    ))
                 }
 
                 Section("Messaging") {
-                    Toggle(isOn: binding(for: .directMessages)) {
-                        Text("Direct Messages")
-                    }
-
-                    Toggle("Posts and Reels", isOn: $viewModel.instagramDirectMediaSharesEnabled)
-                        .disabled(!viewModel.instagramEnabledCategories.contains(.directMessages))
-                        .onChange(of: viewModel.instagramDirectMediaSharesEnabled) { _, enabled in
-                            viewModel.toggleInstagramDirectMediaShares(enabled: enabled)
-                        }
+                    Toggle("Direct Messages", isOn: binding(.directMessages, account: account))
+                    Toggle("Posts and Reels", isOn: Binding(
+                        get: { account.preferences.instagramDirectMediaSharesEnabled ?? true },
+                        set: { viewModel.setInstagramDirectMediaShares(enabled: $0, accountId: account.id) },
+                    ))
+                    .disabled(!categories.contains(.directMessages))
                 }
 
                 Section("Notification Types") {
                     ForEach(InstagramNotificationCategory.allCases.filter { $0 != .directMessages }, id: \.self) { category in
-                        Toggle(isOn: binding(for: category)) {
-                            Text(category.displayLabel)
+                        Toggle(category.displayLabel, isOn: binding(category, account: account))
+                    }
+                }
+
+                MessageSection(message: viewModel.message)
+                RemoveAccountSection(viewModel: viewModel, account: account, onRemoved: onDone)
+            } else {
+                LoginButtonSection(title: "Log in to Instagram") { showingLoginSheet = true }
+
+                if devModeEnabled {
+                    Section("Manual (Dev)") {
+                        TextField("Cookie header", text: $viewModel.instagramCookieHeader, axis: .vertical)
+                            .lineLimit(2 ... 4)
+                            .textFieldStyle(.plain)
+                            .focused($isFocused)
+
+                        Button("Save Instagram Credentials") {
+                            isFocused = false
+                            Task {
+                                if await viewModel.addInstagramCookieHeader() != nil {
+                                    onDone()
+                                }
+                            }
                         }
                     }
                 }
-            }
-
-            if viewModel.instagramStatus != .notConfigured {
-                Section {
-                    Button("Disconnect", role: .destructive) {
-                        viewModel.disconnectInstagram()
-                    }
-                }
-            }
-
-            if let message = viewModel.message {
-                Section {
-                    Text(message)
-                        .foregroundStyle(.secondary)
-                }
+                MessageSection(message: viewModel.message)
             }
         }
         .onAppear { viewModel.message = nil }
         .navigationTitle("Instagram")
         .sheet(isPresented: $showingLoginSheet) {
             InstagramLoginWebView(
-                initialCredentials: viewModel.existingInstagramCredentials(),
+                initialCredentials: nil,
                 onLoginSuccess: { credentials in
-                    Task { await viewModel.saveInstagramCookies(credentials) }
+                    Task {
+                        let added = await viewModel.addInstagram(credentials, reconnecting: accountId)
+                        if added != nil, accountId == nil {
+                            onDone()
+                        }
+                    }
                 },
             )
         }
-        .task {
-            await viewModel.revalidateInstagram()
-        }
     }
 
-    private var needsLogin: Bool {
-        viewModel.instagramStatus == .notConfigured || viewModel.instagramStatus == .invalidCredentials
-    }
-
-    private var loginButtonTitle: String {
-        viewModel.instagramStatus == .invalidCredentials ? "Reconnect Instagram" : "Log in to Instagram"
-    }
-
-    private func binding(for category: InstagramNotificationCategory) -> Binding<Bool> {
+    private func binding(_ category: InstagramNotificationCategory, account: Account) -> Binding<Bool> {
         Binding(
-            get: { viewModel.instagramEnabledCategories.contains(category) },
-            set: { viewModel.toggleInstagramCategory(category, enabled: $0) },
+            get: { viewModel.instagramCategories(account).contains(category) },
+            set: { viewModel.setInstagramCategory(category, enabled: $0, accountId: account.id) },
         )
     }
 }

@@ -8,13 +8,12 @@ Implementation work should follow this document unless `docs/PLAN.md` changes or
 
 ## Current Scope
 
-The MVP is an iOS SwiftUI app built with xtool. It supports a combined notifications feed for one account per supported network. Previous macOS support was removed.
+The MVP is an iOS SwiftUI app built with xtool. It supports a combined notifications feed across any number of accounts per supported network. Previous macOS support was removed.
 
 Out of scope for this technical design:
 
 - Cross-posting and non-Instagram posting.
 - Bluesky posting.
-- Multiple accounts per network.
 - Backend services, except the stateless Apron push relay (`workers/push-relay`).
 - Full notification item sync across devices.
 
@@ -43,7 +42,7 @@ Suggested high-level modules:
 Use built-in SwiftUI and platform primitives wherever possible.
 
 - Feed: a single chronological `List` with network badges.
-- Settings: minimal `Form` for account setup/status.
+- Settings: minimal `Form` listing accounts (network icon, handle, status); Add Account → network → sign in; each account has its own settings and Remove.
 - Account detail: simple detail screen with avatar, name, follower count, and following count.
 - Actions: standard pull-to-refresh behavior.
 - Avoid custom controls, bespoke styling, and non-native interaction patterns unless the plan changes.
@@ -104,14 +103,9 @@ Use SwiftData for local notification cache.
 - Cache only display-safe normalized data needed for the feed and detail views.
 - Do not persist raw source payloads unless a future implementation note documents a specific need.
 
-Use UserDefaults for non-secret account metadata.
+Keep the account list (`AccountStore`) in iCloud Key-Value storage so it syncs across devices, mirrored to UserDefaults as the fast read path. Each account has a stable id; its credentials are Keychain items keyed by that id. Per-device state (validation status, Apron sign-in info) stays in UserDefaults.
 
-Examples:
-
-- Configured account identifiers.
-- Account display handles/usernames.
-- Last successful refresh timestamps.
-- Basic account status flags.
+An account record holds the network, the network's own user id (so adding the same account again updates it), handle, display name, avatar and per-account preferences. A notification item's `accountId` is the app's account id, and its `id` is prefixed with it.
 
 Do not store secrets in UserDefaults.
 

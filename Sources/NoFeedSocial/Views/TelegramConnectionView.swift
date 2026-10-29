@@ -2,13 +2,29 @@ import NoFeedSocialCore
 import SwiftUI
 
 /// Signs in to Telegram with a phone number, the code Telegram sends, and the 2FA password if there is one.
+/// Without `account` it adds an account; with one it signs that account in or out on this device, since each
+/// device is its own Telegram session.
 struct TelegramConnectionView: View {
     @ObservedObject var viewModel: TelegramConnectionViewModel
+    var account: Account?
+    var settings: SettingsViewModel?
+    let onDone: () -> Void
     @FocusState private var isFocused: Bool
     @State private var confirmingSignOut = false
 
     var body: some View {
         Form {
+            if let account, let settings {
+                Section {
+                    LabeledContent("Account", value: settings.connectionLabel(for: account))
+                } footer: {
+                    if case .signedIn = viewModel.step {
+                        EmptyView()
+                    } else {
+                        Text("This account was added on another device. Sign in to use it here too.")
+                    }
+                }
+            }
             if !viewModel.isAvailable {
                 Section {
                     Text("Telegram isn't available in this build.")
@@ -71,9 +87,11 @@ struct TelegramConnectionView: View {
                             LabeledContent("Username", value: "@\(username)")
                         }
                     }
-                    Section {
-                        Button("Sign Out", role: .destructive) {
-                            confirmingSignOut = true
+                    if account != nil {
+                        Section {
+                            Button("Sign Out on This Device", role: .destructive) {
+                                confirmingSignOut = true
+                            }
                         }
                     }
                 }
@@ -92,18 +110,27 @@ struct TelegramConnectionView: View {
                     }
                 }
             }
+
+            if let account, let settings {
+                RemoveAccountSection(viewModel: settings, account: account, onRemoved: onDone)
+            }
         }
         .navigationTitle("Telegram")
         .task { await viewModel.reload() }
-        .onChange(of: viewModel.step) {
+        .onChange(of: viewModel.step) { _, step in
+            if case .signedIn = step, account == nil {
+                onDone()
+                return
+            }
             isFocused = true
         }
-        .confirmationDialog("Sign out of Telegram?", isPresented: $confirmingSignOut, titleVisibility: .visible) {
+        .alert("Sign out of Telegram on this device?", isPresented: $confirmingSignOut) {
+            Button("Cancel", role: .cancel) {}
             Button("Sign Out", role: .destructive) {
                 Task { await viewModel.signOut() }
             }
         } message: {
-            Text("This device's Telegram session ends. Your chats stay on Telegram.")
+            Text("This device's Telegram session ends. The account stays on your other devices, and your chats stay on Telegram.")
         }
     }
 }

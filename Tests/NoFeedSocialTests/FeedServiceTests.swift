@@ -5,11 +5,7 @@ import XCTest
 final class FeedServiceTests: XCTestCase {
     @MainActor
     func testManualRefreshShowsMergedItemsChronologically() async throws {
-        let container = try ModelContainer(
-            for: CachedNotification.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true),
-        )
-        let cacheStore = NotificationCacheStore(context: container.mainContext)
+        let cacheStore = try makeCacheStore()
         let known = item(id: "known", timestamp: Date(timeIntervalSince1970: 200))
         try cacheStore.replaceAll([known])
 
@@ -17,80 +13,44 @@ final class FeedServiceTests: XCTestCase {
             known,
             item(id: "new", timestamp: Date(timeIntervalSince1970: 100)),
         ])
-        let service = FeedService(
-            notificationSources: [source],
-            accountValidators: [],
-            profileFetchersByNetwork: [:],
-            targetDetailFetchersByNetwork: [:],
-            cacheStore: cacheStore,
-        )
+        let service = makeService([source], cacheStore: cacheStore)
 
         let displayed = try await service.manualRefresh()
 
-        XCTAssertEqual(displayed.map(\.id), ["known", "new"])
+        XCTAssertEqual(displayed.map(\.item.sourceId), ["known", "new"])
     }
 
     @MainActor
     func testForegroundActivationRefreshShowsNewItemsImmediately() async throws {
-        let container = try ModelContainer(
-            for: CachedNotification.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true),
-        )
-        let cacheStore = NotificationCacheStore(context: container.mainContext)
+        let cacheStore = try makeCacheStore()
         let source = StubNotificationFetcher(items: [
             item(id: "background-new", timestamp: Date(timeIntervalSince1970: 100)),
         ])
-        let service = FeedService(
-            notificationSources: [source],
-            accountValidators: [],
-            profileFetchersByNetwork: [:],
-            targetDetailFetchersByNetwork: [:],
-            cacheStore: cacheStore,
-        )
+        let service = makeService([source], cacheStore: cacheStore)
 
         try await service.foregroundActivationRefresh()
 
         let displayed = try service.loadCachedFeed()
-        XCTAssertEqual(displayed.map(\.id), ["background-new"])
+        XCTAssertEqual(displayed.map(\.item.sourceId), ["background-new"])
     }
 
     @MainActor
     func testManualRefreshReturnsCachedItemsWhenAllSourcesFail() async throws {
-        let container = try ModelContainer(
-            for: CachedNotification.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true),
-        )
-        let cacheStore = NotificationCacheStore(context: container.mainContext)
-        let cached = item(id: "cached", timestamp: Date(timeIntervalSince1970: 100))
+        let cacheStore = try makeCacheStore()
+        let cached = item(id: "cached", network: .x, timestamp: Date(timeIntervalSince1970: 100))
         try cacheStore.replaceAll([cached])
 
-        let service = FeedService(
-            notificationSources: [FailingNotificationFetcher()],
-            accountValidators: [],
-            profileFetchersByNetwork: [:],
-            targetDetailFetchersByNetwork: [:],
-            cacheStore: cacheStore,
-        )
+        let service = makeService([FailingNotificationFetcher()], cacheStore: cacheStore)
 
         let displayed = try await service.manualRefresh()
 
-        XCTAssertEqual(displayed.map(\.id), ["cached"])
+        XCTAssertEqual(displayed.map(\.item.sourceId), ["cached"])
     }
 
     @MainActor
     func testManualRefreshThrowsWhenAllSourcesFailAndCacheIsEmpty() async throws {
-        let container = try ModelContainer(
-            for: CachedNotification.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true),
-        )
-        let cacheStore = NotificationCacheStore(context: container.mainContext)
-        let service = FeedService(
-            notificationSources: [FailingNotificationFetcher()],
-            accountValidators: [],
-            profileFetchersByNetwork: [:],
-            targetDetailFetchersByNetwork: [:],
-            cacheStore: cacheStore,
-        )
+        let cacheStore = try makeCacheStore()
+        let service = makeService([FailingNotificationFetcher()], cacheStore: cacheStore)
 
         do {
             _ = try await service.manualRefresh()
@@ -102,71 +62,72 @@ final class FeedServiceTests: XCTestCase {
 
     @MainActor
     func testManualRefreshPreservesFailedNetworkCacheWhenAnotherSourceSucceeds() async throws {
-        let container = try ModelContainer(
-            for: CachedNotification.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true),
-        )
-        let cacheStore = NotificationCacheStore(context: container.mainContext)
+        let cacheStore = try makeCacheStore()
         let cachedX = item(id: "cached-x", network: .x, timestamp: Date(timeIntervalSince1970: 200))
         let cachedFarcaster = item(id: "cached-farcaster", network: .farcaster, timestamp: Date(timeIntervalSince1970: 100))
         try cacheStore.replaceAll([cachedX, cachedFarcaster])
 
-        let service = FeedService(
-            notificationSources: [
-                FailingNotificationFetcher(network: .x),
-                StubNotificationFetcher(network: .farcaster, items: [cachedFarcaster]),
-            ],
-            accountValidators: [],
-            profileFetchersByNetwork: [:],
-            targetDetailFetchersByNetwork: [:],
-            cacheStore: cacheStore,
-        )
+        let service = makeService([
+            FailingNotificationFetcher(network: .x),
+            StubNotificationFetcher(network: .farcaster, items: [cachedFarcaster]),
+        ], cacheStore: cacheStore)
 
         let displayed = try await service.manualRefresh()
 
-        XCTAssertEqual(displayed.map(\.id), ["cached-x", "cached-farcaster"])
+        XCTAssertEqual(displayed.map(\.item.sourceId), ["cached-x", "cached-farcaster"])
     }
 
     @MainActor
     func testManualRefreshPreservesNetworkCacheWhenSourceReturnsEmpty() async throws {
-        let container = try ModelContainer(
-            for: CachedNotification.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true),
-        )
-        let cacheStore = NotificationCacheStore(context: container.mainContext)
+        let cacheStore = try makeCacheStore()
         let cachedX = item(id: "cached-x", network: .x, timestamp: Date(timeIntervalSince1970: 100))
         try cacheStore.replaceAll([cachedX])
 
+        let service = makeService([StubNotificationFetcher(network: .x, items: [])], cacheStore: cacheStore)
+
+        let displayed = try await service.manualRefresh()
+
+        XCTAssertEqual(displayed.map(\.item.sourceId), ["cached-x"])
+    }
+
+    @MainActor
+    func testTwoAccountsOnOneNetworkKeepSeparateItems() async throws {
+        let cacheStore = try makeCacheStore()
+        let shared = item(id: "same-event", network: .x, timestamp: Date(timeIntervalSince1970: 100))
         let service = FeedService(
-            notificationSources: [StubNotificationFetcher(network: .x, items: [])],
-            accountValidators: [],
-            profileFetchersByNetwork: [:],
-            targetDetailFetchersByNetwork: [:],
+            accountSources: {
+                [
+                    FeedAccountSources(accountId: "x-1", network: .x, notifications: StubNotificationFetcher(network: .x, items: [shared])),
+                    FeedAccountSources(accountId: "x-2", network: .x, notifications: StubNotificationFetcher(network: .x, items: [shared])),
+                ]
+            },
             cacheStore: cacheStore,
         )
 
         let displayed = try await service.manualRefresh()
 
-        XCTAssertEqual(displayed.map(\.id), ["cached-x"])
+        XCTAssertEqual(Set(displayed.map(\.item.accountId)), ["x-1", "x-2"])
+        XCTAssertEqual(Set(displayed.map(\.id)), ["x-1|same-event", "x-2|same-event"])
+    }
+
+    @MainActor
+    func testRemovedAccountsItemsLeaveTheFeed() async throws {
+        let cacheStore = try makeCacheStore()
+        try cacheStore.replaceAll([item(id: "gone", network: .x, timestamp: Date(timeIntervalSince1970: 100)).scoped(to: "x-removed")])
+        let service = makeService([StubNotificationFetcher(network: .farcaster, items: [item(id: "kept", timestamp: Date(timeIntervalSince1970: 200))])], cacheStore: cacheStore)
+
+        let displayed = try await service.manualRefresh()
+
+        XCTAssertEqual(displayed.map(\.item.sourceId), ["kept"])
     }
 
     @MainActor
     func testManualRefreshRunsSourcesConcurrently() async throws {
-        let container = try ModelContainer(
-            for: CachedNotification.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true),
-        )
-        let cacheStore = NotificationCacheStore(context: container.mainContext)
-        let service = FeedService(
-            notificationSources: [
-                DelayedNotificationFetcher(network: .x, delay: 0.5, items: [item(id: "x", network: .x, timestamp: Date(timeIntervalSince1970: 300))]),
-                DelayedNotificationFetcher(network: .farcaster, delay: 0.1, items: [item(id: "fc", network: .farcaster, timestamp: Date(timeIntervalSince1970: 200))]),
-            ],
-            accountValidators: [],
-            profileFetchersByNetwork: [:],
-            targetDetailFetchersByNetwork: [:],
-            cacheStore: cacheStore,
-        )
+        let cacheStore = try makeCacheStore()
+        let service = makeService([
+            DelayedNotificationFetcher(network: .x, delay: 0.5, items: [item(id: "x", network: .x, timestamp: Date(timeIntervalSince1970: 300))]),
+            DelayedNotificationFetcher(network: .farcaster, delay: 0.1, items: [item(id: "fc", network: .farcaster, timestamp: Date(timeIntervalSince1970: 200))]),
+        ], cacheStore: cacheStore)
 
         let clock = ContinuousClock()
         let elapsed = try await clock.measure {
@@ -179,21 +140,11 @@ final class FeedServiceTests: XCTestCase {
 
     @MainActor
     func testForegroundActivationRefreshRunsSourcesConcurrently() async throws {
-        let container = try ModelContainer(
-            for: CachedNotification.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true),
-        )
-        let cacheStore = NotificationCacheStore(context: container.mainContext)
-        let service = FeedService(
-            notificationSources: [
-                DelayedNotificationFetcher(network: .x, delay: 0.5, items: [item(id: "x", network: .x, timestamp: Date(timeIntervalSince1970: 300))]),
-                DelayedNotificationFetcher(network: .farcaster, delay: 0.1, items: [item(id: "fc", network: .farcaster, timestamp: Date(timeIntervalSince1970: 200))]),
-            ],
-            accountValidators: [],
-            profileFetchersByNetwork: [:],
-            targetDetailFetchersByNetwork: [:],
-            cacheStore: cacheStore,
-        )
+        let cacheStore = try makeCacheStore()
+        let service = makeService([
+            DelayedNotificationFetcher(network: .x, delay: 0.5, items: [item(id: "x", network: .x, timestamp: Date(timeIntervalSince1970: 300))]),
+            DelayedNotificationFetcher(network: .farcaster, delay: 0.1, items: [item(id: "fc", network: .farcaster, timestamp: Date(timeIntervalSince1970: 200))]),
+        ], cacheStore: cacheStore)
 
         let clock = ContinuousClock()
         let elapsed = try await clock.measure {
@@ -204,11 +155,33 @@ final class FeedServiceTests: XCTestCase {
         XCTAssertLessThan(seconds, 0.55, "Foreground refresh should fetch sources concurrently")
     }
 
+    /// Kept for the test's duration, as the cache's context needs its container.
+    private var containers: [ModelContainer] = []
+
+    @MainActor
+    private func makeCacheStore() throws -> NotificationCacheStore {
+        let container = try ModelContainer(
+            for: CachedNotification.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true),
+        )
+        containers.append(container)
+        return NotificationCacheStore(context: container.mainContext)
+    }
+
+    /// One account per source, named after its network, as the cached items are.
+    @MainActor
+    private func makeService(_ sources: [any NotificationFetching], cacheStore: NotificationCacheStore) -> FeedService {
+        FeedService(
+            accountSources: { sources.map { FeedAccountSources(accountId: $0.network.rawValue, network: $0.network, notifications: $0) } },
+            cacheStore: cacheStore,
+        )
+    }
+
     private func item(id: String, network: SocialNetwork = .farcaster, timestamp: Date) -> NotificationItem {
         NotificationItem(
             id: id,
             network: network,
-            accountId: "1",
+            accountId: network.rawValue,
             sourceId: id,
             type: .reply,
             timestamp: timestamp,

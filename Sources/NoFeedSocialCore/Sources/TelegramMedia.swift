@@ -62,13 +62,15 @@ enum TelegramMediaURL {
 }
 
 /// Serves `tgfile:` URLs from `TelegramClient`, so `CachedAsyncImage`, chat bubbles and the image viewer load
-/// Telegram files lazily, only when shown. Registered once with `register(client:)`.
+/// Telegram files lazily, only when shown. Registered with `register(clients:)` whenever the Telegram accounts
+/// change. A URL doesn't name its account, so each signed-in account tries in turn: another account's file
+/// reference fails and the next one gets it.
 public final class TelegramFileURLProtocol: URLProtocol, @unchecked Sendable {
-    private nonisolated(unsafe) static var telegram: TelegramClient?
+    private nonisolated(unsafe) static var telegrams: [TelegramClient] = []
     private var loadTask: Task<Void, Never>?
 
-    public static func register(client: TelegramClient) {
-        telegram = client
+    public static func register(clients: [TelegramClient]) {
+        telegrams = clients
         URLProtocol.registerClass(TelegramFileURLProtocol.self)
     }
 
@@ -81,21 +83,28 @@ public final class TelegramFileURLProtocol: URLProtocol, @unchecked Sendable {
     }
 
     override public func startLoading() {
-        guard let url = request.url, let telegram = Self.telegram else {
+        let telegrams = Self.telegrams
+        guard let url = request.url, !telegrams.isEmpty else {
             client?.urlProtocol(self, didFailWithError: URLError(.unsupportedURL))
             return
         }
         // URLProtocol's client may be called from any thread; the instance only crosses into the task.
         let loader = Loader(urlProtocol: self)
         loadTask = Task {
-            do {
-                let data = try await telegram.file(at: url)
-                Self.saveForNotifications(url: url, data: data)
-                guard !Task.isCancelled else { return }
-                loader.finish(url: url, data: data)
-            } catch {
-                loader.fail(error)
+            var lastError: Error = URLError(.unsupportedURL)
+            for telegram in telegrams {
+                guard await telegram.account != nil else { continue }
+                do {
+                    let data = try await telegram.file(at: url)
+                    Self.saveForNotifications(url: url, data: data)
+                    guard !Task.isCancelled else { return }
+                    loader.finish(url: url, data: data)
+                    return
+                } catch {
+                    lastError = error
+                }
             }
+            loader.fail(lastError)
         }
     }
 

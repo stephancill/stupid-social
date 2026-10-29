@@ -34,7 +34,7 @@ Sources/
       FarcasterConnectionView.swift # Farcaster credential setup
       FarcasterExternalClientView.swift # Farcaster external client picker
       DebugConnectionView.swift     # Debug notifications toggle
-      ApronServersView.swift        # Apron server list, add form, and server detail
+      ApronServersView.swift        # Apron add-server form (Add Account → Apron) and server detail
       ApronLinkView.swift           # Confirmation sheet for opened Apron links
       ChatView.swift                # Shared chat screen: title pill, connection lifecycle; NetworkChatView for Spotify
       ChatUIKitView.swift           # Shared chat UIKit view controller: message list, floating composer, attachments
@@ -43,7 +43,7 @@ Sources/
       ApronChatView.swift           # Apron chat: the shared chat plus members and profiles
       ApronMembersView.swift        # Apron room member list, opened from the chat title
       ApronProfileView.swift        # Apron user profile and shared avatar with presence dot
-      SettingsView.swift            # Settings with connection links
+      SettingsView.swift            # Settings: account list, Add Account sheet, account detail, remove
       TelegramConnectionView.swift  # Telegram sign-in: phone, code, 2FA password
       TelegramChatView.swift        # Telegram chat with the group member list from the title
   NoFeedSocialPush/                 # Shared with the notification extension: Web Push decryption, push store, notification content
@@ -59,9 +59,11 @@ Sources/
   NoFeedSocialCore/                 # Shared core (models, services, sources)
     Models/
       AppModels.swift               # All public model types
+      Account.swift                 # Account (one of any number per network) and its preferences
       CachedNotification.swift      # SwiftData cache model
     Services/
-      FeedService.swift             # Central feed orchestration
+      AccountServices.swift         # Each account's clients and sources, rebuilt as accounts change
+      FeedService.swift             # Central feed orchestration across accounts
       ApronService.swift            # Apron server list, tokens, and signed-in sessions
       ApronLiveFeed.swift           # Foreground WebSocket per Apron server for realtime feed items
       XChatLiveFeed.swift           # Foreground X Chat WebSocket: pushed events for open chats and the Chats list
@@ -96,15 +98,16 @@ Sources/
     Resources/
       TelegramSchema.tl             # Telegram TL schema (scripts/telegram-schema.py); TelegramAPI.json is gitignored
     Storage/
-      AccountMetadataStore.swift
+      AccountStore.swift              # Accounts across devices (iCloud KVS, with removals); per-device status
+      AccountMigration.swift          # One-time move of the single per-network accounts into AccountStore
+      AccountMetadataStore.swift      # One account's metadata in the per-network shapes sources use
       CookieHeaderParser.swift
-      KeychainCredentialStore.swift
+      KeychainCredentialStore.swift   # iCloud Keychain credentials, scoped per account id
       NotificationCacheStore.swift
       SpotifyActivitySeenStore.swift
       GitHubActivitySeenStore.swift
       StorySeenSync.swift             # iCloud KVS seen-state sync (Spotify/GitHub)
       ApronReadStore.swift            # Apron read cursors (server truth or iCloud KVS)
-      ApronServerSync.swift           # Apron server list across devices (iCloud KVS, with removals)
       ApronMessageCache.swift         # Recent Apron messages per room for instant chat open
       ApronDraftStore.swift           # Unsent Apron composer text per room
       ChatSnapshotCache.swift         # Last messages and metadata per Spotify/Instagram chat for instant open
@@ -144,7 +147,7 @@ Outside `Sources/`: `NotificationService/` holds the extension's Info.plist and 
 - This is an iOS app (iPhone and iPad) built and released with the `stupid-app` CLI.
 - The MVP is notifications-only for X and Farcaster.
 - The app should help users avoid algorithmic feeds while still seeing direct social notifications.
-- Posting, Bluesky, multiple accounts, and backend services are future scope unless `docs/PLAN.md` changes.
+- Posting and backend services are future scope unless `docs/PLAN.md` changes. Any number of accounts per network is supported.
 
 ## Apple App Conventions
 

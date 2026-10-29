@@ -220,7 +220,7 @@ final class NotificationRouter: ObservableObject {
     /// notification says so, since there is no screen to show it on.
     func sendReply(_ text: String, to destination: ChatSummary.Destination, replyTo: String?, title: String) async {
         guard case let .apron(serverURL, roomId) = destination else { return }
-        let service = apronService ?? ApronService(metadataStore: AccountMetadataStore(), keychainStore: KeychainCredentialStore())
+        let service = apronService ?? ApronService(accountStore: AccountStore(), keychainStore: KeychainCredentialStore())
         do {
             try await service.send(text: text, serverURL: serverURL, roomId: roomId, replyTo: replyTo)
             clearNotifications(thread: ApronPushNotification.threadIdentifier(serverURL: serverURL, roomId: roomId))

@@ -1,505 +1,307 @@
 import Foundation
-import Security
 
+/// Settings: the account list, adding and reconnecting accounts, each account's preferences, and removing
+/// accounts. Adding an account the store already has (same network identity) updates it instead.
 @MainActor
 public final class SettingsViewModel: ObservableObject {
+    @Published public private(set) var accounts: [Account] = []
+    @Published public private(set) var statuses: [String: AccountStatus] = [:]
+    @Published public var message: String?
+    @Published public private(set) var isWorking = false
+
     @Published public var xCookieHeader = ""
     @Published public var farcasterUsername = ""
     @Published public var instagramCookieHeader = ""
     @Published public var spotifyBearerToken = ""
     @Published public var spotifyClientToken = ""
     @Published public var spotifySpDC = ""
-    @Published public var debugServerURL = ""
     @Published public var blueskyLoginHint = ""
     @Published public var githubCookieHeader = ""
-    @Published public private(set) var xStatus: AccountStatus = .notConfigured
-    @Published public var xEnabledCategories: Set<XNotificationCategory> = []
-    @Published public private(set) var farcasterStatus: AccountStatus = .notConfigured
-    @Published public var farcasterEnabledCategories: Set<FarcasterNotificationCategory> = []
-    @Published public private(set) var instagramStatus: AccountStatus = .notConfigured
-    @Published public var instagramEnabledCategories: Set<InstagramNotificationCategory> = []
-    @Published public var instagramStoriesEnabled = true
-    @Published public var instagramDirectMediaSharesEnabled = true
-    @Published public private(set) var spotifyStatus: AccountStatus = .notConfigured
-    @Published public private(set) var blueskyStatus: AccountStatus = .notConfigured
-    @Published public private(set) var githubStatus: AccountStatus = .notConfigured
+    @Published public var debugServerURL = ""
     @Published public private(set) var debugStatus: AccountStatus = .notConfigured
-    @Published public private(set) var xCredentialStorage: CredentialSaveResult?
-    @Published public private(set) var instagramCredentialStorage: CredentialSaveResult?
-    @Published public private(set) var spotifyCredentialStorage: CredentialSaveResult?
-    @Published public private(set) var blueskyCredentialStorage: CredentialSaveResult?
-    @Published public private(set) var githubCredentialStorage: CredentialSaveResult?
-    @Published public var message: String?
 
-    private let keychainStore: KeychainCredentialStore
-    private let metadataStore: AccountMetadataStore
+    public let services: AccountServices
     private let farcasterClient: FarcasterClient
     private let cacheStore: NotificationCacheStore
+    private let apronService: ApronService
+    /// The account id an unfinished Bluesky sign-in saves its tokens under.
+    private var pendingBlueskyAccountId: String?
 
-    public init(
-        keychainStore: KeychainCredentialStore,
-        metadataStore: AccountMetadataStore,
-        farcasterClient: FarcasterClient,
-        cacheStore: NotificationCacheStore,
-    ) {
-        self.keychainStore = keychainStore
-        self.metadataStore = metadataStore
+    private var store: AccountStore {
+        services.store
+    }
+
+    public init(services: AccountServices, farcasterClient: FarcasterClient, cacheStore: NotificationCacheStore, apronService: ApronService) {
+        self.services = services
         self.farcasterClient = farcasterClient
         self.cacheStore = cacheStore
+        self.apronService = apronService
         loadStatuses()
-    }
-
-    public var xHandle: String? {
-        metadataStore.xAccount?.handle
-    }
-
-    public var farcasterHandle: String? {
-        metadataStore.farcasterAccount?.username
-    }
-
-    public var xConnectionLabel: String {
-        if let handle = xHandle {
-            return "@\(handle)"
+        for name in [AccountStore.didChangeNotification, AccountStore.statusDidChangeNotification] {
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.loadStatuses()
+                }
+            }
         }
-        return xStatus.label
     }
 
-    public var farcasterConnectionLabel: String {
-        if let username = farcasterHandle {
-            return "@\(username)"
+    // MARK: List
+
+    public func loadStatuses() {
+        accounts = store.accounts
+        statuses = Dictionary(uniqueKeysWithValues: accounts.map { ($0.id, Self.accountStatus(store.status(id: $0.id) ?? .valid)) })
+        if let debug = store.debugAccount {
+            debugServerURL = debug.serverURL.absoluteString
+            debugStatus = Self.accountStatus(debug.status)
+        } else {
+            debugStatus = .notConfigured
         }
-        return farcasterStatus.label
     }
 
-    public var instagramHandle: String? {
-        metadataStore.instagramAccount?.username
+    public func account(id: String) -> Account? {
+        accounts.first { $0.id == id }
     }
 
-    public var instagramConnectionLabel: String {
-        if instagramStatus == .invalidCredentials {
-            return instagramStatus.label
+    public func status(for accountId: String) -> AccountStatus {
+        statuses[accountId] ?? .notConfigured
+    }
+
+    /// "@handle" or the account's name, or its status when it needs attention or has no name yet.
+    public func connectionLabel(for account: Account) -> String {
+        let status = status(for: account.id)
+        if status == .invalidCredentials {
+            return status.label
         }
-        if let username = instagramHandle {
-            return "@\(username)"
-        }
-        return instagramStatus.label
-    }
-
-    public func existingInstagramCredentials() -> InstagramCredentials? {
-        try? keychainStore.loadInstagramCredentials()
-    }
-
-    public var debugConnectionLabel: String {
-        metadataStore.debugAccount?.serverURL.absoluteString ?? debugStatus.label
-    }
-
-    public var spotifyHandle: String? {
-        metadataStore.spotifyAccount?.username
-    }
-
-    public var spotifyConnectionLabel: String {
-        if let username = spotifyHandle {
-            return "@\(username)"
-        }
-        return spotifyStatus.label
-    }
-
-    public var blueskyHandle: String? {
-        metadataStore.blueskyAccount?.handle
-    }
-
-    public var blueskyConnectionLabel: String {
-        if let handle = blueskyHandle {
-            return "@\(handle)"
-        }
-        return blueskyStatus.label
-    }
-
-    public var githubHandle: String? {
-        metadataStore.githubAccount?.username
-    }
-
-    public var githubConnectionLabel: String {
-        if githubStatus == .invalidCredentials { return githubStatus.label }
-        if let githubHandle { return "@\(githubHandle)" }
-        return githubStatus.label
+        return account.label ?? status.label
     }
 
     public var hasInvalidCredentials: Bool {
-        xStatus == .invalidCredentials
-            || instagramStatus == .invalidCredentials
-            || spotifyStatus == .invalidCredentials
-            || blueskyStatus == .invalidCredentials
-            || githubStatus == .invalidCredentials
+        statuses.values.contains(.invalidCredentials)
     }
 
-    public func beginBlueskyOAuth() async throws -> BlueskyOAuthSession {
-        let hint = blueskyLoginHint.trimmingCharacters(in: .whitespacesAndNewlines)
-        return try await BlueskyClient(credentialStore: keychainStore).startOAuth(loginHint: hint.isEmpty ? nil : hint)
+    public var debugConnectionLabel: String {
+        store.debugAccount?.serverURL.absoluteString ?? debugStatus.label
     }
 
-    public func finishBlueskyOAuth(callbackURL: URL, session: BlueskyOAuthSession) async {
-        do {
-            let credentials = try await BlueskyClient(credentialStore: keychainStore).finishOAuth(callbackURL: callbackURL, session: session)
-            metadataStore.blueskyAccount = BlueskyAccountMetadata(did: credentials.did, handle: credentials.handle, status: .valid)
-            refreshCredentialStorageStatuses()
-            blueskyStatus = .valid
-            blueskyLoginHint = ""
-            message = "Bluesky account connected."
-        } catch {
-            blueskyStatus = .serviceError("OAuth failed")
-            message = "Bluesky login failed: \(error.localizedDescription)"
+    private static func accountStatus(_ snapshot: AccountStatusSnapshot) -> AccountStatus {
+        switch snapshot {
+        case .valid: .valid
+        case .invalidCredentials: .invalidCredentials
+        case .iCloudUnavailable: .iCloudUnavailable
+        case .notConfigured: .notConfigured
+        case .networkUnavailable: .networkUnavailable
+        case .serviceError: .serviceError("Validation failed")
         }
     }
 
-    public func saveXCookies(_ credentials: XCredentials) async {
-        do {
-            xCredentialStorage = try keychainStore.saveXCredentials(credentials)
-            xStatus = .valid
-            message = "X credentials saved."
-        } catch {
-            xStatus = .serviceError("Could not save credentials")
-            message = "Could not save X credentials."
-            return
-        }
+    // MARK: Adding
 
-        do {
-            let user = try await XClient(credentialStore: keychainStore).verifiedUser()
-            let categories = metadataStore.xAccount?.enabledCategories ?? Set(XNotificationCategory.allCases)
-            metadataStore.xAccount = XAccountMetadata(accountId: "x", handle: user.screenName, status: .valid, enabledCategories: categories)
-            xEnabledCategories = categories
-            xStatus = .valid
-            message = "X credentials saved."
-        } catch {
-            let categories = metadataStore.xAccount?.enabledCategories ?? Set(XNotificationCategory.allCases)
-            metadataStore.xAccount = XAccountMetadata(accountId: "x", handle: nil, status: .valid, enabledCategories: categories)
-            xEnabledCategories = categories
-            message = "X credentials saved, but could not resolve username."
-        }
+    /// Who a new sign-in is, from the network.
+    private struct Identity {
+        var remoteId: String
+        var handle: String?
+        var displayName: String?
+        var avatarURL: URL?
     }
 
-    public func saveGitHubCookies(_ credentials: GitHubCredentials) async {
-        var stored = credentials
+    /// Saves credentials under a new account id (or the reconnected account's), asks the network who they
+    /// belong to, and saves the account. When that identity is already listed, the credentials move to that
+    /// account. Fails loudly, keeping nothing, when the network can't say who signed in.
+    @discardableResult
+    private func connect(
+        _ network: SocialNetwork,
+        reconnecting accountId: String?,
+        save: (KeychainCredentialStore) throws -> Void,
+        identify: (KeychainCredentialStore) async throws -> Identity,
+    ) async -> Account? {
+        isWorking = true
+        defer { isWorking = false }
+        let id = accountId ?? Account.newId(network: network)
+        let credentials = services.keychain.scoped(to: id)
         do {
-            // The login WebView only sets a username when GitHub's `dotcom_user`
-            // cookie was captured during the flow, which is unreliable. Resolve the
-            // signed-in account from the authenticated homepage so the persisted
-            // session (and "starred your repository" routing) names the real user.
-            if stored.username == nil || stored.username!.isEmpty {
-                if let resolved = try await GitHubClient().authenticatedUser(credentials: stored) {
-                    stored = GitHubCredentials(
-                        userSession: stored.userSession,
-                        sameSiteUserSession: stored.sameSiteUserSession,
-                        username: resolved,
-                        additionalCookies: stored.additionalCookies,
-                    )
-                }
+            try save(credentials)
+        } catch {
+            message = "Could not save \(network.displayName) credentials."
+            return nil
+        }
+        let identity: Identity
+        do {
+            identity = try await identify(credentials)
+        } catch SourceError.notConfigured {
+            if accountId == nil {
+                credentials.deleteAccountCredentials()
+            } else {
+                store.setStatus(.invalidCredentials, id: id)
             }
-            githubCredentialStorage = try keychainStore.saveGitHubCredentials(stored)
-            let result = try await GitHubClient().forYouFeed(credentials: stored)
-            guard case let .feed(response) = result else { throw SourceError.invalidResponse }
-            _ = try GitHubActivityParser.parse(response.html)
-            let accountId = stored.username ?? "github"
-            metadataStore.githubAccount = GitHubAccountMetadata(accountId: accountId, username: stored.username, status: .valid)
-            githubStatus = .valid
-            message = "GitHub account connected."
-        } catch SourceError.notConfigured {
-            try? keychainStore.deleteGitHubCredentials()
-            githubCredentialStorage = nil
-            githubStatus = .invalidCredentials
-            message = "GitHub login expired. Log in again."
+            message = "\(network.displayName) login expired. Log in again."
+            return nil
         } catch {
-            try? keychainStore.deleteGitHubCredentials()
-            githubCredentialStorage = nil
-            githubStatus = .serviceError("Validation failed")
-            message = "Could not connect GitHub: \(error.localizedDescription)"
+            if accountId == nil {
+                credentials.deleteAccountCredentials()
+            }
+            message = "Could not connect \(network.displayName): \(error.localizedDescription)"
+            return nil
+        }
+
+        var account: Account
+        if let existing = store.account(network: network, remoteId: identity.remoteId), existing.id != id {
+            // The same account again: keep the listed one and give it these credentials.
+            do {
+                try save(services.keychain.scoped(to: existing.id))
+            } catch {
+                message = "Could not save \(network.displayName) credentials."
+                return nil
+            }
+            credentials.deleteAccountCredentials()
+            account = existing
+        } else {
+            account = store.account(id: id) ?? Account(id: id, network: network)
+        }
+        account.remoteId = identity.remoteId
+        account.handle = identity.handle ?? account.handle
+        account.displayName = identity.displayName ?? account.displayName
+        account.avatarURL = identity.avatarURL ?? account.avatarURL
+        store.setStatus(.valid, id: account.id)
+        store.save(account)
+        loadStatuses()
+        message = accountId == nil ? "\(network.displayName) account added." : "\(network.displayName) account reconnected."
+        if account.avatarURL == nil {
+            await fillAvatar(account)
+        }
+        return account
+    }
+
+    /// The account's own profile picture, for its row in Settings.
+    private func avatarURL(for account: Account) async -> URL? {
+        let credentials = services.keychain.scoped(to: account.id)
+        switch account.network {
+        case .x:
+            guard let handle = account.handle,
+                  let image = try? await XClient(credentialStore: credentials).userProfile(screenName: handle).profileImageUrlHttps
+            else { return nil }
+            // `_normal` is 48 px; without the suffix X serves the original.
+            return URL(string: image.replacingOccurrences(of: "_normal", with: ""))
+        case .instagram:
+            return try? await InstagramClient(credentialStore: credentials).currentUserProfile().profilePicURL
+        case .bluesky:
+            return try? await BlueskyClient(credentialStore: credentials).validateAccount().avatar
+        case .farcaster:
+            guard let handle = account.handle else { return nil }
+            return try? await farcasterClient.user(byUsername: handle).pfpUrl
+        case .spotify:
+            guard let handle = account.handle,
+                  let image = try? await SpotifyClient(credentialStore: credentials).userProfile(username: handle).images?.first?.url
+            else { return nil }
+            return URL(string: image)
+        case .github:
+            return account.handle.flatMap { URL(string: "https://github.com/\($0).png?size=96") }
+        case .apron:
+            return store.apronInfo(id: account.id)?.user?.avatarURL
+        case .telegram:
+            // A `tgfile:` URL, which loads through a signed-in Telegram client.
+            return try? await services.component(id: account.id)?.telegramClient?.ownAvatarURL()
+        case .debug:
+            return nil
         }
     }
 
-    public func saveGitHubCookieHeader() async {
-        guard let credentials = CookieHeaderParser.extractGitHubCredentials(from: githubCookieHeader) else {
-            githubStatus = .invalidCredentials
-            message = "GitHub cookie header must include user_session and __Host-user_session_same_site."
-            return
-        }
-        githubCookieHeader = ""
-        await saveGitHubCookies(credentials)
+    private func fillAvatar(_ account: Account) async {
+        guard let url = await avatarURL(for: account) else { return }
+        store.update(id: account.id) { $0.avatarURL = url }
+        loadStatuses()
     }
 
-    public func saveXCookieHeader() async {
+    @discardableResult
+    public func addX(_ credentials: XCredentials, reconnecting accountId: String? = nil) async -> Account? {
+        await connect(.x, reconnecting: accountId) { store in
+            _ = try store.saveXCredentials(credentials)
+        } identify: { store in
+            let user = try await XClient(credentialStore: store).verifiedUser()
+            return Identity(remoteId: user.idStr, handle: user.screenName, displayName: user.name)
+        }
+    }
+
+    @discardableResult
+    public func addXCookieHeader(reconnecting accountId: String? = nil) async -> Account? {
         guard let credentials = CookieHeaderParser.extractXCredentials(from: xCookieHeader) else {
-            xStatus = .invalidCredentials
             message = "X cookie header must include auth_token and ct0."
-            return
+            return nil
         }
-
-        do {
-            xCredentialStorage = try keychainStore.saveXCredentials(credentials)
-            xCookieHeader = ""
-            xStatus = .valid
-            message = "X credentials saved."
-        } catch {
-            xStatus = .serviceError("Could not save credentials")
-            message = "Could not save X credentials."
-            return
-        }
-
-        do {
-            let user = try await XClient(credentialStore: keychainStore).verifiedUser()
-            let categories = metadataStore.xAccount?.enabledCategories ?? Set(XNotificationCategory.allCases)
-            metadataStore.xAccount = XAccountMetadata(accountId: "x", handle: user.screenName, status: .valid, enabledCategories: categories)
-            xEnabledCategories = categories
-            xStatus = .valid
-            message = "X credentials saved."
-        } catch {
-            let categories = metadataStore.xAccount?.enabledCategories ?? Set(XNotificationCategory.allCases)
-            metadataStore.xAccount = XAccountMetadata(accountId: "x", handle: nil, status: .valid, enabledCategories: categories)
-            xEnabledCategories = categories
-            message = "X credentials saved, but could not resolve username."
-        }
+        xCookieHeader = ""
+        return await addX(credentials, reconnecting: accountId)
     }
 
-    public func saveFarcasterUsername() async {
-        let username = farcasterUsername.trimmingCharacters(in: .whitespacesAndNewlines)
+    @discardableResult
+    public func addFarcaster() async -> Account? {
+        let username = farcasterUsername.trimmingCharacters(in: .whitespacesAndNewlines).trimmingPrefix("@")
         guard !username.isEmpty else {
-            farcasterStatus = .notConfigured
             message = "Enter a Farcaster username."
-            return
+            return nil
         }
+        let account = await connect(.farcaster, reconnecting: nil) { _ in } identify: { [farcasterClient] _ in
+            let user = try await farcasterClient.user(byUsername: String(username))
+            return Identity(remoteId: String(user.fid), handle: user.username ?? String(username))
+        }
+        if account != nil {
+            farcasterUsername = ""
+        }
+        return account
+    }
 
-        do {
-            let user = try await farcasterClient.user(byUsername: username)
-            metadataStore.farcasterAccount = FarcasterAccountMetadata(
-                username: user.username ?? username,
-                fid: user.fid,
-                status: .valid,
-                enabledCategories: Set(FarcasterNotificationCategory.allCases),
-            )
-            farcasterEnabledCategories = Set(FarcasterNotificationCategory.allCases)
-            farcasterStatus = .valid
-            message = "Farcaster account saved."
-        } catch {
-            farcasterStatus = .serviceError("Could not resolve username")
-            message = "Could not resolve Farcaster username."
+    @discardableResult
+    public func addInstagram(_ credentials: InstagramCredentials, reconnecting accountId: String? = nil) async -> Account? {
+        await connect(.instagram, reconnecting: accountId) { store in
+            _ = try store.saveInstagramCredentials(credentials)
+        } identify: { store in
+            let profile = try await InstagramClient(credentialStore: store).currentUserProfile()
+            return Identity(remoteId: String(profile.pk), handle: profile.username, displayName: profile.fullName, avatarURL: profile.profilePicURL)
         }
     }
 
-    public func saveInstagramCookies(_ credentials: InstagramCredentials) async {
-        do {
-            instagramCredentialStorage = try keychainStore.saveInstagramCredentials(credentials)
-            instagramStatus = .valid
-            message = "Instagram credentials saved."
-        } catch {
-            instagramStatus = .serviceError("Could not save credentials")
-            message = "Could not save Instagram credentials."
-            return
-        }
-
-        do {
-            let user = try await InstagramClient(credentialStore: keychainStore).currentUserProfile()
-            let categories = Set(InstagramNotificationCategory.allCases)
-            metadataStore.instagramAccount = instagramMetadata(from: user, categories: categories)
-            instagramEnabledCategories = categories
-            instagramStatus = .valid
-            message = "Instagram credentials saved."
-        } catch SourceError.notConfigured {
-            deleteInstagramCredentialsForFailedReconnect()
-            message = "Instagram login expired. Log in again to reconnect."
-        } catch {
-            let existing = metadataStore.instagramAccount
-            let categories = existing?.enabledCategories ?? Set(InstagramNotificationCategory.allCases)
-            metadataStore.instagramAccount = InstagramAccountMetadata(
-                accountId: credentials.dsUserId,
-                username: existing?.accountId == credentials.dsUserId ? existing?.username : nil,
-                avatarURL: existing?.accountId == credentials.dsUserId ? existing?.avatarURL : nil,
-                status: .serviceError,
-                enabledCategories: categories,
-                storiesEnabled: existing?.storiesEnabled ?? true,
-                directMediaSharesEnabled: existing?.directMediaSharesEnabled ?? true,
-            )
-            instagramEnabledCategories = categories
-            instagramStatus = .serviceError(error.localizedDescription)
-            message = "Instagram credentials saved, but account details could not load. Try again later."
-        }
-    }
-
-    public func saveInstagramCookieHeader() async {
+    @discardableResult
+    public func addInstagramCookieHeader(reconnecting accountId: String? = nil) async -> Account? {
         guard let credentials = CookieHeaderParser.extractInstagramCredentials(from: instagramCookieHeader) else {
-            instagramStatus = .invalidCredentials
             message = "Instagram cookie header must include sessionid, csrftoken, and ds_user_id."
-            return
+            return nil
         }
-
-        do {
-            instagramCredentialStorage = try keychainStore.saveInstagramCredentials(credentials)
-            instagramCookieHeader = ""
-            instagramStatus = .valid
-            message = "Instagram credentials saved."
-        } catch {
-            instagramStatus = .serviceError("Could not save credentials")
-            message = "Could not save Instagram credentials."
-            return
-        }
-
-        do {
-            let user = try await InstagramClient(credentialStore: keychainStore).currentUserProfile()
-            let categories = Set(InstagramNotificationCategory.allCases)
-            metadataStore.instagramAccount = instagramMetadata(from: user, categories: categories)
-            instagramEnabledCategories = categories
-            instagramStatus = .valid
-            message = "Instagram credentials saved."
-        } catch SourceError.notConfigured {
-            deleteInstagramCredentialsForFailedReconnect()
-            message = "Instagram login expired. Log in again to reconnect."
-        } catch {
-            let existing = metadataStore.instagramAccount
-            let categories = existing?.enabledCategories ?? Set(InstagramNotificationCategory.allCases)
-            metadataStore.instagramAccount = InstagramAccountMetadata(
-                accountId: credentials.dsUserId,
-                username: existing?.accountId == credentials.dsUserId ? existing?.username : nil,
-                avatarURL: existing?.accountId == credentials.dsUserId ? existing?.avatarURL : nil,
-                status: .serviceError,
-                enabledCategories: categories,
-                storiesEnabled: existing?.storiesEnabled ?? true,
-                directMediaSharesEnabled: existing?.directMediaSharesEnabled ?? true,
-            )
-            instagramEnabledCategories = categories
-            instagramStatus = .serviceError(error.localizedDescription)
-            message = "Instagram credentials saved, but account details could not load. Try again later."
-        }
+        instagramCookieHeader = ""
+        return await addInstagram(credentials, reconnecting: accountId)
     }
 
-    public func saveDebugServerURL() {
-        let value = debugServerURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let url = URL(string: value), url.scheme == "http" || url.scheme == "https" else {
-            debugStatus = .serviceError("Invalid URL")
-            message = "Enter an http or https debug server URL."
-            return
+    @discardableResult
+    public func addSpotify(_ credentials: SpotifyCredentials, reconnecting accountId: String? = nil) async -> Account? {
+        let account = await connect(.spotify, reconnecting: accountId) { store in
+            _ = try store.saveSpotifyCredentials(credentials)
+        } identify: { store in
+            guard let username = try await SpotifyClient(credentialStore: store).validateAccount() else {
+                throw SourceError.serviceError("Spotify didn't say which account signed in.")
+            }
+            return Identity(remoteId: username, handle: username)
         }
-
-        metadataStore.debugAccount = DebugAccountMetadata(serverURL: url, status: .valid)
-        debugStatus = .valid
-        message = "Debug notifications server saved."
-    }
-
-    public func disconnectX() {
-        try? keychainStore.deleteXCredentials()
-        try? keychainStore.deleteXChatKeys()
-        xCredentialStorage = nil
-        metadataStore.xAccount = nil
-        xEnabledCategories = []
-        try? cacheStore.deleteNetwork(.x)
-        xStatus = .notConfigured
-        message = "X account disconnected."
-    }
-
-    public func toggleXCategory(_ category: XNotificationCategory, enabled: Bool) {
-        if enabled {
-            xEnabledCategories.insert(category)
-        } else {
-            xEnabledCategories.remove(category)
-        }
-        var account = metadataStore.xAccount
-        account?.enabledCategories = xEnabledCategories
         if let account {
-            metadataStore.xAccount = account
+            await fetchSpotifyInitToken(credentials, store: services.keychain.scoped(to: account.id))
         }
+        return account
     }
 
-    public func disconnectFarcaster() {
-        metadataStore.farcasterAccount = nil
-        farcasterEnabledCategories = []
-        try? cacheStore.deleteNetwork(.farcaster)
-        farcasterStatus = .notConfigured
-        message = "Farcaster account disconnected."
+    @discardableResult
+    public func addSpotifyManualCredentials() async -> Account? {
+        let bearer = spotifyBearerToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        let client = spotifyClientToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        let spDC = spotifySpDC.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !bearer.isEmpty, !client.isEmpty else {
+            message = "Bearer token and client token are required."
+            return nil
+        }
+        spotifyBearerToken = ""
+        spotifyClientToken = ""
+        spotifySpDC = ""
+        return await addSpotify(SpotifyCredentials(bearerToken: bearer, clientToken: client, spDC: spDC, username: nil))
     }
 
-    public func toggleFarcasterCategory(_ category: FarcasterNotificationCategory, enabled: Bool) {
-        if enabled {
-            farcasterEnabledCategories.insert(category)
-        } else {
-            farcasterEnabledCategories.remove(category)
-        }
-        var account = metadataStore.farcasterAccount
-        account?.enabledCategories = farcasterEnabledCategories
-        if let account {
-            metadataStore.farcasterAccount = account
-        }
-    }
-
-    public func disconnectInstagram() {
-        try? keychainStore.deleteInstagramCredentials()
-        instagramCredentialStorage = nil
-        metadataStore.instagramAccount = nil
-        instagramEnabledCategories = []
-        instagramStoriesEnabled = true
-        instagramDirectMediaSharesEnabled = true
-        try? cacheStore.deleteNetwork(.instagram)
-        instagramStatus = .notConfigured
-        message = "Instagram account disconnected."
-    }
-
-    public func toggleInstagramCategory(_ category: InstagramNotificationCategory, enabled: Bool) {
-        if enabled {
-            instagramEnabledCategories.insert(category)
-        } else {
-            instagramEnabledCategories.remove(category)
-        }
-        var account = metadataStore.instagramAccount
-        account?.enabledCategories = instagramEnabledCategories
-        if let account {
-            metadataStore.instagramAccount = account
-        }
-    }
-
-    public func toggleInstagramStories(enabled: Bool) {
-        instagramStoriesEnabled = enabled
-        var account = metadataStore.instagramAccount
-        account?.storiesEnabled = enabled
-        if let account {
-            metadataStore.instagramAccount = account
-        }
-    }
-
-    public func toggleInstagramDirectMediaShares(enabled: Bool) {
-        instagramDirectMediaSharesEnabled = enabled
-        var account = metadataStore.instagramAccount
-        account?.directMediaSharesEnabled = enabled
-        if let account {
-            metadataStore.instagramAccount = account
-        }
-    }
-
-    public func saveSpotifyCredentials(_ credentials: SpotifyCredentials) async {
-        do {
-            spotifyCredentialStorage = try keychainStore.saveSpotifyCredentials(credentials)
-        } catch {
-            spotifyStatus = .serviceError("Could not save credentials")
-            message = "Could not save Spotify credentials."
-            return
-        }
-
-        do {
-            let username = try await SpotifyClient(credentialStore: keychainStore).validateAccount()
-            metadataStore.spotifyAccount = SpotifyAccountMetadata(
-                accountId: "spotify",
-                username: username,
-                status: .valid,
-            )
-            spotifyStatus = .valid
-            message = "Spotify credentials saved."
-        } catch {
-            try? keychainStore.deleteSpotifyCredentials()
-            metadataStore.spotifyAccount = nil
-            spotifyStatus = .serviceError("Could not validate account")
-            message = "Spotify login failed: couldn't validate the account (Spotify rejected the buddy-list request). Please try logging in again."
-            return
-        }
-
-        await fetchInitToken(credentials)
-    }
-
-    private func fetchInitToken(_ creds: SpotifyCredentials) async {
+    /// Best effort: the web player's init token, kept with the credentials.
+    private func fetchSpotifyInitToken(_ creds: SpotifyCredentials, store: KeychainCredentialStore) async {
         guard !creds.spDC.isEmpty else { return }
         do {
             var request = URLRequest(url: URL(string: "https://open.spotify.com/api/server-time")!)
@@ -524,7 +326,7 @@ public final class SettingsViewModel: ObservableObject {
             let (data, _) = try await URLSession.shared.data(for: tokenRequest)
             let decoded = try JSONDecoder().decode(SpotifyTokenResponse.self, from: data)
 
-            let existing = try keychainStore.loadSpotifyCredentials() ?? creds
+            let existing = try store.loadSpotifyCredentials() ?? creds
             let enriched = SpotifyCredentials(
                 bearerToken: existing.bearerToken,
                 clientToken: existing.clientToken,
@@ -537,7 +339,7 @@ public final class SettingsViewModel: ObservableObject {
                 username: existing.username,
                 clientId: decoded.clientId ?? existing.clientId,
             )
-            spotifyCredentialStorage = try keychainStore.saveSpotifyCredentials(enriched)
+            _ = try store.saveSpotifyCredentials(enriched)
         } catch {
             // init token is best-effort; transport token already saved and validated
         }
@@ -554,376 +356,243 @@ public final class SettingsViewModel: ObservableObject {
         return values.joined(separator: "; ")
     }
 
-    public func saveSpotifyManualCredentials() async {
-        let bearer = spotifyBearerToken.trimmingCharacters(in: .whitespacesAndNewlines)
-        let client = spotifyClientToken.trimmingCharacters(in: .whitespacesAndNewlines)
-        let spDC = spotifySpDC.trimmingCharacters(in: .whitespacesAndNewlines)
+    public func beginBlueskyOAuth(reconnecting accountId: String? = nil) async throws -> BlueskyOAuthSession {
+        let hint = blueskyLoginHint.trimmingCharacters(in: .whitespacesAndNewlines)
+        let id = accountId ?? Account.newId(network: .bluesky)
+        pendingBlueskyAccountId = id
+        return try await BlueskyClient(credentialStore: services.keychain.scoped(to: id)).startOAuth(loginHint: hint.isEmpty ? nil : hint)
+    }
 
-        guard !bearer.isEmpty, !client.isEmpty else {
-            spotifyStatus = .invalidCredentials
-            message = "Bearer token and client token are required."
+    @discardableResult
+    public func finishBlueskyOAuth(callbackURL: URL, session: BlueskyOAuthSession) async -> Account? {
+        guard let id = pendingBlueskyAccountId else { return nil }
+        pendingBlueskyAccountId = nil
+        let reconnecting = store.account(id: id) != nil ? id : nil
+        var finished: BlueskyOAuthCredentials?
+        let account = await connect(.bluesky, reconnecting: reconnecting) { store in
+            // The OAuth exchange saves the tokens; moving to a listed account saves them there.
+            if let finished {
+                _ = try store.saveBlueskyCredentials(finished)
+            }
+        } identify: { store in
+            let credentials = try await BlueskyClient(credentialStore: store).finishOAuth(callbackURL: callbackURL, session: session)
+            finished = credentials
+            return Identity(remoteId: credentials.did, handle: credentials.handle)
+        }
+        if account != nil {
+            blueskyLoginHint = ""
+        }
+        return account
+    }
+
+    @discardableResult
+    public func addGitHub(_ credentials: GitHubCredentials, reconnecting accountId: String? = nil) async -> Account? {
+        var stored = credentials
+        return await connect(.github, reconnecting: accountId) { store in
+            _ = try store.saveGitHubCredentials(stored)
+        } identify: { store in
+            // The login WebView only sets a username when GitHub's `dotcom_user` cookie was captured during the
+            // flow, which is unreliable. Resolve the signed-in account from the authenticated homepage.
+            if stored.username?.isEmpty != false, let resolved = try await GitHubClient().authenticatedUser(credentials: stored) {
+                stored = GitHubCredentials(
+                    userSession: stored.userSession,
+                    sameSiteUserSession: stored.sameSiteUserSession,
+                    username: resolved,
+                    additionalCookies: stored.additionalCookies,
+                )
+                _ = try store.saveGitHubCredentials(stored)
+            }
+            guard let username = stored.username, !username.isEmpty else {
+                throw SourceError.serviceError("GitHub didn't say which account signed in.")
+            }
+            let result = try await GitHubClient().forYouFeed(credentials: stored)
+            guard case let .feed(response) = result else { throw SourceError.notConfigured }
+            _ = try GitHubActivityParser.parse(response.html)
+            return Identity(remoteId: username, handle: username)
+        }
+    }
+
+    @discardableResult
+    public func addGitHubCookieHeader(reconnecting accountId: String? = nil) async -> Account? {
+        guard let credentials = CookieHeaderParser.extractGitHubCredentials(from: githubCookieHeader) else {
+            message = "GitHub cookie header must include user_session and __Host-user_session_same_site."
+            return nil
+        }
+        githubCookieHeader = ""
+        return await addGitHub(credentials, reconnecting: accountId)
+    }
+
+    /// A Telegram sign-in for a new account. Telegram sign-ins stay on this device, under the account's id.
+    public func makeTelegramSignIn() -> TelegramConnectionViewModel {
+        let id = Account.newId(network: .telegram)
+        let client = TelegramClient(keychain: services.keychain.scoped(to: id))
+        let viewModel = TelegramConnectionViewModel(client: client)
+        viewModel.onSignIn = { [weak self] account in
+            await self?.finishTelegramSignIn(account, accountId: id, client: client)
+        }
+        viewModel.onChange = { [weak services] in
+            services?.onTelegramChange?()
+        }
+        return viewModel
+    }
+
+    /// Lists a Telegram account once it signed in on this device. An account already listed (from another
+    /// device, or signed in before) gets this sign-in, which moves to its id.
+    public func finishTelegramSignIn(_ telegram: TelegramAccount, accountId: String, client: TelegramClient) async {
+        let remoteId = String(telegram.userId)
+        var account: Account
+        if let existing = store.account(network: .telegram, remoteId: remoteId), existing.id != accountId {
+            await client.moveSession(to: services.keychain.scoped(to: existing.id))
+            await services.component(id: existing.id)?.telegramClient?.reloadSession()
+            account = existing
+        } else {
+            account = store.account(id: accountId) ?? Account(id: accountId, network: .telegram)
+        }
+        account.remoteId = remoteId
+        account.handle = telegram.username
+        account.displayName = telegram.name
+        store.setStatus(.valid, id: account.id)
+        store.save(account)
+        // Built now, so registering for pushes right after finds the new account's client.
+        _ = services.components(for: account)
+        loadStatuses()
+        if account.avatarURL == nil {
+            await fillAvatar(account)
+        }
+    }
+
+    /// Fills in identities missing from accounts that predate multi-account support (the X user id, an
+    /// Instagram avatar, a Spotify username), so the same account added again is recognized.
+    public func repairAccountIdentities() async {
+        for account in store.accounts {
+            let credentials = services.keychain.scoped(to: account.id)
+            switch account.network {
+            case .x where account.remoteId == nil:
+                guard let user = try? await XClient(credentialStore: credentials).verifiedUser() else { continue }
+                store.update(id: account.id) {
+                    $0.remoteId = user.idStr
+                    $0.handle = user.screenName
+                    $0.displayName = user.name
+                }
+            case .instagram where account.handle?.isEmpty != false || account.avatarURL == nil:
+                do {
+                    let profile = try await InstagramClient(credentialStore: credentials).currentUserProfile()
+                    store.update(id: account.id) {
+                        $0.remoteId = String(profile.pk)
+                        $0.handle = profile.username
+                        $0.avatarURL = profile.profilePicURL
+                    }
+                } catch SourceError.notConfigured {
+                    store.setStatus(.invalidCredentials, id: account.id)
+                } catch {
+                    continue
+                }
+            case .spotify where account.handle?.isEmpty != false:
+                guard let username = try? await SpotifyClient(credentialStore: credentials).validateAccount() else { continue }
+                store.update(id: account.id) {
+                    $0.remoteId = username
+                    $0.handle = username
+                }
+            default:
+                break
+            }
+        }
+        // Accounts added before rows showed avatars, or whose avatar came from another device's sign-in.
+        for account in store.accounts where account.avatarURL == nil {
+            await fillAvatar(account)
+        }
+        loadStatuses()
+    }
+
+    // MARK: Preferences
+
+    private func updatePreferences(_ accountId: String, _ change: (inout AccountPreferences) -> Void) {
+        store.update(id: accountId) { change(&$0.preferences) }
+        loadStatuses()
+    }
+
+    public func xCategories(_ account: Account) -> Set<XNotificationCategory> {
+        account.preferences.xCategories ?? Set(XNotificationCategory.allCases)
+    }
+
+    public func setXCategory(_ category: XNotificationCategory, enabled: Bool, accountId: String) {
+        guard let account = account(id: accountId) else { return }
+        var categories = xCategories(account)
+        if enabled { categories.insert(category) } else { categories.remove(category) }
+        updatePreferences(accountId) { $0.xCategories = categories }
+    }
+
+    public func farcasterCategories(_ account: Account) -> Set<FarcasterNotificationCategory> {
+        account.preferences.farcasterCategories ?? Set(FarcasterNotificationCategory.allCases)
+    }
+
+    public func setFarcasterCategory(_ category: FarcasterNotificationCategory, enabled: Bool, accountId: String) {
+        guard let account = account(id: accountId) else { return }
+        var categories = farcasterCategories(account)
+        if enabled { categories.insert(category) } else { categories.remove(category) }
+        updatePreferences(accountId) { $0.farcasterCategories = categories }
+    }
+
+    public func instagramCategories(_ account: Account) -> Set<InstagramNotificationCategory> {
+        account.preferences.instagramCategories ?? Set(InstagramNotificationCategory.allCases)
+    }
+
+    public func setInstagramCategory(_ category: InstagramNotificationCategory, enabled: Bool, accountId: String) {
+        guard let account = account(id: accountId) else { return }
+        var categories = instagramCategories(account)
+        if enabled { categories.insert(category) } else { categories.remove(category) }
+        updatePreferences(accountId) { $0.instagramCategories = categories }
+    }
+
+    public func setInstagramStories(enabled: Bool, accountId: String) {
+        updatePreferences(accountId) { $0.instagramStoriesEnabled = enabled }
+    }
+
+    public func setInstagramDirectMediaShares(enabled: Bool, accountId: String) {
+        updatePreferences(accountId) { $0.instagramDirectMediaSharesEnabled = enabled }
+    }
+
+    // MARK: Removing
+
+    /// Removes the account from every device, with its credentials and cached items. Telegram signs out
+    /// first so Telegram stops pushing to this device.
+    public func remove(accountId: String) async {
+        guard let account = store.account(id: accountId) else { return }
+        switch account.network {
+        case .apron:
+            if let serverURL = account.serverURL {
+                apronService.removeServer(serverURL: serverURL)
+            }
+        case .telegram:
+            await services.component(id: accountId)?.telegramClient?.signOut()
+        default:
+            break
+        }
+        services.keychain.scoped(to: accountId).deleteAccountCredentials()
+        try? cacheStore.deleteAccount(network: account.network, accountId: accountId)
+        store.remove(id: accountId)
+        loadStatuses()
+        message = "\(account.network.displayName) account removed."
+    }
+
+    // MARK: Debug server
+
+    public func saveDebugServerURL() {
+        let value = debugServerURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: value), url.scheme == "http" || url.scheme == "https" else {
+            debugStatus = .serviceError("Invalid URL")
+            message = "Enter an http or https debug server URL."
             return
         }
-
-        let credentials = SpotifyCredentials(
-            bearerToken: bearer,
-            clientToken: client,
-            spDC: spDC,
-            username: nil,
-        )
-
-        do {
-            spotifyCredentialStorage = try keychainStore.saveSpotifyCredentials(credentials)
-            spotifyBearerToken = ""
-            spotifyClientToken = ""
-            spotifySpDC = ""
-        } catch {
-            spotifyStatus = .serviceError("Could not save credentials")
-            message = "Could not save Spotify credentials."
-            return
-        }
-
-        do {
-            let username = try await SpotifyClient(credentialStore: keychainStore).validateAccount()
-            metadataStore.spotifyAccount = SpotifyAccountMetadata(
-                accountId: "spotify",
-                username: username,
-                status: .valid,
-            )
-            spotifyStatus = .valid
-            message = "Spotify credentials saved."
-        } catch {
-            try? keychainStore.deleteSpotifyCredentials()
-            metadataStore.spotifyAccount = nil
-            spotifyStatus = .serviceError("Could not validate account")
-            message = "Spotify login failed: couldn't validate the account (Spotify rejected the buddy-list request). Please try logging in again."
-        }
-    }
-
-    public func disconnectSpotify() {
-        try? keychainStore.deleteSpotifyCredentials()
-        spotifyCredentialStorage = nil
-        metadataStore.spotifyAccount = nil
-        try? cacheStore.deleteNetwork(.spotify)
-        spotifyStatus = .notConfigured
-        message = "Spotify account disconnected."
-    }
-
-    public func disconnectBluesky() {
-        try? keychainStore.deleteBlueskyCredentials()
-        blueskyCredentialStorage = nil
-        metadataStore.blueskyAccount = nil
-        try? cacheStore.deleteNetwork(.bluesky)
-        blueskyStatus = .notConfigured
-        message = "Bluesky account disconnected."
-    }
-
-    public func disconnectGitHub() {
-        try? keychainStore.deleteGitHubCredentials()
-        githubCredentialStorage = nil
-        metadataStore.githubAccount = nil
-        githubStatus = .notConfigured
-        message = "GitHub account disconnected."
+        store.debugAccount = DebugAccountMetadata(serverURL: url, status: .valid)
+        debugStatus = .valid
+        message = "Debug notifications server saved."
     }
 
     public func disconnectDebug() {
-        metadataStore.debugAccount = nil
-        try? cacheStore.deleteNetwork(.debug)
+        store.debugAccount = nil
+        try? cacheStore.deleteAccount(network: .debug, accountId: DebugNotificationSource.accountId)
         debugStatus = .notConfigured
         message = "Debug server disconnected."
-    }
-
-    public func loadStatuses() {
-        refreshCredentialStorageStatuses()
-        if let x = metadataStore.xAccount {
-            xEnabledCategories = x.enabledCategories
-            xStatus = accountStatus(from: x.status)
-        } else {
-            xEnabledCategories = []
-            xStatus = .notConfigured
-        }
-        if let farcaster = metadataStore.farcasterAccount {
-            farcasterUsername = farcaster.username
-            farcasterEnabledCategories = farcaster.enabledCategories
-            farcasterStatus = accountStatus(from: farcaster.status)
-        } else {
-            farcasterEnabledCategories = []
-            farcasterStatus = .notConfigured
-        }
-
-        if let instagram = metadataStore.instagramAccount {
-            instagramEnabledCategories = instagram.enabledCategories
-            instagramStoriesEnabled = instagram.storiesEnabled
-            instagramDirectMediaSharesEnabled = instagram.directMediaSharesEnabled
-            instagramStatus = accountStatus(from: instagram.status)
-        } else {
-            instagramEnabledCategories = []
-            instagramStoriesEnabled = true
-            instagramDirectMediaSharesEnabled = true
-            instagramStatus = .notConfigured
-        }
-
-        if let spotify = metadataStore.spotifyAccount {
-            spotifyStatus = accountStatus(from: spotify.status)
-        } else {
-            spotifyStatus = .notConfigured
-        }
-
-        if let bluesky = metadataStore.blueskyAccount {
-            blueskyLoginHint = bluesky.handle ?? ""
-            blueskyStatus = accountStatus(from: bluesky.status)
-        } else {
-            blueskyStatus = .notConfigured
-        }
-
-        if let github = metadataStore.githubAccount {
-            githubStatus = accountStatus(from: github.status)
-        } else {
-            githubStatus = .notConfigured
-        }
-
-        if let debug = metadataStore.debugAccount {
-            debugServerURL = debug.serverURL.absoluteString
-            debugStatus = accountStatus(from: debug.status)
-        } else {
-            debugStatus = .notConfigured
-        }
-    }
-
-    private func accountStatus(from snapshot: AccountStatusSnapshot) -> AccountStatus {
-        switch snapshot {
-        case .valid: .valid
-        case .invalidCredentials: .invalidCredentials
-        case .iCloudUnavailable: .iCloudUnavailable
-        case .notConfigured: .notConfigured
-        case .networkUnavailable: .networkUnavailable
-        case .serviceError: .serviceError("Validation failed")
-        }
-    }
-
-    public func refreshSyncedConnections() async {
-        let discoveredX = metadataStore.xAccount == nil && (try? keychainStore.loadXCredentials()) != nil
-        let discoveredInstagram = metadataStore.instagramAccount == nil && (try? keychainStore.loadInstagramCredentials()) != nil
-        let discoveredSpotify = metadataStore.spotifyAccount == nil && (try? keychainStore.loadSpotifyCredentials()) != nil
-        let discoveredBluesky = metadataStore.blueskyAccount == nil && (try? keychainStore.loadBlueskyCredentials()) != nil
-        let discoveredGitHub = metadataStore.githubAccount == nil && (try? keychainStore.loadGitHubCredentials()) != nil
-        let needsInstagramIdentity = (metadataStore.instagramAccount?.username?.isEmpty != false || metadataStore.instagramAccount?.avatarURL == nil)
-            && (try? keychainStore.loadInstagramCredentials()) != nil
-        let needsSpotifyIdentity = metadataStore.spotifyAccount?.username?.isEmpty != false
-            && (try? keychainStore.loadSpotifyCredentials()) != nil
-
-        if discoveredX {
-            metadataStore.xAccount = XAccountMetadata(accountId: "x", handle: nil, status: .valid)
-        }
-        if discoveredInstagram, let credentials = try? keychainStore.loadInstagramCredentials() {
-            metadataStore.instagramAccount = InstagramAccountMetadata(
-                accountId: credentials.dsUserId,
-                username: nil,
-                status: .valid,
-            )
-        }
-        if discoveredSpotify, let credentials = try? keychainStore.loadSpotifyCredentials() {
-            metadataStore.spotifyAccount = SpotifyAccountMetadata(
-                accountId: "spotify",
-                username: credentials.username,
-                status: .valid,
-            )
-        }
-        if discoveredBluesky, let credentials = try? keychainStore.loadBlueskyCredentials() {
-            metadataStore.blueskyAccount = BlueskyAccountMetadata(
-                did: credentials.did,
-                handle: credentials.handle,
-                status: .valid,
-            )
-        }
-        if discoveredGitHub, let credentials = try? keychainStore.loadGitHubCredentials() {
-            metadataStore.githubAccount = GitHubAccountMetadata(
-                accountId: credentials.username ?? "github",
-                username: credentials.username,
-                status: .valid,
-            )
-        }
-
-        loadStatuses()
-
-        if discoveredX {
-            await validateDiscoveredXCredentials()
-        }
-        if needsInstagramIdentity {
-            await validateDiscoveredInstagramCredentials()
-        }
-        if needsSpotifyIdentity {
-            await validateDiscoveredSpotifyCredentials()
-        }
-        if discoveredBluesky {
-            await validateDiscoveredBlueskyCredentials()
-        }
-        if discoveredGitHub {
-            await validateDiscoveredGitHubCredentials()
-        }
-    }
-
-    private func refreshCredentialStorageStatuses() {
-        xCredentialStorage = try? keychainStore.xCredentialStorage()
-        instagramCredentialStorage = try? keychainStore.instagramCredentialStorage()
-        spotifyCredentialStorage = try? keychainStore.spotifyCredentialStorage()
-        blueskyCredentialStorage = try? keychainStore.blueskyCredentialStorage()
-        githubCredentialStorage = try? keychainStore.githubCredentialStorage()
-    }
-
-    private func validateDiscoveredXCredentials() async {
-        do {
-            let user = try await XClient(credentialStore: keychainStore).verifiedUser()
-            metadataStore.xAccount = XAccountMetadata(accountId: "x", handle: user.screenName, status: .valid)
-            xStatus = .valid
-        } catch {
-            metadataStore.xAccount = XAccountMetadata(accountId: "x", handle: nil, status: .serviceError)
-            xStatus = .serviceError("Validation failed")
-        }
-    }
-
-    private func validateDiscoveredInstagramCredentials() async {
-        do {
-            let profile = try await InstagramClient(credentialStore: keychainStore).currentUserProfile()
-            metadataStore.instagramAccount = instagramMetadata(from: profile, categories: metadataStore.instagramAccount?.enabledCategories ?? Set(InstagramNotificationCategory.allCases))
-            instagramStatus = .valid
-        } catch SourceError.notConfigured {
-            markInstagramCredentialsInvalid()
-        } catch {
-            if var account = metadataStore.instagramAccount {
-                account.status = .serviceError
-                metadataStore.instagramAccount = account
-            }
-            instagramStatus = .serviceError("Validation failed")
-        }
-    }
-
-    private func validateDiscoveredSpotifyCredentials() async {
-        do {
-            let username = try await SpotifyClient(credentialStore: keychainStore).validateAccount()
-            metadataStore.spotifyAccount = SpotifyAccountMetadata(accountId: "spotify", username: username, status: .valid)
-            spotifyStatus = .valid
-        } catch SourceError.notConfigured {
-            metadataStore.spotifyAccount = SpotifyAccountMetadata(accountId: "spotify", username: nil, status: .invalidCredentials)
-            spotifyStatus = .invalidCredentials
-        } catch {
-            metadataStore.spotifyAccount = SpotifyAccountMetadata(accountId: "spotify", username: nil, status: .serviceError)
-            spotifyStatus = .serviceError("Validation failed")
-        }
-    }
-
-    private func validateDiscoveredBlueskyCredentials() async {
-        do {
-            let profile = try await BlueskyClient(credentialStore: keychainStore).validateAccount()
-            guard let credentials = try? keychainStore.loadBlueskyCredentials() else { return }
-            metadataStore.blueskyAccount = BlueskyAccountMetadata(did: credentials.did, handle: profile.handle, status: .valid)
-            blueskyStatus = .valid
-        } catch SourceError.notConfigured {
-            if var account = metadataStore.blueskyAccount {
-                account.status = .invalidCredentials
-                metadataStore.blueskyAccount = account
-            }
-            blueskyStatus = .invalidCredentials
-        } catch {
-            if var account = metadataStore.blueskyAccount {
-                account.status = .serviceError
-                metadataStore.blueskyAccount = account
-            }
-            blueskyStatus = .serviceError("Validation failed")
-        }
-    }
-
-    private func validateDiscoveredGitHubCredentials() async {
-        guard let credentials = try? keychainStore.loadGitHubCredentials() else { return }
-        do {
-            var stored = credentials
-            // Heal legacy sessions that were saved before the signed-in username
-            // was reliably captured or resolved.
-            if stored.username == nil || stored.username!.isEmpty {
-                if let resolved = try await GitHubClient().authenticatedUser(credentials: stored) {
-                    stored = GitHubCredentials(
-                        userSession: stored.userSession,
-                        sameSiteUserSession: stored.sameSiteUserSession,
-                        username: resolved,
-                        additionalCookies: stored.additionalCookies,
-                    )
-                    _ = try? keychainStore.saveGitHubCredentials(stored)
-                }
-            }
-            let result = try await GitHubClient().forYouFeed(credentials: stored)
-            guard case let .feed(response) = result else { return }
-            _ = try GitHubActivityParser.parse(response.html)
-            metadataStore.githubAccount = GitHubAccountMetadata(accountId: stored.username ?? "github", username: stored.username, status: .valid)
-            githubStatus = .valid
-        } catch SourceError.notConfigured {
-            if var account = metadataStore.githubAccount {
-                account.status = .invalidCredentials
-                metadataStore.githubAccount = account
-            }
-            githubStatus = .invalidCredentials
-        } catch {
-            if var account = metadataStore.githubAccount {
-                account.status = .serviceError
-                metadataStore.githubAccount = account
-            }
-            githubStatus = .serviceError("Validation failed")
-        }
-    }
-
-    private func instagramMetadata(from profile: InstagramCurrentUserProfile, categories: Set<InstagramNotificationCategory>) -> InstagramAccountMetadata {
-        let existing = metadataStore.instagramAccount
-        return InstagramAccountMetadata(
-            accountId: String(profile.pk),
-            username: profile.username,
-            avatarURL: profile.profilePicURL,
-            status: .valid,
-            enabledCategories: categories,
-            storiesEnabled: existing?.storiesEnabled ?? true,
-            directMediaSharesEnabled: existing?.directMediaSharesEnabled ?? true,
-        )
-    }
-
-    public func revalidateInstagram() async {
-        guard metadataStore.instagramAccount != nil else { return }
-        do {
-            let client = InstagramClient(credentialStore: keychainStore)
-            let profile = try await client.currentUserProfile()
-            instagramStatus = .valid
-            if var account = metadataStore.instagramAccount {
-                account.accountId = String(profile.pk)
-                account.username = profile.username
-                account.avatarURL = profile.profilePicURL
-                account.status = .valid
-                metadataStore.instagramAccount = account
-            }
-        } catch SourceError.notConfigured {
-            markInstagramCredentialsInvalid()
-        } catch {
-            instagramStatus = .serviceError(error.localizedDescription)
-            if var account = metadataStore.instagramAccount {
-                account.status = .serviceError
-                metadataStore.instagramAccount = account
-            }
-        }
-    }
-
-    private func markInstagramCredentialsInvalid() {
-        instagramStatus = .invalidCredentials
-        if var account = metadataStore.instagramAccount {
-            account.status = .invalidCredentials
-            metadataStore.instagramAccount = account
-        } else {
-            metadataStore.instagramAccount = InstagramAccountMetadata(
-                accountId: "instagram",
-                username: nil,
-                status: .invalidCredentials,
-                enabledCategories: Set(InstagramNotificationCategory.allCases),
-            )
-        }
-    }
-
-    private func deleteInstagramCredentialsForFailedReconnect() {
-        try? keychainStore.deleteInstagramCredentials()
-        markInstagramCredentialsInvalid()
     }
 }
