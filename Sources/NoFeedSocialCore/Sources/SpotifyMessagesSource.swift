@@ -2,8 +2,9 @@ import Foundation
 
 /// Lists Spotify Messages chats for the Chats screen, each with its latest message.
 @MainActor
-public final class SpotifyMessagesSource {
+public final class SpotifyMessagesSource: ChatListProvider {
     private static let chatListLimit = 50
+    public let network: SocialNetwork = .spotify
 
     private let client: SpotifyClient
     private let metadataStore: AccountMetadataStore
@@ -15,8 +16,12 @@ public final class SpotifyMessagesSource {
         self.metadataStore = metadataStore
     }
 
+    public func chatList() async throws -> ChatListPage {
+        try await ChatListPage(chats: chatSummaries(), archived: [])
+    }
+
     /// Every chat with its latest message, for the Chats list. DMs are titled with the other member.
-    public func chatSummaries() async throws -> [ChatSummary] {
+    func chatSummaries() async throws -> [ChatSummary] {
         let chats = try await client.latestChats(limit: Self.chatListLimit)
         guard let viewer = metadataStore.spotifyAccount?.username else {
             throw SourceError.serviceError("Spotify username unavailable")

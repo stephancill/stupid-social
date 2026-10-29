@@ -203,7 +203,7 @@ final class TelegramTests: XCTestCase {
         ]))])
         XCTAssertEqual(TelegramClient.statusUpdate(status, userId: 185_733_531), .lastSeen(Date(timeIntervalSince1970: 1_793_170_332)))
         XCTAssertNil(TelegramClient.statusUpdate(status, userId: 1))
-        XCTAssertEqual(TelegramMember.Status.recently.text, "last seen recently")
+        XCTAssertEqual(ChatPresence.recently.text, "last seen recently")
     }
 
     // MARK: Spoilers

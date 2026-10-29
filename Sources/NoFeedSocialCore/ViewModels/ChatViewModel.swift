@@ -18,6 +18,28 @@ public struct ChatUser: Hashable, Identifiable, Codable, Sendable {
     }
 }
 
+/// When someone was last online: exact for people who share it, otherwise only roughly (as Telegram reports it).
+public enum ChatPresence: Codable, Hashable, Sendable {
+    case online
+    case lastSeen(Date)
+    case recently
+    case lastWeek
+    case lastMonth
+    case unknown
+
+    /// "online", "last seen 5 minutes ago", or roughly when the exact time is private.
+    public var text: String {
+        switch self {
+        case .online: "online"
+        case let .lastSeen(date): "last seen \(date.formatted(.relative(presentation: .named)))"
+        case .recently: "last seen recently"
+        case .lastWeek: "last seen within a week"
+        case .lastMonth: "last seen within a month"
+        case .unknown: "last seen a long time ago"
+        }
+    }
+}
+
 /// Rich content shown in a message bubble.
 public enum ChatEmbed: Hashable, Sendable {
     /// An image sized from `aspectRatio` (width / height). Media that `opensViewer` fills the bubble and opens

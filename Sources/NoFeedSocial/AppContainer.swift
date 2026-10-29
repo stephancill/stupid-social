@@ -50,7 +50,9 @@ final class AppContainer {
 
         apronService = ApronService(accountStore: accountStore, keychainStore: keychainStore)
         let apronSource = ApronNotificationSource(service: apronService)
-        chatListViewModel = ChatListViewModel(apronSource: apronSource, services: services)
+        chatListViewModel = ChatListViewModel(sources: { [services] in
+            [ChatListSource(provider: apronSource, accountId: nil, label: SocialNetwork.apron.displayName)] + services.chatListSources
+        })
         services.chatList = chatListViewModel
 
         settingsViewModel = SettingsViewModel(
@@ -137,7 +139,7 @@ final class AppContainer {
         return { XChatViewModel(client: client, liveFeed: liveFeed, conversationId: conversationId, title: title) }
     }
 
-    func telegramChatFactory(accountId: String, peer: TelegramPeer, title: String, userStatus: TelegramMember.Status?) -> (() -> TelegramChatViewModel)? {
+    func telegramChatFactory(accountId: String, peer: TelegramPeer, title: String, userStatus: ChatPresence?) -> (() -> TelegramChatViewModel)? {
         guard let client = services.component(id: accountId)?.telegramClient else { return nil }
         return { TelegramChatViewModel(client: client, peer: peer, title: title, userStatus: userStatus) }
     }

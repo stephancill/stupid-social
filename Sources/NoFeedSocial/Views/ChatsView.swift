@@ -10,7 +10,7 @@ struct ChatsView: View {
     /// The chat for an Instagram account's thread and title; `nil` when the account is gone.
     let instagramChat: (_ accountId: String, _ threadFbid: String, _ title: String) -> (() -> ChatViewModel)?
     /// The chat for a Telegram account's peer; `nil` when the account is gone.
-    let telegramChat: (_ accountId: String, _ peer: TelegramPeer, _ title: String, _ userStatus: TelegramMember.Status?) -> (() -> TelegramChatViewModel)?
+    let telegramChat: (_ accountId: String, _ peer: TelegramPeer, _ title: String, _ userStatus: ChatPresence?) -> (() -> TelegramChatViewModel)?
     /// The chat for an X account's conversation and title; `nil` until its X Chat PIN unlocks it.
     let xChat: (_ accountId: String, _ conversationId: String, _ title: String) -> (() -> ChatViewModel)?
     /// Whether a chat is pushed, so the home pager can stop paging.
@@ -171,7 +171,7 @@ struct ChatsView: View {
             timestamp: nil,
             unreadCount: 0,
             destination: destination,
-        )
+        ).scoped(to: Account.apronId(serverURL: serverURL))
     }
 
     /// A network chat opening from its row, which says whether there are unread messages to wait for.
@@ -208,7 +208,7 @@ struct ChatsView: View {
                 ContentUnavailableView("Instagram Not Connected", systemImage: "camera")
             }
         case let .telegram(peer):
-            if let makeChat = telegramChat(chat.accountId, peer, chat.title, chat.telegramUserStatus) {
+            if let makeChat = telegramChat(chat.accountId, peer, chat.title, chat.presence) {
                 TelegramChatView(viewModel: opened(makeChat(), chat: chat))
             } else {
                 ContentUnavailableView("Telegram Not Connected", systemImage: "paperplane")

@@ -133,6 +133,11 @@ public final class AccountComponents {
         )
     }
 
+    /// The account's chats, when its network has any. Apron servers list through one shared source instead.
+    public var chatListProvider: (any ChatListProvider)? {
+        spotifyMessagesSource ?? instagramClient ?? telegramClient ?? xChatClient
+    }
+
     /// Stops what runs in the background, when the account goes away.
     func shutDown() {
         xChatLiveFeed?.stop()
@@ -189,6 +194,18 @@ public final class AccountServices: ObservableObject {
 
     public func components(network: SocialNetwork) -> [AccountComponents] {
         components.filter { $0.network == network }
+    }
+
+    /// Each account's chats for the Chats list, labelled with the account when a network has several.
+    public var chatListSources: [ChatListSource] {
+        let multiple = Dictionary(grouping: components, by: \.network).mapValues { $0.count > 1 }
+        return components.compactMap { component in
+            guard let provider = component.chatListProvider else { return nil }
+            let label = multiple[component.network] == true
+                ? "\(component.network.displayName) \(component.metadata.account?.label ?? "")"
+                : component.network.displayName
+            return ChatListSource(provider: provider, accountId: component.accountId, label: label)
+        }
     }
 
     /// The account's components, built now when the account was saved a moment ago and the store's change

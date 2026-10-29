@@ -83,7 +83,7 @@ public final class ApronServersViewModel: ObservableObject {
 
     public func remove(_ server: ApronServerMetadata) {
         service.removeServer(serverURL: server.serverURL)
-        chatList.replaceApronChats(serverURL: server.serverURL, with: [])
+        chatList.replaceChats(where: { $0.isApronRoom(on: server.serverURL) }, with: [])
         reload()
         NotificationCenter.default.post(name: ApronLiveFeed.serversDidChangeNotification, object: nil)
     }

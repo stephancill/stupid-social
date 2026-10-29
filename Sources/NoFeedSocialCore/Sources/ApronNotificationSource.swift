@@ -4,7 +4,7 @@ import OSLog
 /// Lists the joined rooms of every saved Apron server for the Chats screen, each with its latest message and
 /// unread count, and reports whether any server is configured.
 @MainActor
-public final class ApronNotificationSource: AccountValidating {
+public final class ApronNotificationSource: AccountValidating, ChatListProvider {
     public let network: SocialNetwork = .apron
 
     private let service: ApronService
@@ -21,9 +21,13 @@ public final class ApronNotificationSource: AccountValidating {
         service.servers.isEmpty ? .notConfigured : .valid
     }
 
+    public func chatList() async throws -> ChatListPage {
+        try await ChatListPage(chats: chatSummaries(), archived: [])
+    }
+
     /// Every joined room on every server with its latest message, for the Chats list. Unlike the feed, rooms
-    /// stay listed however old their latest message is.
-    public func chatSummaries() async throws -> [ChatSummary] {
+    /// stay listed however old their latest message is. Each row belongs to its server's account.
+    func chatSummaries() async throws -> [ChatSummary] {
         let servers = service.servers
         guard !servers.isEmpty else { throw SourceError.notConfigured }
         var summaries: [ChatSummary] = []
@@ -116,7 +120,7 @@ public final class ApronNotificationSource: AccountValidating {
                 titleNamesPeople: room.isNamedForMembers,
                 // A room set to None is muted on the server (§4.5.3).
                 isMuted: session.connection.mutedRooms.contains(room.roomId),
-            ))
+            ).scoped(to: Account.apronId(serverURL: session.serverURL)))
         }
         return summaries
     }
@@ -140,5 +144,13 @@ public final class ApronNotificationSource: AccountValidating {
             return !message.isDeleted && !message.from.isSystem && !own.contains(message.from.userId)
         }
         return min(unread.count, Self.unreadCap)
+    }
+}
+
+public extension ChatSummary {
+    /// Whether the row is one of the server's rooms, which its live connection rebuilds together.
+    func isApronRoom(on serverURL: URL) -> Bool {
+        guard case let .apron(chatServerURL, _) = destination else { return false }
+        return chatServerURL == serverURL
     }
 }

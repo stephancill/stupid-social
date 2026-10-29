@@ -119,7 +119,7 @@ Sources/
       SettingsViewModel.swift
       ApronServersViewModel.swift
       ChatViewModel.swift            # Shared chat models (ChatMessage, ChatUser, ChatEmbed) and base view model: drafts, polling, unread, read markers, sending
-      ChatListViewModel.swift        # Chats list: ChatSummary, merged from every chat network
+      ChatListViewModel.swift        # Chats list: ChatSummary, ChatListProvider (one per network), merged list
       ApronChatViewModel.swift
       ApronLinkViewModel.swift       # What an opened Apron link offers: add server, sign in, join, open
       SpotifyChatViewModel.swift     # Spotify Messages chat: history, polling, send, seen, track metadata
@@ -176,7 +176,8 @@ Chat is one framework with an adapter per network; `docs/TECHNICAL_DESIGN.md` §
 - Behavior users expect to match across chats belongs to the framework: drafts, polling, read-marker debouncing, unread counting and the divider, snapshots, optimistic sending, links. A network uses the shared version (`startPolling(every:)`/`poll()`, `isAfterReadPosition(_:)`, `scheduleReadMarker`, `sendOptimistically`) rather than writing its own; if the shared one doesn't fit, extend it.
 - Network chat code only translates between the network and the shared models (`ChatMessage`, `ChatEmbed`, `ChatReaction`, `ChatSummary`); it doesn't do UI work.
 - Every capability a network declares (`canReply`, `canReact`, `canAttach`, …) is implemented; never leave a declared action as the base class's no-op.
-- Adding a network should only take its adapter, its list rows, a `Destination` case and its one place in the destination-to-chat switch. If it needs more, extend the framework first.
+- A network's Chats rows come from its `ChatListProvider` conformance; each account contributes one through `AccountComponents.chatListProvider`, and the list scopes the rows to that account. Live row changes use `updateChats(_:accountId:)` or `replaceChats(where:with:)`.
+- Adding a network should only take its adapter, its `ChatListProvider` (and its line in `AccountComponents.chatListProvider`), a `Destination` case and its one place in the destination-to-chat switch. If it needs more, extend the framework first.
 - Every chat has a `chatKey` (`<network>:<id>`), used for drafts and snapshots.
 - Shared behavior is covered in `ChatViewModelTests`; network mapping is tested against recorded pages without the UI.
 

@@ -54,7 +54,7 @@ public final class ApronLiveFeed {
         for url in loops.keys where !saved.contains(url) {
             disconnect(url)
             // Removed here or on another device.
-            chatList.replaceApronChats(serverURL: url, with: [])
+            chatList.replaceChats(where: { $0.isApronRoom(on: url) }, with: [])
         }
         for url in saved where loops[url] == nil {
             loops[url] = Task { [weak self] in await self?.run(url) }
@@ -140,7 +140,7 @@ public final class ApronLiveFeed {
                 if let roomIds {
                     try await chatList.updateChats(source.chatSummaries(in: session, roomIds: roomIds))
                 } else {
-                    try await chatList.replaceApronChats(serverURL: url, with: source.chatSummaries(in: session))
+                    try await chatList.replaceChats(where: { $0.isApronRoom(on: url) }, with: source.chatSummaries(in: session))
                     // Rooms changed: notifications title new rooms, such as a new DM, by name.
                     if session.server.has("rooms") {
                         try await service.push.updateRoomTitles(session: session, rooms: session.connection.joinedRooms())

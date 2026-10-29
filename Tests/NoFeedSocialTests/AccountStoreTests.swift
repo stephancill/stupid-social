@@ -135,6 +135,8 @@ final class AccountStoreTests: XCTestCase {
         XCTAssertEqual(scoped.scoped(to: "x-1"), scoped)
         let server = try XCTUnwrap(URL(string: "wss://server.apron.chat/"))
         let room = ChatSummary(id: "r", network: .apron, title: "R", avatarURL: nil, preview: nil, timestamp: nil, unreadCount: 0, destination: .apron(serverURL: server, roomId: "r"))
-        XCTAssertEqual(room.scoped(to: nil).accountId, Account.apronId(serverURL: server))
+        let serverRoom = room.scoped(to: Account.apronId(serverURL: server))
+        XCTAssertEqual(serverRoom.accountId, Account.apronId(serverURL: server))
+        XCTAssertEqual(serverRoom.scoped(to: nil), serverRoom, "a row that names its account keeps it")
     }
 }

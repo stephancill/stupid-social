@@ -508,10 +508,14 @@ extension InstagramClient {
 }
 
 @MainActor
-extension InstagramClient {
-    /// The newest 35 inbox threads for the Chats list. Unread counts only cover each thread's 5 newest messages.
-    func directChatSummaries() async throws -> [ChatSummary] {
-        try await directInbox(pages: 2).map(Self.chatSummary)
+extension InstagramClient: ChatListProvider {
+    public nonisolated var network: SocialNetwork {
+        .instagram
+    }
+
+    /// The newest 35 inbox threads. Unread counts only cover each thread's 5 newest messages.
+    public func chatList() async throws -> ChatListPage {
+        try await ChatListPage(chats: directInbox(pages: 2).map(Self.chatSummary), archived: [])
     }
 
     static func chatSummary(_ thread: InstagramDirectThread) -> ChatSummary {

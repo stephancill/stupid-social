@@ -73,34 +73,12 @@ public struct TelegramMember: Identifiable, Hashable, Sendable {
         case owner, admin, member
     }
 
-    /// Telegram's last-seen status: exact for people who share it, otherwise only roughly.
-    public enum Status: Codable, Hashable, Sendable {
-        case online
-        case lastSeen(Date)
-        case recently
-        case lastWeek
-        case lastMonth
-        case unknown
-
-        /// Like Telegram: "online", "last seen 5 minutes ago", or roughly when the exact time is private.
-        public var text: String {
-            switch self {
-            case .online: "online"
-            case let .lastSeen(date): "last seen \(date.formatted(.relative(presentation: .named)))"
-            case .recently: "last seen recently"
-            case .lastWeek: "last seen within a week"
-            case .lastMonth: "last seen within a month"
-            case .unknown: "last seen a long time ago"
-            }
-        }
-    }
-
     public let id: Int64
     public let name: String
     public let username: String?
     public let avatarURL: URL?
     public let role: Role
-    public let status: Status
+    public let status: ChatPresence
     public let isYou: Bool
     public let isBot: Bool
 }
@@ -125,7 +103,7 @@ public struct TelegramDialogState: Sendable {
     public let isGroup: Bool
     public let memberCount: Int?
     /// The other person's last-seen status in a private chat; `nil` in groups, Saved Messages and with bots.
-    public let userStatus: TelegramMember.Status?
+    public let userStatus: ChatPresence?
     public let readInboxMaxId: Int32
     public let readOutboxMaxId: Int32
 }
@@ -148,7 +126,9 @@ struct TelegramAPIConfig: Decodable {
 
 /// The signed-in Telegram account over MTProto: one session on the account's home DC, following
 /// `*_MIGRATE_X` to another DC during sign-in, with the auth keys kept in this device's Keychain.
-public actor TelegramClient {
+public actor TelegramClient: ChatListProvider {
+    public nonisolated let network: SocialNetwork = .telegram
+
     private struct Stored: Codable {
         var homeDC = 2
         var keys: [Int: TelegramDCKey] = [:]
@@ -461,7 +441,7 @@ public actor TelegramClient {
     }
 
     /// Calls `observer` with a user's new status when Telegram pushes `updateUserStatus` for them.
-    public func addStatusObserver(userId: Int64, _ observer: @escaping @Sendable (TelegramMember.Status) -> Void) -> UUID {
+    public func addStatusObserver(userId: Int64, _ observer: @escaping @Sendable (ChatPresence) -> Void) -> UUID {
         let id = UUID()
         observers[id] = { update in
             if let status = Self.statusUpdate(update, userId: userId) {
@@ -471,7 +451,7 @@ public actor TelegramClient {
         return id
     }
 
-    static func statusUpdate(_ update: TLObject, userId: Int64) -> TelegramMember.Status? {
+    static func statusUpdate(_ update: TLObject, userId: Int64) -> ChatPresence? {
         switch update.name {
         case "updateShort":
             update["update"]?.object.flatMap { statusUpdate($0, userId: userId) }
@@ -623,7 +603,14 @@ public actor TelegramClient {
         return TelegramMediaParser.avatarURL(photo: user["photo"]?.object, inputPeer: TLObject("inputPeerSelf"), key: "user:\(id)")
     }
 
-    public func chatSummaries(archived: Bool = false, limit: Int = 50) async throws -> [ChatSummary] {
+    /// The main list and the Archive, loaded together; an Archive that fails keeps its listed rows.
+    public func chatList() async throws -> ChatListPage {
+        async let archived = try? chatSummaries(archived: true)
+        let chats = try await chatSummaries()
+        return await ChatListPage(chats: chats, archived: archived)
+    }
+
+    func chatSummaries(archived: Bool = false, limit: Int = 50) async throws -> [ChatSummary] {
         try requireAccount()
         guard let result = try await invoke(TLObject("messages.getDialogs", [
             "folder_id": .int(archived ? 1 : 0),
@@ -677,7 +664,7 @@ public actor TelegramClient {
                 titleNamesPeople: peer.kind == .user,
                 // Muted chats have `mute_until` in the future (2147483647 for "forever").
                 isMuted: TimeInterval(dialog["notify_settings"]?.object?["mute_until"]?.int ?? 0) > Date().timeIntervalSince1970,
-                telegramUserStatus: peer.kind == .user ? users[peer.id].flatMap(Self.userStatus) : nil,
+                presence: peer.kind == .user ? users[peer.id].flatMap(Self.userStatus) : nil,
             )
         }
     }
@@ -690,7 +677,7 @@ public actor TelegramClient {
         else { throw TelegramError.protocolViolation("no dialog") }
         let title: String
         var memberCount: Int?
-        var userStatus: TelegramMember.Status?
+        var userStatus: ChatPresence?
         if peer.kind == .user {
             let user = result.objects("users").first { $0["id"]?.long == peer.id }
             title = user?.flag("self") == true ? "Saved Messages" : user.map(Self.name(of:)) ?? "Telegram"
@@ -837,12 +824,12 @@ public actor TelegramClient {
     }
 
     /// A person's status as a private chat shows it; `nil` for yourself (Saved Messages) and bots.
-    static func userStatus(_ user: TLObject) -> TelegramMember.Status? {
+    static func userStatus(_ user: TLObject) -> ChatPresence? {
         guard !user.flag("self"), !user.flag("bot") else { return nil }
         return status(of: user["status"]?.object)
     }
 
-    static func status(of status: TLObject?) -> TelegramMember.Status {
+    static func status(of status: TLObject?) -> ChatPresence {
         switch status?.name {
         case "userStatusOnline": .online
         case "userStatusOffline": status?["was_online"]?.int.map { .lastSeen(Date(timeIntervalSince1970: TimeInterval($0))) } ?? .unknown

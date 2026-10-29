@@ -171,7 +171,9 @@ public struct XChatEventPage: Sendable {
 /// operations with the same cookies as the X client; event payloads are Thrift, and message contents are
 /// encrypted with per-conversation keys that only the account's private keys open. See
 /// `scripts/xchat-client.py`, which validated each request live, and `docs/IMPLEMENTATION.md`.
-public actor XChatClient {
+public actor XChatClient: ChatListProvider {
+    public nonisolated let network: SocialNetwork = .x
+
     private enum Operation: String {
         case initialPage = "GetInitialXChatPageQuery"
         case inboxPage = "GetInboxPageRequestQuery"
@@ -303,6 +305,13 @@ public actor XChatClient {
     }
 
     // MARK: Inbox
+
+    /// The archived rows come from the inbox the main rows just loaded.
+    public func chatList() async throws -> ChatListPage {
+        let chats = try await chatSummaries(archived: false)
+        let archived = try? await chatSummaries(archived: true)
+        return ChatListPage(chats: chats, archived: archived)
+    }
 
     /// Every conversation in the inbox (not message requests), newest first, as Chats rows.
     func chatSummaries(archived: Bool) async throws -> [ChatSummary] {

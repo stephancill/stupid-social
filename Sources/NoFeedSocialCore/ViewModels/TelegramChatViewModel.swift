@@ -16,7 +16,7 @@ public final class TelegramChatViewModel: ChatViewModel {
     private var observer: UUID?
     private var statusObserver: UUID?
     /// The other person's last-seen status in a private chat, which the subtitle shows.
-    private var userStatus: TelegramMember.Status?
+    private var userStatus: ChatPresence?
     private let pollInterval: Duration = .seconds(30)
     private let snapshotCache: ChatSnapshotCache
     private var hasLoadedHistory = false
@@ -32,7 +32,7 @@ public final class TelegramChatViewModel: ChatViewModel {
         peer.kind != .user
     }
 
-    public init(client: TelegramClient, peer: TelegramPeer, title: String, userStatus: TelegramMember.Status? = nil, snapshotCache: ChatSnapshotCache = ChatSnapshotCache()) {
+    public init(client: TelegramClient, peer: TelegramPeer, title: String, userStatus: ChatPresence? = nil, snapshotCache: ChatSnapshotCache = ChatSnapshotCache()) {
         self.client = client
         self.peer = peer
         self.snapshotCache = snapshotCache
@@ -72,7 +72,7 @@ public final class TelegramChatViewModel: ChatViewModel {
         let title: String
         let subtitle: String
         /// Saved so a private chat's "last seen" shows, freshly worded, as it opens.
-        var userStatus: TelegramMember.Status?
+        var userStatus: ChatPresence?
     }
 
     private var snapshotKey: String {
@@ -160,7 +160,7 @@ public final class TelegramChatViewModel: ChatViewModel {
         subtitle = dialog.memberCount.map { "\($0) members" } ?? userStatus?.text ?? "Telegram"
     }
 
-    private func apply(status: TelegramMember.Status) {
+    private func apply(status: ChatPresence) {
         userStatus = status
         subtitle = status.text
     }

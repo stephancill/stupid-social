@@ -33,23 +33,18 @@ public struct ChatSummary: Identifiable, Hashable, Codable, Sendable {
     public let titleNamesPeople: Bool
     /// Optional so chat lists cached before it existed still decode.
     private let muted: Bool?
-    /// The other person's last-seen status in a Telegram private chat, so the chat opens showing it.
-    public let telegramUserStatus: TelegramMember.Status?
+    /// The other person's presence in a one-to-one chat, so the chat opens showing it.
+    public let presence: ChatPresence?
 
     /// Whether the user muted the chat on its network, so its unread count is shown quietly.
     public var isMuted: Bool {
         muted == true
     }
 
-    /// The chat as one account's. Apron rows belong to their server's account.
-    func scoped(to accountId: String?) -> ChatSummary {
+    /// The chat as one account's; `nil` keeps the account a provider already set, such as an Apron server's.
+    public func scoped(to accountId: String?) -> ChatSummary {
         var chat = self
-        let owner: String? = if case let .apron(serverURL, _) = destination {
-            Account.apronId(serverURL: serverURL)
-        } else {
-            accountId
-        }
-        guard let owner, chat.accountId != owner else { return chat }
+        guard let owner = accountId, chat.accountId != owner else { return chat }
         chat.accountId = owner
         chat.id = "\(owner)|\(id)"
         return chat
@@ -68,7 +63,7 @@ public struct ChatSummary: Identifiable, Hashable, Codable, Sendable {
         namesSenderInPreview: Bool = true,
         titleNamesPeople: Bool = false,
         isMuted: Bool = false,
-        telegramUserStatus: TelegramMember.Status? = nil,
+        presence: ChatPresence? = nil,
     ) {
         self.id = id
         accountId = ""
@@ -83,11 +78,48 @@ public struct ChatSummary: Identifiable, Hashable, Codable, Sendable {
         self.namesSenderInPreview = namesSenderInPreview
         self.titleNamesPeople = titleNamesPeople
         muted = isMuted
-        self.telegramUserStatus = telegramUserStatus
+        self.presence = presence
     }
 }
 
-/// Every chat across Apron servers, Spotify Messages, Instagram Direct, Telegram and X Chat, newest first.
+/// One network's rows for the Chats list.
+public struct ChatListPage: Sendable {
+    public let chats: [ChatSummary]
+    /// The chats the user archived on the network; `nil` when the archive didn't load, so the rows already
+    /// listed stay. Networks without an archive return none.
+    public let archived: [ChatSummary]?
+
+    public init(chats: [ChatSummary], archived: [ChatSummary]?) {
+        self.chats = chats
+        self.archived = archived
+    }
+}
+
+/// A chat network's part of the Chats list. Each network conforms its client or source; the list knows networks
+/// only through this.
+public protocol ChatListProvider: Sendable {
+    var network: SocialNetwork { get }
+    /// The network's rows. Throws `SourceError.notConfigured` when the network isn't connected, which lists none.
+    func chatList() async throws -> ChatListPage
+}
+
+/// One account's provider, as the Chats list loads it.
+public struct ChatListSource {
+    public let provider: any ChatListProvider
+    /// The account the rows belong to; `nil` when the provider names each row's account itself, as Apron's
+    /// does for its servers.
+    public let accountId: String?
+    /// Names the account in errors, such as "Telegram" or, with several, "Telegram Alice".
+    public let label: String
+
+    public init(provider: any ChatListProvider, accountId: String?, label: String) {
+        self.provider = provider
+        self.accountId = accountId
+        self.label = label
+    }
+}
+
+/// Every chat across every account's chat networks, newest first.
 @MainActor
 public final class ChatListViewModel: ObservableObject {
     @Published public private(set) var chats: [ChatSummary] = []
@@ -99,16 +131,14 @@ public final class ChatListViewModel: ObservableObject {
     /// Networks that failed to load, with the reason.
     @Published public private(set) var errorMessage: String?
 
-    private let apronSource: ApronNotificationSource
-    private let services: AccountServices
+    /// The accounts' providers as of each load, since accounts come and go.
+    private let sources: () -> [ChatListSource]
     /// The last loaded list, shown at launch while it refreshes, so only the very first load waits.
     private let cacheURL: URL
     private let archiveCacheURL: URL
 
-    public init(apronSource: ApronNotificationSource, services: AccountServices, fileManager: FileManager = .default) {
-        self.apronSource = apronSource
-        self.services = services
-        let caches = fileManager.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+    public init(sources: @escaping () -> [ChatListSource], caches: URL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]) {
+        self.sources = sources
         cacheURL = caches.appending(path: "chat-list.json")
         archiveCacheURL = caches.appending(path: "chat-list-archived.json")
         if let data = try? Data(contentsOf: cacheURL), let cached = try? JSONDecoder().decode([ChatSummary].self, from: data) {
@@ -120,90 +150,47 @@ public final class ChatListViewModel: ObservableObject {
         }
     }
 
-    /// One account's (or every Apron server's) chats to load.
-    private struct Loader {
-        let network: SocialNetwork
-        /// `nil` for Apron, whose rows name their server's account.
-        let accountId: String?
-        let label: String
-        let chats: @MainActor @Sendable () async throws -> [ChatSummary]
-        /// Archived chats, loaded after the main list succeeded.
-        let archived: (@MainActor @Sendable () async throws -> [ChatSummary])?
-    }
-
-    private func loaders() -> [Loader] {
-        var loaders = [Loader(network: .apron, accountId: nil, label: SocialNetwork.apron.displayName, chats: { [apronSource] in try await apronSource.chatSummaries() }, archived: nil)]
-        let multiple = Dictionary(grouping: services.components, by: \.network).mapValues { $0.count > 1 }
-        for component in services.components {
-            let account = component.metadata.account
-            let label = multiple[component.network] == true
-                ? "\(component.network.displayName) \(account?.label ?? "")"
-                : component.network.displayName
-            let id = component.accountId
-            if let source = component.spotifyMessagesSource {
-                loaders.append(Loader(network: .spotify, accountId: id, label: label, chats: { try await source.chatSummaries() }, archived: nil))
-            }
-            if let client = component.instagramClient {
-                loaders.append(Loader(network: .instagram, accountId: id, label: label, chats: { try await client.directChatSummaries() }, archived: nil))
-            }
-            if let client = component.telegramClient {
-                loaders.append(Loader(network: .telegram, accountId: id, label: label, chats: { try await client.chatSummaries() }, archived: { try await client.chatSummaries(archived: true) }))
-            }
-            if let client = component.xChatClient {
-                // X's archived chats come with the inbox the main list just loaded.
-                loaders.append(Loader(network: .x, accountId: id, label: label, chats: { try await client.chatSummaries(archived: false) }, archived: { try await client.chatSummaries(archived: true) }))
-            }
-        }
-        return loaders
-    }
-
-    /// Reloads every account; each keeps its previous chats when it fails.
+    /// Reloads every account at once; each keeps its previous chats when it fails.
     public func load() async {
         guard !isLoading else { return }
         isLoading = true
         defer { isLoading = false }
-        let loaders = loaders()
-        let results = await withTaskGroup(of: (Int, Result<[ChatSummary], Error>, [ChatSummary]?).self) { group in
-            for (index, loader) in loaders.enumerated() {
-                group.addTask {
-                    let result = await Self.result(loader.chats)
-                    var archived: [ChatSummary]?
-                    if case .success = result, let loadArchived = loader.archived {
-                        archived = try? await loadArchived()
-                    }
-                    return (index, result, archived)
-                }
+        let sources = sources()
+        let providers = sources.map(\.provider)
+        let results = await withTaskGroup(of: (Int, Result<ChatListPage, Error>).self) { group in
+            for (index, provider) in providers.enumerated() {
+                group.addTask { await (index, Self.result { try await provider.chatList() }) }
             }
-            var results: [(Int, Result<[ChatSummary], Error>, [ChatSummary]?)] = []
-            for await result in group {
-                results.append(result)
+            var results: [Result<ChatListPage, Error>?] = Array(repeating: nil, count: providers.count)
+            for await (index, result) in group {
+                results[index] = result
             }
-            return results.sorted { $0.0 < $1.0 }
+            return results.compactMap(\.self)
         }
 
         var merged: [ChatSummary] = []
         var archived: [ChatSummary] = []
         var failures: [String] = []
-        for (index, result, archivedResult) in results {
-            let loader = loaders[index]
+        for (source, result) in zip(sources, results) {
+            // Without an account, the source's rows are those of its network, such as every Apron server's.
             let belongs: (ChatSummary) -> Bool = { chat in
-                loader.accountId.map { chat.accountId == $0 } ?? (chat.network == loader.network)
+                source.accountId.map { chat.accountId == $0 } ?? (chat.network == source.provider.network)
             }
             switch result {
-            case let .success(summaries):
-                merged += summaries.map { $0.scoped(to: loader.accountId) }
+            case let .success(page):
+                merged += page.chats.map { $0.scoped(to: source.accountId) }
+                if let pageArchived = page.archived {
+                    archived += pageArchived.map { $0.scoped(to: source.accountId) }
+                } else {
+                    archived += archivedChats.filter(belongs)
+                }
             case let .failure(error):
                 merged += chats.filter(belongs)
+                archived += archivedChats.filter(belongs)
                 // A reload cut short (such as by opening a chat) isn't a failure worth showing.
                 if !Self.isCancellation(error) {
-                    failures.append("\(loader.label): \(error.localizedDescription)")
+                    failures.append("\(source.label): \(error.localizedDescription)")
                 }
-            }
-            // A failed archive keeps its rows; the main list's failure already reports the account.
-            if let archivedResult {
-                archived += archivedResult.map { $0.scoped(to: loader.accountId) }
-            } else {
-                archived += archivedChats.filter(belongs)
             }
         }
         errorMessage = failures.isEmpty ? nil : failures.joined(separator: "\n")
@@ -257,21 +244,18 @@ public final class ChatListViewModel: ObservableObject {
         (chats + archivedChats).contains { $0.destination == destination }
     }
 
-    /// One Apron server's rooms, rebuilt by the live connection when its rooms change.
-    public func replaceApronChats(serverURL: URL, with summaries: [ChatSummary]) {
-        let others = chats.filter { chat in
-            guard case let .apron(chatServerURL, _) = chat.destination else { return true }
-            return chatServerURL != serverURL
-        }
-        setChats(others + summaries.map { $0.scoped(to: nil) })
+    /// Replaces a set of rows that a live connection rebuilt, such as one Apron server's rooms. The rows name
+    /// their account.
+    public func replaceChats(where isReplaced: (ChatSummary) -> Bool, with summaries: [ChatSummary]) {
+        setChats(chats.filter { !isReplaced($0) } + summaries)
     }
 
     /// Rows rebuilt for chats with new messages, replacing those chats' rows. `accountId` names the account
-    /// they came from; Apron rows know their server's.
+    /// they came from, unless the rows already do.
     public func updateChats(_ summaries: [ChatSummary], accountId: String? = nil) {
         let summaries = summaries.map { $0.scoped(to: accountId) }
         let ids = Set(summaries.map(\.id))
-        setChats(chats.filter { !ids.contains($0.id) } + summaries)
+        replaceChats(where: { ids.contains($0.id) }, with: summaries)
     }
 
     private func setChats(_ summaries: [ChatSummary]) {
@@ -293,11 +277,11 @@ public final class ChatListViewModel: ObservableObject {
         error is CancellationError || (error as? URLError)?.code == .cancelled
     }
 
-    private static func result(_ load: @MainActor @Sendable () async throws -> [ChatSummary]) async -> Result<[ChatSummary], Error> {
+    private nonisolated static func result(_ load: () async throws -> ChatListPage) async -> Result<ChatListPage, Error> {
         do {
             return try await .success(load())
         } catch SourceError.notConfigured {
-            return .success([])
+            return .success(ChatListPage(chats: [], archived: []))
         } catch {
             return .failure(error)
         }
