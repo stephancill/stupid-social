@@ -84,7 +84,11 @@ public final class StoryBarViewModel: ObservableObject {
             await inFlightStoryBarContentFetch.value
             return
         }
-        let task = Task { await performStoryBarContentFetch() }
+        let task = Task {
+            await BackgroundActivity.run(reason: "Refresh stories") {
+                await self.performStoryBarContentFetch()
+            }
+        }
         inFlightStoryBarContentFetch = task
         await task.value
         inFlightStoryBarContentFetch = nil
@@ -402,6 +406,7 @@ public final class StoryBarViewModel: ObservableObject {
             } catch SourceError.notConfigured {
                 continue
             } catch {
+                if Task.isCancelled { return nil }
                 AppMetrics.storySourceFailed(network: .instagram, error: error)
                 failed += 1
             }

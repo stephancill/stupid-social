@@ -29,6 +29,10 @@ public enum AppMetrics {
         }
     }
 
+    static func sourceRefreshCancelled(network: SocialNetwork, trigger: String, duration: Duration) {
+        StupidMetrics.track("refresh", properties: ["network": network.rawValue, "trigger": trigger, "outcome": "cancelled"], value: milliseconds(duration))
+    }
+
     static func storySourceFailed(network: SocialNetwork, error: any Error) {
         StupidMetrics.error("story_source_error", error: error, properties: ["network": network.rawValue])
     }

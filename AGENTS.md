@@ -79,6 +79,7 @@ Sources/
       XChatLiveFeed.swift           # Foreground X Chat WebSocket: pushed events for open chats and the Chats list
       ApronPushService.swift        # Apron push registration through the push.stupidtech.net relay
       AppMetrics.swift              # Every anonymous usage event and error sent to metrics.stupidtech.net
+      BackgroundActivity.swift      # Keeps a refresh running when the app is backgrounded; cancels it when iOS's time runs out
       ApronRoomNotifications.swift  # Per-room notification levels mapped to mute and wake scopes
       TelegramPushService.swift     # Telegram APNs registration (token type 1) after sign-in, at launch, on token change
     Sources/                        # Network clients + notification sources

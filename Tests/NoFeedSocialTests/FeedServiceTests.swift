@@ -155,6 +155,22 @@ final class FeedServiceTests: XCTestCase {
         XCTAssertLessThan(seconds, 0.55, "Foreground refresh should fetch sources concurrently")
     }
 
+    /// iOS cancels a refresh whose background time runs out; that isn't a source failure.
+    @MainActor
+    func testCancelledRefreshIsNotAFailure() async throws {
+        let cacheStore = try makeCacheStore()
+        let service = makeService([
+            DelayedNotificationFetcher(network: .x, delay: 5, items: [item(id: "x", network: .x, timestamp: Date(timeIntervalSince1970: 300))]),
+        ], cacheStore: cacheStore)
+
+        let refresh = Task { try await service.manualRefresh().count }
+        try await Task.sleep(for: .milliseconds(100))
+        refresh.cancel()
+
+        let displayed = try await refresh.value
+        XCTAssertEqual(displayed, 0)
+    }
+
     /// Kept for the test's duration, as the cache's context needs its container.
     private var containers: [ModelContainer] = []
 

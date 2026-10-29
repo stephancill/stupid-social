@@ -70,6 +70,8 @@ public final class FeedService {
                     logger.info("Skipping unconfigured source: \(result.network.rawValue, privacy: .public)")
                 case SourceError.endpointSpikeRequired:
                     logger.info("Skipping source pending endpoint spike: \(result.network.rawValue, privacy: .public)")
+                case is CancellationError:
+                    logger.info("Source refresh cancelled in the background: \(result.network.rawValue, privacy: .public)")
                 default:
                     logger.error("Source refresh failed: \(result.network.rawValue, privacy: .public) \(String(describing: error), privacy: .public)")
                     errors.append("\(result.network.displayName) refresh failed")
@@ -105,7 +107,7 @@ public final class FeedService {
         for result in results {
             if let error = result.error {
                 switch error {
-                case SourceError.notConfigured, SourceError.endpointSpikeRequired:
+                case SourceError.notConfigured, SourceError.endpointSpikeRequired, is CancellationError:
                     continue
                 default:
                     logger.error("Foreground activation source refresh failed: \(result.network.rawValue, privacy: .public) \(String(describing: error), privacy: .public)")
@@ -144,7 +146,14 @@ public final class FeedService {
             return (sources.accountId, sources.network, { try await source.fetchNotifications(reason: reason) })
         }
 
-        return await withTaskGroup(of: FetchResult.self) { group in
+        // Kept running in the background, so a refresh started as the app opens isn't frozen when the user leaves.
+        return await BackgroundActivity.run(reason: "Refresh feed") {
+            await Self.fetch(fetchers, timingPrefix: timingPrefix)
+        }
+    }
+
+    private static func fetch(_ fetchers: [(accountId: String, network: SocialNetwork, fetch: @MainActor () async throws -> [NotificationItem])], timingPrefix: String) async -> [FetchResult] {
+        await withTaskGroup(of: FetchResult.self) { group in
             for fetcher in fetchers {
                 group.addTask {
                     let start = ContinuousClock.now
@@ -155,6 +164,11 @@ public final class FeedService {
                         AppMetrics.sourceRefreshed(network: fetcher.network, trigger: timingPrefix, duration: .now - start, error: nil)
                         return FetchResult(accountId: fetcher.accountId, network: fetcher.network, items: items.map { $0.scoped(to: fetcher.accountId) }, error: nil)
                     } catch {
+                        // iOS ended the background time: the source didn't fail, so it isn't reported as an error.
+                        if Task.isCancelled {
+                            AppMetrics.sourceRefreshCancelled(network: fetcher.network, trigger: timingPrefix, duration: .now - start)
+                            return FetchResult(accountId: fetcher.accountId, network: fetcher.network, items: [], error: CancellationError())
+                        }
                         switch error {
                         case SourceError.notConfigured, SourceError.endpointSpikeRequired:
                             break
