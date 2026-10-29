@@ -9,7 +9,7 @@ struct SpotifyLoginWebView: View {
     var onLoginSuccess: (SpotifyCredentials) -> Void
 
     var body: some View {
-        NavigationStack {
+        LoginSheet(title: "Log in to Spotify") {
             ZStack {
                 SpotifyLoginWKWebView(
                     url: URL(string: "https://accounts.spotify.com/login?continue=https%3A%2F%2Fopen.spotify.com%2F%3Fnd%3D1")!,
@@ -36,13 +36,6 @@ struct SpotifyLoginWebView: View {
                         }
                         .buttonStyle(.borderedProminent)
                     }
-                }
-            }
-            .navigationTitle("Log in to Spotify")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
                 }
             }
         }

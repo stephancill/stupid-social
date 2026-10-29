@@ -7,73 +7,30 @@ struct XConnectionView: View {
     let accountId: String?
     var xChatViewModel: XChatUnlockViewModel?
     let onDone: () -> Void
-    @FocusState private var isFocused: Bool
-    @State private var showingLoginSheet = false
-    @AppStorage("devModeEnabled") private var devModeEnabled = false
-
-    private var account: Account? {
-        accountId.flatMap(viewModel.account(id:))
-    }
 
     var body: some View {
-        Form {
-            if let account {
-                if viewModel.status(for: account.id) == .invalidCredentials {
-                    LoginButtonSection(title: "Reconnect X") { showingLoginSheet = true }
-                }
-
-                Section {
-                    LabeledContent("Account", value: viewModel.connectionLabel(for: account))
-                }
-
-                if let xChatViewModel {
-                    XChatSection(viewModel: xChatViewModel)
-                }
-
-                Section("Notifications") {
-                    ForEach(XNotificationCategory.allCases, id: \.self) { category in
-                        Toggle(category.displayLabel, isOn: Binding(
-                            get: { viewModel.xCategories(account).contains(category) },
-                            set: { viewModel.setXCategory(category, enabled: $0, accountId: account.id) },
-                        ))
-                    }
-                }
-
-                MessageSection(message: viewModel.message)
-                RemoveAccountSection(viewModel: viewModel, account: account, onRemoved: onDone)
-            } else {
-                LoginButtonSection(title: "Log in to X") { showingLoginSheet = true }
-
-                if devModeEnabled {
-                    Section("Manual (Dev)") {
-                        TextField("Cookie header", text: $viewModel.xCookieHeader, axis: .vertical)
-                            .lineLimit(2 ... 4)
-                            .textFieldStyle(.plain)
-                            .focused($isFocused)
-
-                        Button("Save X Credentials") {
-                            isFocused = false
-                            Task {
-                                if await viewModel.addXCookieHeader() != nil {
-                                    onDone()
-                                }
-                            }
-                        }
-                    }
-                }
-                MessageSection(message: viewModel.message)
+        LoginConnectionForm(viewModel: viewModel, network: .x, accountId: accountId, onDone: onDone) { account in
+            if let xChatViewModel {
+                XChatSection(viewModel: xChatViewModel)
             }
-        }
-        .onAppear { viewModel.message = nil }
-        .navigationTitle("X")
-        .sheet(isPresented: $showingLoginSheet) {
-            XLoginWebView { credentials in
-                Task {
-                    let added = await viewModel.addX(credentials, reconnecting: accountId)
-                    if added != nil, accountId == nil {
-                        onDone()
-                    }
+
+            Section("Notifications") {
+                ForEach(XNotificationCategory.allCases, id: \.self) { category in
+                    Toggle(category.displayLabel, isOn: Binding(
+                        get: { viewModel.xCategories(account).contains(category) },
+                        set: { viewModel.setXCategory(category, enabled: $0, accountId: account.id) },
+                    ))
                 }
+            }
+        } manualFields: {
+            TextField("Cookie header", text: $viewModel.xCookieHeader, axis: .vertical)
+                .lineLimit(2 ... 4)
+                .textFieldStyle(.plain)
+        } saveManual: {
+            await viewModel.addXCookieHeader()
+        } login: { complete in
+            XLoginWebView { credentials in
+                complete { await viewModel.addX(credentials, reconnecting: accountId) }
             }
         }
     }

@@ -310,7 +310,7 @@ private struct MessageBubbleView: View {
     var body: some View {
         HStack(alignment: .bottom, spacing: 10) {
             if let actor = actors.first {
-                DetailActorAvatar(actor: actor, size: 32)
+                ActorAvatar(actor: actor, size: 32)
             } else {
                 DetailNetworkFallbackAvatar(network: .instagram)
                     .frame(width: 32, height: 32)
@@ -404,10 +404,11 @@ private struct PersonRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            DetailActorAvatar(actor: actor)
+            ActorAvatar(actor: actor, size: 24)
 
             HStack(spacing: 6) {
-                DetailNetworkUsernameBadge(network: actor.network)
+                NetworkBadgeIcon(network: actor.network)
+                    .accessibilityHidden(true)
 
                 Text(DebugRedaction.actorName(actor, enabled: redactionEnabled))
                     .foregroundStyle(.primary)
@@ -521,7 +522,7 @@ private struct TargetPostView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 10) {
                 if let author = displayAuthor {
-                    DetailActorAvatar(actor: author, size: 36)
+                    ActorAvatar(actor: author, size: 36)
                 } else {
                     DetailNetworkFallbackAvatar(network: fallbackNetwork)
                 }
@@ -801,60 +802,5 @@ private struct DetailNetworkFallbackAvatar: View {
             Circle()
                 .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
         }
-    }
-}
-
-private struct DetailNetworkUsernameBadge: View {
-    let network: SocialNetwork
-
-    var body: some View {
-        NetworkBadgeIcon(network: network)
-            .accessibilityHidden(true)
-    }
-}
-
-private struct DetailActorAvatar: View {
-    let actor: NotificationActor
-    var size: CGFloat = 24
-
-    var body: some View {
-        Group {
-            if let avatarURL = actor.avatarURL {
-                CachedAsyncImage(url: avatarURL) {
-                    DetailAvatarFallback(actor: actor)
-                } failure: {
-                    DetailAvatarFallback(actor: actor)
-                }
-            } else {
-                DetailAvatarFallback(actor: actor)
-            }
-        }
-        .frame(width: size, height: size)
-        .clipShape(Circle())
-        .overlay {
-            Circle()
-                .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
-        }
-    }
-}
-
-private struct DetailAvatarFallback: View {
-    let actor: NotificationActor
-    @AppStorage("redactionEnabled") private var redactionEnabled = false
-
-    var body: some View {
-        ZStack {
-            Circle()
-                .fill(Color.secondary.opacity(0.18))
-
-            Text(initial)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    private var initial: String {
-        let value = DebugRedaction.actorName(actor, enabled: redactionEnabled)
-        return value.first.map { String($0).uppercased() } ?? "?"
     }
 }

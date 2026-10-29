@@ -20,6 +20,9 @@ Sources/
       NotificationDetailView.swift  # Standard form-based notification detail
       ProfileDetailView.swift       # Actor profile detail
       NetworkBadgeIcon.swift        # Shared social network icon badge
+      ActorAvatar.swift             # Shared notification actor avatar with initial fallback
+      CookieLoginWebView.swift      # LoginSheet scaffold and the cookie-capturing login page (GitHub, X)
+      LoginConnectionForm.swift     # Shared add/settings form for web-login networks (X, Instagram, Spotify, GitHub)
       UnifiedStoryViewer.swift      # Full-screen unified story viewer
       SpotifyPulseRing.swift        # Shared phase-driven pulse ring
       InstagramConnectionView.swift # Instagram credential setup

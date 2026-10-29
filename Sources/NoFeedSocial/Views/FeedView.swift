@@ -1121,7 +1121,9 @@ private struct AvatarStrip: View {
     var body: some View {
         HStack(spacing: -6) {
             ForEach(Array(actors.prefix(5).enumerated()), id: \.element.id) { index, actor in
-                ActorAvatar(actor: actor)
+                // Opaque, as the avatars overlap.
+                ActorAvatar(actor: actor, size: 32)
+                    .background(.background, in: Circle())
                     .zIndex(Double(5 - index))
             }
 
@@ -1148,52 +1150,6 @@ private struct AvatarStrip: View {
         }
         let suffix = actors.count > 5 ? ", and \(actors.count - 5) more" : ""
         return "Actors: \(visibleNames.joined(separator: ", "))\(suffix)"
-    }
-}
-
-private struct ActorAvatar: View {
-    let actor: NotificationActor
-
-    var body: some View {
-        Group {
-            if let avatarURL = actor.avatarURL {
-                CachedAsyncImage(url: avatarURL) {
-                    AvatarFallback(actor: actor)
-                } failure: {
-                    AvatarFallback(actor: actor)
-                }
-            } else {
-                AvatarFallback(actor: actor)
-            }
-        }
-        .frame(width: 32, height: 32)
-        .clipShape(Circle())
-        .background(.background, in: Circle())
-        .overlay {
-            Circle()
-                .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
-        }
-    }
-}
-
-private struct AvatarFallback: View {
-    let actor: NotificationActor
-    @AppStorage("redactionEnabled") private var redactionEnabled = false
-
-    var body: some View {
-        ZStack {
-            Circle()
-                .fill(Color.secondary.opacity(0.18))
-
-            Text(initial)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    private var initial: String {
-        let value = DebugRedaction.actorName(actor, enabled: redactionEnabled)
-        return value.first.map { String($0).uppercased() } ?? "?"
     }
 }
 

@@ -14,7 +14,7 @@ struct InstagramLoginWebView: View {
     var onLoginSuccess: (InstagramCredentials) -> Void
 
     var body: some View {
-        NavigationStack {
+        LoginSheet(title: "Log in to Instagram") {
             InstagramLoginWKWebView(
                 url: URL(string: initialCredentials == nil ? "https://www.instagram.com/accounts/login/" : "https://www.instagram.com/")!,
                 initialCredentials: initialCredentials,
@@ -28,15 +28,6 @@ struct InstagramLoginWebView: View {
                 },
             )
             .ignoresSafeArea()
-            .navigationTitle("Log in to Instagram")
-            #if os(iOS)
-                .navigationBarTitleDisplayMode(.inline)
-            #endif
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel") { dismiss() }
-                    }
-                }
         }
     }
 
