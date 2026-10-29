@@ -11,7 +11,12 @@ struct NoFeedSocialApp: App {
     init() {
         AppMetrics.configure()
         do {
-            modelContainer = try ModelContainer(for: CachedNotification.self)
+            // Kept out of the App Group: iOS kills a suspending app that holds a SQLite lock in a shared
+            // container (0xdead10cc), and the notification extension never reads the cache.
+            modelContainer = try ModelContainer(
+                for: CachedNotification.self,
+                configurations: ModelConfiguration(groupContainer: .none),
+            )
         } catch {
             fatalError("Could not create SwiftData model container: \(error)")
         }
