@@ -51,7 +51,10 @@ final class AppContainer {
         apronService = ApronService(accountStore: accountStore, keychainStore: keychainStore)
         let apronSource = ApronNotificationSource(service: apronService)
         chatListViewModel = ChatListViewModel(sources: { [services] in
-            [ChatListSource(provider: apronSource, accountId: nil, label: SocialNetwork.apron.displayName)] + services.chatListSources
+            if DemoData.isDemoMode {
+                return [ChatListSource(provider: DemoChatListProvider(), accountId: DemoData.viewerAccountId, label: "Preview")]
+            }
+            return [ChatListSource(provider: apronSource, accountId: nil, label: SocialNetwork.apron.displayName)] + services.chatListSources
         })
         services.chatList = chatListViewModel
 

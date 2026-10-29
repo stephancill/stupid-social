@@ -15,6 +15,8 @@ public struct ChatSummary: Identifiable, Hashable, Codable, Sendable {
         case x(conversationId: String)
         /// A `chat.bsky.convo` id.
         case bluesky(convoId: String)
+        /// A preview chat in demo mode (`DemoChats`).
+        case demo(chatId: String)
     }
 
     /// Prefixed with the account's id, as two accounts can share a chat.

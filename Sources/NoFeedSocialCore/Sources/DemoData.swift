@@ -4,7 +4,7 @@ import Foundation
 /// simulator capture can browse a populated feed and stories bar without any live
 /// network credentials. Available through the hidden developer settings.
 public enum DemoData {
-    static let viewerAccountId = "demo-viewer"
+    public static let viewerAccountId = "demo-viewer"
 
     public static var isDemoMode: Bool {
         UserDefaults.standard.bool(forKey: "demoModeEnabled")

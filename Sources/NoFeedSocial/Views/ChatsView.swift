@@ -217,6 +217,8 @@ struct ChatsView: View {
             } else {
                 ContentUnavailableView("Bluesky Not Connected", systemImage: "bubble.left.and.bubble.right")
             }
+        case let .demo(chatId):
+            NetworkChatView(viewModel: opened(AdapterChatViewModel(adapter: DemoChatAdapter(chatId: chatId), accountId: chat.accountId), chat: chat))
         }
     }
 }
