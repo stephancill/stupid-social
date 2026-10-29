@@ -1,9 +1,19 @@
 import Foundation
 
-/// One Spotify Messages chat: pages its history, polls for new messages while open (Spotify delivers them
-/// through a push channel the app can't use), sends text, and marks the chat seen as messages are read.
+/// One Spotify Messages chat: pages its history, is polled for new messages (Spotify delivers them through a
+/// push channel the app can't use), sends text, and marks the chat seen as messages are read.
 @MainActor
-public final class SpotifyChatViewModel: ChatViewModel {
+public final class SpotifyChatAdapter: ChatAdapter, ChatAudioPreviewing {
+    public let network = SocialNetwork.spotify
+    public let canReply = false
+    public let acceptsAttachments = false
+    public let pollInterval: Duration? = .seconds(10)
+    public var onChange: (() -> Void)?
+    public private(set) var info: ChatInfo
+    public private(set) var messages: [ChatMessage] = []
+    public private(set) var reactions: [String: [ChatReaction]] = [:]
+    public private(set) var hasEarlierMessages = false
+
     private let client: SpotifyClient
     private let chatId: String
     private let viewerUsername: String
@@ -15,7 +25,6 @@ public final class SpotifyChatViewModel: ChatViewModel {
     private var tracks: [String: SpotifyTrackMetadata] = [:]
     private var pendingShares: Set<String> = []
     private var previewURLs: [String: URL] = [:]
-    private let snapshotCache: ChatSnapshotCache
     /// Whether the first page came from Spotify this visit; until then the messages are the cached snapshot.
     private var hasLoadedHistory = false
     /// The other member of a one-to-one chat, whose name titles it.
@@ -23,17 +32,20 @@ public final class SpotifyChatViewModel: ChatViewModel {
     /// The newest incoming message the chat was marked seen at.
     private var seenUpTo: Date?
     private let pageSize = 30
-    private let pollInterval: Duration = .seconds(10)
 
     /// `chatId` is the base62 id from `spotify:chat:<id>`.
-    public init(client: SpotifyClient, accountId: String, chatId: String, title: String, viewerUsername: String, snapshotCache: ChatSnapshotCache = ChatSnapshotCache()) {
+    public init(client: SpotifyClient, chatId: String, title: String, viewerUsername: String) {
         self.client = client
         self.chatId = chatId
         self.viewerUsername = viewerUsername
-        self.snapshotCache = snapshotCache
-        super.init(network: .spotify, chatKey: "\(accountId)|spotify:\(chatId)", title: title, subtitle: "Spotify", canReply: false)
-        restoreSnapshot()
+        info = ChatInfo(title: title, subtitle: "Spotify")
     }
+
+    public var key: String {
+        "spotify:\(chatId)"
+    }
+
+    // MARK: Snapshot
 
     /// What the chat showed last time, so it opens with its messages, names and track details in place.
     private struct Snapshot: Codable {
@@ -47,12 +59,8 @@ public final class SpotifyChatViewModel: ChatViewModel {
         let showsSenderNames: Bool
     }
 
-    private var snapshotKey: String {
-        chatKey
-    }
-
-    private func restoreSnapshot() {
-        guard let snapshot = snapshotCache.load(Snapshot.self, key: snapshotKey) else { return }
+    public func restore(snapshot data: Data) {
+        guard let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data) else { return }
         for message in snapshot.messages {
             loaded[message.id] = message
         }
@@ -60,109 +68,79 @@ public final class SpotifyChatViewModel: ChatViewModel {
         tracks = snapshot.tracks
         shares = snapshot.shares
         partner = snapshot.partner
-        title = snapshot.title
-        subtitle = snapshot.subtitle
-        showsSenderNames = snapshot.showsSenderNames
+        info = ChatInfo(title: snapshot.title, subtitle: snapshot.subtitle, showsSenderNames: snapshot.showsSenderNames)
         publish()
     }
 
-    private func saveSnapshot() {
+    public func snapshot() -> Data? {
         let newest = loaded.values.sorted { ($0.sentAt ?? .distantPast, $0.id) < ($1.sentAt ?? .distantPast, $1.id) }.suffix(ChatSnapshotCache.messageLimit)
-        snapshotCache.save(
-            Snapshot(messages: Array(newest), profiles: profiles, tracks: tracks, shares: shares, partner: partner, title: title, subtitle: subtitle, showsSenderNames: showsSenderNames),
-            key: snapshotKey,
-        )
+        return try? JSONEncoder().encode(Snapshot(
+            messages: Array(newest), profiles: profiles, tracks: tracks, shares: shares, partner: partner,
+            title: info.title, subtitle: info.subtitle, showsSenderNames: info.showsSenderNames,
+        ))
     }
 
-    override public func connect() async {
-        guard !isPolling else { return }
-        if messages.isEmpty {
-            state = .connecting
-        }
-        errorMessage = nil
-        do {
-            let page = try await client.chatHistory(chatId: chatId, pageSize: pageSize, pageToken: nil)
-            if let chat = page.chat, chat.isGroup {
-                title = chat.name ?? "Group"
-                subtitle = "\(chat.members.count) members"
-            } else if let chat = page.chat, let other = chat.members.first(where: { $0 != viewerUsername }) {
-                partner = other
-                showsSenderNames = false
-                // Keeps the title it opened with (the profile name from the Chats list) rather than flashing
-                // the username, which is often a random ID, until the profile loads.
-                if let profile = profiles[other] {
-                    title = profile.name
-                }
-                loadProfile(username: other)
+    // MARK: Loading
+
+    public func loadNewest() async throws {
+        let page = try await client.chatHistory(chatId: chatId, pageSize: pageSize, pageToken: nil)
+        if let chat = page.chat, chat.isGroup {
+            info.title = chat.name ?? "Group"
+            info.subtitle = "\(chat.members.count) members"
+        } else if let chat = page.chat, let other = chat.members.first(where: { $0 != viewerUsername }) {
+            partner = other
+            info.showsSenderNames = false
+            // Keeps the title it opened with (the profile name from the Chats list) rather than flashing
+            // the username, which is often a random ID, until the profile loads.
+            if let profile = profiles[other] {
+                info.title = profile.name
             }
-            if !hasLoadedHistory {
-                hasLoadedHistory = true
-                nextPageToken = page.nextPageToken
-                hasEarlierMessages = page.nextPageToken != nil
-                // Cached profiles refresh once per visit, quietly, since they render already.
-                for username in profiles.keys {
-                    loadProfile(username: username)
-                }
-            }
-            merge(page.messages)
-            saveSnapshot()
-            state = .connected
-            startPolling(every: pollInterval)
-        } catch {
-            state = .disconnected(error.localizedDescription)
+            loadProfile(username: other)
         }
-    }
-
-    override public func disconnect() {
-        stopPolling()
-        saveSnapshot()
-    }
-
-    override func poll() async {
-        await refreshNewest()
-    }
-
-    private func refreshNewest() async {
-        guard let page = try? await client.chatHistory(chatId: chatId, pageSize: pageSize, pageToken: nil) else { return }
+        if !hasLoadedHistory {
+            hasLoadedHistory = true
+            nextPageToken = page.nextPageToken
+            hasEarlierMessages = page.nextPageToken != nil
+            // Cached profiles refresh once per visit, quietly, since they render already.
+            for username in profiles.keys {
+                loadProfile(username: username)
+            }
+        }
         merge(page.messages)
     }
 
-    override public func loadEarlier() async {
-        guard let token = nextPageToken, !isLoadingEarlier else { return }
-        isLoadingEarlier = true
-        defer { isLoadingEarlier = false }
-        do {
-            let page = try await client.chatHistory(chatId: chatId, pageSize: pageSize, pageToken: token)
-            nextPageToken = page.nextPageToken
-            hasEarlierMessages = page.nextPageToken != nil
-            merge(page.messages)
-        } catch {
-            errorMessage = error.localizedDescription
-        }
+    public func loadEarlier() async throws {
+        guard let token = nextPageToken else { return }
+        let page = try await client.chatHistory(chatId: chatId, pageSize: pageSize, pageToken: token)
+        nextPageToken = page.nextPageToken
+        hasEarlierMessages = page.nextPageToken != nil
+        merge(page.messages)
     }
 
-    /// Sends optimistically (see `sendOptimistically`); when Spotify doesn't return the message, the refresh
-    /// loads it before the sending copy goes.
-    override public func send() async {
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, state == .connected else { return }
-        await sendOptimistically(text: text, attachment: nil, replyToId: nil) {
-            guard let sent = try await client.sendChatText(chatId: chatId, text: text) else {
-                await refreshNewest()
-                return nil
-            }
-            merge([sent])
-            return sent.id
+    /// When Spotify doesn't return the sent message, the newest page loads it before the sending copy goes.
+    public func send(_ message: ChatOutgoing) async throws -> String? {
+        guard let sent = try await client.sendChatText(chatId: chatId, text: message.text) else {
+            try? await loadNewest()
+            return nil
         }
+        merge([sent])
+        return sent.id
+    }
+
+    // MARK: Read position
+
+    /// Spotify keeps no read position the app can read, so nothing counts as unread.
+    public func isAfterReadPosition(_: ChatMessage) -> Bool {
+        false
     }
 
     /// Spotify only marks a whole chat seen, so this sends it once per newer incoming message that is shown.
-    override public func markRead(upTo message: ChatMessage) {
+    public func markRead(upTo message: ChatMessage) -> (@MainActor () async throws -> Void)? {
         guard let newest = loaded.values.filter({ $0.sender != viewerUsername }).compactMap(\.sentAt).max(),
               let shown = message.timestamp, shown >= newest, seenUpTo.map({ newest > $0 }) ?? true
-        else { return }
+        else { return nil }
         seenUpTo = newest
-        Task { [client, chatId] in try? await client.markChatSeen(chatId: chatId) }
+        return { [client, chatId] in try await client.markChatSeen(chatId: chatId) }
     }
 
     // MARK: Display
@@ -185,10 +163,12 @@ public final class SpotifyChatViewModel: ChatViewModel {
                 }
                 .sorted { ($0.count, $0.emoji) > ($1.count, $1.emoji) }
         }
-        publish(history: sorted.map(chatMessage), reactions: totals)
+        reactions = totals
+        messages = sorted.map(chatMessage)
+        onChange?()
     }
 
-    override public func reactors(of emoji: String, on messageId: String) -> [ChatReactor] {
+    public func reactors(of emoji: String, on messageId: String) -> [ChatReactor] {
         (loaded[messageId]?.reactions ?? [])
             .filter { $0.emoji == emoji }
             .map { ChatReactor(user: user(username: $0.username), date: $0.sentAt, isYou: $0.username == viewerUsername) }
@@ -236,7 +216,7 @@ public final class SpotifyChatViewModel: ChatViewModel {
                 avatarURL: profile.images?.first.flatMap { URL(string: $0.url) },
             )
             if username == partner, let name = profiles[username]?.name {
-                title = name
+                info.title = name
             }
             publish()
         }
@@ -299,7 +279,7 @@ public final class SpotifyChatViewModel: ChatViewModel {
     }
 
     /// The track's 30-second preview from its embed page, which `metadata/4` doesn't carry.
-    override public func audioPreviewURL(for previewId: String) async -> URL? {
+    public func audioPreviewURL(for previewId: String) async -> URL? {
         if let cached = previewURLs[previewId] {
             return cached
         }

@@ -114,9 +114,9 @@ final class InstagramDirectTests: XCTestCase {
 
     @MainActor
     func testStoredEmojiMatchesQuickReaction() {
-        XCTAssertEqual(InstagramChatViewModel.displayEmoji("❤"), "❤️")
-        XCTAssertEqual(InstagramChatViewModel.displayEmoji("❤️"), "❤️")
-        XCTAssertEqual(InstagramChatViewModel.displayEmoji("👍"), "👍")
-        XCTAssertEqual(InstagramChatViewModel.displayEmoji("🥲"), "🥲")
+        XCTAssertEqual(InstagramChatAdapter.displayEmoji("❤"), "❤️")
+        XCTAssertEqual(InstagramChatAdapter.displayEmoji("❤️"), "❤️")
+        XCTAssertEqual(InstagramChatAdapter.displayEmoji("👍"), "👍")
+        XCTAssertEqual(InstagramChatAdapter.displayEmoji("🥲"), "🥲")
     }
 }

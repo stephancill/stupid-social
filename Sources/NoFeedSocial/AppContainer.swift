@@ -122,13 +122,13 @@ final class AppContainer {
         guard let component = services.component(id: accountId), let client = component.spotifyClient,
               let viewer = component.metadata.spotifyAccount?.username
         else { return nil }
-        return { SpotifyChatViewModel(client: client, accountId: accountId, chatId: chatId, title: title, viewerUsername: viewer) }
+        return { AdapterChatViewModel(adapter: SpotifyChatAdapter(client: client, chatId: chatId, title: title, viewerUsername: viewer), accountId: accountId) }
     }
 
     /// `nil` when the Instagram account is gone.
     func instagramChatFactory(accountId: String, threadFbid: String, title: String) -> (() -> ChatViewModel)? {
         guard let client = services.component(id: accountId)?.instagramClient else { return nil }
-        return { InstagramChatViewModel(client: client, accountId: accountId, threadFbid: threadFbid, title: title) }
+        return { AdapterChatViewModel(adapter: InstagramChatAdapter(client: client, threadFbid: threadFbid, title: title), accountId: accountId) }
     }
 
     /// `nil` until the X Chat PIN has unlocked the account's keys.

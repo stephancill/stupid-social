@@ -1,9 +1,19 @@
 import Foundation
 
-/// One Instagram Direct thread: pages its history, polls for new messages while open (the web gets them over
-/// MQTT, which the app doesn't use), sends text and replies, and moves the read receipt as messages are read.
+/// One Instagram Direct thread: pages its history, is polled for new messages (the web gets them over MQTT,
+/// which the app doesn't use), sends text and replies, reacts, and moves the read receipt as messages are read.
 @MainActor
-public final class InstagramChatViewModel: ChatViewModel {
+public final class InstagramChatAdapter: ChatAdapter, ChatReactionSending {
+    public let network = SocialNetwork.instagram
+    public let canReply = true
+    public let acceptsAttachments = false
+    public let pollInterval: Duration? = .seconds(20)
+    public var onChange: (() -> Void)?
+    public private(set) var info: ChatInfo
+    public private(set) var messages: [ChatMessage] = []
+    public private(set) var reactions: [String: [ChatReaction]] = [:]
+    public private(set) var hasEarlierMessages = false
+
     private let client: InstagramClient
     private let threadFbid: String
     private var loaded: [String: InstagramDirectMessage] = [:]
@@ -15,18 +25,20 @@ public final class InstagramChatViewModel: ChatViewModel {
     private var legacyThreadId: String?
     /// Where the viewer's read receipt is, locally ahead of Instagram while a mark is pending.
     private var readAt: Date?
-    private let pollInterval: Duration = .seconds(20)
-    private let snapshotCache: ChatSnapshotCache
     /// Whether the thread came from Instagram this visit; until then the messages are the cached snapshot.
     private var hasLoadedHistory = false
 
-    public init(client: InstagramClient, accountId: String, threadFbid: String, title: String, snapshotCache: ChatSnapshotCache = ChatSnapshotCache()) {
+    public init(client: InstagramClient, threadFbid: String, title: String) {
         self.client = client
         self.threadFbid = threadFbid
-        self.snapshotCache = snapshotCache
-        super.init(network: .instagram, chatKey: "\(accountId)|instagram:\(threadFbid)", title: title, subtitle: "Instagram", canReply: true)
-        restoreSnapshot()
+        info = ChatInfo(title: title, subtitle: "Instagram")
     }
+
+    public var key: String {
+        "instagram:\(threadFbid)"
+    }
+
+    // MARK: Snapshot
 
     /// What the chat showed last time, so it opens with its messages and people in place.
     private struct Snapshot: Codable {
@@ -40,12 +52,8 @@ public final class InstagramChatViewModel: ChatViewModel {
         let showsSenderNames: Bool
     }
 
-    private var snapshotKey: String {
-        chatKey
-    }
-
-    private func restoreSnapshot() {
-        guard let snapshot = snapshotCache.load(Snapshot.self, key: snapshotKey) else { return }
+    public func restore(snapshot data: Data) {
+        guard let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data) else { return }
         for message in snapshot.messages {
             loaded[message.id] = message
         }
@@ -53,51 +61,29 @@ public final class InstagramChatViewModel: ChatViewModel {
         viewerFbid = snapshot.viewerFbid
         legacyThreadId = snapshot.legacyThreadId
         readAt = snapshot.readAt
-        title = snapshot.title
-        subtitle = snapshot.subtitle
-        showsSenderNames = snapshot.showsSenderNames
-        // The divider is in the first render, rather than appearing once history arrives.
-        firstUnreadMessageId = loaded.values.sorted { ($0.sentAt ?? .distantPast, $0.id) < ($1.sentAt ?? .distantPast, $1.id) }
-            .map(chatMessage).first(where: isUnread)?.id
+        info = ChatInfo(title: snapshot.title, subtitle: snapshot.subtitle, showsSenderNames: snapshot.showsSenderNames)
         publish()
     }
 
-    private func saveSnapshot() {
+    public func snapshot() -> Data? {
         let newest = loaded.values.sorted { ($0.sentAt ?? .distantPast, $0.id) < ($1.sentAt ?? .distantPast, $1.id) }.suffix(ChatSnapshotCache.messageLimit)
-        snapshotCache.save(
-            Snapshot(messages: Array(newest), people: people, viewerFbid: viewerFbid, legacyThreadId: legacyThreadId, readAt: readAt, title: title, subtitle: subtitle, showsSenderNames: showsSenderNames),
-            key: snapshotKey,
-        )
+        return try? JSONEncoder().encode(Snapshot(
+            messages: Array(newest), people: people, viewerFbid: viewerFbid, legacyThreadId: legacyThreadId, readAt: readAt,
+            title: info.title, subtitle: info.subtitle, showsSenderNames: info.showsSenderNames,
+        ))
     }
 
-    override public func connect() async {
-        guard !isPolling else { return }
-        if messages.isEmpty {
-            state = .connecting
-        }
-        errorMessage = nil
-        do {
-            let thread = try await client.directThread(threadFbid: threadFbid)
-            apply(thread: thread)
-            if !hasLoadedHistory {
-                hasLoadedHistory = true
-                nextCursor = thread.slideMessages?.pageInfo?.hasNextPage == true ? thread.slideMessages?.pageInfo?.endCursor : nil
-                hasEarlierMessages = nextCursor != nil
-            }
-            merge(thread.messages)
-            placeUnreadDivider()
-            saveSnapshot()
-            canReact = true
-            state = .connected
-            startPolling(every: pollInterval)
-        } catch {
-            state = .disconnected(error.localizedDescription)
-        }
-    }
+    // MARK: Loading
 
-    override public func disconnect() {
-        stopPolling()
-        saveSnapshot()
+    public func loadNewest() async throws {
+        let thread = try await client.directThread(threadFbid: threadFbid)
+        apply(thread: thread)
+        if !hasLoadedHistory {
+            hasLoadedHistory = true
+            nextCursor = thread.slideMessages?.pageInfo?.hasNextPage == true ? thread.slideMessages?.pageInfo?.endCursor : nil
+            hasEarlierMessages = nextCursor != nil
+        }
+        merge(thread.messages)
     }
 
     private func apply(thread: InstagramDirectThread) {
@@ -113,68 +99,55 @@ public final class InstagramChatViewModel: ChatViewModel {
         if let viewer = thread.viewer, let fbid = viewer.interopMessagingUserFbid {
             people[fbid] = ChatUser(id: viewer.id ?? fbid, name: "You", avatarURL: viewer.profilePicUrl.flatMap(URL.init))
         }
-        showsSenderNames = thread.isGroup == true
+        info.showsSenderNames = thread.isGroup == true
         if let threadTitle = thread.threadTitle, !threadTitle.isEmpty {
-            title = threadTitle
+            info.title = threadTitle
         }
-        subtitle = thread.isGroup == true ? "\(thread.others.count + 1) members" : "Instagram"
+        info.subtitle = thread.isGroup == true ? "\(thread.others.count + 1) members" : "Instagram"
     }
 
-    override func poll() async {
-        guard let thread = try? await client.directThread(threadFbid: threadFbid) else { return }
-        apply(thread: thread)
-        merge(thread.messages)
+    public func loadEarlier() async throws {
+        guard let cursor = nextCursor else { return }
+        let page = try await client.directOlderMessages(threadFbid: threadFbid, cursor: cursor)
+        nextCursor = page.pageInfo?.hasNextPage == true ? page.pageInfo?.endCursor : nil
+        hasEarlierMessages = nextCursor != nil
+        merge(page.edges.map(\.node))
     }
 
-    override public func loadEarlier() async {
-        guard let cursor = nextCursor, !isLoadingEarlier else { return }
-        isLoadingEarlier = true
-        defer { isLoadingEarlier = false }
-        do {
-            let page = try await client.directOlderMessages(threadFbid: threadFbid, cursor: cursor)
-            nextCursor = page.pageInfo?.hasNextPage == true ? page.pageInfo?.endCursor : nil
-            hasEarlierMessages = nextCursor != nil
-            merge(page.edges.map(\.node))
-        } catch {
-            errorMessage = error.localizedDescription
-        }
+    public func send(_ message: ChatOutgoing) async throws -> String? {
+        let sent = try await client.sendDirectText(threadFbid: threadFbid, text: message.text, replyToMessageId: message.replyToId)
+        // Added as sent; the next poll replaces it with Instagram's copy, which has the same id.
+        loaded[sent.id] = InstagramDirectMessage(
+            id: sent.id,
+            senderFbid: viewerFbid,
+            timestampMs: sent.timestampMs,
+            contentType: "TEXT",
+            textBody: message.text,
+            igdSnippet: nil,
+            content: nil,
+            repliedToMessageId: message.replyToId,
+            reactions: nil,
+            sender: nil,
+        )
+        publish()
+        return sent.id
     }
 
-    /// Sends optimistically (see `sendOptimistically`).
-    override public func send() async {
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, state == .connected else { return }
-        let replyTo = replyingTo?.id
-        await sendOptimistically(text: text, attachment: nil, replyToId: replyTo) {
-            let sent = try await client.sendDirectText(threadFbid: threadFbid, text: text, replyToMessageId: replyTo)
-            // Added as sent; the next poll replaces it with Instagram's copy, which has the same id.
-            loaded[sent.id] = InstagramDirectMessage(
-                id: sent.id,
-                senderFbid: viewerFbid,
-                timestampMs: sent.timestampMs,
-                contentType: "TEXT",
-                textBody: text,
-                igdSnippet: nil,
-                content: nil,
-                repliedToMessageId: replyTo,
-                reactions: nil,
-                sender: nil,
-            )
-            publish()
-            return sent.id
-        }
+    // MARK: Read position
+
+    public func isAfterReadPosition(_ message: ChatMessage) -> Bool {
+        (message.timestamp ?? .distantPast) > (readAt ?? .distantPast)
     }
 
-    /// Instagram keeps one read receipt per person, so this moves it to the newest message shown, shortly after,
-    /// whenever that passes an unread message from someone else.
-    override public func markRead(upTo message: ChatMessage) {
+    /// Instagram keeps one read receipt per person, so this moves it to the newest message shown whenever that
+    /// passes an unread message from someone else.
+    public func markRead(upTo message: ChatMessage) -> (@MainActor () async throws -> Void)? {
         guard let shown = message.timestamp, shown > (readAt ?? .distantPast),
               loaded.values.contains(where: { $0.senderFbid != viewerFbid && ($0.sentAt ?? .distantPast) > (readAt ?? .distantPast) && ($0.sentAt ?? .distantFuture) <= shown }),
               let legacyThreadId
-        else { return }
+        else { return nil }
         readAt = shown
-        updateUnreadCount()
-        scheduleReadMarker { [client, threadFbid, messageId = message.id] in
+        return { [client, threadFbid, messageId = message.id] in
             try await client.markDirectRead(threadFbid: threadFbid, threadId: legacyThreadId, messageId: messageId)
         }
     }
@@ -200,29 +173,28 @@ public final class InstagramChatViewModel: ChatViewModel {
                 }
                 .sorted { ($0.count, $0.emoji) > ($1.count, $1.emoji) }
         }
-        publish(history: sorted.map(chatMessage), reactions: totals)
-        updateUnreadCount()
-    }
-
-    override func isAfterReadPosition(_ message: ChatMessage) -> Bool {
-        (message.timestamp ?? .distantPast) > (readAt ?? .distantPast)
+        reactions = totals
+        messages = sorted.map(chatMessage)
+        onChange?()
     }
 
     /// Instagram stores emoji without the variation selector (❤️ comes back as ❤), so one that matches a quick
     /// reaction without it shows as that quick reaction.
     static func displayEmoji(_ emoji: String) -> String {
         let bare = emoji.replacingOccurrences(of: "\u{FE0F}", with: "")
-        return quickReactions.first { $0.replacingOccurrences(of: "\u{FE0F}", with: "") == bare } ?? emoji
+        return ChatViewModel.quickReactions.first { $0.replacingOccurrences(of: "\u{FE0F}", with: "") == bare } ?? emoji
     }
 
-    override public func yourEmojis(on messageId: String) -> [String] {
+    // MARK: Reactions
+
+    public func yourEmojis(on messageId: String) -> [String] {
         (loaded[messageId]?.reactions ?? []).filter { $0.senderFbid == viewerFbid }.map { Self.displayEmoji($0.reaction) }
     }
 
     /// Instagram keeps one reaction per person, so a new emoji replaces yours and your current one removes it.
     /// Shown right away, then replaced by Instagram's answer, or put back if it fails.
-    override public func toggleReaction(_ emoji: String, on messageId: String) async {
-        guard canReact, let viewerFbid, let message = loaded[messageId] else { return }
+    public func toggleReaction(_ emoji: String, on messageId: String) async throws {
+        guard let viewerFbid, let message = loaded[messageId] else { return }
         let previous = message.reactions
         let mine = previous?.first { $0.senderFbid == viewerFbid }
         let remove = mine.map { Self.displayEmoji($0.reaction) == emoji } ?? false
@@ -238,7 +210,7 @@ public final class InstagramChatViewModel: ChatViewModel {
             setReactions(reactions, on: messageId)
         } catch {
             setReactions(previous, on: messageId)
-            errorMessage = error.localizedDescription
+            throw error
         }
     }
 
@@ -247,7 +219,7 @@ public final class InstagramChatViewModel: ChatViewModel {
         publish()
     }
 
-    override public func reactors(of emoji: String, on messageId: String) -> [ChatReactor] {
+    public func reactors(of emoji: String, on messageId: String) -> [ChatReactor] {
         (loaded[messageId]?.reactions ?? [])
             .filter { Self.displayEmoji($0.reaction) == emoji }
             .map { ChatReactor(user: person(fbid: $0.senderFbid, sender: nil), date: nil, isYou: $0.senderFbid == viewerFbid) }

@@ -472,7 +472,7 @@ Chat is one framework with an adapter per chat network (Apron, Telegram, Instagr
 
 1. Done: shared behavior moved into the base view model (drafts for every network, polling, unread counting and the divider, debounced read markers, in-chat links), and the shared UI no longer casts to Apron.
 2. Done: a list provider per network, so the Chats list holds a list of providers instead of five clients and their special cases (Telegram's archive folder, X's archived inbox rows). Rows carry a framework presence (online or last seen) instead of Telegram's user status, and live updates replace rows through generic calls.
-3. A conversation adapter protocol and one final chat view model driven by it; Spotify and Instagram first, then X Chat and Telegram. One snapshot cache for every network (Apron's log-id merge rule included), so X Chat gains one.
+3. In progress: a conversation adapter protocol and one final chat view model driven by it. Spotify and Instagram are done; X Chat and Telegram are next (pushed updates, attachments, Telegram's members and presence). One snapshot cache for every network (Apron's log-id merge rule included), so X Chat gains one.
 4. Apron last (paged windows, typing, mentions, commands, markdown), which tests whether the protocol is complete; members become a capability, replacing the Apron- and Telegram-specific chat screens.
 
 ## Sending

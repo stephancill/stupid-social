@@ -77,10 +77,12 @@ Sources/
       InstagramProfile.swift       # Current web profile/posts queries and runtime configuration
       InstagramHomepage.swift      # Authenticated viewer and preloaded stories tray parsing
       InstagramDirect.swift        # Direct inbox/thread/send/read via web GraphQL, Chats list rows
+      InstagramChatAdapter.swift   # Instagram Direct chat adapter: history, polling, send, replies, reactions, read receipt
       GitHubClient.swift
       GitHubActivitySource.swift
       GitHubNotificationSource.swift
       SpotifyClient.swift / SpotifyActivitySource.swift
+      SpotifyChatAdapter.swift      # Spotify Messages chat adapter: history, polling, send, seen, track metadata
       SpotifyMessagesParser.swift / SpotifyMessagesSource.swift  # Spotify Messages (speechless) chats in the feed
       XClient.swift / XNotificationSource.swift
       FarcasterClient.swift / FarcasterNotificationSource.swift
@@ -119,11 +121,10 @@ Sources/
       SettingsViewModel.swift
       ApronServersViewModel.swift
       ChatViewModel.swift            # Shared chat models (ChatMessage, ChatUser, ChatEmbed) and base view model: drafts, polling, unread, read markers, sending
+      AdapterChatViewModel.swift     # ChatAdapter protocol (+ ChatReactionSending, ChatAudioPreviewing) and the view model that drives one
       ChatListViewModel.swift        # Chats list: ChatSummary, ChatListProvider (one per network), merged list
       ApronChatViewModel.swift
       ApronLinkViewModel.swift       # What an opened Apron link offers: add server, sign in, join, open
-      SpotifyChatViewModel.swift     # Spotify Messages chat: history, polling, send, seen, track metadata
-      InstagramChatViewModel.swift   # Instagram Direct chat: history, polling, send, replies, read receipt
       TelegramChatViewModel.swift    # Telegram chat: history, pushed updates, send, replies, read cursor
       TelegramConnectionViewModel.swift # Telegram sign-in steps
       XChatViewModel.swift           # X Chat conversation: decrypted history, live events, send, reactions, read marker

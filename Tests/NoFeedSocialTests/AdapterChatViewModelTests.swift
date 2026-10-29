@@ -1,0 +1,194 @@
+import Foundation
+@testable import NoFeedSocialCore
+import XCTest
+
+@MainActor
+final class AdapterChatViewModelTests: XCTestCase {
+    private var directory: URL!
+
+    override func setUp() {
+        directory = FileManager.default.temporaryDirectory.appending(path: "AdapterChatViewModelTests-\(UUID().uuidString)")
+    }
+
+    override func tearDown() {
+        try? FileManager.default.removeItem(at: directory)
+    }
+
+    func testConnectLoadsAndShowsTheAdaptersChat() async {
+        let adapter = FakeAdapter()
+        adapter.pages = [[message(1), message(2)]]
+        let chat = makeChat(adapter)
+        await chat.connect()
+        XCTAssertEqual(chat.state, .connected)
+        XCTAssertEqual(chat.messages.map(\.id), ["1", "2"])
+        XCTAssertEqual(chat.title, "Loaded")
+        XCTAssertFalse(chat.canReact, "the adapter can't react")
+        chat.disconnect()
+    }
+
+    func testAFailedLoadDisconnectsWithTheReason() async {
+        let adapter = FakeAdapter()
+        adapter.error = URLError(.notConnectedToInternet)
+        let chat = makeChat(adapter)
+        await chat.connect()
+        guard case .disconnected = chat.state else { return XCTFail("expected disconnected, got \(chat.state)") }
+    }
+
+    func testReactingAdaptersEnableReactions() async {
+        let adapter = FakeReactingAdapter()
+        adapter.pages = [[message(1)]]
+        let chat = makeChat(adapter)
+        await chat.connect()
+        XCTAssertTrue(chat.canReact)
+        await chat.toggleReaction("👍", on: "1")
+        XCTAssertEqual(chat.reactions["1"]?.first?.emoji, "👍")
+        chat.disconnect()
+    }
+
+    func testTheSnapshotRestoresWithItsDividerInTheFirstRender() async {
+        let adapter = FakeAdapter()
+        adapter.readUpTo = 1
+        adapter.pages = [[message(1), message(2), message(3)]]
+        let first = makeChat(adapter)
+        await first.connect()
+        first.disconnect()
+
+        let reopened = FakeAdapter()
+        reopened.readUpTo = 1
+        let chat = makeChat(reopened)
+        XCTAssertEqual(chat.messages.map(\.id), ["1", "2", "3"], "opens with the snapshot")
+        XCTAssertEqual(chat.firstUnreadMessageId, "2")
+        XCTAssertEqual(chat.unreadCount, 2)
+    }
+
+    func testAdapterChangesOutsideCallsReachTheScreen() async {
+        let adapter = FakeAdapter()
+        adapter.pages = [[message(1)]]
+        let chat = makeChat(adapter)
+        await chat.connect()
+        adapter.info.title = "Renamed"
+        adapter.onChange?()
+        XCTAssertEqual(chat.title, "Renamed")
+        chat.disconnect()
+    }
+
+    func testSendingShowsAtOnceThenTheNetworksCopy() async {
+        let adapter = FakeAdapter()
+        adapter.pages = [[message(1)]]
+        let chat = makeChat(adapter)
+        await chat.connect()
+        chat.draft = "Hello"
+        await chat.send()
+        XCTAssertEqual(adapter.sent.map(\.text), ["Hello"])
+        XCTAssertEqual(chat.messages.last?.id, "sent-1")
+        XCTAssertFalse(chat.messages.contains(where: \.isSending))
+        XCTAssertEqual(chat.draft, "")
+        chat.disconnect()
+    }
+
+    func testMarkingReadMovesTheCountAtOnceAndSendsOnce() async throws {
+        let adapter = FakeAdapter()
+        adapter.pages = [[message(1), message(2), message(3)]]
+        let chat = makeChat(adapter)
+        await chat.connect()
+        XCTAssertEqual(chat.unreadCount, 3)
+        chat.markRead(upTo: message(2))
+        chat.markRead(upTo: message(3))
+        XCTAssertEqual(chat.unreadCount, 0)
+        try await Task.sleep(for: .milliseconds(800))
+        XCTAssertEqual(adapter.readMarks, [3])
+        chat.disconnect()
+    }
+
+    private func makeChat(_ adapter: FakeAdapter) -> AdapterChatViewModel {
+        let suite = "AdapterChatViewModelTests-\(UUID().uuidString)"
+        return AdapterChatViewModel(
+            adapter: adapter,
+            accountId: "test",
+            snapshotCache: ChatSnapshotCache(directory: directory),
+            draftStore: ChatDraftStore(defaults: UserDefaults(suiteName: suite)!),
+        )
+    }
+}
+
+private func message(_ id: Int, own: Bool = false) -> ChatMessage {
+    ChatMessage(id: "\(id)", sender: ChatUser(id: own ? "you" : "ada", name: own ? "You" : "Ada", avatarURL: nil), timestamp: Date(timeIntervalSince1970: Double(id)), text: "Message \(id)", isOwn: own)
+}
+
+/// Read position is a message id, like Telegram's.
+@MainActor
+private class FakeAdapter: ChatAdapter {
+    let network = SocialNetwork.telegram
+    let key = "fake:1"
+    let canReply = true
+    let acceptsAttachments = false
+    let pollInterval: Duration? = .seconds(60)
+    var onChange: (() -> Void)?
+    var info = ChatInfo(title: "Fake", subtitle: "Test")
+    private(set) var messages: [ChatMessage] = []
+    var reactions: [String: [ChatReaction]] = [:]
+    var hasEarlierMessages = false
+
+    var pages: [[ChatMessage]] = []
+    var error: Error?
+    var readUpTo = 0
+    private(set) var sent: [ChatOutgoing] = []
+    private(set) var readMarks: [Int] = []
+
+    func loadNewest() async throws {
+        if let error {
+            throw error
+        }
+        info.title = "Loaded"
+        if !pages.isEmpty {
+            messages = pages.removeFirst()
+        }
+    }
+
+    func loadEarlier() async throws {}
+
+    func send(_ message: ChatOutgoing) async throws -> String? {
+        sent.append(message)
+        let id = "sent-\(sent.count)"
+        messages.append(ChatMessage(id: id, sender: ChatUser(id: "you", name: "You", avatarURL: nil), timestamp: Date(), text: message.text, isOwn: true))
+        return id
+    }
+
+    func isAfterReadPosition(_ message: ChatMessage) -> Bool {
+        (Int(message.id) ?? 0) > readUpTo
+    }
+
+    func markRead(upTo message: ChatMessage) -> (@MainActor () async throws -> Void)? {
+        guard let id = Int(message.id), id > readUpTo else { return nil }
+        readUpTo = id
+        return { [weak self] in self?.readMarks.append(id) }
+    }
+
+    func reactors(of _: String, on _: String) -> [ChatReactor] {
+        []
+    }
+
+    private struct Snapshot: Codable {
+        let ids: [Int]
+    }
+
+    func snapshot() -> Data? {
+        try? JSONEncoder().encode(Snapshot(ids: messages.compactMap { Int($0.id) }))
+    }
+
+    func restore(snapshot data: Data) {
+        guard let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data) else { return }
+        messages = snapshot.ids.map { message($0) }
+    }
+}
+
+@MainActor
+private final class FakeReactingAdapter: FakeAdapter, ChatReactionSending {
+    func yourEmojis(on messageId: String) -> [String] {
+        reactions[messageId]?.filter(\.includesYou).map(\.emoji) ?? []
+    }
+
+    func toggleReaction(_ emoji: String, on messageId: String) async throws {
+        reactions[messageId] = [ChatReaction(emoji: emoji, count: 1, includesYou: true)]
+    }
+}
