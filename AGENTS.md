@@ -137,23 +137,22 @@ Outside `Sources/`: `NotificationService/` holds the extension's Info.plist and 
 - Always read `docs/TECHNICAL_DESIGN.md` before making architecture or implementation decisions once it exists.
 - Treat `docs/TECHNICAL_DESIGN.md` as the source of truth for planned implementation details.
 - Record implementation decisions, tradeoffs, endpoint discoveries, and notable deviations in `docs/IMPLEMENTATION.md` as work progresses.
-- Keep `docs/IMPLEMENTATION.md` factual and chronological enough that another agent can resume work without re-discovering context.
+- `docs/IMPLEMENTATION.md` is organized by topic and describes the current state, so another agent can resume work without re-discovering context. Add to the topic's section and edit or remove what a change makes untrue; don't append dated changelog entries. Keep reasons for decisions and `(observed YYYY-MM-DD)` on external service behavior. Leave out release logs (git and App Store Connect have them), verification narratives and step-by-step debugging stories: keep the root cause and the rule it implies.
 
 ## Product Direction
 
-- This is a universal macOS and iOS app built and released with the `stupid-app` CLI.
+- This is an iOS app (iPhone and iPad) built and released with the `stupid-app` CLI.
 - The MVP is notifications-only for X and Farcaster.
 - The app should help users avoid algorithmic feeds while still seeing direct social notifications.
 - Posting, Bluesky, multiple accounts, and backend services are future scope unless `docs/PLAN.md` changes.
 
 ## Apple App Conventions
 
-- Prefer SwiftUI for shared macOS and iOS UI.
+- Prefer SwiftUI for UI.
 - Keep UI very simple, restrained, and aligned with Apple's Human Interface Guidelines.
 - Prefer built-in SwiftUI and platform UI primitives over custom controls, custom styling, or bespoke interaction patterns.
 - Keep platform-specific code isolated behind small adapters or conditional compilation.
 - Prefer native Apple APIs over extra dependencies unless the dependency clearly reduces risk or complexity.
-- Preserve a universal app structure that can run on both macOS and iOS.
 - Verify `stupid-app` build/run behavior after meaningful project changes when feasible.
 
 ## State And Storage
