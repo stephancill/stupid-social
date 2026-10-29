@@ -59,8 +59,4 @@ public final class FeedViewModel: ObservableObject {
 
         return true
     }
-
-    public func performCredentialHealthCheck() async {
-        await feedService.healthCheckAllSources()
-    }
 }

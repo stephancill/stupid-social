@@ -102,7 +102,7 @@ struct ChatsView: View {
             focus = NotificationRouter.shared.pendingFocus.map { (request, $0) }
             NotificationRouter.shared.pendingFocus = nil
             guard selection?.destination != request else { return }
-            guard let chat = chat(for: request) else {
+            guard let chat = viewModel.chat(for: request) else {
                 waitingRequest = request
                 return
             }
@@ -110,7 +110,7 @@ struct ChatsView: View {
             open(chat)
         }
         .onChange(of: viewModel.chats + viewModel.archivedChats) { _, _ in
-            guard let request = waitingRequest, let chat = chat(for: request) else { return }
+            guard let request = waitingRequest, let chat = viewModel.chat(for: request) else { return }
             waitingRequest = nil
             open(chat)
         }
@@ -147,45 +147,6 @@ struct ChatsView: View {
             chat.title.localizedStandardContains(query) || (chat.titlePrefix ?? "").localizedStandardContains(query)
                 || (chat.preview ?? "").localizedStandardContains(query)
         }
-    }
-
-    /// The listed chat, or one titled by its room until the list has it.
-    private func chat(for destination: ChatSummary.Destination) -> ChatSummary? {
-        if let listed = (viewModel.chats + viewModel.archivedChats).first(where: { $0.destination == destination }) {
-            return listed
-        }
-        // A Telegram notification names the chat without its access hash, so it matches on kind and id.
-        if case let .telegram(peer) = destination {
-            return (viewModel.chats + viewModel.archivedChats).first { chat in
-                guard case let .telegram(listed) = chat.destination else { return false }
-                return listed.kind == peer.kind && listed.id == peer.id
-            }
-        }
-        if case let .apronDirect(serverURL, user) = destination {
-            return ChatSummary(
-                id: "apron:\(serverURL.absoluteString)|direct:\(user.userId)",
-                network: .apron,
-                title: user.displayName,
-                titlePrefix: serverURL.host() ?? serverURL.absoluteString,
-                avatarURL: user.avatarURL,
-                preview: nil,
-                timestamp: nil,
-                unreadCount: 0,
-                destination: destination,
-            ).scoped(to: Account.apronId(serverURL: serverURL))
-        }
-        guard case let .apron(serverURL, roomId) = destination else { return nil }
-        return ChatSummary(
-            id: "apron:\(serverURL.absoluteString)|\(roomId)",
-            network: .apron,
-            title: roomId,
-            titlePrefix: serverURL.host() ?? serverURL.absoluteString,
-            avatarURL: nil,
-            preview: nil,
-            timestamp: nil,
-            unreadCount: 0,
-            destination: destination,
-        ).scoped(to: Account.apronId(serverURL: serverURL))
     }
 
     /// A network chat opening from its row, which says whether there are unread messages to wait for.

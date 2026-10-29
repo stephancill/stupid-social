@@ -131,11 +131,4 @@ extension KeyedDecodingContainer {
         guard contains(key), try !decodeNil(forKey: key) else { return nil }
         return try decodeFlexibleString(forKey: key)
     }
-
-    func decodeFlexibleInt64IfPresent(forKey key: Key) throws -> Int64? {
-        guard contains(key), try !decodeNil(forKey: key) else { return nil }
-        if let int = try? decode(Int64.self, forKey: key) { return int }
-        if let string = try? decode(String.self, forKey: key) { return Int64(string) }
-        return nil
-    }
 }

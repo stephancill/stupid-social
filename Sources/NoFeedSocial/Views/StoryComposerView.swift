@@ -57,8 +57,6 @@ struct StoryComposerView: View {
     @State private var isSearchingMentions = false
     @State private var mentionSearchTask: Task<Void, Never>?
     @State private var keyboardHeight: CGFloat = 0
-    @GestureState private var captionDrag: CaptionDrag?
-    @FocusState private var swiftUIFocusedCaptionID: UUID?
 
     init(
         onMentionSearch: @escaping (String) async -> [NetworkProfile] = { _ in [] },
@@ -309,75 +307,8 @@ struct StoryComposerView: View {
         )
     }
 
-    private func bindingForCaption(_ id: UUID) -> Binding<String> {
-        Binding(
-            get: { captions.first(where: { $0.id == id })?.text ?? "" },
-            set: { newValue in
-                guard let index = captions.firstIndex(where: { $0.id == id }) else { return }
-                captions[index].text = newValue
-                updateMentionQuery(for: captions[index])
-            },
-        )
-    }
-
     private func textDisplay(_ caption: StoryCaption) -> String {
         caption.text.isEmpty ? "Text" : caption.text
-    }
-
-    private func liveOffset(_ caption: StoryCaption) -> CGSize {
-        guard captionDrag?.id == caption.id else { return caption.offset }
-        return CGSize(
-            width: caption.offset.width + (captionDrag?.translation.width ?? 0),
-            height: caption.offset.height + (captionDrag?.translation.height ?? 0),
-        )
-    }
-
-    private func textOverlay(caption: StoryCaption, maxWidth: CGFloat) -> some View {
-        Group {
-            if swiftUIFocusedCaptionID == caption.id {
-                TextField("Text", text: bindingForCaption(caption.id), axis: .vertical)
-                    .focused($swiftUIFocusedCaptionID, equals: caption.id)
-                    .submitLabel(.done)
-            } else {
-                Text(textDisplay(caption))
-                    .onTapGesture {
-                        focusedCaptionID = caption.id
-                        swiftUIFocusedCaptionID = caption.id
-                    }
-            }
-        }
-        .font(.largeTitle.weight(.bold))
-        .multilineTextAlignment(.center)
-        .foregroundStyle(caption.textColor.color)
-        .padding(.horizontal, 18)
-        .padding(.vertical, 12)
-        .background(caption.textBackground.color, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .frame(maxWidth: maxWidth)
-        .scaleEffect(caption.scale)
-        .contentShape(Rectangle())
-        .offset(liveOffset(caption))
-        .highPriorityGesture(textDragGesture(caption))
-        .transaction { transaction in
-            transaction.animation = nil
-        }
-    }
-
-    private func textDragGesture(_ caption: StoryCaption) -> some Gesture {
-        DragGesture()
-            .updating($captionDrag) { value, state, _ in
-                state = CaptionDrag(id: caption.id, translation: value.translation)
-            }
-            .onChanged { value in
-                if value.translation != .zero {
-                    focusedCaptionID = nil
-                    swiftUIFocusedCaptionID = nil
-                }
-            }
-            .onEnded { value in
-                guard let index = captions.firstIndex(where: { $0.id == caption.id }) else { return }
-                captions[index].offset.width += value.translation.width
-                captions[index].offset.height += value.translation.height
-            }
     }
 
     private func loadSelectedPhoto() async {
@@ -393,7 +324,6 @@ struct StoryComposerView: View {
         let caption = StoryCaption(text: "Text")
         captions.append(caption)
         focusedCaptionID = caption.id
-        swiftUIFocusedCaptionID = caption.id
     }
 
     private func cycleBackground() {
@@ -409,14 +339,10 @@ struct StoryComposerView: View {
         if focusedCaptionID == id {
             focusedCaptionID = nil
         }
-        if swiftUIFocusedCaptionID == id {
-            swiftUIFocusedCaptionID = nil
-        }
     }
 
     private func clearFocusedCaption() {
         focusedCaptionID = nil
-        swiftUIFocusedCaptionID = nil
         captionTrashVisible = false
         clearMentionSearch()
     }
@@ -966,11 +892,6 @@ private enum StoryTextColor: CaseIterable, Equatable {
         }
     }
 #endif
-
-private struct CaptionDrag: Equatable {
-    let id: UUID
-    let translation: CGSize
-}
 
 private enum StoryComposerBackground: Equatable, CaseIterable {
     case black

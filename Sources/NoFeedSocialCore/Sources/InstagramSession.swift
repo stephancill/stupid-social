@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 
 struct InstagramWebState {
@@ -28,55 +27,6 @@ let operationNames = [
 
 @MainActor
 extension InstagramClient {
-    private static let instagramSignatureKey = "9193488027538fd3450b83b7d05286d4ca9599a0f7eeed90d8c85925698a05dc"
-
-    struct StoryPhotoFormat {
-        let entityType: String
-        let compressionLibrary: String
-        let compressionVersion: String
-    }
-
-    func storyPhotoFormat(mimeType: String) -> StoryPhotoFormat {
-        if mimeType == "image/webp" {
-            return StoryPhotoFormat(entityType: "image/webp", compressionLibrary: "libwebp", compressionVersion: "30")
-        }
-        return StoryPhotoFormat(entityType: "image/jpeg", compressionLibrary: "libjpeg", compressionVersion: "9")
-    }
-
-    func imageCompressionJSON(format: StoryPhotoFormat, width: Int, height: Int) -> String {
-        jsonString([
-            "lib_name": format.compressionLibrary,
-            "lib_version": format.compressionVersion,
-            "quality": "86",
-            "original_width": width,
-            "original_height": height,
-        ])
-    }
-
-    var supportedCapabilitiesJSON: String {
-        let sdkVersions = (149 ... 202).map { "\($0).0" }.joined(separator: ",")
-        let betaVersions = (182 ... 202).map { "\($0).0-beta" }.joined(separator: ",")
-        return jsonString([
-            ["name": "SUPPORTED_SDK_VERSIONS", "value": sdkVersions],
-            ["name": "SUPPORTED_BETA_SDK_VERSIONS", "value": betaVersions],
-            ["name": "FACE_TRACKER_VERSION", "value": "14"],
-            ["name": "COMPRESSION", "value": "ETC2_COMPRESSION"],
-            ["name": "gyroscope", "value": "gyroscope_enabled"],
-        ])
-    }
-
-    func signedFormBody(object: [String: Any]) throws -> String {
-        let signedBodyJSON = jsonString(object)
-        let signatureData = signedBodyJSON.data(using: .utf8)!
-        let hmacKey = Self.instagramSignatureKey.data(using: .utf8)!
-        let hmac = HMAC<SHA256>.authenticationCode(for: signatureData, using: SymmetricKey(data: hmacKey))
-        let signatureHex = hmac.map { String(format: "%02x", $0) }.joined()
-        return formURLEncoded([
-            "signed_body": "\(signatureHex).\(signedBodyJSON)",
-            "ig_sig_key_version": "4",
-        ])
-    }
-
     func headers(credentials: InstagramCredentials) -> [String: String] {
         let deviceId = credentials.dsUserId
 
@@ -104,75 +54,6 @@ extension InstagramClient {
         ]
     }
 
-    func directInboxHeaders(credentials: InstagramCredentials) -> [String: String] {
-        let deviceIds = instagramDeviceIdentifiers(credentials: credentials)
-        var directHeaders = headers(credentials: credentials)
-        directHeaders["Authorization"] = instagramAuthorizationHeader(credentials: credentials)
-        directHeaders["X-Ads-Opt-Out"] = "0"
-        directHeaders["X-CM-Bandwidth-KBPS"] = "-1.000"
-        directHeaders["X-CM-Latency"] = "-1.000"
-        directHeaders["X-IG-App-Locale"] = "en_US"
-        directHeaders["X-IG-Device-Locale"] = "en_US"
-        directHeaders["X-Pigeon-Session-Id"] = UUID().uuidString.lowercased()
-        directHeaders["X-Pigeon-Rawclienttime"] = String(format: "%.3f", Date().timeIntervalSince1970)
-        directHeaders["X-IG-Connection-Speed"] = "2500kbps"
-        directHeaders["X-IG-Bandwidth-Speed-KBPS"] = "-1.000"
-        directHeaders["X-IG-Bandwidth-TotalBytes-B"] = "0"
-        directHeaders["X-IG-Bandwidth-TotalTime-MS"] = "0"
-        directHeaders["X-IG-Extended-CDN-Thumbnail-Cache-Busting-Value"] = "1000"
-        directHeaders["X-Bloks-Version-Id"] = "388ece79ebc0e70e87873505ed1b0ff335ae2868a978cc951b6721c41d46a30a"
-        directHeaders["X-IG-WWW-Claim"] = "0"
-        directHeaders["X-Bloks-Is-Layout-RTL"] = "false"
-        directHeaders["X-IG-Device-ID"] = deviceIds.uuid
-        directHeaders["X-IG-Android-ID"] = deviceIds.androidId
-        if let mid = credentials.mid {
-            directHeaders["X-MID"] = mid
-        }
-        return directHeaders
-    }
-
-    func storyPostingHeaders(credentials: InstagramCredentials) -> [String: String] {
-        let deviceIds = instagramDeviceIdentifiers(credentials: credentials)
-        var headers = [
-            "Authorization": instagramAuthorizationHeader(credentials: credentials),
-            "X-CSRFToken": credentials.csrfToken,
-            "User-Agent": Self.webUserAgent,
-            "Accept": "*/*",
-            "Accept-Language": Self.acceptLanguageHeader,
-            "X-IG-App-Locale": "en_US",
-            "X-IG-Device-Locale": "en_US",
-            "X-IG-Mapped-Locale": "en_US",
-            "X-IG-Capabilities": "3brTv10=",
-            "X-IG-App-ID": "567067343352427",
-            "X-IG-WWW-Claim": "0",
-            "X-IG-Device-ID": deviceIds.uuid,
-            "X-IG-Android-ID": deviceIds.androidId,
-            "X-IG-Connection-Type": "WIFI",
-            "X-FB-Connection-Type": "WIFI",
-            "X-FB-HTTP-Engine": "Liger",
-        ]
-        if let mid = credentials.mid {
-            headers["X-MID"] = mid
-        }
-        return headers
-    }
-
-    func storyUploadHeaders(credentials: InstagramCredentials) -> [String: String] {
-        var uploadHeaders = headers(credentials: credentials)
-        let deviceIds = instagramDeviceIdentifiers(credentials: credentials)
-        uploadHeaders["X-IG-Device-ID"] = deviceIds.uuid
-        uploadHeaders["X-IG-Android-ID"] = deviceIds.androidId
-        uploadHeaders["X-IG-App-Locale"] = "en_US"
-        uploadHeaders["X-IG-Device-Locale"] = "en_US"
-        uploadHeaders["X-IG-Mapped-Locale"] = "en_US"
-        uploadHeaders["X-IG-WWW-Claim"] = "0"
-        uploadHeaders["X-FB-Connection-Type"] = "WIFI"
-        if let mid = credentials.mid {
-            uploadHeaders["X-MID"] = mid
-        }
-        return uploadHeaders
-    }
-
     func instagramAuthorizationHeader(credentials: InstagramCredentials) -> String {
         let payload = jsonString([
             "ds_user_id": credentials.dsUserId,
@@ -180,13 +61,6 @@ extension InstagramClient {
         ])
         let encoded = Data(payload.utf8).base64EncodedString()
         return "Bearer IGT:2:\(encoded)"
-    }
-
-    func instagramDeviceIdentifiers(credentials: InstagramCredentials) -> (uuid: String, androidId: String) {
-        let uuid = (credentials.igDid ?? credentials.dsUserId).lowercased()
-        let digest = SHA256.hash(data: Data(uuid.utf8))
-        let androidSuffix = digest.prefix(8).map { String(format: "%02x", $0) }.joined()
-        return (uuid: uuid, androidId: "android-\(androidSuffix)")
     }
 
     func webHeaders(credentials: InstagramCredentials, referer: String) -> [String: String] {
@@ -466,13 +340,6 @@ extension InstagramClient {
 
     func jazoest(csrfToken: String) -> String {
         "2\(csrfToken.unicodeScalars.reduce(0) { $0 + Int($1.value) })"
-    }
-
-    func instagramDateTimeString() -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy:MM:dd HH:mm:ss"
-        return formatter.string(from: Date())
     }
 
     static var acceptLanguageHeader: String {

@@ -60,10 +60,6 @@ public final class StoryBarViewModel: ObservableObject {
         ownerId.flatMap { instagramSourceByOwner[$0] } ?? instagramSource
     }
 
-    public func fetchInstagramStories() async {
-        await fetchStoryBarContent()
-    }
-
     /// Replaces the story bar with demo stories and marks content loaded.
     public func loadDemoStoryBarItems() {
         storyBarItems = DemoData.storyBarItems()
@@ -81,10 +77,6 @@ public final class StoryBarViewModel: ObservableObject {
         ownInstagramStoryReel = nil
         storyBarContentLoaded = false
         storyBarLoading = false
-    }
-
-    public func fetchSpotifyActivity() async {
-        await fetchStoryBarContent()
     }
 
     public func fetchStoryBarContent() async {

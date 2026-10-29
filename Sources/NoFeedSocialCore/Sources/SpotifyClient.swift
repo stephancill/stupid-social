@@ -335,11 +335,6 @@ public struct SpotifyClient {
         return response.friends
     }
 
-    func needsRefresh() -> Bool {
-        guard let creds = try? credentialStore.loadSpotifyCredentials() else { return false }
-        return !creds.spDC.isEmpty
-    }
-
     func userProfile(username: String) async throws -> SpotifyUserProfile {
         let (data, _) = try await makeRequest("user-profile-view/v3/profile/\(username)")
         let profile = try JSONDecoder().decode(SpotifyUserProfileJSON.self, from: data)

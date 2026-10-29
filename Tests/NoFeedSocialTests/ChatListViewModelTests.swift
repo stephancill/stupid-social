@@ -125,6 +125,38 @@ final class ChatListViewModelTests: XCTestCase {
         XCTAssertEqual(relaunched.chats.map(\.id), ["spotify|s"])
     }
 
+    func testAListedChatOpensByItsDestination() async {
+        let list = makeList([(FakeProvider(network: .spotify, page: .init(chats: [row("s", .spotify, minutesAgo: 1)], archived: [])), "spotify")])
+        await list.load()
+        XCTAssertEqual(list.chat(for: .spotify(chatId: "s"))?.id, "spotify|s")
+        XCTAssertNil(list.chat(for: .spotify(chatId: "other")))
+    }
+
+    func testAProviderResolvesADestinationAmongItsOwnRows() async {
+        let first = ResolvingFakeProvider(network: .spotify, page: .init(chats: [row("a", .spotify, minutesAgo: 1)], archived: []))
+        let second = ResolvingFakeProvider(network: .spotify, page: .init(chats: [row("b", .spotify, minutesAgo: 2)], archived: []))
+        let list = ChatListViewModel(sources: {
+            [ChatListSource(provider: first, accountId: "spotify-1", label: "Spotify"), ChatListSource(provider: second, accountId: "spotify-2", label: "Spotify")]
+        }, caches: caches)
+        await list.load()
+        XCTAssertEqual(list.chat(for: .spotify(chatId: "B"))?.id, "spotify-2|b", "each provider sees only its own rows")
+        XCTAssertEqual(first.offered.map(\.id), ["spotify-1|a"])
+    }
+
+    func testATelegramNotificationOpensItsChatWithoutTheAccessHash() async throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "ChatListViewModelTests-\(UUID().uuidString)"))
+        let keychain = KeychainCredentialStore(service: "ChatListViewModelTests-\(UUID().uuidString)", fallbackStore: defaults, prefersSynchronizable: false, allowsInsecureFallback: true)
+        let listed = row("t", .telegram, minutesAgo: 1, destination: .telegram(peer: TelegramPeer(kind: .user, id: 7, accessHash: 42)))
+        await makeList([(FakeProvider(network: .telegram, page: .init(chats: [listed], archived: [])), "telegram")]).load()
+        // Starts from the cached list, then resolves through the real Telegram client.
+        let telegram = TelegramClient(keychain: keychain)
+        let list = ChatListViewModel(sources: {
+            [ChatListSource(provider: telegram, accountId: "telegram", label: "Telegram")]
+        }, caches: caches)
+        XCTAssertEqual(list.chat(for: .telegram(peer: TelegramPeer(kind: .user, id: 7, accessHash: 0)))?.id, "telegram|t")
+        XCTAssertNil(list.chat(for: .telegram(peer: TelegramPeer(kind: .chat, id: 7, accessHash: 0))))
+    }
+
     private func makeList(_ providers: [(FakeProvider, String?)]) -> ChatListViewModel {
         ChatListViewModel(sources: {
             providers.map { ChatListSource(provider: $0.0, accountId: $0.1, label: $0.0.network.displayName) }
@@ -161,5 +193,31 @@ private final class FakeProvider: ChatListProvider {
             throw error
         }
         return page
+    }
+}
+
+@MainActor
+private final class ResolvingFakeProvider: ChatListResolving {
+    let network: SocialNetwork
+    let page: ChatListPage
+    private(set) var offered: [ChatSummary] = []
+
+    init(network: SocialNetwork, page: ChatListPage) {
+        self.network = network
+        self.page = page
+    }
+
+    func chatList() async throws -> ChatListPage {
+        page
+    }
+
+    /// Matches a Spotify chat id regardless of case.
+    func chat(for destination: ChatSummary.Destination, in chats: [ChatSummary]) -> ChatSummary? {
+        offered = chats
+        guard case let .spotify(chatId) = destination else { return nil }
+        return chats.first { chat in
+            guard case let .spotify(listed) = chat.destination else { return false }
+            return listed.lowercased() == chatId.lowercased()
+        }
     }
 }

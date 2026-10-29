@@ -192,8 +192,6 @@ public final class InstagramClient {
         [:]
     }
 
-    private static let reelsMediaBatchSize = 30
-
     public func userInfo(uid: String) async throws -> InstagramUserInfoResponse {
         guard let credentials = try credentialStore.loadInstagramCredentials() else {
             throw SourceError.notConfigured
@@ -203,10 +201,6 @@ public final class InstagramClient {
         let decoded = try JSONDecoder().decode(InstagramProfileQueryResponse.self, from: data)
         guard let user = decoded.data.user else { throw SourceError.invalidResponse }
         return InstagramUserInfoResponse(user: user, status: "ok")
-    }
-
-    public func userPosts(uid: String, count: Int = 12) async throws -> [NetworkProfilePost] {
-        try await userPostsPage(uid: uid, cursor: nil, count: count).posts
     }
 
     public func userPostsPage(uid: String, cursor: String?, count: Int = 12) async throws -> NetworkProfilePostsPage {

@@ -82,13 +82,6 @@ public struct ThriftStruct: Hashable, Sendable {
         default: nil
         }
     }
-
-    /// The set field of a Thrift union, such as `MessageEventDetail`.
-    var unionCase: (id: Int16, value: ThriftStruct)? {
-        fields.lazy.compactMap { id, value in
-            if case let .structure(structure) = value { (id, structure) } else { nil }
-        }.first
-    }
 }
 
 enum ThriftError: LocalizedError {

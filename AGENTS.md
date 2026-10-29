@@ -38,6 +38,10 @@ Sources/
       ApronLinkView.swift           # Confirmation sheet for opened Apron links
       ChatView.swift                # Shared chat screen: title pill, connection lifecycle; NetworkChatView for Spotify
       ChatUIKitView.swift           # Shared chat UIKit view controller: message list, floating composer, attachments
+      ChatMessageCell.swift         # Chat message cell, unread divider, avatar and reply quote views
+      ChatTextViews.swift           # Chat composer text view, link/mention label and tap gestures
+      ChatAttributedText.swift      # Inline Markdown to UIKit attributes for chat messages
+      ChatReactionPicker.swift      # "More Reactions" emoji sheet
       ChatAudioPreview.swift        # Inline audio preview player and track card for chat messages
       ChatImageViewer.swift         # Full-screen chat image viewer: zoom, swipe to dismiss, save to Photos
       ApronChatView.swift           # Apron chat: the shared chat plus members and profiles
@@ -127,7 +131,7 @@ Sources/
       ApronServersViewModel.swift
       ChatViewModel.swift            # Shared chat models (ChatMessage, ChatUser, ChatEmbed) and base view model: drafts, polling, unread, read markers, sending
       AdapterChatViewModel.swift     # ChatAdapter protocol and its optional abilities, and the view model that drives one (every network)
-      ChatListViewModel.swift        # Chats list: ChatSummary, ChatListProvider (one per network), merged list
+      ChatListViewModel.swift        # Chats list: ChatSummary, ChatListProvider (one per network), merged list, opening a destination
       ApronRoomViewModel.swift       # Apron room members, profiles and notification level, kept current by the room's adapter
       ApronLinkViewModel.swift       # What an opened Apron link offers: add server, sign in, join, open
       TelegramMembersViewModel.swift # Telegram group member list, opened from the chat title

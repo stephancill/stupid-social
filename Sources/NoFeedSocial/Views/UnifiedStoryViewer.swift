@@ -36,6 +36,7 @@ struct UnifiedStoryViewer: View {
     @State private var touchStartedAt: Date?
 
     @State private var player: AVPlayer?
+    @State private var playbackEndObserver: (any NSObjectProtocol)?
     @State private var playerStatus: PlayerStatus = .idle
     @State private var previewURLs: [String: URL?] = [:]
     @State private var preloadedPreviews: [String: PreloadedPreview] = [:]
@@ -1012,16 +1013,9 @@ struct UnifiedStoryViewer: View {
             }
         }
 
-        NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemDidPlayToEndTime,
-            object: playerItem,
-            queue: .main,
-        ) { _ in
-            Task { @MainActor in
-                guard player?.currentItem === playerItem else { return }
-                playerStatus = .finished
-                advance()
-            }
+        observePlaybackEnd(of: playerItem) {
+            playerStatus = .finished
+            advance()
         }
 
         newPlayer.play()
@@ -1049,14 +1043,8 @@ struct UnifiedStoryViewer: View {
             }
         }
 
-        NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemDidPlayToEndTime,
-            object: playerItem,
-            queue: .main,
-        ) { _ in
-            Task { @MainActor in
-                playerStatus = .finished
-            }
+        observePlaybackEnd(of: playerItem) {
+            playerStatus = .finished
         }
 
         newPlayer.play()
@@ -1158,7 +1146,30 @@ struct UnifiedStoryViewer: View {
         player = nil
         playerStatus = .idle
         pulsePhase = 0
-        NotificationCenter.default.removeObserver(self, name: .AVPlayerItemDidPlayToEndTime, object: nil)
+        removePlaybackEndObserver()
+    }
+
+    /// Calls `onEnd` when `playerItem` finishes while it is still the one playing. One observer at a time,
+    /// so a story's item can't end the next one's playback.
+    private func observePlaybackEnd(of playerItem: AVPlayerItem, onEnd: @escaping @MainActor () -> Void) {
+        removePlaybackEndObserver()
+        playbackEndObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: playerItem,
+            queue: .main,
+        ) { _ in
+            Task { @MainActor in
+                guard player?.currentItem === playerItem else { return }
+                onEnd()
+            }
+        }
+    }
+
+    private func removePlaybackEndObserver() {
+        if let playbackEndObserver {
+            NotificationCenter.default.removeObserver(playbackEndObserver)
+        }
+        playbackEndObserver = nil
     }
 
     private func extractTrackId(from uri: String) -> String {

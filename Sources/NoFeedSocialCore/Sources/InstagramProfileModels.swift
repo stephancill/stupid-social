@@ -21,25 +21,6 @@ public struct InstagramCurrentUserProfile {
     public let isPrivate: Bool?
 }
 
-struct InstagramCurrentUserResponse: Decodable {
-    struct User: Decodable {
-        let pk: UInt64
-        let username: String
-        let fullName: String
-        let profilePicUrl: String?
-
-        enum CodingKeys: String, CodingKey {
-            case pk
-            case username
-            case fullName = "full_name"
-            case profilePicUrl = "profile_pic_url"
-        }
-    }
-
-    let user: User
-    let status: String
-}
-
 public struct InstagramUserInfoResponse: Decodable {
     public struct InfoUser: Decodable {
         public let pk: UInt64?

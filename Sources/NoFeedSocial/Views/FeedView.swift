@@ -537,19 +537,6 @@ private enum StoryBarFeedMode: CaseIterable {
         }
     }
 
-    var indicatorColor: Color {
-        switch self {
-        case .general:
-            Color.secondary
-        case .instagram:
-            Color.pink.opacity(0.75)
-        case .spotify:
-            Color.spotifyActivityBorder
-        case .github:
-            Color(red: 0.20, green: 0.22, blue: 0.25)
-        }
-    }
-
     func includes(_ item: StoryBarItem) -> Bool {
         switch self {
         case .general:
@@ -1043,25 +1030,12 @@ private extension Color {
         Color(red: 0.12, green: 0.73, blue: 0.26)
     }
 
-    static var storySkeletonFill: Color {
-        Color(.tertiaryLabel)
-    }
-
     static var storySkeletonPulseFill: Color {
         Color(.label)
     }
 
     static var storySkeletonStroke: Color {
         Color(.separator)
-    }
-}
-
-private struct NetworkUsernameBadge: View {
-    let network: SocialNetwork
-
-    var body: some View {
-        NetworkBadgeIcon(network: network)
-            .accessibilityHidden(true)
     }
 }
 

@@ -143,6 +143,14 @@ public protocol ChatListProvider: Sendable {
     func chatList() async throws -> ChatListPage
 }
 
+/// A provider that finds the chat a notification or link names when it isn't listed under exactly that
+/// destination, or stands in for one the list doesn't have yet.
+public protocol ChatListResolving: ChatListProvider {
+    /// The chat among `chats` (this provider's rows) that `destination` names, or a row standing in for it;
+    /// `nil` when the destination isn't this provider's.
+    @MainActor func chat(for destination: ChatSummary.Destination, in chats: [ChatSummary]) -> ChatSummary?
+}
+
 /// One account's provider, as the Chats list loads it.
 public struct ChatListSource {
     public let provider: any ChatListProvider
@@ -156,6 +164,12 @@ public struct ChatListSource {
         self.provider = provider
         self.accountId = accountId
         self.label = label
+    }
+
+    /// Whether the row is this source's. Without an account, the source's rows are those of its network, such
+    /// as every Apron server's.
+    func owns(_ chat: ChatSummary) -> Bool {
+        accountId.map { chat.accountId == $0 } ?? (chat.network == provider.network)
     }
 }
 
@@ -201,6 +215,20 @@ public final class ChatListViewModel: ObservableObject {
         }
     }
 
+    /// The chat a notification or link names: the listed one, else what its provider finds or stands in for.
+    public func chat(for destination: ChatSummary.Destination) -> ChatSummary? {
+        let all = chats + archivedChats
+        if let listed = all.first(where: { $0.destination == destination }) {
+            return listed
+        }
+        for source in sources() {
+            guard let provider = source.provider as? any ChatListResolving,
+                  let chat = provider.chat(for: destination, in: all.filter(source.owns)) else { continue }
+            return chat.scoped(to: source.accountId)
+        }
+        return nil
+    }
+
     /// Reloads every account at once; each keeps its previous chats when it fails.
     public func load() async {
         guard !isLoading else { return }
@@ -232,10 +260,6 @@ public final class ChatListViewModel: ObservableObject {
         }
         for (source, result) in zip(sources, results) {
             let network = source.provider.network
-            // Without an account, the source's rows are those of its network, such as every Apron server's.
-            let belongs: (ChatSummary) -> Bool = { chat in
-                source.accountId.map { chat.accountId == $0 } ?? (chat.network == network)
-            }
             let sourceId = source.accountId ?? network.rawValue
             switch result {
             case let .success(page):
@@ -243,7 +267,7 @@ public final class ChatListViewModel: ObservableObject {
                 if let pageArchived = page.archived {
                     archived += pageArchived.map { $0.scoped(to: source.accountId) }
                 } else {
-                    archived += archivedChats.filter(belongs)
+                    archived += archivedChats.filter(source.owns)
                 }
                 guard let accounts = page.accounts else {
                     statuses.append(status(id: sourceId, network: network, label: source.label, error: nil))
@@ -258,8 +282,8 @@ public final class ChatListViewModel: ObservableObject {
                     }
                 }
             case let .failure(error):
-                merged += chats.filter(belongs)
-                archived += archivedChats.filter(belongs)
+                merged += chats.filter(source.owns)
+                archived += archivedChats.filter(source.owns)
                 statuses.append(status(id: sourceId, network: network, label: source.label, error: error))
             }
         }

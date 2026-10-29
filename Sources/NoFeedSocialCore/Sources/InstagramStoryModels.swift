@@ -116,11 +116,6 @@ struct InstagramTrayFriendshipStatus: Decodable {
     }
 }
 
-struct InstagramUserStoryResponse: Decodable {
-    let reel: InstagramReel?
-    let status: String?
-}
-
 struct InstagramReelsMediaResponse: Decodable {
     let reels: [String: InstagramReel]
     let reelsMedia: [InstagramReel]

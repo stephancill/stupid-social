@@ -177,12 +177,6 @@ public final class FeedService {
         }
     }
 
-    public func healthCheckAllSources() async {
-        for source in accountSources().flatMap(\.validators) {
-            _ = try? await source.validateAccount()
-        }
-    }
-
     /// The account's sources, or the network's first account's when no account is named, such as for a
     /// profile opened from a story.
     private func sources(network: SocialNetwork, accountId: String?) -> FeedAccountSources? {

@@ -103,7 +103,7 @@ public final class ApronNotificationSource: AccountValidating, ChatListProvider 
             let others = room.isNamedForMembers ? room.otherMembers(you: session.you.userId) : []
             let avatarURL = others.count == 1 ? (users[others[0].userId] ?? others[0]).avatarURL : nil
             summaries.append(ChatSummary(
-                id: "apron:\(session.serverURL.absoluteString)|\(room.roomId)",
+                id: Self.chatId(serverURL: session.serverURL, roomId: room.roomId),
                 network: .apron,
                 title: room.displayTitle(users: users, you: session.you.userId),
                 titlePrefix: serverTitle,
@@ -120,6 +120,11 @@ public final class ApronNotificationSource: AccountValidating, ChatListProvider 
             ).scoped(to: Account.apronId(serverURL: session.serverURL)))
         }
         return summaries
+    }
+
+    /// A room's Chats row id, before it is scoped to its server's account.
+    private static func chatId(serverURL: URL, roomId: String) -> String {
+        "apron:\(serverURL.absoluteString)|\(roomId)"
     }
 
     private func latestMessage(in page: ApronHistoryResult) -> ApronMessage? {
@@ -176,5 +181,40 @@ public extension ChatSummary {
     func isApronRoom(on serverURL: URL) -> Bool {
         guard case let .apron(chatServerURL, _) = destination else { return false }
         return chatServerURL == serverURL
+    }
+}
+
+extension ApronNotificationSource: ChatListResolving {
+    /// A room the list doesn't have yet is titled by its id, and a direct chat with no room yet by the other
+    /// person, until the list loads them.
+    public func chat(for destination: ChatSummary.Destination, in _: [ChatSummary]) -> ChatSummary? {
+        switch destination {
+        case let .apron(serverURL, roomId):
+            ChatSummary(
+                id: Self.chatId(serverURL: serverURL, roomId: roomId),
+                network: .apron,
+                title: roomId,
+                titlePrefix: serverURL.host() ?? serverURL.absoluteString,
+                avatarURL: nil,
+                preview: nil,
+                timestamp: nil,
+                unreadCount: 0,
+                destination: destination,
+            ).scoped(to: Account.apronId(serverURL: serverURL))
+        case let .apronDirect(serverURL, user):
+            ChatSummary(
+                id: Self.chatId(serverURL: serverURL, roomId: "direct:\(user.userId)"),
+                network: .apron,
+                title: user.displayName,
+                titlePrefix: serverURL.host() ?? serverURL.absoluteString,
+                avatarURL: user.avatarURL,
+                preview: nil,
+                timestamp: nil,
+                unreadCount: 0,
+                destination: destination,
+            ).scoped(to: Account.apronId(serverURL: serverURL))
+        default:
+            nil
+        }
     }
 }

@@ -1098,3 +1098,14 @@ public actor TelegramClient: ChatListProvider {
         }
     }
 }
+
+extension TelegramClient: ChatListResolving {
+    /// A notification names the chat without its access hash, so it matches on kind and id.
+    public nonisolated func chat(for destination: ChatSummary.Destination, in chats: [ChatSummary]) -> ChatSummary? {
+        guard case let .telegram(peer) = destination else { return nil }
+        return chats.first { chat in
+            guard case let .telegram(listed) = chat.destination else { return false }
+            return listed.kind == peer.kind && listed.id == peer.id
+        }
+    }
+}

@@ -148,21 +148,6 @@ public struct SpotifyCredentials: Codable, Equatable, Sendable {
         self.clientId = clientId
     }
 
-    public func updatingWebPlayerToken(_ token: String, expiresAt: Date?) -> SpotifyCredentials {
-        SpotifyCredentials(
-            bearerToken: token,
-            clientToken: clientToken,
-            spDC: spDC,
-            spT: spT,
-            spKey: spKey,
-            accessTokenExpiresAt: expiresAt,
-            initialBearerToken: initialBearerToken,
-            initialBearerTokenExpiresAt: initialBearerTokenExpiresAt,
-            username: username,
-            clientId: clientId,
-        )
-    }
-
     public func updatingUsername(username: String) -> SpotifyCredentials {
         SpotifyCredentials(
             bearerToken: bearerToken,

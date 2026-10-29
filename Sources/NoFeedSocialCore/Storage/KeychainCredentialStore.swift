@@ -203,10 +203,6 @@ public final class KeychainCredentialStore: @unchecked Sendable {
         return try decoder.decode(GitHubCredentials.self, from: data)
     }
 
-    public func deleteGitHubCredentials() throws {
-        try deleteForAccount(key("github"))
-    }
-
     /// Apron bearer tokens are keyed per server URL (§3.2.1); the latest token replaces earlier ones.
     public func saveApronToken(_ token: String, serverURL: URL) throws -> CredentialSaveResult {
         try save(data: Data(token.utf8), account: apronAccount(serverURL))
@@ -244,22 +240,6 @@ public final class KeychainCredentialStore: @unchecked Sendable {
 
     public func xCredentialStorage() throws -> CredentialSaveResult? {
         try storage(account: key("x"))
-    }
-
-    public func instagramCredentialStorage() throws -> CredentialSaveResult? {
-        try storage(account: key("instagram"))
-    }
-
-    public func spotifyCredentialStorage() throws -> CredentialSaveResult? {
-        try storage(account: key("spotify"))
-    }
-
-    public func blueskyCredentialStorage() throws -> CredentialSaveResult? {
-        try storage(account: key("bluesky"))
-    }
-
-    public func githubCredentialStorage() throws -> CredentialSaveResult? {
-        try storage(account: key("github"))
     }
 
     private func deleteForAccount(_ account: String) throws {

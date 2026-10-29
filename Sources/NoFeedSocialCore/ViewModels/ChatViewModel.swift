@@ -350,10 +350,6 @@ public class ChatViewModel: ObservableObject {
         draft = draftStore.draft(key: chatKey)
     }
 
-    public var canSend: Bool {
-        state == .connected && !isSending && (attachment != nil || !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-    }
-
     // MARK: Lifecycle and history
 
     /// Loads the conversation and starts following it; called again when the app becomes active.

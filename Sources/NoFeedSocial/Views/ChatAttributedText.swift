@@ -1,0 +1,141 @@
+import UIKit
+
+/// Converts parsed inline Markdown into UIKit attributes; `AttributedString`'s presentation intents carry no fonts.
+enum ChatAttributedText {
+    static func make(
+        _ text: AttributedString,
+        color: UIColor,
+        linkColor: UIColor,
+        codeBackground: UIColor,
+        underlinesMentions: Bool,
+        mentionPattern: NSRegularExpression?,
+        mentionNames: [String: String],
+        redactsMentions: Bool,
+        font base: UIFont,
+        formatsQuotes: Bool,
+    ) -> NSAttributedString {
+        let result = NSMutableAttributedString()
+        for run in text.runs {
+            var font = base
+            var attributes: [NSAttributedString.Key: Any] = [.foregroundColor: color]
+            var isCode = false
+            if let intent = run.inlinePresentationIntent {
+                if intent.contains(.code) {
+                    isCode = true
+                    font = .monospacedSystemFont(ofSize: base.pointSize * 0.92, weight: .regular)
+                    attributes[.backgroundColor] = codeBackground
+                }
+                var traits: UIFontDescriptor.SymbolicTraits = []
+                if intent.contains(.stronglyEmphasized) { traits.insert(.traitBold) }
+                if intent.contains(.emphasized) { traits.insert(.traitItalic) }
+                if !traits.isEmpty {
+                    font = font.withTraits(traits)
+                }
+                if intent.contains(.strikethrough) {
+                    attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
+                }
+            }
+            if let link = run.link {
+                attributes[.foregroundColor] = linkColor
+                attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
+                attributes[.chatLink] = link
+            }
+            attributes[.font] = font
+            let segment = NSMutableAttributedString(string: String(text[run.range].characters), attributes: attributes)
+            if !isCode {
+                if run.link == nil {
+                    detectLinks(in: segment, color: linkColor)
+                }
+                if let mentionPattern {
+                    highlightMentions(in: segment, pattern: mentionPattern, color: linkColor, underline: underlinesMentions, names: mentionNames, redacts: redactsMentions)
+                }
+            }
+            result.append(segment)
+        }
+        if formatsQuotes {
+            formatQuotes(in: result, color: color)
+        }
+        return result
+    }
+
+    static let quoteIndent: CGFloat = 12
+
+    /// Lines starting with `>` lose the marker and are indented and dimmed; `ChatLinkLabel` draws the bar.
+    /// Messages are parsed as inline Markdown only, so block quotes are found here, line by line.
+    private static func formatQuotes(in text: NSMutableAttributedString, color: UIColor) {
+        let style = NSMutableParagraphStyle()
+        style.firstLineHeadIndent = quoteIndent
+        style.headIndent = quoteIndent
+        var lines: [NSRange] = []
+        (text.string as NSString).enumerateSubstrings(in: NSRange(location: 0, length: text.length), options: .byParagraphs) { _, range, _, _ in
+            lines.append(range)
+        }
+        // Back to front, so removing a marker doesn't move the lines before it.
+        for line in lines.reversed() {
+            let string = (text.string as NSString).substring(with: line)
+            guard string.hasPrefix(">") else { continue }
+            let marker = string.hasPrefix("> ") ? 2 : 1
+            text.deleteCharacters(in: NSRange(location: line.location, length: marker))
+            let quoted = NSRange(location: line.location, length: line.length - marker)
+            guard quoted.length > 0 else { continue }
+            text.addAttribute(.paragraphStyle, value: style, range: quoted)
+            text.addAttribute(.chatQuote, value: true, range: quoted)
+            text.enumerateAttribute(.foregroundColor, in: quoted) { value, range, _ in
+                // Links and mentions keep their color.
+                guard (value as? UIColor) == color else { return }
+                text.addAttribute(.foregroundColor, value: color.withAlphaComponent(0.7), range: range)
+            }
+        }
+    }
+
+    private static let linkDetector = try! NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+    /// `apron:?…` links, which the data detector doesn't find. Trailing punctuation ends a sentence, not the link.
+    private static let apronLinkPattern = try! NSRegularExpression(pattern: #"\bapron:\?[^\s<>"'`]*[^\s<>"'`.,;:!?)\]]"#, options: .caseInsensitive)
+
+    /// Bare URLs in plain text (and any Markdown left unlinked) become tappable links too.
+    private static func detectLinks(in segment: NSMutableAttributedString, color: UIColor) {
+        let range = NSRange(location: 0, length: segment.length)
+        let web = linkDetector.matches(in: segment.string, range: range).compactMap { match in
+            match.url.flatMap { ["http", "https"].contains($0.scheme?.lowercased()) ? (match.range, $0) : nil }
+        }
+        let apron = apronLinkPattern.matches(in: segment.string, range: range).compactMap { match in
+            URL(string: (segment.string as NSString).substring(with: match.range)).map { (match.range, $0) }
+        }
+        for (range, url) in web + apron {
+            segment.addAttributes([
+                .foregroundColor: color,
+                .underlineStyle: NSUnderlineStyle.single.rawValue,
+                .chatLink: url,
+            ], range: range)
+        }
+    }
+
+    /// Mentions render in the link color, or underlined where that color isn't available, and show the user's
+    /// name where it is known; code spans hold no mentions. A mention inside a link keeps its text.
+    private static func highlightMentions(in segment: NSMutableAttributedString, pattern: NSRegularExpression, color: UIColor, underline: Bool, names: [String: String], redacts: Bool) {
+        let range = NSRange(location: 0, length: segment.length)
+        // Back to front, so replacing a mention's text doesn't move the ones before it.
+        for match in pattern.matches(in: segment.string, range: range).reversed() {
+            let userId = String((segment.string as NSString).substring(with: match.range).dropFirst())
+            segment.addAttribute(.foregroundColor, value: color, range: match.range)
+            segment.addAttribute(.chatMention, value: userId, range: match.range)
+            if underline {
+                segment.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: match.range)
+            }
+            if let name = redacts ? "Redacted" : names[userId], segment.attribute(.chatLink, at: match.range.location, effectiveRange: nil) == nil {
+                segment.replaceCharacters(in: match.range, with: "@\(name)")
+            }
+        }
+    }
+}
+
+extension NSAttributedString.Key {
+    /// A link's URL. Not `.link`, which `UILabel` would restyle; `ChatLinkLabel` opens it on tap.
+    static let chatLink = NSAttributedString.Key("ChatLink")
+    /// The `user_id` of an `@` mention, which opens their profile on tap.
+    static let chatMention = NSAttributedString.Key("ChatMention")
+    /// A block quote line, drawn with a bar at its leading edge.
+    static let chatQuote = NSAttributedString.Key("ChatQuote")
+    /// Hidden spoiler text, drawn as dots in the attribute's color until tapped.
+    static let chatSpoiler = NSAttributedString.Key("ChatSpoiler")
+}
