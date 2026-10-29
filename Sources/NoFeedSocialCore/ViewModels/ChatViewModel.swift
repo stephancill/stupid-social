@@ -231,6 +231,12 @@ public class ChatViewModel: ObservableObject {
     private var holdsRestoredMessages = false
     @Published public internal(set) var title: String
     @Published public internal(set) var subtitle: String
+    /// The other person in a one-to-one chat, beside the title (`ChatInfo.avatarUserId`).
+    @Published public internal(set) var avatarUserId: String?
+    @Published public internal(set) var avatarURL: URL?
+    /// The chat's picture from its Chats row, beside the title when no one person is named (`avatarUserId`),
+    /// such as in groups and rooms.
+    @Published public private(set) var rowAvatar: ChatTitleAvatar?
     @Published public internal(set) var hasEarlierMessages = false
     @Published public internal(set) var isLoadingEarlier = false
     /// True while showing a window of older history that doesn't reach the newest message.
@@ -259,6 +265,12 @@ public class ChatViewModel: ObservableObject {
     @Published public internal(set) var firstUnreadMessageId: String?
     /// Unread messages among those loaded, for the jump-to-latest badge.
     @Published public internal(set) var unreadCount = 0 {
+        didSet { reportSummary() }
+    }
+
+    /// The user's messages with reactions from others the user hasn't seen, oldest first; they may include
+    /// messages that aren't loaded. Empty for chats that don't track them (`tracksUnseenReactions`).
+    @Published public internal(set) var unseenReactionMessageIds: [String] = [] {
         didSet { reportSummary() }
     }
 
@@ -305,13 +317,17 @@ public class ChatViewModel: ObservableObject {
     /// sending copy doesn't reload the image or change its size.
     private var pickedImages: [String: ChatEmbed] = [:]
 
-    /// The newest message with its one-line preview, and the unread count, for the chat's row in the Chats list.
-    var summaryDidChange: ((_ latest: ChatMessage?, _ body: String?, _ unreadCount: Int) -> Void)?
+    /// Whether the network reports which reactions the user hasn't seen.
+    var tracksUnseenReactions = false
+    /// The newest message with its one-line preview, the unread count, and the unseen reactions count (`nil`
+    /// without `tracksUnseenReactions`), for the chat's row in the Chats list.
+    var summaryDidChange: ((_ latest: ChatMessage?, _ body: String?, _ unreadCount: Int, _ unseenReactionCount: Int?) -> Void)?
     private var messagesById: [String: ChatMessage] = [:]
     private var renderedTextCache: [String: AttributedString] = [:]
     private let draftStore: ChatDraftStore
     private var pollTask: Task<Void, Never>?
     private var readSendTask: Task<Void, Never>?
+    private var reactionsSeenSendTask: Task<Void, Never>?
 
     init(
         network: SocialNetwork,
@@ -370,6 +386,15 @@ public class ChatViewModel: ObservableObject {
 
     /// The user has seen everything up to and including this message.
     public func markRead(upTo _: ChatMessage) {}
+
+    /// The user saw these messages, and with them their reactions.
+    public func reactionsSeen(on _: Set<String>) {}
+
+    /// Scrolls to the oldest message with reactions the user hasn't seen.
+    public func jumpToNextUnseenReaction() async {
+        guard let messageId = unseenReactionMessageIds.first else { return }
+        await jump(to: messageId)
+    }
 
     // MARK: Polling
 
@@ -432,6 +457,17 @@ public class ChatViewModel: ObservableObject {
     func scheduleReadMarker(_ send: @escaping @MainActor () async throws -> Void) {
         readSendTask?.cancel()
         readSendTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(600))
+            guard self != nil, !Task.isCancelled else { return }
+            try? await send()
+        }
+    }
+
+    /// Tells the network which reactions the user saw, shortly after, like `scheduleReadMarker`. Each send
+    /// covers every message seen since the last one that went through, so replacing a waiting one loses nothing.
+    func scheduleReactionsSeen(_ send: @escaping @MainActor () async throws -> Void) {
+        reactionsSeenSendTask?.cancel()
+        reactionsSeenSendTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(600))
             guard self != nil, !Task.isCancelled else { return }
             try? await send()
@@ -509,6 +545,16 @@ public class ChatViewModel: ObservableObject {
     /// hold none of them, showing those would open at their bottom and then jump once history adds the new
     /// messages and the "New Messages" divider. So the chat shows nothing until history arrives, for at most 1.5
     /// seconds, and then opens at the divider.
+    /// The picture beside the title: the other person in a one-to-one chat, else the chat's own from its row.
+    public var titleAvatar: ChatTitleAvatar? {
+        avatarUserId.map { ChatTitleAvatar(url: avatarURL, colorKey: $0) } ?? rowAvatar
+    }
+
+    /// Shows the chat's Chats row picture beside the title, as the row does.
+    public func showRowAvatar(url: URL?, colorKey: String?) {
+        rowAvatar = ChatTitleAvatar(url: url, colorKey: colorKey)
+    }
+
     public func expectUnread() {
         guard unreadCount == 0, state == .connecting else { return }
         holdsRestoredMessages = true
@@ -598,7 +644,7 @@ public class ChatViewModel: ObservableObject {
     private func reportSummary() {
         guard let summaryDidChange else { return }
         let latest = hasLaterMessages ? nil : messages.last { $0.isUserMessage && !$0.isDeleted }
-        summaryDidChange(latest, latest.map(summaryBody), unreadCount)
+        summaryDidChange(latest, latest.map(summaryBody), unreadCount, tracksUnseenReactions ? unseenReactionMessageIds.count : nil)
     }
 
     /// One line for the Chats list: the text with mentions by name, or what was shared.
@@ -675,4 +721,10 @@ public class ChatViewModel: ObservableObject {
         renderedTextCache[text] = rendered
         return rendered
     }
+}
+
+/// A picture beside a chat's title; without a URL, initials on the color of `colorKey`, or a gray initial.
+public struct ChatTitleAvatar: Equatable, Sendable {
+    public let url: URL?
+    public let colorKey: String?
 }

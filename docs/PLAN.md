@@ -117,9 +117,12 @@ Reference behavior from `docs/CLI_DOCS.md`:
 ### Apron
 
 - Users can add any number of [Apron Chat Protocol](https://github.com/shazow/apron) servers by WebSocket URL (for example `wss://server.apron.chat/`), with an optional bearer token and display name.
+- A server is shown by the name and icon it gives itself (its host without one), and its server settings show its description. Where a server is picked or signed in to, its address shows too.
 - Without a token the app joins as a guest when the server offers it. Tokens are stored in Keychain like other credentials.
-- Apron rooms appear on the Chats screen, not in the notifications feed: every joined room, with its latest message and unread count, updated live while the app is open.
+- Apron rooms appear on the Chats screen, not in the notifications feed: every joined room, with its latest message and unread count, updated live while the app is open. Each row is titled "<server name> / <room name>", with the server name muted.
 - Opening an Apron room shows a live chat for that room, where the user can read recent history and send messages.
+- A member's profile has a Message button that opens the user's DM with that person (an untitled private room of just the two of them). When there is none, it opens an empty chat with them, and the room is started only when the first message is sent, so looking and leaving creates nothing. It isn't offered on the user's own profile, inside that DM, or on servers without rooms.
+- A DM shows the other person's picture, or their initials on their chat color as on their profile, both on its Chats row and beside the title in the chat. Telegram chats do the same, and Telegram groups without a photo show their initials on their own color.
 - The chat opens at the first unread message when there is one, shows who is typing (and shares the user's own typing) on servers with `activity`, and opens links in messages.
 - Push notifications: on servers that offer Web Push (`server.push.webpush`), signed-in accounts (not guests) get notifications for mentions, replies and messages in private rooms such as DMs, while the app is closed. The app asks for notification permission the first time such a server connects.
 - Each room has a notification level in its member list (opened from the chat title): All Messages, Mentions Only, or None. Rooms default to Mentions Only and private rooms to All Messages. None is a server-side room mute, so it applies to all of the user's devices. All Messages in a public room, and Mentions Only in a private room, appear only on servers that support per-room wake scopes (proposed protocol extension, see `docs/TECHNICAL_DESIGN.md`).

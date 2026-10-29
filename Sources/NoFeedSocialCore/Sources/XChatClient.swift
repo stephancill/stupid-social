@@ -155,6 +155,9 @@ public struct XChatConversationInfo: Sendable {
     let isArchived: Bool
     /// Everyone but the viewer.
     let others: [XChatPerson]
+    /// A group's name, sealed under one of its conversation keys; `name` once decrypted.
+    let sealedName: Data?
+    var name: String?
     /// Grown by events the socket delivers, so the Chats row stays current between inbox loads.
     var latestEvents: [XChatEvent]
     var keyChanges: [XChatEvent]
@@ -335,9 +338,10 @@ public actor XChatClient: ChatListProvider {
         }
         var loaded: [String: XChatConversationInfo] = [:]
         for item in items {
-            guard let info = Self.conversationInfo(item, viewerId: keys.userId) else { continue }
-            loaded[info.id] = info
+            guard var info = Self.conversationInfo(item, viewerId: keys.userId) else { continue }
             addKeys(from: info.keyChanges, keys: keys)
+            info.name = info.sealedName.flatMap { openName($0, conversationId: info.id) }
+            loaded[info.id] = info
         }
         conversations = loaded
     }
@@ -345,7 +349,8 @@ public actor XChatClient: ChatListProvider {
     private static func conversationInfo(_ item: [String: Any], viewerId: String) -> XChatConversationInfo? {
         guard let detail = item["conversation_detail"] as? [String: Any], let id = detail["conversation_id"] as? String else { return nil }
         let isGroup = detail["__typename"] as? String == "XChatGroupConversationDetail"
-        let members = (detail[isGroup ? "group_members_results" : "participants_results"] as? [[String: Any]] ?? detail["participants_results"] as? [[String: Any]] ?? [])
+        // Groups' `group_members_results` are ids only; `participants_results` has every other member's profile.
+        let members = (detail["participants_results"] as? [[String: Any]] ?? [])
             .compactMap { person($0["result"] as? [String: Any]) }
             .filter { $0.id != viewerId }
         func events(_ key: String) -> [XChatEvent] {
@@ -359,6 +364,7 @@ public actor XChatClient: ChatListProvider {
             isMuted: detail["is_muted"] as? Bool ?? false,
             isArchived: detail["is_archived"] as? Bool ?? false,
             others: members,
+            sealedName: ((detail["group_metadata"] as? [String: Any])?["group_name"] as? String).flatMap { Data(base64Encoded: $0) },
             latestEvents: events("latest_message_events"),
             keyChanges: events("latest_conversation_key_change_events"),
             readEvents: readEvents,
@@ -409,15 +415,14 @@ public actor XChatClient: ChatListProvider {
         return ChatSummary(
             id: "x:chat:\(conversation.id)",
             network: .x,
-            title: partner?.name ?? Self.groupTitle(conversation.others),
+            title: partner?.name ?? conversation.name ?? Self.groupTitle(conversation.others),
             avatarURL: partner?.avatarURL ?? conversation.others.first?.avatarURL,
             preview: preview,
             timestamp: latest?.event.createdAt ?? conversation.latestEvents.compactMap(\.createdAt).max(),
             unreadCount: unread,
             destination: .x(conversationId: conversation.id),
             namesSenderInPreview: conversation.isGroup,
-            // Group titles are encrypted group events; until those are read, groups are named for their members.
-            titleNamesPeople: true,
+            titleNamesPeople: conversation.name == nil,
             isMuted: conversation.isMuted,
         )
     }
@@ -476,6 +481,17 @@ public actor XChatClient: ChatListProvider {
         // Version 1 derives a key per message; no account seen so far sends it, so it fails loudly instead.
         guard (create.int(112) ?? 0) == 0 else { throw SourceError.unsupported }
         return try XChatEntry(plaintext: XChatCrypto.open(contents, key: key))
+    }
+
+    /// The name doesn't say which key sealed it, so each of the conversation's keys is tried, newest first.
+    private func openName(_ sealed: Data, conversationId: String) -> String? {
+        let keys = (conversationKeys[conversationId] ?? [:]).sorted { (Int64($0.key) ?? 0) > (Int64($1.key) ?? 0) }
+        for (_, key) in keys {
+            if let plaintext = try? XChatCrypto.open(sealed, key: key) {
+                return String(data: plaintext, encoding: .utf8).flatMap { $0.isEmpty ? nil : $0 }
+            }
+        }
+        return nil
     }
 
     private func addKeys(from keyChanges: [XChatEvent], keys: XChatKeys) {

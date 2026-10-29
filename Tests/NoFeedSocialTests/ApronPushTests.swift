@@ -194,4 +194,17 @@ final class ApronPushTests: XCTestCase {
         XCTAssertTrue(info.push?.wakes("private") == true)
         XCTAssertNil(info.push?.roomWake)
     }
+
+    func testDecodesServerMetadata() throws {
+        let serverURL = try XCTUnwrap(URL(string: "wss://server.apron.chat/"))
+        let json = #"{"apron":9,"auth":["guest"],"title":"Apron Demo","description":"The public *demo*.","avatar":"https://web.apron.chat/icon-512.png"}"#
+        let info = try JSONDecoder().decode(ApronServerInfo.self, from: Data(json.utf8))
+        XCTAssertEqual(info.displayTitle(serverURL: serverURL), "Apron Demo")
+        XCTAssertEqual(info.description, "The public *demo*.")
+        XCTAssertEqual(info.avatarURL?.absoluteString, "https://web.apron.chat/icon-512.png")
+
+        let untitled = try JSONDecoder().decode(ApronServerInfo.self, from: Data(#"{"apron":9,"auth":["guest"],"title":"  ","avatar":"javascript:alert(1)"}"#.utf8))
+        XCTAssertEqual(untitled.displayTitle(serverURL: serverURL), "server.apron.chat")
+        XCTAssertNil(untitled.avatarURL)
+    }
 }

@@ -7,6 +7,8 @@ struct ApronProfileView: View {
     @AppStorage("redactionEnabled") private var redactionEnabled = false
     @ObservedObject var viewModel: ApronRoomViewModel
     let user: ApronUser
+    @State private var isOpeningMessage = false
+    @State private var messageError: String?
 
     var body: some View {
         let user = viewModel.currentUser(user)
@@ -15,7 +17,7 @@ struct ApronProfileView: View {
         List {
             Section {
                 VStack(spacing: 6) {
-                    ApronUserAvatar(user: user, avatarURL: viewModel.avatarURL(for: user), presence: presence, size: 96, ringColor: Color(uiColor: .systemGroupedBackground), dotScale: 1 / 5)
+                    ApronUserAvatar(user: user, avatarURL: viewModel.avatarURL(for: user), presence: presence, size: 96, ringColor: Color(uiColor: .systemGroupedBackground), dotScale: 1 / 5, hasBorder: true)
                         .padding(.bottom, 6)
                     HStack(spacing: 6) {
                         Text(DebugRedaction.name(user.displayName, enabled: redactionEnabled))
@@ -40,6 +42,10 @@ struct ApronProfileView: View {
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
+                    if viewModel.canMessage(user) {
+                        messageButton(for: user)
+                            .padding(.top, 10)
+                    }
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 8)
@@ -54,6 +60,50 @@ struct ApronProfileView: View {
         }
         .navigationTitle(DebugRedaction.name(user.displayName, enabled: redactionEnabled))
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    @ViewBuilder
+    private func messageButton(for user: ApronUser) -> some View {
+        Button {
+            Task { await openMessage(with: user) }
+        } label: {
+            // The icon keeps sizing the button while hidden, so the spinner doesn't enlarge it.
+            Image(systemName: "message.fill")
+                .opacity(isOpeningMessage ? 0 : 1)
+                .overlay {
+                    if isOpeningMessage {
+                        ProgressView()
+                    }
+                }
+        }
+        .buttonStyle(.bordered)
+        .buttonBorderShape(.circle)
+        .controlSize(.large)
+        .accessibilityLabel("Message")
+        .disabled(isOpeningMessage)
+        if let messageError {
+            Text(messageError)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+    }
+
+    /// Opens your private room with the user on the Chats side like a tapped notification, or a new chat with
+    /// them whose first message starts the room.
+    private func openMessage(with user: ApronUser) async {
+        isOpeningMessage = true
+        messageError = nil
+        defer { isOpeningMessage = false }
+        do {
+            if let roomId = try await viewModel.existingDirectRoom(with: user) {
+                NotificationRouter.shared.pendingChat = .apron(serverURL: viewModel.serverURL, roomId: roomId)
+            } else {
+                NotificationRouter.shared.pendingChat = .apronDirect(serverURL: viewModel.serverURL, user: user)
+            }
+        } catch {
+            messageError = error.localizedDescription
+        }
     }
 
     private static let linkDetector = try! NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
@@ -104,11 +154,18 @@ struct ApronUserAvatar: View {
     var ringColor = Color(uiColor: .secondarySystemGroupedBackground)
     /// The dot's diameter as a share of the avatar's.
     var dotScale: CGFloat = 1 / 3
+    /// A thin muted ring around the avatar, under the dot.
+    var hasBorder = false
 
     var body: some View {
         image
             .frame(width: size, height: size)
             .clipShape(Circle())
+            .overlay {
+                if hasBorder {
+                    Circle().strokeBorder(Color(uiColor: .separator), lineWidth: 1)
+                }
+            }
             .overlay(alignment: .bottomTrailing) {
                 if let color = presence?.dotColor {
                     let dot = size * dotScale

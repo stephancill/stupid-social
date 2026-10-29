@@ -8,6 +8,10 @@ public struct ChatInfo: Equatable, Sendable {
     public var showsSenderNames: Bool
     /// The title is made of member names, such as an untitled group, so name redaction applies to it.
     public var titleIsMemberNames: Bool
+    /// A one-to-one chat shows the other person beside its title: their picture, else their initials on their
+    /// chat color, as their Chats row does.
+    public var avatarUserId: String?
+    public var avatarURL: URL?
 
     public init(title: String, subtitle: String, showsSenderNames: Bool = true, titleIsMemberNames: Bool = false) {
         self.title = title
@@ -29,8 +33,8 @@ public struct ChatOutgoing {
 /// owns the screen's state and the behavior every chat shares: connecting, polling, paging, unread counting and
 /// the divider, read-marker debouncing, snapshots, drafts and optimistic sending.
 ///
-/// Optional abilities are separate protocols (reactions, audio previews, live updates, quoted messages, windows
-/// of older history, typing, mentions, commands, links), so a chat offers an action exactly when its adapter
+/// Optional abilities are separate protocols (reactions, unseen reactions, audio previews, live updates, quoted
+/// messages, windows of older history, typing, mentions, commands, links), so a chat offers an action exactly when its adapter
 /// implements it.
 @MainActor
 public protocol ChatAdapter: AnyObject {
@@ -83,6 +87,19 @@ public protocol ChatReactionSending: ChatAdapter {
     /// Adds the emoji, or removes it when you already reacted with it. The adapter shows the change at once
     /// and puts it back if the network refuses it.
     func toggleReaction(_ emoji: String, on messageId: String) async throws
+}
+
+/// Reactions others put on the user's messages since the user last saw them, which the chat badges and jumps
+/// between.
+@MainActor
+public protocol ChatUnseenReactions: ChatAdapter {
+    /// Ids of the user's messages with unseen reactions, oldest first; they may include messages that aren't
+    /// loaded.
+    var unseenReactionMessageIds: [String] { get }
+    /// The user saw these messages on screen. Drops their reactions from the unseen ones at once and returns what
+    /// tells the network, which the framework sends shortly after; `nil` when there is nothing to send. The send
+    /// covers every message seen since the last send that went through.
+    func markReactionsSeen(on messageIds: Set<String>) -> (@MainActor () async throws -> Void)?
 }
 
 /// Inline previews for `.audio` embeds.
@@ -170,6 +187,10 @@ public final class AdapterChatViewModel<Adapter: ChatAdapter>: ChatViewModel {
     private var isOpen = false
     private var isConnecting = false
     private var snapshotSaveTask: Task<Void, Never>?
+    /// A computed property, since generic classes can't have static stored ones.
+    private static var jumpPageLimit: Int {
+        20
+    }
 
     public init(adapter: Adapter, accountId: String, snapshotCache: ChatSnapshotCache = ChatSnapshotCache(), draftStore: ChatDraftStore = ChatDraftStore()) {
         self.adapter = adapter
@@ -184,6 +205,7 @@ public final class AdapterChatViewModel<Adapter: ChatAdapter>: ChatViewModel {
             mentionPattern: (adapter as? any ChatMentioning)?.mentionPattern,
             draftStore: draftStore,
         )
+        tracksUnseenReactions = adapter is any ChatUnseenReactions
         adapter.onChange = { [weak self] in self?.adapterDidChange() }
         if let live = adapter as? any ChatLiveUpdating {
             live.onConnectionLost = { [weak self] error in self?.connectionLost(error) }
@@ -281,13 +303,24 @@ public final class AdapterChatViewModel<Adapter: ChatAdapter>: ChatViewModel {
         adapterDidChange()
     }
 
-    /// Scrolls to a loaded message, or shows a window around one that isn't.
+    /// Scrolls to a loaded message, or shows a window around one that isn't. Networks without windows load
+    /// earlier pages until it's there, up to `jumpPageLimit` of them.
     override public func jump(to messageId: String) async {
         if message(withId: messageId) != nil, referencedMessages[messageId] == nil {
             jumpTarget = messageId
             return
         }
-        guard let windowing = adapter as? any ChatWindowing else { return }
+        guard let windowing = adapter as? any ChatWindowing else {
+            for _ in 0 ..< Self.jumpPageLimit where adapter.hasEarlierMessages && message(withId: messageId) == nil {
+                await loadEarlier()
+            }
+            if message(withId: messageId) != nil {
+                jumpTarget = messageId
+            } else {
+                errorMessage = "That message is too far back to show."
+            }
+            return
+        }
         do {
             guard try await windowing.showWindow(around: messageId) else {
                 errorMessage = "That message is no longer available."
@@ -382,6 +415,18 @@ public final class AdapterChatViewModel<Adapter: ChatAdapter>: ChatViewModel {
         adapterDidChange()
     }
 
+    /// Only once connected, like the read position: cached messages shown before then may be out of date.
+    override public func reactionsSeen(on messageIds: Set<String>) {
+        guard isOpen, let unseen = adapter as? any ChatUnseenReactions else { return }
+        let ids = messageIds.intersection(unseenReactionMessageIds)
+        guard !ids.isEmpty else { return }
+        let send = unseen.markReactionsSeen(on: ids)
+        adapterDidChange()
+        if let send {
+            scheduleReactionsSeen(send)
+        }
+    }
+
     override public func reactors(of emoji: String, on messageId: String) -> [ChatReactor] {
         adapter.reactors(of: emoji, on: messageId)
     }
@@ -416,6 +461,12 @@ public final class AdapterChatViewModel<Adapter: ChatAdapter>: ChatViewModel {
         }
         showsSenderNames = info.showsSenderNames
         titleIsMemberNames = info.titleIsMemberNames
+        if avatarUserId != info.avatarUserId {
+            avatarUserId = info.avatarUserId
+        }
+        if avatarURL != info.avatarURL {
+            avatarURL = info.avatarURL
+        }
         if hasEarlierMessages != adapter.hasEarlierMessages {
             hasEarlierMessages = adapter.hasEarlierMessages
         }
@@ -424,6 +475,9 @@ public final class AdapterChatViewModel<Adapter: ChatAdapter>: ChatViewModel {
         }
         if let typing = adapter as? any ChatTyping, typingNames != typing.typingNames {
             typingNames = typing.typingNames
+        }
+        if let unseen = adapter as? any ChatUnseenReactions, unseenReactionMessageIds != unseen.unseenReactionMessageIds {
+            unseenReactionMessageIds = unseen.unseenReactionMessageIds
         }
         if let mentioning = adapter as? any ChatMentioning, mentionNames != mentioning.mentionNames {
             mentionNames = mentioning.mentionNames

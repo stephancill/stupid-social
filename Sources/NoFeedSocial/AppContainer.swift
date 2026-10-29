@@ -146,10 +146,10 @@ final class AppContainer {
     }
 
     /// The chat and its group's member list.
-    func telegramChatFactory(accountId: String, peer: TelegramPeer, title: String, userStatus: ChatPresence?) -> (chat: () -> ChatViewModel, members: () -> TelegramMembersViewModel)? {
+    func telegramChatFactory(accountId: String, peer: TelegramPeer, title: String, userStatus: ChatPresence?, avatarURL: URL?) -> (chat: () -> ChatViewModel, members: () -> TelegramMembersViewModel)? {
         guard let client = services.component(id: accountId)?.telegramClient else { return nil }
         return (
-            chat: { AdapterChatViewModel(adapter: TelegramChatAdapter(client: client, peer: peer, title: title, userStatus: userStatus), accountId: accountId) },
+            chat: { AdapterChatViewModel(adapter: TelegramChatAdapter(client: client, peer: peer, title: title, userStatus: userStatus, avatarURL: avatarURL), accountId: accountId) },
             members: { TelegramMembersViewModel(client: client, peer: peer) },
         )
     }

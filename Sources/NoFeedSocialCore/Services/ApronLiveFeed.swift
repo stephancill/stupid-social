@@ -111,6 +111,10 @@ public final class ApronLiveFeed {
             guard let message = try? JSONDecoder().decode(ApronMessage.self, from: params), message.messageId != nil else { return }
             // Only that room changed; rebuilding just it keeps within the server's frame budget.
             scheduleRebuild(session.serverURL, roomId: message.roomId)
+        case "reactions":
+            // A reaction to the user's message changes the room's unseen reactions.
+            guard let record = try? JSONDecoder().decode(ApronReactionRecord.self, from: params) else { return }
+            scheduleRebuild(session.serverURL, roomId: record.roomId)
         case "room_update":
             scheduleRebuild(session.serverURL)
         case "activity":

@@ -4,6 +4,8 @@ import Foundation
 public struct ChatSummary: Identifiable, Hashable, Codable, Sendable {
     public enum Destination: Hashable, Codable, Sendable {
         case apron(serverURL: URL, roomId: String)
+        /// A direct chat with an Apron user that has no room yet; its first message starts one.
+        case apronDirect(serverURL: URL, user: ApronUser)
         /// The base62 id from `spotify:chat:<id>`.
         case spotify(chatId: String)
         /// The id in `/direct/t/<thread_fbid>/`.
@@ -21,9 +23,14 @@ public struct ChatSummary: Identifiable, Hashable, Codable, Sendable {
     public internal(set) var accountId: String
     public let network: SocialNetwork
     public let title: String
-    /// Shown under the title when there is no message yet, such as the Apron server.
+    /// Shown muted before the title, as "<prefix> / <title>", such as the Apron server a room is on.
+    public let titlePrefix: String?
+    /// Shown under the title when there is no message yet.
     public let subtitle: String?
     public let avatarURL: URL?
+    /// Colors the initials that stand in for a missing picture, as in Telegram: the other person's id in a DM
+    /// (the id their messages carry, so it matches their bubbles), else the chat's own.
+    public let avatarColorKey: String?
     /// The latest message, prefixed with "You: " or the sender in a group.
     public internal(set) var preview: String?
     public internal(set) var timestamp: Date?
@@ -35,12 +42,20 @@ public struct ChatSummary: Identifiable, Hashable, Codable, Sendable {
     public let titleNamesPeople: Bool
     /// Optional so chat lists cached before it existed still decode.
     private let muted: Bool?
+    /// Optional so chat lists cached before it existed still decode.
+    private var unseenReactions: Int?
     /// The other person's presence in a one-to-one chat, so the chat opens showing it.
     public let presence: ChatPresence?
 
     /// Whether the user muted the chat on its network, so its unread count is shown quietly.
     public var isMuted: Bool {
         muted == true
+    }
+
+    /// Messages of the user's that others reacted to since the user last saw them.
+    public internal(set) var unseenReactionCount: Int {
+        get { unseenReactions ?? 0 }
+        set { unseenReactions = newValue }
     }
 
     /// The chat as one account's; `nil` keeps the account a provider already set, such as an Apron server's.
@@ -56,11 +71,14 @@ public struct ChatSummary: Identifiable, Hashable, Codable, Sendable {
         id: String,
         network: SocialNetwork,
         title: String,
+        titlePrefix: String? = nil,
         subtitle: String? = nil,
         avatarURL: URL?,
+        avatarColorKey: String? = nil,
         preview: String?,
         timestamp: Date?,
         unreadCount: Int,
+        unseenReactionCount: Int = 0,
         destination: Destination,
         namesSenderInPreview: Bool = true,
         titleNamesPeople: Bool = false,
@@ -71,11 +89,14 @@ public struct ChatSummary: Identifiable, Hashable, Codable, Sendable {
         accountId = ""
         self.network = network
         self.title = title
+        self.titlePrefix = titlePrefix
         self.subtitle = subtitle
         self.avatarURL = avatarURL
+        self.avatarColorKey = avatarColorKey
         self.preview = preview
         self.timestamp = timestamp
         self.unreadCount = unreadCount
+        unseenReactions = unseenReactionCount
         self.destination = destination
         self.namesSenderInPreview = namesSenderInPreview
         self.titleNamesPeople = titleNamesPeople
@@ -250,21 +271,21 @@ public final class ChatListViewModel: ObservableObject {
     /// Keeps the chat's row current while it is open, so returning to the list shows its latest message and
     /// read state without waiting for the reload.
     public func follow<ViewModel: ChatViewModel>(_ viewModel: ViewModel, chatId: String) -> ViewModel {
-        viewModel.summaryDidChange = { [weak self] latest, body, unreadCount in
-            self?.updateChat(id: chatId, latest: latest, body: body, unreadCount: unreadCount)
+        viewModel.summaryDidChange = { [weak self] latest, body, unreadCount, unseenReactionCount in
+            self?.updateChat(id: chatId, latest: latest, body: body, unreadCount: unreadCount, unseenReactionCount: unseenReactionCount)
         }
         return viewModel
     }
 
-    private func updateChat(id: String, latest: ChatMessage?, body: String?, unreadCount: Int) {
+    private func updateChat(id: String, latest: ChatMessage?, body: String?, unreadCount: Int, unseenReactionCount: Int?) {
         if let index = chats.firstIndex(where: { $0.id == id }) {
-            let chat = Self.updated(chats[index], latest: latest, body: body, unreadCount: unreadCount)
+            let chat = Self.updated(chats[index], latest: latest, body: body, unreadCount: unreadCount, unseenReactionCount: unseenReactionCount)
             guard chat != chats[index] else { return }
             var updated = chats
             updated[index] = chat
             setChats(updated)
         } else if let index = archivedChats.firstIndex(where: { $0.id == id }) {
-            let chat = Self.updated(archivedChats[index], latest: latest, body: body, unreadCount: unreadCount)
+            let chat = Self.updated(archivedChats[index], latest: latest, body: body, unreadCount: unreadCount, unseenReactionCount: unseenReactionCount)
             guard chat != archivedChats[index] else { return }
             var updated = archivedChats
             updated[index] = chat
@@ -272,7 +293,8 @@ public final class ChatListViewModel: ObservableObject {
         }
     }
 
-    private static func updated(_ chat: ChatSummary, latest: ChatMessage?, body: String?, unreadCount: Int) -> ChatSummary {
+    /// `unseenReactionCount` is `nil` for chats that don't track unseen reactions, which keep the row's.
+    private static func updated(_ chat: ChatSummary, latest: ChatMessage?, body: String?, unreadCount: Int, unseenReactionCount: Int?) -> ChatSummary {
         var chat = chat
         if let latest, let body {
             chat.preview = if latest.isOwn {
@@ -285,6 +307,9 @@ public final class ChatListViewModel: ObservableObject {
             chat.timestamp = latest.timestamp ?? chat.timestamp
         }
         chat.unreadCount = unreadCount
+        if let unseenReactionCount {
+            chat.unseenReactionCount = unseenReactionCount
+        }
         return chat
     }
 

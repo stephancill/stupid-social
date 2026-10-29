@@ -6,7 +6,8 @@ enum HomePage: String, Hashable {
     case social
 }
 
-/// Chats to the left of the feed, swiped between like Instagram's camera and inbox. A `UIPageViewController`
+/// Chats to the left of the feed, swiped between like Instagram's camera and inbox. The pages wrap around, so
+/// swiping on past either page lands on the other. A `UIPageViewController`
 /// hosts each side as a child view controller; SwiftUI's paging `TabView` and `ScrollView` dropped the
 /// navigation bars' layout margins, leaving large titles against the screen edge.
 struct HomePager<Chats: View, Social: View>: UIViewControllerRepresentable {
@@ -59,11 +60,15 @@ struct HomePager<Chats: View, Social: View>: UIViewControllerRepresentable {
         }
 
         func pageViewController(_: UIPageViewController, viewControllerBefore viewController: UIViewController) -> UIViewController? {
-            viewController === social ? chats : nil
+            other(than: viewController)
         }
 
         func pageViewController(_: UIPageViewController, viewControllerAfter viewController: UIViewController) -> UIViewController? {
-            viewController === chats ? social : nil
+            other(than: viewController)
+        }
+
+        private func other(than viewController: UIViewController) -> UIViewController {
+            viewController === chats ? social : chats
         }
 
         func pageViewController(_ controller: UIPageViewController, didFinishAnimating _: Bool, previousViewControllers _: [UIViewController], transitionCompleted completed: Bool) {
@@ -81,6 +86,8 @@ final class HomePagerController: UIViewController {
     weak var leftPage: UIViewController?
     private let dots = HomePageDotsView()
     private var offsetObservation: NSKeyValueObservation?
+    /// The progress of the page shown when the scroll view was last at rest.
+    private var restingProgress: CGFloat = 1
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -104,7 +111,8 @@ final class HomePagerController: UIViewController {
     func show(_ page: UIViewController) {
         let isLeft = page === leftPage
         pageController.setViewControllers([page], direction: isLeft ? .reverse : .forward, animated: false)
-        dots.progress = isLeft ? 0 : 1
+        restingProgress = isLeft ? 0 : 1
+        dots.progress = restingProgress
     }
 
     func setPagingEnabled(_ enabled: Bool) {
@@ -118,9 +126,15 @@ final class HomePagerController: UIViewController {
         offsetObservation = scrollView?.observe(\.contentOffset, options: [.new]) { [weak self] scrollView, _ in
             MainActor.assumeIsolated {
                 guard let self, scrollView.bounds.width > 0 else { return }
-                let current: CGFloat = self.pageController.viewControllers?.first === self.leftPage ? 0 : 1
                 let shift = (scrollView.contentOffset.x - scrollView.bounds.width) / scrollView.bounds.width
-                self.dots.progress = min(1, max(0, current + shift))
+                // The page controller switches its current page while a swipe is still settling, before the
+                // offset returns to the middle, so the swipe is measured from the page it started on.
+                if shift == 0 {
+                    self.restingProgress = self.pageController.viewControllers?.first === self.leftPage ? 0 : 1
+                }
+                // Past either end the swipe wraps to the other page, so the position reflects back into 0...1.
+                let position = self.restingProgress + shift
+                self.dots.progress = min(1, max(0, position < 0 ? -position : position > 1 ? 2 - position : position))
             }
         }
     }

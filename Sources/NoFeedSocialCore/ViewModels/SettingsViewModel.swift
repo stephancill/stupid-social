@@ -73,7 +73,15 @@ public final class SettingsViewModel: ObservableObject {
         if status == .invalidCredentials {
             return status.label
         }
+        if account.network == .apron, let serverURL = account.serverURL {
+            return ApronServerInfo.displayTitle(store.apronInfo(id: account.id)?.title, serverURL: serverURL)
+        }
         return account.label ?? status.label
+    }
+
+    /// The picture beside the account's row: an Apron account shows its server's icon, others their own.
+    public func rowAvatarURL(for account: Account) -> URL? {
+        account.network == .apron ? ApronUser.avatarURL(store.apronInfo(id: account.id)?.avatar) : account.avatarURL
     }
 
     public var hasInvalidCredentials: Bool {

@@ -219,7 +219,11 @@ def cmd_rooms(session: Session, args: argparse.Namespace) -> None:
     caps = session.server.get("capabilities", [])
     output: dict[str, Any] = {"server": session.server, "auth": auth}
     if "rooms" in caps:
-        output["room_list"] = session.request("room_list", {"filter": "all", "members": args.members})
+        params: dict[str, Any] = {"filter": "all", "members": args.members}
+        # One room, joined or not, as a link preview shows it before joining (§4.2.1).
+        if args.room_id:
+            params["room_id"] = args.room_id
+        output["room_list"] = session.request("room_list", params)
     session.drain(args.wait)
     output["notifications"] = session.notifications
     print_json(output)
@@ -623,6 +627,49 @@ def cmd_room_create(session: Session, args: argparse.Namespace) -> None:
     print_json({"room_id": room_id})
 
 
+def direct_room_with(rooms: list[dict[str, Any]], you: str, user_id: str) -> dict[str, Any] | None:
+    """apron-web's `directRoomWith`: a joined top-level untitled private room whose complete member list is
+    exactly you and `user_id`."""
+    for room in rooms:
+        if not room.get("private") or room.get("parent_room_id") or (room.get("title") or "").strip():
+            continue
+        if room.get("members") is None or room.get("member_count") is not None:
+            continue
+        if {member["user_id"] for member in room["members"]} == {you, user_id}:
+            return room
+    return None
+
+
+def cmd_dm(session: Session, args: argparse.Namespace) -> None:
+    """Opens the DM with --user: the existing direct room from `room_list` (§4.2.1), else a new untitled private
+    room (`room_set` with `private: true`, §4.2.4), checked for `private: true` in its `room_update` `joined`
+    record before `room_join` adds the user (§4.2.2)."""
+    you = authenticate(session, args)["you"]["user_id"]
+    listing = session.request("room_list", {"filter": "joined", "members": True})
+    existing = direct_room_with(listing.get("joined") or [], you, args.user)
+    if existing:
+        print_json({"room_id": existing["room_id"], "created": False})
+        return
+    room_id = session.request("room_set", {"private": True})["room_id"]
+
+    def joined_record() -> dict[str, Any] | None:
+        for frame in session.notifications:
+            if frame.get("method") == "room_update":
+                for room in frame["params"].get("joined") or []:
+                    if room["room_id"] == room_id:
+                        return room
+        return None
+
+    # The record usually arrives before the result; otherwise wait for it.
+    if joined_record() is None:
+        session.drain(2)
+    joined = joined_record()
+    if not joined or not joined.get("private"):
+        raise SystemExit(f"room {room_id} came back without private: true: {joined}")
+    session.request("room_join", {"room_id": room_id, "user_id": args.user})
+    print_json({"room_id": room_id, "created": True, "joined_record": joined})
+
+
 def cmd_push_register(session: Session, args: argparse.Namespace) -> None:
     """Registers --endpoint for push (§4.9.1) with the client keys in --keys-file; prints server.push first."""
     authenticate(session, args)
@@ -710,7 +757,9 @@ def main() -> None:
         return p
 
     add("hello", cmd_hello)
-    add("rooms", cmd_rooms).add_argument("--members", action="store_true")
+    rooms = add("rooms", cmd_rooms)
+    rooms.add_argument("--members", action="store_true")
+    rooms.add_argument("--room-id")
     history = add("history", cmd_history)
     history.add_argument("--room", required=True)
     history.add_argument("--limit", type=int, default=20)
@@ -766,6 +815,7 @@ def main() -> None:
     room.add_argument("--title")
     room.add_argument("--private", action="store_true")
     room.add_argument("--add", action="append", default=[], help="user_id to add (repeatable)")
+    add("dm", cmd_dm).add_argument("--user", required=True, help="user_id to message")
     register = add("push-register", cmd_push_register)
     register.add_argument("--endpoint", required=True)
     register.add_argument("--kind", choices=["webpush", "relay"], default="webpush")

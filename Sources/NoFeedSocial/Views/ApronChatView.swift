@@ -9,6 +9,8 @@ struct ApronChatView: View {
     /// A member to show on opening, such as from a link.
     private let profileUserId: String?
     @State private var hasShownLinkedProfile = false
+    /// The room marked on screen, so its notifications aren't shown; `nil` while the chat isn't showing.
+    @State private var openRoomId: String?
 
     init(viewModel: @autoclosure @escaping () -> AdapterChatViewModel<ApronChatAdapter>, profileUserId: String? = nil) {
         _viewModel = StateObject(wrappedValue: viewModel())
@@ -35,7 +37,21 @@ struct ApronChatView: View {
             ApronProfileView(viewModel: room, user: user)
         }
         .onAppear {
-            NotificationRouter.shared.roomDidOpen(serverURL: room.serverURL, roomId: room.roomId)
+            openRoomId = room.roomId
+        }
+        // A new direct chat gets its room with the first message.
+        .onReceive(room.$roomId) { roomId in
+            if openRoomId != nil {
+                openRoomId = roomId
+            }
+        }
+        .onChange(of: openRoomId) { previous, current in
+            if let previous, !previous.isEmpty {
+                NotificationRouter.shared.roomDidClose(serverURL: room.serverURL, roomId: previous)
+            }
+            if let current, !current.isEmpty {
+                NotificationRouter.shared.roomDidOpen(serverURL: room.serverURL, roomId: current)
+            }
         }
         .task {
             if let profileUserId, !hasShownLinkedProfile {
@@ -44,7 +60,7 @@ struct ApronChatView: View {
             }
         }
         .onDisappear {
-            NotificationRouter.shared.roomDidClose(serverURL: room.serverURL, roomId: room.roomId)
+            openRoomId = nil
         }
     }
 }

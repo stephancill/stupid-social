@@ -143,18 +143,33 @@ public struct ApronServerMetadata: Codable, Equatable, Identifiable {
     public var user: ApronUser?
     public var agent: String?
     public var welcome: String?
+    public var title: String?
+    public var description: String?
+    public var avatar: String?
     public var status: AccountStatusSnapshot
 
     public var id: String {
         serverURL.absoluteString
     }
 
-    public init(serverURL: URL, requestedName: String?, user: ApronUser?, agent: String?, welcome: String?, status: AccountStatusSnapshot) {
+    /// The server's `title`, or its host without one (§3.1).
+    public var displayTitle: String {
+        ApronServerInfo.displayTitle(title, serverURL: serverURL)
+    }
+
+    public var avatarURL: URL? {
+        ApronUser.avatarURL(avatar)
+    }
+
+    public init(serverURL: URL, requestedName: String?, info: ApronSignInInfo?, status: AccountStatusSnapshot) {
         self.serverURL = serverURL
         self.requestedName = requestedName
-        self.user = user
-        self.agent = agent
-        self.welcome = welcome
+        user = info?.user
+        agent = info?.agent
+        welcome = info?.welcome
+        title = info?.title
+        description = info?.description
+        avatar = info?.avatar
         self.status = status
     }
 }

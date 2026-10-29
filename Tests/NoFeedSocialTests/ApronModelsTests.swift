@@ -21,6 +21,21 @@ final class ApronModelsTests: XCTestCase {
         XCTAssertEqual(dm.otherMembers(you: "me").map(\.userId), ["bob", "alice"])
     }
 
+    func testDirectRoomIsUntitledPrivateRoomOfExactlyTwo() throws {
+        let dm = try room(#"{"room_id": "1", "private": true, "members": [{"user_id": "me"}, {"user_id": "bob"}]}"#)
+        XCTAssertTrue(dm.isDirect(with: "bob", you: "me"))
+        XCTAssertFalse(dm.isDirect(with: "alice", you: "me"))
+        XCTAssertFalse(dm.isDirect(with: "me", you: "me"))
+        let group = try room(#"{"room_id": "2", "private": true, "members": [{"user_id": "me"}, {"user_id": "bob"}, {"user_id": "alice"}]}"#)
+        XCTAssertFalse(group.isDirect(with: "bob", you: "me"))
+        let titled = try room(#"{"room_id": "3", "private": true, "title": "Plans", "members": [{"user_id": "me"}, {"user_id": "bob"}]}"#)
+        XCTAssertFalse(titled.isDirect(with: "bob", you: "me"))
+        let truncated = try room(#"{"room_id": "4", "private": true, "member_count": 40, "members": [{"user_id": "me"}, {"user_id": "bob"}]}"#)
+        XCTAssertFalse(truncated.isDirect(with: "bob", you: "me"))
+        let open = try room(#"{"room_id": "5", "members": [{"user_id": "me"}, {"user_id": "bob"}]}"#)
+        XCTAssertFalse(open.isDirect(with: "bob", you: "me"))
+    }
+
     func testPrivateRoomFallbacks() throws {
         let alone = try room(#"{"room_id": "private_1", "private": true, "members": [{"user_id": "me"}]}"#)
         XCTAssertEqual(alone.displayTitle(users: users, you: "me"), "You")
@@ -47,5 +62,20 @@ final class ApronModelsTests: XCTestCase {
         let online = offline.merging(ApronUser(userId: "alice", name: nil, avatar: nil, roles: nil, status: "online"))
         XCTAssertEqual(online.seen, "1724803600000")
         XCTAssertNil(online.lastSeen)
+    }
+
+    /// One room by `room_id`, as a link preview asks for it, comes back in `not_joined` until the user joins.
+    func testOneRoomListing() throws {
+        let params = try JSONSerialization.jsonObject(with: JSONEncoder().encode(ApronRoomListParams(filter: "all", members: true, roomId: "1793058106801"))) as? [String: Any]
+        XCTAssertEqual(params?["room_id"] as? String, "1793058106801")
+        let all = try JSONSerialization.jsonObject(with: JSONEncoder().encode(ApronRoomListParams(filter: "joined", members: true))) as? [String: Any]
+        XCTAssertNil(all?["room_id"])
+
+        let json = #"{"not_joined":[{"room_id":"1793058106801","title":"The Watchlist","description":"Share what's worth watching.","members":[{"user_id":"ada"}]}],"users":[{"user_id":"ada","name":"Ada","avatar":"https://example.com/ada.png"}]}"#
+        let result = try JSONDecoder().decode(ApronRoomListResult.self, from: Data(json.utf8))
+        XCTAssertNil(result.joined)
+        XCTAssertEqual(result.notJoined?.first?.title, "The Watchlist")
+        XCTAssertEqual(result.notJoined?.first?.members?.count, 1)
+        XCTAssertEqual(result.users?.first?.avatarURL?.absoluteString, "https://example.com/ada.png")
     }
 }

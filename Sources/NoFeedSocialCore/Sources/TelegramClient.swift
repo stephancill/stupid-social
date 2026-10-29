@@ -112,6 +112,8 @@ public struct TelegramDialogState: Sendable {
     public let userStatus: ChatPresence?
     public let readInboxMaxId: Int32
     public let readOutboxMaxId: Int32
+    /// The user's messages with reactions they haven't seen.
+    public let unreadReactionsCount: Int
 }
 
 public enum TelegramSignInResult: Sendable, Equatable {
@@ -446,6 +448,30 @@ public actor TelegramClient: ChatListProvider {
         }
     }
 
+    /// Calls `observer` when Telegram pushes a change to the reactions on one of `peer`'s messages.
+    public func addReactionObserver(peer: TelegramPeer, _ observer: @escaping @Sendable () -> Void) -> UUID {
+        let id = UUID()
+        observers[id] = { update in
+            if Self.reactionUpdate(update, concerns: peer) {
+                observer()
+            }
+        }
+        return id
+    }
+
+    static func reactionUpdate(_ update: TLObject, concerns peer: TelegramPeer) -> Bool {
+        switch update.name {
+        case "updateShort":
+            update["update"]?.object.map { reactionUpdate($0, concerns: peer) } ?? false
+        case "updates", "updatesCombined":
+            update.objects("updates").contains { reactionUpdate($0, concerns: peer) }
+        case "updateMessageReactions":
+            update["peer"]?.object.map(peerKey) == peer.key
+        default:
+            false
+        }
+    }
+
     /// Calls `observer` with a user's new status when Telegram pushes `updateUserStatus` for them.
     public func addStatusObserver(userId: Int64, _ observer: @escaping @Sendable (ChatPresence) -> Void) -> UUID {
         let id = UUID()
@@ -675,9 +701,11 @@ public actor TelegramClient: ChatListProvider {
                 network: .telegram,
                 title: title,
                 avatarURL: TelegramMediaParser.avatarURL(photo: photo, inputPeer: peer.inputPeer, key: peer.key),
+                avatarColorKey: String(peer.id),
                 preview: preview,
                 timestamp: latest?.date,
                 unreadCount: Int(dialog["unread_count"]?.int ?? 0),
+                unseenReactionCount: Int(dialog["unread_reactions_count"]?.int ?? 0),
                 destination: .telegram(peer: peer),
                 namesSenderInPreview: peer.kind != .user,
                 titleNamesPeople: peer.kind == .user,
@@ -715,6 +743,7 @@ public actor TelegramClient: ChatListProvider {
             userStatus: userStatus,
             readInboxMaxId: dialog["read_inbox_max_id"]?.int ?? 0,
             readOutboxMaxId: dialog["read_outbox_max_id"]?.int ?? 0,
+            unreadReactionsCount: Int(dialog["unread_reactions_count"]?.int ?? 0),
         )
     }
 
@@ -924,6 +953,31 @@ public actor TelegramClient: ChatListProvider {
         let updates = try await invoke(TLObject("messages.sendReaction", ["peer": .object(peer.inputPeer), "msg_id": .int(messageId), "reaction": .vector(reaction)])).object
         guard let update = updates?.objects("updates").first(where: { $0.name == "updateMessageReactions" }), let reactions = update["reactions"] else { return nil }
         return TelegramMediaParser.reactions(of: TLObject("message", ["reactions": reactions]))
+    }
+
+    /// The user's messages with reactions they haven't seen, newest first (`messages.getUnreadReactions`).
+    public func unreadReactionMessageIds(peer: TelegramPeer, limit: Int = 100) async throws -> [Int32] {
+        try requireAccount()
+        guard let result = try await invoke(TLObject("messages.getUnreadReactions", [
+            "peer": .object(peer.inputPeer), "offset_id": .int(0), "add_offset": .int(0), "limit": .int(Int32(limit)),
+            "max_id": .int(0), "min_id": .int(0),
+        ])).object else { throw TelegramError.protocolViolation("no unread reactions") }
+        return result.objects("messages").filter { $0.name != "messageEmpty" }.compactMap { $0["id"]?.int }
+    }
+
+    /// Marks the reactions on these messages seen, as Telegram's apps do when the messages show
+    /// (`messages.readMessageContents`, or `channels.readMessageContents` in supergroups).
+    public func markReactionsSeen(peer: TelegramPeer, messageIds: [Int32]) async throws {
+        try requireAccount()
+        let ids: TLValue = .vector(messageIds.map { .int($0) })
+        if peer.kind == .channel {
+            _ = try await invoke(TLObject("channels.readMessageContents", [
+                "channel": .object(TLObject("inputChannel", ["channel_id": .long(peer.id), "access_hash": .long(peer.accessHash)])),
+                "id": ids,
+            ]))
+        } else {
+            _ = try await invoke(TLObject("messages.readMessageContents", ["id": ids]))
+        }
     }
 
     public func markRead(peer: TelegramPeer, maxId: Int32) async throws {

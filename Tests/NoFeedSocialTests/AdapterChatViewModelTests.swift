@@ -172,6 +172,57 @@ final class AdapterChatViewModelTests: XCTestCase {
         chat.disconnect()
     }
 
+    func testUnseenReactionsShowAndSeeingThemSendsOnce() async throws {
+        let adapter = FakeUnseenReactionsAdapter()
+        adapter.pages = [[message(1, own: true), message(2, own: true), message(3, own: true)]]
+        adapter.unseen = ["1", "3"]
+        let chat = makeChat(adapter)
+        var rowCounts: [Int?] = []
+        chat.summaryDidChange = { _, _, _, count in rowCounts.append(count) }
+        await chat.connect()
+        XCTAssertEqual(chat.unseenReactionMessageIds, ["1", "3"])
+        chat.reactionsSeen(on: ["1", "2"])
+        chat.reactionsSeen(on: ["3"])
+        XCTAssertEqual(chat.unseenReactionMessageIds, [], "seen at once")
+        XCTAssertEqual(rowCounts.last, 0, "the row follows")
+        try await Task.sleep(for: .milliseconds(800))
+        XCTAssertEqual(adapter.seenSends, [["1", "3"]], "one send covers both")
+        chat.disconnect()
+    }
+
+    func testReactionsAreOnlySeenOnceConnected() {
+        let adapter = FakeUnseenReactionsAdapter()
+        adapter.unseen = ["1"]
+        let chat = makeChat(adapter)
+        chat.reactionsSeen(on: ["1"])
+        XCTAssertEqual(chat.unseenReactionMessageIds, ["1"], "cached messages shown before connecting don't count")
+    }
+
+    func testChatsWithoutUnseenReactionsLeaveTheRowsCount() async {
+        let adapter = FakeAdapter()
+        adapter.pages = [[message(1)]]
+        let chat = makeChat(adapter)
+        var rowCounts: [Int?] = []
+        chat.summaryDidChange = { _, _, _, count in rowCounts.append(count) }
+        await chat.connect()
+        XCTAssertFalse(rowCounts.isEmpty)
+        XCTAssertTrue(rowCounts.allSatisfy { $0 == nil })
+        chat.disconnect()
+    }
+
+    func testJumpingToAnUnloadedMessageWithoutWindowsPagesBack() async {
+        let adapter = FakeUnseenReactionsAdapter()
+        adapter.pages = [[message(3, own: true)]]
+        adapter.earlierPages = [[message(2, own: true)], [message(1, own: true)]]
+        adapter.unseen = ["1"]
+        let chat = makeChat(adapter)
+        await chat.connect()
+        await chat.jumpToNextUnseenReaction()
+        XCTAssertEqual(chat.jumpTarget, "1")
+        XCTAssertEqual(chat.messages.map(\.id), ["1", "2", "3"])
+        chat.disconnect()
+    }
+
     private func makeChat(_ adapter: FakeAdapter) -> AdapterChatViewModel<FakeAdapter> {
         let suite = "AdapterChatViewModelTests-\(UUID().uuidString)"
         return AdapterChatViewModel(
@@ -331,5 +382,37 @@ private final class FakeReactingAdapter: FakeAdapter, ChatReactionSending {
 
     func toggleReaction(_ emoji: String, on messageId: String) async throws {
         reactions[messageId] = [ChatReaction(emoji: emoji, count: 1, includesYou: true)]
+    }
+}
+
+@MainActor
+private final class FakeUnseenReactionsAdapter: FakeAdapter, ChatUnseenReactions {
+    var unseen: [String] = []
+    var earlierPages: [[ChatMessage]] = []
+    private var pending: Set<String> = []
+    private(set) var seenSends: [[String]] = []
+
+    var unseenReactionMessageIds: [String] {
+        unseen
+    }
+
+    override var hasEarlierMessages: Bool {
+        get { !earlierPages.isEmpty }
+        set {}
+    }
+
+    override func loadEarlier() async throws {
+        guard !earlierPages.isEmpty else { return }
+        replace(with: earlierPages.removeFirst() + messages)
+    }
+
+    func markReactionsSeen(on messageIds: Set<String>) -> (@MainActor () async throws -> Void)? {
+        unseen.removeAll { messageIds.contains($0) }
+        pending.formUnion(messageIds)
+        return { [weak self] in
+            guard let self, !pending.isEmpty else { return }
+            seenSends.append(pending.sorted())
+            pending = []
+        }
     }
 }

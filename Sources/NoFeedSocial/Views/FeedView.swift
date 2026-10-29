@@ -114,7 +114,7 @@ struct FeedView: View {
         .listStyle(.plain)
         .listSectionSpacing(0)
         .scrollContentBackground(.hidden)
-        .toolbarBackground(.hidden, for: .navigationBar)
+        .softScrollEdge()
         #endif
         .refreshable {
             isPullRefreshing = true
@@ -1236,5 +1236,17 @@ private struct SettingsToolbarIcon: View {
                         .offset(x: 2, y: -2)
                 }
             }
+    }
+}
+
+private extension View {
+    /// Content fades under the bar as on Chats; the feed's list otherwise gets a hard edge.
+    @ViewBuilder
+    func softScrollEdge() -> some View {
+        if #available(iOS 26.0, *) {
+            scrollEdgeEffectStyle(.soft, for: .top)
+        } else {
+            self
+        }
     }
 }

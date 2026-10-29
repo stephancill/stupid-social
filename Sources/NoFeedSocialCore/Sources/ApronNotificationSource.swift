@@ -31,7 +31,7 @@ public final class ApronNotificationSource: AccountValidating, ChatListProvider 
         var accounts: [ChatListPage.AccountResult] = []
         for server in servers {
             let accountId = Account.apronId(serverURL: server.serverURL)
-            let label = "\(network.displayName) \(server.serverURL.host() ?? server.serverURL.absoluteString)"
+            let label = "\(network.displayName) \(server.displayTitle)"
             do {
                 // The shared connection stays open for live updates and chat; it isn't closed here.
                 let session = try await service.session(serverURL: server.serverURL)
@@ -87,7 +87,7 @@ public final class ApronNotificationSource: AccountValidating, ChatListProvider 
             firstPage = page
         }
         let own = service.readStore.ownUserIds(serverURL: session.serverURL).union([session.you.userId])
-        let host = session.serverURL.host() ?? session.serverURL.absoluteString
+        let serverTitle = session.serverTitle
         var summaries: [ChatSummary] = []
         for room in rooms where roomIds?.contains(room.roomId) ?? true {
             let page = if let firstPage { firstPage } else { try await session.connection.history(roomId: room.roomId, limit: historyLimit) }
@@ -106,11 +106,13 @@ public final class ApronNotificationSource: AccountValidating, ChatListProvider 
                 id: "apron:\(session.serverURL.absoluteString)|\(room.roomId)",
                 network: .apron,
                 title: room.displayTitle(users: users, you: session.you.userId),
-                subtitle: host,
+                titlePrefix: serverTitle,
                 avatarURL: avatarURL,
+                avatarColorKey: others.count == 1 ? others[0].userId : nil,
                 preview: preview,
                 timestamp: latest?.timestamp,
                 unreadCount: unread,
+                unseenReactionCount: unseenReactionCount(in: page, roomId: room.roomId, ownUserIds: own, serverURL: session.serverURL),
                 destination: .apron(serverURL: session.serverURL, roomId: room.roomId),
                 titleNamesPeople: room.isNamedForMembers,
                 // A room set to None is muted on the server (§4.5.3).
@@ -124,6 +126,33 @@ public final class ApronNotificationSource: AccountValidating, ChatListProvider 
         (page.messages ?? [])
             .filter { $0.messageId != nil && !$0.isDeleted && !($0.body?.text ?? "").isEmpty }
             .max { $0.sortKey < $1.sortKey }
+    }
+
+    /// The user's messages with unseen reactions from others among the page's reaction records, which can be on
+    /// messages older than the page; the store knows which of those are the user's (`ApronReactionStore`).
+    private func unseenReactionCount(in page: ApronHistoryResult, roomId: String, ownUserIds: Set<String>, serverURL: URL) -> Int {
+        let store = service.reactionStore
+        if let last = page.lastLogId.flatMap(Int64.init) {
+            store.setBaselineIfNeeded(last, serverURL: serverURL, roomId: roomId)
+        }
+        let ownInPage = (page.messages ?? []).filter { ownUserIds.contains($0.from.userId) }.compactMap(\.messageId)
+        store.addOwnMessageIds(ownInPage, serverURL: serverURL, roomId: roomId)
+        let ownMessages = store.ownMessageIds(serverURL: serverURL, roomId: roomId)
+        // Each user's latest set per message, as the chat keeps them (§4.7).
+        var entries: [String: [String: (logId: Int64, emojis: [String])]] = [:]
+        for record in page.reactions ?? [] where record.roomId == nil || record.roomId == roomId {
+            let logId = record.logId.flatMap(Int64.init) ?? 0
+            for set in record.reactions where (entries[record.messageId]?[set.from.userId]?.logId ?? .min) <= logId {
+                entries[record.messageId, default: [:]][set.from.userId] = (logId, set.emojis)
+            }
+        }
+        return store.unseenMessageIds(
+            in: entries,
+            isOwnMessage: ownMessages.contains,
+            isOwnUser: ownUserIds.contains,
+            serverURL: serverURL,
+            roomId: roomId,
+        ).count
     }
 
     /// Messages from others after the read cursor, capped at the page size (§4.6).

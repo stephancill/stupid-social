@@ -25,7 +25,7 @@ public final class AccountStore: NSObject, @unchecked Sendable {
 
     /// Posted on the main queue after accounts were added, changed or removed, here or on another device.
     public static let didChangeNotification = Notification.Name("AccountStore.didChange")
-    /// Posted on the main queue after an account's status on this device changed.
+    /// Posted on the main queue after an account's status, or what its Apron server said, changed on this device.
     public static let statusDidChangeNotification = Notification.Name("AccountStore.statusDidChange")
 
     private let lock = NSRecursiveLock()
@@ -167,10 +167,17 @@ public final class AccountStore: NSObject, @unchecked Sendable {
 
     public func setApronInfo(_ info: ApronSignInInfo, id: String) {
         lock.lock()
-        defer { lock.unlock() }
         var all = apronInfoMap
+        guard all[id] != info else {
+            lock.unlock()
+            return
+        }
         all[id] = info
         defaults.set(Self.encode(all), forKey: Key.apronInfo)
+        lock.unlock()
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: AccountStore.statusDidChangeNotification, object: nil)
+        }
     }
 
     /// The developer notifications server, which is a device setting rather than an account.
@@ -261,10 +268,21 @@ public struct ApronSignInInfo: Codable, Equatable, Sendable {
     public var user: ApronUser?
     public var agent: String?
     public var welcome: String?
+    /// The server's own `title`, `description` and `avatar` (§3.1).
+    public var title: String?
+    public var description: String?
+    public var avatar: String?
 
-    public init(user: ApronUser?, agent: String?, welcome: String?) {
+    public init(user: ApronUser?, agent: String?, welcome: String?, title: String? = nil, description: String? = nil, avatar: String? = nil) {
         self.user = user
         self.agent = agent
         self.welcome = welcome
+        self.title = title
+        self.description = description
+        self.avatar = avatar
+    }
+
+    public init(user: ApronUser, server: ApronServerInfo) {
+        self.init(user: user, agent: server.agent, welcome: server.welcome, title: server.title, description: server.description, avatar: server.avatar)
     }
 }

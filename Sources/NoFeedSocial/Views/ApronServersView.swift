@@ -85,9 +85,15 @@ struct ApronServerDetailView: View {
                 }
             }
 
+            if let description = server.description, !description.isEmpty {
+                Section("About") {
+                    Text(markdown(description))
+                }
+            }
+
             if let welcome = server.welcome, !welcome.isEmpty {
                 Section("Welcome") {
-                    Text((try? AttributedString(markdown: welcome, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(welcome))
+                    Text(markdown(welcome))
                 }
             }
 
@@ -125,9 +131,9 @@ struct ApronServerDetailView: View {
                 }
             }
         }
-        .navigationTitle(server.serverURL.host() ?? "Server")
+        .navigationTitle(server.displayTitle)
         .onAppear { viewModel.message = nil }
-        .alert("Remove \(server.serverURL.host() ?? "server")?", isPresented: $showRemoveConfirmation) {
+        .alert("Remove \(server.displayTitle)?", isPresented: $showRemoveConfirmation) {
             Button("Cancel", role: .cancel) {}
             Button("Remove Server", role: .destructive) {
                 viewModel.remove(server)
@@ -136,6 +142,10 @@ struct ApronServerDetailView: View {
         } message: {
             Text("This removes the server and its saved token, and removes its rooms from your notifications.")
         }
+    }
+
+    private func markdown(_ text: String) -> AttributedString {
+        (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
     }
 
     private var statusLabel: String {

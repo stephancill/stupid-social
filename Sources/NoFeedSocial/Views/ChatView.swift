@@ -38,11 +38,11 @@ struct ChatView: View {
                     // Without an action it isn't a button: a disabled button would dim the title.
                     if let onTitleTap {
                         Button(action: onTitleTap) {
-                            ChatTitlePill(title: displayTitle, subtitle: displaySubtitle, network: viewModel.network)
+                            ChatTitlePill(title: displayTitle, subtitle: displaySubtitle, network: viewModel.network, avatar: viewModel.titleAvatar)
                         }
                         .buttonStyle(.plain)
                     } else {
-                        ChatTitlePill(title: displayTitle, subtitle: displaySubtitle, network: viewModel.network)
+                        ChatTitlePill(title: displayTitle, subtitle: displaySubtitle, network: viewModel.network, avatar: viewModel.titleAvatar)
                     }
                 }
             }
@@ -77,23 +77,31 @@ private struct ChatTitlePill: View {
     let title: String
     let subtitle: String
     let network: SocialNetwork
+    /// Leads with the chat's picture, as its Chats row does.
+    var avatar: ChatTitleAvatar?
 
     var body: some View {
-        let content = VStack(spacing: 0) {
-            Text(title)
-                .font(.headline)
-                .lineLimit(1)
-            if !subtitle.isEmpty {
-                HStack(spacing: 4) {
-                    NetworkBadgeIcon(network: network, size: 12)
-                    Text(subtitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+        let content = HStack(spacing: 8) {
+            if let avatar {
+                ChatAvatarImage(url: avatar.url, title: title, size: 32, colorKey: avatar.colorKey)
+            }
+            VStack(spacing: 0) {
+                Text(title)
+                    .font(.headline)
+                    .lineLimit(1)
+                if !subtitle.isEmpty {
+                    HStack(spacing: 4) {
+                        NetworkBadgeIcon(network: network, size: 12)
+                        Text(subtitle)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
             }
         }
-        .padding(.horizontal, 18)
+        .padding(.leading, avatar == nil ? 18 : 5)
+        .padding(.trailing, 18)
         .padding(.vertical, 5)
 
         if #available(iOS 26.0, *) {

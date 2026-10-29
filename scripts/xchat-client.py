@@ -636,6 +636,34 @@ def unread_count(item: dict[str, Any], keys: dict[str, Any]) -> int:
             count += 1
     return count
 
+def group_names_summary(items: list[dict[str, Any]], keys: dict[str, Any], show_names: bool) -> list[dict[str, Any]]:
+    """Each group's `group_metadata.group_name`: sealed (version 0) under one of the conversation keys, which it
+    doesn't name, so each is tried. Names only with --show-names."""
+    rows = []
+    for item in items:
+        detail = item["conversation_detail"]
+        if detail.get("__typename") != "XChatGroupConversationDetail":
+            continue
+        sealed = (detail.get("group_metadata") or {}).get("group_name")
+        row: dict[str, Any] = {"members": len(detail.get("group_members_results") or []), "named": sealed is not None}
+        if sealed:
+            conversation_keys = XChatClient.conversation_keys(
+                [thrift(base64.b64decode(e)) for e in item.get("latest_conversation_key_change_events") or []], keys
+            )
+            for version, key in sorted(conversation_keys.items(), reverse=True):
+                try:
+                    name = open_sealed(key, b64_lenient(sealed)).decode()
+                except Exception:
+                    continue
+                row["key_version"] = version
+                row["name" if show_names else "name_length"] = name if show_names else len(name)
+                break
+            else:
+                row["decrypt"] = "no conversation key opens it"
+        rows.append(row)
+    return rows
+
+
 def plain_holder_shape(contents: Any) -> Any:
     """Whether create-event contents parse as an unencrypted Thrift `MessageEntryHolder`, by field numbers only."""
     if not isinstance(contents, bytes):
@@ -756,6 +784,8 @@ def build_parser() -> argparse.ArgumentParser:
         "recover-keys",
         help="Recover the viewer's private keys through Juicebox with X_CHAT_PIN. Uses a PIN guess if the PIN is wrong.",
     )
+    names = subparsers.add_parser("group-names", help="Decrypt each group's sealed name (lengths; names with --show-names).")
+    names.add_argument("--show-names", action="store_true")
     conversation = subparsers.add_parser("conversation", help="Decrypt the newest events of one conversation (shapes; text with --show-text).")
     conversation.add_argument("conversation_id")
     conversation.add_argument("--show-text", action="store_true")
@@ -793,6 +823,8 @@ def main() -> None:
     elif args.command == "public-keys":
         users = client.public_keys(args.user_ids or [client.viewer_id()], juicebox=False)
         result = key_versions_summary(users)
+    elif args.command == "group-names":
+        result = group_names_summary(client.inbox_items(), load_keys(), args.show_names)
     elif args.command == "inbox":
         items = client.inbox_items()
         x_probe.write_output(args.output, items)

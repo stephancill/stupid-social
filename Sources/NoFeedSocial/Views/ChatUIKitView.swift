@@ -50,7 +50,13 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     private var messageIdByKey: [String: String] = [:]
     /// Messages whose spoilers were tapped open; they stay open while the chat is.
     private var revealedSpoilers: Set<String> = []
-    private var isNearBottom = true
+    /// Read from the current layout: a list that fits on screen never scrolls, so a value kept from the last
+    /// scroll could be one from before the view had its size.
+    private var isNearBottom: Bool {
+        let visibleBottom = collectionView.contentOffset.y + collectionView.bounds.height - collectionView.adjustedContentInset.bottom
+        return visibleBottom >= collectionView.contentSize.height - 80
+    }
+
     /// Follows the newest message: set when the room opens at the bottom or the user scrolls back down,
     /// cleared when the user scrolls away. Layout changes while pinned re-anchor to the bottom.
     private var isPinnedToBottom = false
@@ -69,11 +75,21 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     private var hasEarlier = false
     private let historySpinner = UIActivityIndicatorView(style: .medium)
     private var pendingJumpTarget: String?
+    /// While a jump's scroll animates, the messages it passes neither page in history nor count as seen.
+    private var isAnimatingJump = false
     private let jumpToLatestButton = UIButton(type: .system)
     private let jumpToLatestGlass = ChatGlass.make(cornerRadius: 20)
     private let unreadBadge = UIView()
     private let unreadBadgeLabel = UILabel()
     private var unreadCount = 0
+    private let unseenReactionsButton = UIButton(type: .system)
+    private let unseenReactionsGlass = ChatGlass.make(cornerRadius: 20)
+    private let unseenReactionsBadge = UIView()
+    private let unseenReactionsBadgeLabel = UILabel()
+    private var unseenReactionCount = 0
+    /// The heart sits above the jump-to-latest button while that shows, and takes its place otherwise.
+    private var unseenReactionsAboveJump: NSLayoutConstraint!
+    private var unseenReactionsInJumpPlace: NSLayoutConstraint!
     private var userHasScrolled = false
     private var reactionTotals: [String: [ChatReaction]] = [:]
     /// Reaction changes made while a message's context menu is up wait for it to finish dismissing, so the
@@ -127,6 +143,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         configureCollectionView()
         configureComposer()
         configureJumpToLatestButton()
+        configureUnseenReactionsButton()
         configureTypingIndicator()
         configureMentionSuggestions()
         bind()
@@ -416,6 +433,12 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
             self?.pendingJumpTarget = target
             DispatchQueue.main.async { self?.performPendingJump() }
         }.store(in: &cancellables)
+        viewModel.$unseenReactionMessageIds.sink { [weak self] ids in
+            guard let self else { return }
+            unseenReactionCount = ids.count
+            unseenReactionsBadgeLabel.text = ids.count > ChatViewModel.unreadBadgeCap ? "\(ChatViewModel.unreadBadgeCap)+" : "\(ids.count)"
+            updateUnseenReactionsButton()
+        }.store(in: &cancellables)
         viewModel.$unreadCount.sink { [weak self] count in
             guard let self else { return }
             unreadCount = count
@@ -595,10 +618,13 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         isPinnedToBottom = false
         isAnchoredToDivider = false
         collectionView.layoutIfNeeded()
+        isAnimatingJump = true
         collectionView.scrollToItem(at: indexPath, at: .centeredVertically, animated: true)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
             (self?.collectionView.cellForItem(at: indexPath) as? ChatMessageCell)?.flash()
         }
+        // In case the scroll was too short to animate, so `scrollViewDidEndScrollingAnimation` doesn't come.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in self?.jumpDidEnd() }
     }
 
     /// Floating button that returns to the newest message, shown when scrolled up or viewing an older window.
@@ -607,6 +633,10 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         let glass = jumpToLatestGlass
         unreadBadge.isHidden = !visible || unreadCount == 0
         guard glass.isHidden == visible else { return }
+        unseenReactionsAboveJump.isActive = false
+        unseenReactionsInJumpPlace.isActive = !visible
+        unseenReactionsAboveJump.isActive = visible
+        UIView.animate(withDuration: 0.2) { self.view.layoutIfNeeded() }
         if visible { glass.isHidden = false }
         UIView.animate(withDuration: 0.2, animations: {
             glass.alpha = visible ? 1 : 0
@@ -966,9 +996,17 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         isAnchoredToDivider = false
     }
 
+    func scrollViewDidEndScrollingAnimation(_: UIScrollView) {
+        jumpDidEnd()
+    }
+
+    private func jumpDidEnd() {
+        guard isAnimatingJump else { return }
+        isAnimatingJump = false
+        reportVisibleRead()
+    }
+
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
-        let visibleBottom = scrollView.contentOffset.y + scrollView.bounds.height - scrollView.adjustedContentInset.bottom
-        isNearBottom = visibleBottom >= scrollView.contentSize.height - 80
         // Only the user's own scrolling changes whether the list follows new messages.
         if scrollView.isDragging || scrollView.isDecelerating {
             isPinnedToBottom = isNearBottom
@@ -982,25 +1020,35 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     /// Cached messages shown before the chat connects don't count: reading them would move the cursor, and with it
     /// the divider that history places once it arrives.
     private func reportVisibleRead() {
-        guard hasScrolledInitially, state == .connected, view.window != nil, UIApplication.shared.applicationState == .active else { return }
+        guard hasScrolledInitially, !isAnimatingJump, state == .connected, view.window != nil, UIApplication.shared.applicationState == .active else { return }
         let visibleBottom = collectionView.contentOffset.y + collectionView.bounds.height - collectionView.adjustedContentInset.bottom
+        let visibleTop = collectionView.contentOffset.y + collectionView.adjustedContentInset.top
         var newest: Int?
+        var shown: Set<String> = []
         for indexPath in collectionView.indexPathsForVisibleItems {
             guard case let .message(key) = dataSource.itemIdentifier(for: indexPath),
                   let index = indexById[messageId(forKey: key)], !orderedMessages[index].isNotice,
-                  let frame = collectionView.layoutAttributesForItem(at: indexPath)?.frame,
-                  frame.maxY <= visibleBottom + 1
+                  let frame = collectionView.layoutAttributesForItem(at: indexPath)?.frame
             else { continue }
+            // Reactions sit at the bottom of the bubble, so they show once its bottom is on screen and clear of
+            // the header by about a chip's height; just under the header they're still hidden by its blur.
+            if frame.maxY <= visibleBottom + 1, frame.maxY >= visibleTop + 40 {
+                shown.insert(orderedMessages[index].id)
+            }
+            guard frame.maxY <= visibleBottom + 1 else { continue }
             newest = max(newest ?? index, index)
         }
         if let newest {
             viewModel.markRead(upTo: orderedMessages[newest])
         }
+        if !shown.isEmpty, unseenReactionCount > 0 {
+            viewModel.reactionsSeen(on: shown)
+        }
     }
 
     /// Pages history automatically within about a screen of either end; there are no load buttons.
     private func loadMoreIfNeeded(_ scrollView: UIScrollView) {
-        guard hasScrolledInitially, pendingJumpTarget == nil else { return }
+        guard hasScrolledInitially, pendingJumpTarget == nil, !isAnimatingJump else { return }
         let prefetch = scrollView.bounds.height
         let visibleTop = scrollView.contentOffset.y + scrollView.adjustedContentInset.top
         let visibleBottom = scrollView.contentOffset.y + scrollView.bounds.height - scrollView.adjustedContentInset.bottom
@@ -1164,6 +1212,67 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         ])
         glass.isHidden = true
         glass.alpha = 0
+    }
+
+    /// A heart over the jump-to-latest button, as in Telegram, while the user's messages have reactions they
+    /// haven't seen; it scrolls to the oldest one, which counts as seen once on screen.
+    private func configureUnseenReactionsButton() {
+        let glass = unseenReactionsGlass
+        unseenReactionsButton.setImage(UIImage(systemName: "heart", withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold)), for: .normal)
+        unseenReactionsButton.tintColor = .label
+        unseenReactionsButton.accessibilityLabel = "Next Unseen Reaction"
+        unseenReactionsButton.addAction(UIAction { [weak self] _ in
+            Task { await self?.viewModel.jumpToNextUnseenReaction() }
+        }, for: .primaryActionTriggered)
+        glass.contentView.addSubview(unseenReactionsButton)
+        unseenReactionsButton.pinToEdges(of: glass.contentView)
+        unseenReactionsBadgeLabel.font = UIFont.systemFont(ofSize: 12, weight: .bold).monospacedDigits()
+        unseenReactionsBadgeLabel.textColor = .white
+        unseenReactionsBadgeLabel.textAlignment = .center
+        unseenReactionsBadgeLabel.translatesAutoresizingMaskIntoConstraints = false
+        unseenReactionsBadge.addSubview(unseenReactionsBadgeLabel)
+        unseenReactionsBadge.backgroundColor = .systemBlue
+        unseenReactionsBadge.layer.cornerRadius = 10
+        unseenReactionsBadge.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            unseenReactionsBadgeLabel.centerYAnchor.constraint(equalTo: unseenReactionsBadge.centerYAnchor),
+            unseenReactionsBadgeLabel.leadingAnchor.constraint(equalTo: unseenReactionsBadge.leadingAnchor, constant: 6),
+            unseenReactionsBadgeLabel.trailingAnchor.constraint(equalTo: unseenReactionsBadge.trailingAnchor, constant: -6),
+        ])
+        glass.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(glass)
+        unseenReactionsAboveJump = glass.bottomAnchor.constraint(equalTo: jumpToLatestGlass.topAnchor, constant: -14)
+        unseenReactionsInJumpPlace = glass.bottomAnchor.constraint(equalTo: composer.topAnchor, constant: -10)
+        NSLayoutConstraint.activate([
+            glass.widthAnchor.constraint(equalToConstant: 40),
+            glass.heightAnchor.constraint(equalToConstant: 40),
+            glass.trailingAnchor.constraint(equalTo: jumpToLatestGlass.trailingAnchor),
+            unseenReactionsInJumpPlace,
+        ])
+        view.addSubview(unseenReactionsBadge)
+        NSLayoutConstraint.activate([
+            unseenReactionsBadge.centerXAnchor.constraint(equalTo: glass.centerXAnchor),
+            unseenReactionsBadge.centerYAnchor.constraint(equalTo: glass.topAnchor),
+            unseenReactionsBadge.heightAnchor.constraint(equalToConstant: 20),
+            unseenReactionsBadge.widthAnchor.constraint(greaterThanOrEqualToConstant: 20),
+        ])
+        glass.isHidden = true
+        glass.alpha = 0
+        unseenReactionsBadge.isHidden = true
+    }
+
+    private func updateUnseenReactionsButton() {
+        let visible = unseenReactionCount > 0
+        let glass = unseenReactionsGlass
+        unseenReactionsBadge.isHidden = !visible
+        guard glass.isHidden == visible else { return }
+        if visible { glass.isHidden = false }
+        UIView.animate(withDuration: 0.2, animations: {
+            glass.alpha = visible ? 1 : 0
+            glass.transform = visible ? .identity : CGAffineTransform(scaleX: 0.7, y: 0.7)
+        }, completion: { _ in
+            glass.isHidden = !visible
+        })
     }
 
     /// "Name is typing…" in a small glass capsule over the list above the composer. It floats, so showing

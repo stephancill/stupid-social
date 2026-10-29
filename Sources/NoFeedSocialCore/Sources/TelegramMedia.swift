@@ -19,6 +19,20 @@ public struct TelegramReactor: Codable, Hashable, Sendable {
     public let emoji: String
     public let peerId: Int64
     public let isMine: Bool
+    /// Optional so snapshots saved before it existed still decode.
+    private let unread: Bool?
+
+    public init(emoji: String, peerId: Int64, isMine: Bool, isUnread: Bool = false) {
+        self.emoji = emoji
+        self.peerId = peerId
+        self.isMine = isMine
+        unread = isUnread
+    }
+
+    /// Someone else's reaction to the user's message that the user hasn't seen.
+    public var isUnread: Bool {
+        unread == true
+    }
 }
 
 /// `tgfile://file/<key>?dc=<dc>&loc=<InputFileLocation>`: a Telegram file any image view can load through
@@ -302,7 +316,7 @@ enum TelegramMediaParser {
         let reactors = reactions.objects("recent_reactions").compactMap { recent -> TelegramReactor? in
             guard let reaction = recent["reaction"]?.object, let peer = recent["peer_id"]?.object else { return nil }
             let id = peer["user_id"]?.long ?? peer["channel_id"]?.long ?? peer["chat_id"]?.long ?? 0
-            return TelegramReactor(emoji: emoji(reaction), peerId: id, isMine: recent.flag("my"))
+            return TelegramReactor(emoji: emoji(reaction), peerId: id, isMine: recent.flag("my"), isUnread: recent.flag("unread"))
         }
         return (totals, reactors)
     }

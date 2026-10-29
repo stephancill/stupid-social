@@ -77,7 +77,10 @@ public final class XChatAdapter: ChatAdapter, ChatReactionSending, ChatLiveUpdat
         }
         info.showsSenderNames = conversation.isGroup
         if conversation.isGroup {
-            info.titleIsMemberNames = true
+            if let name = conversation.name {
+                info.title = name
+            }
+            info.titleIsMemberNames = conversation.name == nil
             info.subtitle = "\(conversation.others.count + 1) members"
         }
     }

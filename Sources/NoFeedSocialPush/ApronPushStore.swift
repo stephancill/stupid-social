@@ -21,6 +21,8 @@ public struct ApronPushRegistration: Codable, Hashable, Sendable {
     public var userNames: [String: String]
     /// Avatars of known users, since pushes leave them out.
     public var avatarURLs: [String: URL]
+    /// The server's `title`, for the notification's subtitle (§3.1).
+    public var serverTitle: String?
 
     public init(pushId: String, serverURL: URL, userId: String, keys: WebPushKeys) {
         self.pushId = pushId
@@ -35,7 +37,7 @@ public struct ApronPushRegistration: Codable, Hashable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case pushId, serverURL, userId, keys, endpoint, endpointDeviceToken, endpointVapidKey
-        case roomTitles, directRooms, userNames, avatarURLs
+        case roomTitles, directRooms, userNames, avatarURLs, serverTitle
     }
 
     /// Fields added later decode as empty, so a store written by an older build still decrypts.
@@ -52,6 +54,7 @@ public struct ApronPushRegistration: Codable, Hashable, Sendable {
         directRooms = try container.decodeIfPresent(Set<String>.self, forKey: .directRooms) ?? []
         userNames = try container.decodeIfPresent([String: String].self, forKey: .userNames) ?? [:]
         avatarURLs = try container.decodeIfPresent([String: URL].self, forKey: .avatarURLs) ?? [:]
+        serverTitle = try container.decodeIfPresent(String.self, forKey: .serverTitle)
     }
 }
 

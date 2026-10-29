@@ -4,7 +4,7 @@ import Foundation
 /// slow poll as a fallback), sends text, replies, photos and files, reacts, and moves the read cursor as
 /// messages are read. Media, avatars and link previews load lazily through `tgfile:` URLs.
 @MainActor
-public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatLiveUpdating, ChatReferenceResolving {
+public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUnseenReactions, ChatLiveUpdating, ChatReferenceResolving {
     public let network = SocialNetwork.telegram
     public let canReply = true
     public let acceptsAttachments = true
@@ -20,6 +20,7 @@ public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatLi
     public private(set) var hasEarlierMessages = false
     public private(set) var referencedMessages: [String: ChatMessage] = [:]
     public private(set) var unavailableReferences: Set<String> = []
+    public private(set) var unseenReactionMessageIds: [String] = []
 
     private let client: TelegramClient
     public let peer: TelegramPeer
@@ -31,6 +32,12 @@ public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatLi
     private var refreshTask: Task<Void, Never>?
     private var observer: UUID?
     private var statusObserver: UUID?
+    private var reactionObserver: UUID?
+    /// The user's messages Telegram says have unseen reactions, including ones that aren't loaded.
+    private var unreadReactionIds: Set<Int32> = []
+    /// Seen here this visit, so they stay seen while Telegram catches up; `pendingSeen` hasn't been sent yet.
+    private var seenReactionIds: Set<Int32> = []
+    private var pendingSeen: Set<Int32> = []
     /// The other person's last-seen status in a private chat, which the subtitle shows.
     private var userStatus: ChatPresence?
     /// The Chats list's status, which is newer than a snapshot's.
@@ -39,12 +46,18 @@ public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatLi
     /// Reply targets being fetched, so a refresh doesn't ask for them again.
     private var pendingReferences: Set<Int32> = []
 
-    public init(client: TelegramClient, peer: TelegramPeer, title: String, userStatus: ChatPresence? = nil) {
+    /// `avatarURL` is the chat's picture from its Chats row, shown beside a private chat's title.
+    public init(client: TelegramClient, peer: TelegramPeer, title: String, userStatus: ChatPresence? = nil, avatarURL: URL? = nil) {
         self.client = client
         self.peer = peer
         listedStatus = userStatus
         self.userStatus = userStatus
         info = ChatInfo(title: title, subtitle: userStatus?.text ?? "Telegram", showsSenderNames: peer.kind != .user)
+        if peer.kind == .user {
+            // The id the person's messages carry, so the initials match their bubbles' color.
+            info.avatarUserId = String(peer.id)
+            info.avatarURL = avatarURL
+        }
     }
 
     public var key: String {
@@ -93,6 +106,8 @@ public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatLi
         async let dialog = client.dialogState(peer: peer)
         async let page = client.history(peer: peer)
         let (state, history) = try await (dialog, page)
+        // Telegram counts them with the dialog, so they're listed only when there are some.
+        unreadReactionIds = await state.unreadReactionsCount > 0 ? Set((try? client.unreadReactionMessageIds(peer: peer)) ?? []) : []
         // Quoted messages outside the page load before the chat shows, so replies don't wait on them.
         await resolveReferences(in: history)
         apply(state)
@@ -117,6 +132,9 @@ public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatLi
         observer = await client.addUpdateObserver(peer: peer) { [weak self] in
             Task { @MainActor in self?.scheduleRefresh() }
         }
+        reactionObserver = await client.addReactionObserver(peer: peer) { [weak self] in
+            Task { @MainActor in await self?.refreshUnseenReactions() }
+        }
         if peer.kind == .user {
             statusObserver = await client.addStatusObserver(userId: peer.id) { [weak self] status in
                 Task { @MainActor in self?.apply(status: status) }
@@ -126,11 +144,12 @@ public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatLi
 
     public func stopFollowing() {
         refreshTask?.cancel()
-        for id in [observer, statusObserver].compactMap(\.self) {
+        for id in [observer, statusObserver, reactionObserver].compactMap(\.self) {
             Task { [client] in await client.removeUpdateObserver(id) }
         }
         observer = nil
         statusObserver = nil
+        reactionObserver = nil
     }
 
     private func apply(status: ChatPresence) {
@@ -239,6 +258,27 @@ public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatLi
         }
     }
 
+    /// A reaction changed on one of the chat's messages, which may be an older one than the refresh loads.
+    private func refreshUnseenReactions() async {
+        guard let ids = try? await client.unreadReactionMessageIds(peer: peer) else { return }
+        unreadReactionIds = Set(ids)
+        scheduleRefresh()
+    }
+
+    /// Telegram marks reactions seen per message, as its apps do when the messages show.
+    public func markReactionsSeen(on messageIds: Set<String>) -> (@MainActor () async throws -> Void)? {
+        let ids = Set(messageIds.compactMap { Int32($0) })
+        seenReactionIds.formUnion(ids)
+        pendingSeen.formUnion(ids)
+        publish()
+        return { [weak self] in
+            guard let self, !pendingSeen.isEmpty else { return }
+            let sending = pendingSeen
+            try await client.markReactionsSeen(peer: peer, messageIds: sending.sorted())
+            pendingSeen.subtract(sending)
+        }
+    }
+
     private func setReactions(_ totals: [TelegramReaction], reactors: [TelegramReactor], on id: Int32) {
         loaded[id]?.reactions = totals
         loaded[id]?.reactors = reactors
@@ -298,6 +338,9 @@ public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatLi
                 .sorted { ($0.count, $0.emoji) > ($1.count, $1.emoji) }
         }
         reactions = totals
+        // Telegram's list, and loaded messages whose recent reactions say so, which arrive with a refresh.
+        let flagged = sorted.filter { $0.isOutgoing && $0.reactors.contains(where: \.isUnread) }.map(\.id)
+        unseenReactionMessageIds = unreadReactionIds.union(flagged).subtracting(seenReactionIds).sorted().map(String.init)
         messages = sorted.map(chatMessage)
         onChange?()
     }

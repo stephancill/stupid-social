@@ -105,6 +105,7 @@ public final class ApronPushService {
                 registration.endpointVapidKey = vapidKey
             }
             guard let endpoint = registration.endpoint else { return }
+            registration.serverTitle = session.serverTitle
             if session.server.has("rooms") {
                 try await applyRoomTitles(to: &registration, rooms: session.connection.joinedRooms(), you: session.you.userId)
             }
@@ -144,6 +145,7 @@ public final class ApronPushService {
         var registrations = store.load()
         guard var registration = registrations.values.first(where: { $0.serverURL == session.serverURL && $0.userId == session.you.userId }) else { return }
         let before = registration
+        registration.serverTitle = session.serverTitle
         applyRoomTitles(to: &registration, rooms: rooms, you: session.you.userId)
         guard registration != before else { return }
         registrations[registration.pushId] = registration

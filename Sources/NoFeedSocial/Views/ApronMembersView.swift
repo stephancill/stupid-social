@@ -5,12 +5,16 @@ import SwiftUI
 /// when the server reports statuses (§4.5).
 struct ApronMembersView: View {
     @ObservedObject var viewModel: ApronRoomViewModel
+    @State private var query = ""
 
     var body: some View {
         Group {
-            if let members = viewModel.members {
+            if let allMembers = viewModel.members {
+                let members = filtered(allMembers)
                 List {
-                    notificationSection
+                    if query.isEmpty {
+                        notificationSection
+                    }
                     if members.contains(where: { viewModel.presence(of: $0) != nil }) {
                         let online = members.filter { viewModel.presence(of: $0)?.isConnected == true }
                         let offline = members.filter { viewModel.presence(of: $0)?.isConnected != true }
@@ -23,10 +27,15 @@ struct ApronMembersView: View {
                     } else {
                         memberSection(nil, members)
                     }
-                    if let total = viewModel.memberCount, total > members.count {
+                    if let total = viewModel.memberCount, total > allMembers.count {
                         Section {} footer: {
-                            Text("Showing \(members.count) of \(total) members.")
+                            Text("Showing \(allMembers.count) of \(total) members.")
                         }
+                    }
+                }
+                .overlay {
+                    if members.isEmpty, !query.isEmpty {
+                        ContentUnavailableView.search(text: query)
                     }
                 }
             } else if viewModel.isConnected {
@@ -36,6 +45,8 @@ struct ApronMembersView: View {
                 ProgressView()
             }
         }
+        // On the screen rather than the list, so it is under the title from the start, not added once members load.
+        .searchBar(text: $query, placement: .navigationBarDrawer(displayMode: .always))
         .navigationTitle(memberTitle)
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -59,6 +70,13 @@ struct ApronMembersView: View {
                 }
             }
         }
+    }
+
+    /// Members whose name or `@user_id` contains the query.
+    private func filtered(_ members: [ApronUser]) -> [ApronUser] {
+        let query = query.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty else { return members }
+        return members.filter { $0.displayName.localizedStandardContains(query) || $0.userId.localizedStandardContains(query) }
     }
 
     private func memberSection(_ title: String?, _ members: [ApronUser]) -> some View {

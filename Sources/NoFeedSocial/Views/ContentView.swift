@@ -60,7 +60,7 @@ public struct ContentView: View {
                     apronService: container.apronService,
                     spotifyChat: { container.spotifyChatFactory(accountId: $0, chatId: $1, title: $2) },
                     instagramChat: { container.instagramChatFactory(accountId: $0, threadFbid: $1, title: $2) },
-                    telegramChat: { container.telegramChatFactory(accountId: $0, peer: $1, title: $2, userStatus: $3) },
+                    telegramChat: { container.telegramChatFactory(accountId: $0, peer: $1, title: $2, userStatus: $3, avatarURL: $4) },
                     xChat: { container.xChatFactory(accountId: $0, conversationId: $1, title: $2) },
                     blueskyChat: { container.blueskyChatFactory(accountId: $0, convoId: $1, title: $2) },
                     isShowingChat: $isShowingChat,

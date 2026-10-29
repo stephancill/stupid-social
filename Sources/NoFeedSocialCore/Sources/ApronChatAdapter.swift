@@ -3,7 +3,7 @@ import Foundation
 /// One Apron room: loads recent history, applies live snapshots, posts messages and commands, and keeps the
 /// room's members, typing indications and read cursor.
 @MainActor
-public final class ApronChatAdapter: ChatAdapter, ChatReactionSending, ChatLiveUpdating, ChatReferenceResolving, ChatWindowing, ChatTyping, ChatMentioning, ChatCommanding, ChatLinking {
+public final class ApronChatAdapter: ChatAdapter, ChatReactionSending, ChatUnseenReactions, ChatLiveUpdating, ChatReferenceResolving, ChatWindowing, ChatTyping, ChatMentioning, ChatCommanding, ChatLinking {
     public let network = SocialNetwork.apron
     public let canReply = true
     public let pollInterval: Duration? = nil
@@ -28,7 +28,8 @@ public final class ApronChatAdapter: ChatAdapter, ChatReactionSending, ChatLiveU
     /// The members, profile and notification screens' model, kept current from this room's connection.
     public let room: ApronRoomViewModel
     public let serverURL: URL
-    public let roomId: String
+    /// Empty in a new direct chat (`directUser`) until its first message starts the room.
+    public private(set) var roomId: String
 
     private let service: ApronService
     private var session: ApronSession?
@@ -79,20 +80,38 @@ public final class ApronChatAdapter: ChatAdapter, ChatReactionSending, ChatLiveU
     private var typingStopTask: Task<Void, Never>?
     /// Recomputes a DM's "last seen …" subtitle, which ages while the chat is open.
     private var subtitleTask: Task<Void, Never>?
+    /// The other person in a new direct chat, whose room is started only when the first message is sent, so
+    /// opening a profile's Message and leaving doesn't leave an empty room behind.
+    private var directUser: ApronUser?
+    private var roomCreation: Task<Void, Error>?
+    /// Its snapshots would be keyed by the person, not the room it became, so it keeps none.
+    private let isNewDirectChat: Bool
 
-    public init(service: ApronService, serverURL: URL, roomId: String, title: String?) {
+    public convenience init(service: ApronService, serverURL: URL, roomId: String, title: String?) {
+        self.init(service: service, serverURL: serverURL, roomId: roomId, directUser: nil, title: title ?? roomId)
+    }
+
+    /// A direct chat with the user that has no room yet; the first message starts it.
+    public convenience init(service: ApronService, serverURL: URL, directWith user: ApronUser) {
+        self.init(service: service, serverURL: serverURL, roomId: "", directUser: user, title: user.displayName)
+    }
+
+    private init(service: ApronService, serverURL: URL, roomId: String, directUser: ApronUser?, title: String) {
         ownUserIds = service.readStore.ownUserIds(serverURL: serverURL)
         self.service = service
         self.serverURL = serverURL
         self.roomId = roomId
-        info = ChatInfo(title: title ?? roomId, subtitle: serverURL.host() ?? serverURL.absoluteString)
+        self.directUser = directUser
+        isNewDirectChat = directUser != nil
+        info = ChatInfo(title: title, subtitle: service.server(for: serverURL)?.displayTitle ?? ApronServerInfo.displayTitle(nil, serverURL: serverURL))
         room = ApronRoomViewModel(serverURL: serverURL, roomId: roomId)
         room.adapter = self
     }
 
-    /// The account is the server (`Account.apronId`), so the room names the chat.
+    /// The account is the server (`Account.apronId`), so the room names the chat; a new direct chat is named by
+    /// the person, so its draft is kept for the next time.
     public var key: String {
-        "apron:\(roomId)"
+        directUser.map { "apron:direct:\($0.userId)" } ?? "apron:\(roomId)"
     }
 
     /// Before connecting, uploads might be allowed; once connected, the server says (`embed:upload`).
@@ -144,7 +163,7 @@ public final class ApronChatAdapter: ChatAdapter, ChatReactionSending, ChatLiveU
 
     /// The newest messages, unless an older window is showing.
     public func snapshot() -> Data? {
-        guard !hasLaterMessages, !snapshots.isEmpty else { return nil }
+        guard !isNewDirectChat, !hasLaterMessages, !snapshots.isEmpty else { return nil }
         let recent = sortedSnapshots().suffix(ChatSnapshotCache.messageLimit)
         // Reactors too, so the reaction list has their avatars before the connection is up.
         let authors = Set(recent.map(\.from.userId)).union(recent.compactMap(\.messageId).flatMap { (reactionEntries[$0] ?? [:]).keys })
@@ -197,6 +216,10 @@ public final class ApronChatAdapter: ChatAdapter, ChatReactionSending, ChatLiveU
             for user in listing.users {
                 users[user.userId] = user
             }
+            if let directUser {
+                showNewDirectChat(with: directUser, you: session.you)
+                return
+            }
             if let listed = listing.rooms.first(where: { $0.roomId == roomId }) {
                 isPrivateRoom = listed.isPrivate
                 info.titleIsMemberNames = listed.isNamedForMembers
@@ -219,6 +242,10 @@ public final class ApronChatAdapter: ChatAdapter, ChatReactionSending, ChatLiveU
                 let page = try await session.connection.history(roomId: roomId, limit: pageSize)
                 dropCacheBehindGap(newestPage: page)
                 apply(page, publishing: false)
+                // Reactions already in the room when it's first shown aren't unseen.
+                if let last = page.lastLogId.flatMap(Int64.init) {
+                    service.reactionStore.setBaselineIfNeeded(last, serverURL: serverURL, roomId: roomId)
+                }
                 try await openAtFirstUnread(session: session)
             }
             hasLoadedHistory = true
@@ -227,6 +254,48 @@ public final class ApronChatAdapter: ChatAdapter, ChatReactionSending, ChatLiveU
         room.isConnected = true
         updateNotifications()
         publish()
+    }
+
+    /// A new direct chat shows just the two of you, like the room it becomes, with no history to load.
+    private func showNewDirectChat(with user: ApronUser, you: ApronUser) {
+        users[user.userId] = users[user.userId] ?? user
+        users[you.userId] = you
+        isPrivateRoom = true
+        info.titleIsMemberNames = true
+        info.title = currentUser(user).displayName
+        memberIds = [you.userId, user.userId]
+        room.isConnected = true
+        updateNotifications()
+        publishMembers()
+        publish()
+    }
+
+    /// Starts the new direct chat's room, once however many sends wait on it, then shows it as that room.
+    private func ensureRoom(on session: ApronSession) async throws {
+        guard let user = directUser else { return }
+        if roomCreation == nil {
+            roomCreation = Task { [weak self] in
+                let roomId = try await session.connection.directRoom(with: user.userId, you: session.you.userId)
+                guard let self else { return }
+                self.roomId = roomId
+                directUser = nil
+                room.roomId = roomId
+                // Members joined while the room had no id here, so they come from the listing.
+                if let listed = try? await session.connection.joinedRooms().rooms.first(where: { $0.roomId == roomId }) {
+                    isPrivateRoom = listed.isPrivate
+                    info.title = listed.displayTitle(users: users, you: session.you.userId)
+                    setMembers(of: listed)
+                }
+                updateNotifications()
+                onChange?()
+            }
+        }
+        do {
+            try await roomCreation?.value
+        } catch {
+            roomCreation = nil
+            throw error
+        }
     }
 
     /// Frames already arrive from `loadNewest`; this keeps a DM's "last seen" current.
@@ -270,7 +339,7 @@ public final class ApronChatAdapter: ChatAdapter, ChatReactionSending, ChatLiveU
     }
 
     private func updateNotifications() {
-        guard let session, service.offersPush(session), let push = session.server.push else {
+        guard directUser == nil, let session, service.offersPush(session), let push = session.server.push else {
             room.notifications = nil
             return
         }
@@ -422,6 +491,8 @@ public final class ApronChatAdapter: ChatAdapter, ChatReactionSending, ChatLiveU
     }
 
     private func publish() {
+        let own = snapshots.values.filter(isOwn).compactMap(\.messageId)
+        service.reactionStore.addOwnMessageIds(own, serverURL: serverURL, roomId: roomId)
         messages = (sortedSnapshots() + notices).map(chatMessage)
         fetchMissingReferences()
         onChange?()
@@ -585,15 +656,17 @@ public final class ApronChatAdapter: ChatAdapter, ChatReactionSending, ChatLiveU
         onChange?()
     }
 
-    /// A DM shows the other person's status in place of the server, when the server reports it: "last seen …"
-    /// when it sends `seen` with an offline status (§4.5.2).
+    /// A DM shows the other person's avatar beside the title, and their status in place of the server, when the
+    /// server reports it: "last seen …" when it sends `seen` with an offline status (§4.5.2).
     private func updateSubtitle() {
         let others = (room.members ?? []).filter { !isOwnUserId($0.userId) }
         let other = info.titleIsMemberNames && others.count == 1 ? others[0] : nil
+        info.avatarUserId = other?.userId
+        info.avatarURL = other?.avatarURL
         let status = other.flatMap { user in
             user.lastSeen.map { "last seen \($0.formatted(.relative(presentation: .named)))" } ?? presence(of: user)?.text
         }
-        info.subtitle = status ?? serverURL.host() ?? serverURL.absoluteString
+        info.subtitle = status ?? service.server(for: serverURL)?.displayTitle ?? ApronServerInfo.displayTitle(nil, serverURL: serverURL)
     }
 
     /// Whether the user is reachable now, `nil` when the server doesn't say (§4.5.1). Your own entry follows
@@ -606,6 +679,19 @@ public final class ApronChatAdapter: ChatAdapter, ChatReactionSending, ChatLiveU
         case "invisible", "": return .offline
         default: return .online
         }
+    }
+
+    /// Whether a direct room with the user can be opened from here: the server has rooms (§4.2), the user isn't
+    /// you, and this room isn't already that one.
+    func canOpenDirectRoom(with user: ApronUser) -> Bool {
+        guard let session, session.server.has("rooms"), !isOwnUserId(user.userId) else { return false }
+        return !(info.titleIsMemberNames && memberIds == [session.you.userId, user.userId])
+    }
+
+    /// The room id of the direct room with the user, `nil` when there is none yet.
+    func existingDirectRoom(with user: ApronUser) async throws -> String? {
+        let session = try await service.session(serverURL: serverURL)
+        return try await session.connection.existingDirectRoom(with: user.userId, you: session.you.userId)
     }
 
     /// The kept current object, falling back to a recorded one such as a message's `from` (§3.3.1).
@@ -628,6 +714,7 @@ public final class ApronChatAdapter: ChatAdapter, ChatReactionSending, ChatLiveU
     public func sendCommand(_ text: String, replyToId: String?) async throws {
         guard let session else { return }
         stopTyping()
+        try await ensureRoom(on: session)
         _ = try await session.connection.post(method: "command", roomId: roomId, body: ApronMessageBody(text: text), replyTo: replyToId)
     }
 
@@ -641,6 +728,7 @@ public final class ApronChatAdapter: ChatAdapter, ChatReactionSending, ChatLiveU
         }
         // A new message ends the indication for others (§4.6).
         forgetTyping()
+        try await ensureRoom(on: session)
         let bodyText = message.text.hasPrefix("//") ? String(message.text.dropFirst()) : message.text
         let mentions = mentionedUserIds(in: bodyText)
         let result = try await session.connection.post(
@@ -697,6 +785,30 @@ public final class ApronChatAdapter: ChatAdapter, ChatReactionSending, ChatLiveU
                 let user = users[userId] ?? reactionAuthors[userId] ?? ApronUser(userId: userId, name: nil, avatar: nil, roles: nil)
                 return ChatReactor(user: chatUser(user), date: entry.logId > 0 ? ApronLogId.date(String(entry.logId)) : nil, isYou: isOwnUserId(userId))
             }
+    }
+
+    // MARK: Unseen reactions
+
+    /// Reactions from others to the user's messages, logged after the user last saw them (`ApronReactionStore`).
+    public var unseenReactionMessageIds: [String] {
+        let ownMessages = service.reactionStore.ownMessageIds(serverURL: serverURL, roomId: roomId)
+        return service.reactionStore.unseenMessageIds(
+            in: reactionEntries,
+            isOwnMessage: { [snapshots] id in snapshots[id].map { self.isOwn($0) } ?? ownMessages.contains(id) },
+            isOwnUser: isOwnUserId,
+            serverURL: serverURL,
+            roomId: roomId,
+        )
+    }
+
+    /// Kept on the device, so there is nothing to tell the server.
+    public func markReactionsSeen(on messageIds: Set<String>) -> (@MainActor () async throws -> Void)? {
+        let newest = Dictionary(uniqueKeysWithValues: messageIds.compactMap { id -> (String, Int64)? in
+            let logIds = (reactionEntries[id] ?? [:]).filter { !isOwnUserId($0.key) }.map(\.value.logId)
+            return logIds.max().map { (id, $0) }
+        })
+        service.reactionStore.markSeen(newest, serverURL: serverURL, roomId: roomId)
+        return nil
     }
 
     private func applyReactions(_ record: ApronReactionRecord) {
@@ -764,7 +876,8 @@ public final class ApronChatAdapter: ChatAdapter, ChatReactionSending, ChatLiveU
 
     /// Announces typing, refreshed while typing continues, and stops it after a pause.
     public func draftDidChange(_ draft: String) {
-        guard let session, session.server.has("activity") else { return }
+        // Others can't see typing in a room that doesn't exist yet.
+        guard directUser == nil, let session, session.server.has("activity") else { return }
         restartTypingPause()
         if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return

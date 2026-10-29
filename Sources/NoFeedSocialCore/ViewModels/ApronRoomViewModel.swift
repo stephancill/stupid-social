@@ -14,7 +14,8 @@ public final class ApronRoomViewModel: ObservableObject {
     @Published public internal(set) var isConnected = false
 
     public let serverURL: URL
-    public let roomId: String
+    /// Empty in a new direct chat until its first message starts the room.
+    @Published public internal(set) var roomId: String
     weak var adapter: ApronChatAdapter?
 
     init(serverURL: URL, roomId: String) {
@@ -46,6 +47,18 @@ public final class ApronRoomViewModel: ObservableObject {
     public func apronUser(for user: ChatUser) -> ApronUser {
         adapter?.apronUser(for: user)
             ?? ApronUser(userId: user.id, name: user.name == user.id ? nil : user.name, avatar: user.avatarURL?.absoluteString, roles: nil)
+    }
+
+    /// Whether the profile offers a direct message: the server has rooms, it's someone else, and this isn't
+    /// already your room with them.
+    public func canMessage(_ user: ApronUser) -> Bool {
+        isConnected && adapter?.canOpenDirectRoom(with: user) == true
+    }
+
+    /// The private room you talk to the user in, `nil` when there is none yet; one is started by the first message.
+    public func existingDirectRoom(with user: ApronUser) async throws -> String? {
+        guard let adapter else { throw ApronError.closed }
+        return try await adapter.existingDirectRoom(with: user)
     }
 
     /// Applies a notification level with `status` (`ApronRoomNotifications`); the server keeps it for every device.

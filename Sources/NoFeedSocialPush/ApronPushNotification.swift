@@ -46,7 +46,7 @@ public struct ApronPushNotification: Equatable, Sendable {
 
         return ApronPushNotification(
             title: isDirect ? sender : "\(sender) in \(roomTitle)",
-            subtitle: registration.serverURL.host() ?? registration.serverURL.absoluteString,
+            subtitle: registration.serverTitle ?? registration.serverURL.host() ?? registration.serverURL.absoluteString,
             body: text,
             threadIdentifier: threadIdentifier(serverURL: registration.serverURL, roomId: message.roomId),
             serverURL: registration.serverURL,

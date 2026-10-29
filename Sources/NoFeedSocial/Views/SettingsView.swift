@@ -20,15 +20,18 @@ struct SettingsView: View {
                         AccountDetailView(viewModel: viewModel, apronServersViewModel: apronServersViewModel, accountId: account.id)
                     } label: {
                         let label = viewModel.connectionLabel(for: account)
+                        // Only beside a name, not a status such as "Invalid credentials"; an Apron server only with its own icon.
+                        let showsAvatar = account.network == .apron
+                            ? viewModel.status(for: account.id) != .invalidCredentials && viewModel.rowAvatarURL(for: account) != nil
+                            : label == account.label
                         AccountRow(
                             network: account.network,
                             subtitle: redacted(label),
                             isInvalid: viewModel.status(for: account.id) == .invalidCredentials,
-                            // Only beside a name, not a status such as "Invalid credentials".
-                            avatar: account.network == .apron || label != account.label ? nil : AccountAvatar(
-                                url: redactionEnabled ? nil : account.avatarURL,
+                            avatar: showsAvatar ? AccountAvatar(
+                                url: redactionEnabled ? nil : viewModel.rowAvatarURL(for: account),
                                 name: redacted(label),
-                            ),
+                            ) : nil,
                         )
                     }
                 }

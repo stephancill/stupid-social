@@ -196,6 +196,32 @@ final class TelegramTests: XCTestCase {
         XCTAssertFalse(TelegramClient.update(shortMessage, concerns: group))
     }
 
+    func testUnreadRecentReactionsAreFlagged() throws {
+        let peer: (Int64) -> TLValue = { .object(TLObject("peerUser", ["user_id": .long($0)])) }
+        let thumbs = TLValue.object(TLObject("reactionEmoji", ["emoticon": .string("👍")]))
+        let message = TLObject("message", ["reactions": .object(TLObject("messageReactions", [
+            "results": .vector([.object(TLObject("reactionCount", ["reaction": thumbs, "count": .int(2)]))]),
+            "recent_reactions": .vector([
+                .object(TLObject("messagePeerReaction", ["unread": .bool(true), "peer_id": peer(1), "date": .int(0), "reaction": thumbs])),
+                .object(TLObject("messagePeerReaction", ["peer_id": peer(2), "date": .int(0), "reaction": thumbs])),
+            ]),
+        ]))])
+        XCTAssertEqual(TelegramMediaParser.reactions(of: message).reactors.map(\.isUnread), [true, false])
+        // Snapshots saved before the flag existed still decode.
+        let old = try JSONDecoder().decode(TelegramReactor.self, from: Data(#"{"emoji":"👍","peerId":1,"isMine":false}"#.utf8))
+        XCTAssertFalse(old.isUnread)
+    }
+
+    func testReactionUpdatesConcernOnlyTheirChat() {
+        let dm = TelegramPeer(kind: .user, id: 185_733_531, accessHash: 2)
+        let reaction = TLObject("updates", ["updates": .vector([.object(TLObject("updateMessageReactions", [
+            "peer": .object(TLObject("peerUser", ["user_id": .long(185_733_531)])), "msg_id": .int(5),
+        ]))])])
+        XCTAssertTrue(TelegramClient.reactionUpdate(reaction, concerns: dm))
+        XCTAssertFalse(TelegramClient.reactionUpdate(reaction, concerns: TelegramPeer(kind: .user, id: 1, accessHash: 1)))
+        XCTAssertFalse(TelegramClient.update(reaction, concerns: dm), "reactions refresh on their own, not with messages")
+    }
+
     func testStatusUpdatesForTheirUser() {
         let status = TLObject("updateShort", ["update": .object(TLObject("updateUserStatus", [
             "user_id": .long(185_733_531),

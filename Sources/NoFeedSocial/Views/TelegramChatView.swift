@@ -33,12 +33,14 @@ struct TelegramChatView: View {
 /// A Telegram group's members, online ones first, as Telegram lists them.
 struct TelegramMembersView: View {
     @ObservedObject var viewModel: TelegramMembersViewModel
+    @State private var query = ""
 
     var body: some View {
         Group {
             if let list = viewModel.members {
-                let online = list.members.filter { $0.status == .online }
-                let others = list.members.filter { $0.status != .online }.sorted { $0.lastSeenOrder > $1.lastSeenOrder }
+                let members = filtered(list.members)
+                let online = members.filter { $0.status == .online }
+                let others = members.filter { $0.status != .online }.sorted { $0.lastSeenOrder > $1.lastSeenOrder }
                 List {
                     if !online.isEmpty {
                         memberSection("Online", online)
@@ -52,16 +54,30 @@ struct TelegramMembersView: View {
                         }
                     }
                 }
+                .overlay {
+                    if members.isEmpty, !query.isEmpty {
+                        ContentUnavailableView.search(text: query)
+                    }
+                }
             } else if let error = viewModel.errorMessage {
                 ContentUnavailableView("No Member List", systemImage: "person.2", description: Text(error))
             } else {
                 ProgressView()
             }
         }
+        // On the screen rather than the list, so it is under the title from the start, not added once members load.
+        .searchBar(text: $query, placement: .navigationBarDrawer(displayMode: .always))
         .navigationTitle(memberTitle)
         .navigationBarTitleDisplayMode(.inline)
         .task { await viewModel.load() }
         .refreshable { await viewModel.load() }
+    }
+
+    /// Members whose name or username contains the query.
+    private func filtered(_ members: [TelegramMember]) -> [TelegramMember] {
+        let query = query.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty else { return members }
+        return members.filter { $0.name.localizedStandardContains(query) || ($0.username ?? "").localizedStandardContains(query) }
     }
 
     private func memberSection(_ title: String?, _ members: [TelegramMember]) -> some View {

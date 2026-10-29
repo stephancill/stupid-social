@@ -8,6 +8,11 @@ public struct ApronSession: Sendable {
     public let you: ApronUser
     /// The server issued or rotated a bearer token during this sign-in (§3.2.1).
     let issuedToken: Bool
+
+    /// The server's title from its latest `server` frame, or its host (§3.1).
+    @MainActor public var serverTitle: String {
+        (connection.server ?? server).displayTitle(serverURL: serverURL)
+    }
 }
 
 /// Owns the user's Apron server list and opens authenticated connections to them.
@@ -19,6 +24,7 @@ public final class ApronService {
     private var sharedSessions: [URL: ApronSession] = [:]
     private var pendingSessions: [URL: Task<ApronSession, Error>] = [:]
     public let readStore: ApronReadStore
+    public let reactionStore = ApronReactionStore()
     public let snapshotCache = ChatSnapshotCache()
     public let draftStore = ChatDraftStore()
     public let push: ApronPushService
@@ -63,13 +69,10 @@ public final class ApronService {
     public var servers: [ApronServerMetadata] {
         accountStore.accounts(network: .apron).compactMap { account in
             guard let serverURL = account.serverURL else { return nil }
-            let info = accountStore.apronInfo(id: account.id)
             return ApronServerMetadata(
                 serverURL: serverURL,
                 requestedName: account.preferences.apronRequestedName,
-                user: info?.user,
-                agent: info?.agent,
-                welcome: info?.welcome,
+                info: accountStore.apronInfo(id: account.id),
                 status: accountStore.status(id: account.id) ?? .valid,
             )
         }
@@ -170,6 +173,7 @@ public final class ApronService {
         }
         closeSessions(for: serverURL)
         readStore.removeServer(serverURL)
+        reactionStore.removeServer(serverURL)
         snapshotCache.removeAll(accountId: Account.apronId(serverURL: serverURL))
         draftStore.removeDrafts(keyPrefix: "\(Account.apronId(serverURL: serverURL))|")
     }
@@ -189,7 +193,12 @@ public final class ApronService {
         defer { pendingSessions[serverURL] = nil }
         let session = try await task.value
         sharedSessions[serverURL] = session
-        session.connection.observe(notifications: { _, _ in }, onClose: { [weak self] _ in
+        session.connection.observe(notifications: { [weak self] method, _ in
+            // A later `server` frame fully replaces the last one, such as after sign-in (§3.1).
+            if method == "server", let server = session.connection.server {
+                self?.saveServerInfo(server, you: session.you, serverURL: serverURL)
+            }
+        }, onClose: { [weak self] _ in
             if self?.sharedSessions[serverURL]?.connection === session.connection {
                 self?.sharedSessions[serverURL] = nil
             }
@@ -256,24 +265,25 @@ public final class ApronService {
         if let token, !session.issuedToken {
             _ = try keychainStore.saveApronToken(token, serverURL: session.serverURL)
         }
-        let metadata = ApronServerMetadata(
-            serverURL: session.serverURL,
-            requestedName: requestedName,
-            user: session.you,
-            agent: session.server.agent,
-            welcome: session.server.welcome,
-            status: .valid,
-        )
+        // The server may have sent a new `server` frame after sign-in (§3.1).
+        let info = ApronSignInInfo(user: session.you, server: session.connection.server ?? session.server)
+        let metadata = ApronServerMetadata(serverURL: session.serverURL, requestedName: requestedName, info: info, status: .valid)
         let id = Account.apronId(serverURL: session.serverURL)
         var account = accountStore.account(id: id) ?? Account(id: id, network: .apron, serverURL: session.serverURL)
         account.remoteId = session.you.userId
         account.displayName = session.you.name
         account.preferences.apronRequestedName = requestedName
-        accountStore.setApronInfo(ApronSignInInfo(user: session.you, agent: session.server.agent, welcome: session.server.welcome), id: id)
+        accountStore.setApronInfo(info, id: id)
         accountStore.setStatus(.valid, id: id)
         knownServers.insert(session.serverURL)
         accountStore.save(account)
         return metadata
+    }
+
+    private func saveServerInfo(_ server: ApronServerInfo, you: ApronUser, serverURL: URL) {
+        let id = Account.apronId(serverURL: serverURL)
+        guard accountStore.account(id: id) != nil else { return }
+        accountStore.setApronInfo(ApronSignInInfo(user: you, server: server), id: id)
     }
 
     private func updateStatus(serverURL: URL, status: AccountStatusSnapshot) {
@@ -305,6 +315,17 @@ public extension ApronConnection {
         return rooms
     }
 
+    /// One room and its members, joined or not, such as to preview a link before joining. A room the user can't
+    /// see, private or missing, fails with `Unknown room` (-32602) on the demo server (§4.2.1).
+    func room(roomId: String) async throws -> ApronRoomListing? {
+        let params = ApronRoomListParams(filter: "all", members: true, roomId: roomId)
+        let result = try await request("room_list", params: params, as: ApronRoomListResult.self)
+        if let room = result.joined?.first(where: { $0.roomId == roomId }) {
+            return ApronRoomListing(room: room, users: result.users ?? [], isJoined: true)
+        }
+        return result.notJoined?.first { $0.roomId == roomId }.map { ApronRoomListing(room: $0, users: result.users ?? [], isJoined: false) }
+    }
+
     /// A window of a room's log with inclusive bounds: the oldest matches with `after`, otherwise the newest (§4.3.2).
     func history(roomId: String?, after: String? = nil, before: String? = nil, limit: Int) async throws -> ApronHistoryResult {
         try await request("history", params: ApronHistoryParams(roomId: roomId, after: after, before: before, limit: limit), as: ApronHistoryResult.self)
@@ -312,6 +333,46 @@ public extension ApronConnection {
 
     func joinRoom(roomId: String) async throws {
         _ = try await request("room_join", params: ApronRoomIdParams(roomId: roomId), as: ApronEmptyResult.self)
+    }
+
+    /// The joined room `you` talk to `userId` in (`ApronRoom.isDirect`), without starting one.
+    func existingDirectRoom(with userId: String, you: String) async throws -> String? {
+        try await joinedRooms().rooms.first(where: { $0.isDirect(with: userId, you: you) })?.roomId
+    }
+
+    /// The room `you` talk to `userId` in (`ApronRoom.isDirect`), else a new one, as apron-web starts it: an untitled
+    /// private room (`room_set`, §4.2.4), used only once its `joined` record says it is private, then `userId` added
+    /// with `room_join` (§4.2.2). A room nobody could be added to stays joined, as in apron-web.
+    func directRoom(with userId: String, you: String) async throws -> String {
+        if let roomId = try await existingDirectRoom(with: userId, you: you) {
+            return roomId
+        }
+        var joined: [String: ApronRoom] = [:]
+        let decoder = JSONDecoder()
+        let token = observe { method, params in
+            guard method == "room_update", let update = try? decoder.decode(ApronRoomUpdate.self, from: params) else { return }
+            for room in update.joined ?? [] {
+                joined[room.roomId] = room
+            }
+        }
+        defer { removeObserver(token) }
+        let roomId: String
+        do {
+            roomId = try await request("room_set", params: ["private": true], as: ApronRoomSetResult.self).roomId
+        } catch let ApronError.rpc(code, _) where code == -32601 {
+            throw SourceError.serviceError("This server doesn't have private rooms.")
+        }
+        // The record usually arrives before the result; a server may answer first.
+        let deadline = ContinuousClock.now + .seconds(10)
+        while joined[roomId] == nil, ContinuousClock.now < deadline, isOpen {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        guard let room = joined[roomId] else { throw ApronError.timedOut }
+        guard room.isPrivate else {
+            throw SourceError.serviceError("The server didn't keep the new room private, so no one was added to it.")
+        }
+        _ = try await request("room_join", params: ApronRoomIdParams(roomId: roomId, userId: userId), as: ApronEmptyResult.self)
+        return roomId
     }
 
     /// Sends a `message` or `command` (§4.1); the result lists write URLs for new upload embeds.

@@ -10,7 +10,7 @@ struct ChatsView: View {
     /// The chat for an Instagram account's thread and title; `nil` when the account is gone.
     let instagramChat: (_ accountId: String, _ threadFbid: String, _ title: String) -> (() -> ChatViewModel)?
     /// The chat for a Telegram account's peer; `nil` when the account is gone.
-    let telegramChat: (_ accountId: String, _ peer: TelegramPeer, _ title: String, _ userStatus: ChatPresence?) -> (chat: () -> ChatViewModel, members: () -> TelegramMembersViewModel)?
+    let telegramChat: (_ accountId: String, _ peer: TelegramPeer, _ title: String, _ userStatus: ChatPresence?, _ avatarURL: URL?) -> (chat: () -> ChatViewModel, members: () -> TelegramMembersViewModel)?
     /// The chat for an X account's conversation and title; `nil` until its X Chat PIN unlocks it.
     let xChat: (_ accountId: String, _ conversationId: String, _ title: String) -> (() -> ChatViewModel)?
     /// The chat for a Bluesky account's conversation and title; `nil` when the account is gone.
@@ -144,7 +144,8 @@ struct ChatsView: View {
         guard hasAppeared else { return [] }
         guard !query.isEmpty else { return viewModel.chats }
         return (viewModel.chats + viewModel.archivedChats).filter { chat in
-            chat.title.localizedStandardContains(query) || (chat.preview ?? "").localizedStandardContains(query)
+            chat.title.localizedStandardContains(query) || (chat.titlePrefix ?? "").localizedStandardContains(query)
+                || (chat.preview ?? "").localizedStandardContains(query)
         }
     }
 
@@ -160,12 +161,25 @@ struct ChatsView: View {
                 return listed.kind == peer.kind && listed.id == peer.id
             }
         }
+        if case let .apronDirect(serverURL, user) = destination {
+            return ChatSummary(
+                id: "apron:\(serverURL.absoluteString)|direct:\(user.userId)",
+                network: .apron,
+                title: user.displayName,
+                titlePrefix: serverURL.host() ?? serverURL.absoluteString,
+                avatarURL: user.avatarURL,
+                preview: nil,
+                timestamp: nil,
+                unreadCount: 0,
+                destination: destination,
+            ).scoped(to: Account.apronId(serverURL: serverURL))
+        }
         guard case let .apron(serverURL, roomId) = destination else { return nil }
         return ChatSummary(
             id: "apron:\(serverURL.absoluteString)|\(roomId)",
             network: .apron,
             title: roomId,
-            subtitle: serverURL.host(),
+            titlePrefix: serverURL.host() ?? serverURL.absoluteString,
             avatarURL: nil,
             preview: nil,
             timestamp: nil,
@@ -176,6 +190,7 @@ struct ChatsView: View {
 
     /// A network chat opening from its row, which says whether there are unread messages to wait for.
     private func opened<ViewModel: ChatViewModel>(_ chatViewModel: ViewModel, chat: ChatSummary) -> ViewModel {
+        chatViewModel.showRowAvatar(url: chat.avatarURL, colorKey: chat.avatarColorKey)
         if chat.unreadCount > 0 {
             chatViewModel.expectUnread()
         }
@@ -200,6 +215,16 @@ struct ChatsView: View {
                 }(),
                 profileUserId: focus?.userId,
             )
+        case let .apronDirect(serverURL, user):
+            ApronChatView(viewModel: opened(
+                AdapterChatViewModel(
+                    adapter: ApronChatAdapter(service: apronService, serverURL: serverURL, directWith: user),
+                    accountId: Account.apronId(serverURL: serverURL),
+                    snapshotCache: apronService.snapshotCache,
+                    draftStore: apronService.draftStore,
+                ),
+                chat: chat,
+            ))
         case let .spotify(chatId):
             if let makeChat = spotifyChat(chat.accountId, chatId, chat.title) {
                 NetworkChatView(viewModel: opened(makeChat(), chat: chat))
@@ -213,7 +238,7 @@ struct ChatsView: View {
                 ContentUnavailableView("Instagram Not Connected", systemImage: "camera")
             }
         case let .telegram(peer):
-            if let make = telegramChat(chat.accountId, peer, chat.title, chat.presence) {
+            if let make = telegramChat(chat.accountId, peer, chat.title, chat.presence, chat.avatarURL) {
                 TelegramChatView(viewModel: opened(make.chat(), chat: chat), members: make.members())
             } else {
                 ContentUnavailableView("Telegram Not Connected", systemImage: "paperplane")
@@ -411,13 +436,28 @@ private struct ChatRow: View {
         return date.formatted(date: .numeric, time: .omitted)
     }
 
+    private var title: Text {
+        let title = Text(DebugRedaction.chatTitle(chat, enabled: redactionEnabled))
+        guard let prefix = chat.titlePrefix else { return title }
+        return Text("\(prefix) / ").fontWeight(.regular).foregroundStyle(.secondary) + title
+    }
+
+    private func badge(_ content: some View) -> some View {
+        content
+            .font(.caption.weight(.semibold).monospacedDigit())
+            .foregroundStyle(.white)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2)
+            .background(chat.isMuted ? Color.gray : Color.blue, in: Capsule())
+    }
+
     var body: some View {
         HStack(spacing: Self.spacing) {
             ChatSummaryAvatar(chat: chat, size: Self.avatarSize)
 
             VStack(alignment: .leading, spacing: 1) {
                 HStack(alignment: .firstTextBaseline) {
-                    Text(DebugRedaction.chatTitle(chat, enabled: redactionEnabled))
+                    title
                         .font(.headline)
                         .lineLimit(1)
                     if chat.isMuted {
@@ -439,14 +479,16 @@ private struct ChatRow: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                     Spacer(minLength: 8)
-                    if chat.unreadCount > 0 {
-                        Text(chat.unreadCount >= ApronNotificationSource.unreadCap ? "\(ApronNotificationSource.unreadCap)+" : "\(chat.unreadCount)")
-                            .font(.caption.weight(.semibold).monospacedDigit())
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 2)
-                            // Gray for muted chats, as in Telegram.
-                            .background(chat.isMuted ? Color.gray : Color.blue, in: Capsule())
+                    HStack(spacing: 4) {
+                        // A heart for unseen reactions to the user's messages, beside the unread count, as in
+                        // Telegram. Gray for muted chats.
+                        if chat.unseenReactionCount > 0 {
+                            badge(Image(systemName: "heart.fill"))
+                                .accessibilityLabel("Unseen reactions")
+                        }
+                        if chat.unreadCount > 0 {
+                            badge(Text(chat.unreadCount >= ApronNotificationSource.unreadCap ? "\(ApronNotificationSource.unreadCap)+" : "\(chat.unreadCount)"))
+                        }
                     }
                 }
             }
@@ -465,9 +507,30 @@ private struct ChatSummaryAvatar: View {
     @AppStorage("redactionEnabled") private var redactionEnabled = false
 
     var body: some View {
+        ChatAvatarImage(url: chat.avatarURL, title: DebugRedaction.chatTitle(chat, enabled: redactionEnabled), size: size, colorKey: chat.avatarColorKey)
+            .overlay(alignment: .bottomTrailing) {
+                // An opaque backing, since some badges (such as Spotify's round logo) have transparent corners.
+                NetworkBadgeIcon(network: chat.network, size: 16)
+                    .padding(1.5)
+                    .background(Color(uiColor: .systemBackground), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .offset(x: 2, y: 2)
+            }
+    }
+}
+
+/// A chat's picture, or in its place the initials of its (already redacted) title on the chat color of
+/// `colorKey` (as on Apron profiles), else its initial on gray. The Chats row and the chat's title show the same one.
+struct ChatAvatarImage: View {
+    let url: URL?
+    let title: String
+    let size: CGFloat
+    var colorKey: String?
+    @AppStorage("redactionEnabled") private var redactionEnabled = false
+
+    var body: some View {
         Group {
             // Profile photos identify people as names do, so redaction shows the initial instead.
-            if let url = chat.avatarURL, !redactionEnabled {
+            if let url, !redactionEnabled {
                 CachedAsyncImage(url: url) { fallback } failure: { fallback }
             } else {
                 fallback
@@ -475,21 +538,25 @@ private struct ChatSummaryAvatar: View {
         }
         .frame(width: size, height: size)
         .clipShape(Circle())
-        .overlay(alignment: .bottomTrailing) {
-            // An opaque backing, since some badges (such as Spotify's round logo) have transparent corners.
-            NetworkBadgeIcon(network: chat.network, size: 16)
-                .padding(1.5)
-                .background(Color(uiColor: .systemBackground), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-                .offset(x: 2, y: 2)
-        }
     }
 
     private var fallback: some View {
-        ZStack {
-            Circle().fill(Color.secondary.opacity(0.18))
-            Text(DebugRedaction.chatTitle(chat, enabled: redactionEnabled).first.map { String($0).uppercased() } ?? "?")
-                .font(.headline)
-                .foregroundStyle(.secondary)
+        Group {
+            if let colorKey {
+                ZStack {
+                    Color(uiColor: ChatUserColor.color(for: colorKey))
+                    Text(title.split(separator: " ").prefix(2).compactMap(\.first).map(String.init).joined().uppercased())
+                        .font(.system(size: size * 0.39, weight: .semibold))
+                        .foregroundStyle(.white)
+                }
+            } else {
+                ZStack {
+                    Circle().fill(Color.secondary.opacity(0.18))
+                    Text(title.first.map { String($0).uppercased() } ?? "?")
+                        .font(.headline)
+                        .foregroundStyle(.secondary)
+                }
+            }
         }
         .accessibilityHidden(true)
     }

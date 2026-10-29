@@ -12,6 +12,10 @@ public struct ApronServerInfo: Decodable, Equatable, Sendable {
     public let ext: ApronServerExt?
     /// Push kinds and wake scopes; absent when the server doesn't push (§4.9).
     public let push: ApronPushInfo?
+    /// The server's display name, CommonMark description and icon (§3.1); they may change after sign-in.
+    public let title: String?
+    public let description: String?
+    public let avatar: String?
 
     public func has(_ capability: String) -> Bool {
         capabilities?.contains(capability) ?? false
@@ -19,6 +23,22 @@ public struct ApronServerInfo: Decodable, Equatable, Sendable {
 
     public var acceptedSchemes: Set<String> {
         Set(auth).union(signup ?? [])
+    }
+
+    public var avatarURL: URL? {
+        ApronUser.avatarURL(avatar)
+    }
+
+    /// The server's `title`, or its host without one (§3.1).
+    public func displayTitle(serverURL: URL) -> String {
+        Self.displayTitle(title, serverURL: serverURL)
+    }
+
+    static func displayTitle(_ title: String?, serverURL: URL) -> String {
+        if let title = title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
+            return title
+        }
+        return serverURL.host() ?? serverURL.absoluteString
     }
 }
 
@@ -131,8 +151,12 @@ public struct ApronUser: Codable, Hashable, Sendable {
         return userId
     }
 
-    /// `https:` images, or small inline `data:image/…;base64,` images (§4.8.6).
     public var avatarURL: URL? {
+        Self.avatarURL(avatar)
+    }
+
+    /// `https:` images, or small inline `data:image/…;base64,` images (§4.8.6), for users and servers.
+    static func avatarURL(_ avatar: String?) -> URL? {
         guard let avatar, let url = URL(string: avatar) else { return nil }
         if url.scheme == "https" || url.scheme == "http" {
             return url
@@ -242,6 +266,13 @@ public struct ApronRoom: Decodable, Hashable, Sendable {
     /// An untitled top-level private room, such as a DM, is named for its members, as in apron-web.
     public var isNamedForMembers: Bool {
         isPrivate && parentRoomId == nil && (title ?? "").trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    /// Whether this is the room `you` talk to `userId` in, as apron-web's `directRoomWith` finds it: a room named
+    /// for its members whose complete member list (no `member_count`) is exactly the two of them.
+    public func isDirect(with userId: String, you: String) -> Bool {
+        guard isNamedForMembers, userId != you, let members, memberCount == nil else { return false }
+        return Set(members.map(\.userId)) == [you, userId]
     }
 
     /// Members other than `you`; empty while they aren't known.
@@ -462,12 +493,34 @@ struct ApronAuthResult: Decodable {
 struct ApronRoomListParams: Encodable {
     let filter: String
     let members: Bool
+    /// Lists only this room, in the array that matches the user's membership (§4.2.1).
+    var roomId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case filter
+        case members
+        case roomId = "room_id"
+    }
 }
 
 struct ApronRoomListResult: Decodable {
     let joined: [ApronRoom]?
+    let notJoined: [ApronRoom]?
     /// Complete current user objects of the listed members, with `members: true` (§4.2.1).
     let users: [ApronUser]?
+
+    enum CodingKeys: String, CodingKey {
+        case joined
+        case notJoined = "not_joined"
+        case users
+    }
+}
+
+/// One room as the server lists it to the user, joined or not, with its members' user objects.
+public struct ApronRoomListing: Equatable, Sendable {
+    public let room: ApronRoom
+    public let users: [ApronUser]
+    public let isJoined: Bool
 }
 
 struct ApronHistoryParams: Encodable {
@@ -569,6 +622,17 @@ struct ApronEmbedWrite: Decodable {
 }
 
 struct ApronRoomIdParams: Encodable {
+    let roomId: String
+    /// Another user to add or remove, where the server allows it (§4.2.2).
+    var userId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case roomId = "room_id"
+        case userId = "user_id"
+    }
+}
+
+struct ApronRoomSetResult: Decodable {
     let roomId: String
 
     enum CodingKeys: String, CodingKey {
