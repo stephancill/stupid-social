@@ -100,12 +100,12 @@ public struct GitHubClient: Sendable {
     }
 
     /// Resolves the currently signed-in GitHub username from the authenticated
-    /// homepage's user menu JSON (`"userMenu":{"owner":{"login":"..."}}`). The
+    /// homepage's `<meta name="user-login" content="...">`. The
     /// login WebView can finish before GitHub has set its `dotcom_user` cookie,
     /// so the stored session sometimes has no username; this recovers it from an
     /// authenticated read so the account can be named and "starred your repo"
-    /// notifications can be routed. Returns nil when the homepage carries no user
-    /// menu (e.g. not logged in), and throws `notConfigured` on an expired session.
+    /// notifications can be routed. Returns nil when the tag is missing or empty
+    /// (logged out), and throws `notConfigured` on an expired session.
     public func authenticatedUser(credentials: GitHubCredentials) async throws -> String? {
         var request = URLRequest(url: URL(string: "https://github.com/")!)
         request.httpMethod = "GET"
@@ -128,7 +128,7 @@ public struct GitHubClient: Sendable {
         else {
             throw SourceError.invalidResponse
         }
-        guard let regex = try? NSRegularExpression(pattern: #""userMenu":\{"owner":\{"login":"([^"]+)""#),
+        guard let regex = try? NSRegularExpression(pattern: #"<meta name="user-login" content="([^"]*)""#),
               let match = regex.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
               let range = Range(match.range(at: 1), in: html)
         else { return nil }

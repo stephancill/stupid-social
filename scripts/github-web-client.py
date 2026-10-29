@@ -26,6 +26,7 @@ from typing import Any
 
 BASE_URL = "https://github.com"
 FOR_YOU_FEED_URL = BASE_URL + "/conduit/for_you_feed"
+USER_LOGIN_META = re.compile(r'<meta name="user-login" content="([^"]*)"')
 APP_USER_AGENT = "NoFeedSocial/1"
 DEFAULT_ACCEPT_LANGUAGE = "en-US,en;q=0.9"
 SIM_PREFS_SCRIPT = os.path.expanduser(
@@ -221,6 +222,32 @@ class GitHubWebClient:
                 if value and name not in cookies and name != "_gh_sess":
                     cookies[name] = str(value)
         return "; ".join(f"{name}={value}" for name, value in cookies.items())
+
+    def whoami(self) -> dict[str, Any]:
+        """Read the signed-in login from the homepage's ``<meta name="user-login">``.
+
+        GitHub dropped the homepage's ``"userMenu":{"owner":{"login":...}}`` JSON
+        (observed 2026-10-29); the meta tag is on every page, with empty content
+        when logged out.
+        """
+        headers = {
+            "Accept": "text/html",
+            "Accept-Language": self.accept_language,
+            "Cookie": self.cookie_header(),
+            "User-Agent": APP_USER_AGENT,
+        }
+        request = urllib.request.Request(BASE_URL + "/", headers=headers, method="GET")
+        with self.opener.open(request, timeout=30) as response:
+            final_url = response.geturl()
+            html = response.read().decode(response.headers.get_content_charset() or "utf-8", errors="replace")
+        match = USER_LOGIN_META.search(html)
+        login = match.group(1).strip() if match else ""
+        return {
+            "final_url": final_url,
+            "user_login_meta": "present" if match else "missing",
+            "login": login or None,
+            "has_user_menu_json": '"userMenu"' in html,
+        }
 
     def validate(self) -> dict[str, Any]:
         """Diagnose whether the stored session can still read the For You feed.
@@ -757,6 +784,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Check whether the stored session is still authenticated (no redirects followed).",
     )
     validate.add_argument("--output", help="Write the diagnostic JSON to this path.")
+    subparsers.add_parser(
+        "whoami", help="Print the signed-in login from the github.com homepage."
+    )
     feed = subparsers.add_parser("feed", help="Fetch the GitHub For You HTML feed.")
     feed.add_argument("--etag", help="Send If-None-Match with this ETag.")
     feed.add_argument("--output", help="Write raw HTML to this path.")
@@ -802,6 +832,9 @@ def main() -> None:
         client = GitHubWebClient(credentials, accept_language=args.accept_language)
         if args.command == "bootstrap":
             print(json.dumps(client.bootstrap(), indent=2, sort_keys=True))
+            return
+        if args.command == "whoami":
+            print(json.dumps(client.whoami(), indent=2, sort_keys=True))
             return
         if args.command == "validate":
             result = client.validate()

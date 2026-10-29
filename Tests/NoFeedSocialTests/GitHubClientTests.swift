@@ -73,14 +73,14 @@ final class GitHubClientTests: XCTestCase {
         }
     }
 
-    func testAuthenticatedUserReadsUserMenuLogin() async throws {
+    func testAuthenticatedUserReadsUserLoginMeta() async throws {
         GitHubURLProtocolStub.handler = { request in
             XCTAssertEqual(request.url?.absoluteString, "https://github.com/")
             XCTAssertEqual(
                 request.value(forHTTPHeaderField: "Cookie"),
                 "user_session=session; __Host-user_session_same_site=same-site; logged_in=yes",
             )
-            let html = #"<script>{"userMenu":{"owner":{"login":"stephancill","name":"Stephan Cilliers"}}}</script>"#
+            let html = #"<head><meta name="user-login" content="stephancill"></head>"#
             return (200, ["Content-Type": "text/html; charset=utf-8"], Data(html.utf8))
         }
 
@@ -91,9 +91,9 @@ final class GitHubClientTests: XCTestCase {
         XCTAssertEqual(username, "stephancill")
     }
 
-    func testAuthenticatedUserReturnsNilWhenNoUserMenu() async throws {
+    func testAuthenticatedUserReturnsNilWhenLoggedOut() async throws {
         GitHubURLProtocolStub.handler = { _ in
-            (200, ["Content-Type": "text/html; charset=utf-8"], Data("<html>logged out</html>".utf8))
+            (200, ["Content-Type": "text/html; charset=utf-8"], Data(#"<meta name="user-login" content="">"#.utf8))
         }
 
         let username = try await makeClient().authenticatedUser(
