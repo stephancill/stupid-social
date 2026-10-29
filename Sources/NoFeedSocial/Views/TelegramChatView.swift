@@ -2,11 +2,14 @@ import NoFeedSocialCore
 import NoFeedSocialPush
 import SwiftUI
 
-/// A Telegram chat: the shared chat, with the member list opened from the title in groups.
+/// A Telegram chat: the shared chat, with the member list opened from the title in groups, and profiles from
+/// mentions and senders' avatars.
 struct TelegramChatView: View {
     @StateObject private var viewModel: ChatViewModel
     @StateObject private var members: TelegramMembersViewModel
     @State private var showsMembers = false
+    /// The user id, or `@username`, whose profile is open.
+    @State private var profileTarget: String?
 
     init(viewModel: @autoclosure @escaping () -> ChatViewModel, members: @autoclosure @escaping () -> TelegramMembersViewModel) {
         _viewModel = StateObject(wrappedValue: viewModel())
@@ -17,10 +20,14 @@ struct TelegramChatView: View {
         ChatView(
             viewModel: viewModel,
             onTitleTap: members.isGroup ? { showsMembers = true } : nil,
-            keepsConnection: showsMembers,
+            showProfile: { profileTarget = $0.id },
+            keepsConnection: showsMembers || profileTarget != nil,
         )
         .navigationDestination(isPresented: $showsMembers) {
             TelegramMembersView(viewModel: members)
+        }
+        .navigationDestination(item: $profileTarget) { target in
+            TelegramProfileView(viewModel: members.profile(for: target))
         }
         .onAppear {
             NotificationRouter.shared.telegramChatDidOpen(members.peer)
@@ -84,7 +91,11 @@ struct TelegramMembersView: View {
     private func memberSection(_ title: String?, _ members: [TelegramMember]) -> some View {
         Section {
             ForEach(members) { member in
-                TelegramMemberRow(member: member)
+                NavigationLink {
+                    TelegramProfileView(viewModel: viewModel.profile(for: String(member.id)))
+                } label: {
+                    TelegramMemberRow(member: member)
+                }
             }
         } header: {
             if let title {

@@ -54,7 +54,7 @@ struct ApronProfileView: View {
             }
             if let bio = user.bio?.trimmingCharacters(in: .whitespacesAndNewlines), !bio.isEmpty {
                 Section("Bio") {
-                    Text(Self.linkingURLs(in: bio))
+                    Text(AttributedString(linkingWebURLsIn: bio))
                         .textSelection(.enabled)
                 }
             }
@@ -105,22 +105,6 @@ struct ApronProfileView: View {
         } catch {
             messageError = error.localizedDescription
         }
-    }
-
-    private static let linkDetector = try! NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
-
-    /// Bios are untrusted text, so only web links found in it become tappable, like links in messages.
-    private static func linkingURLs(in text: String) -> AttributedString {
-        var result = AttributedString(text)
-        for match in linkDetector.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
-            guard let url = match.url, ["http", "https"].contains(url.scheme?.lowercased()),
-                  let range = Range(match.range, in: text),
-                  let lower = AttributedString.Index(range.lowerBound, within: result),
-                  let upper = AttributedString.Index(range.upperBound, within: result)
-            else { continue }
-            result[lower ..< upper].link = url
-        }
-        return result
     }
 }
 
@@ -218,6 +202,23 @@ extension ApronPresence {
         case .doNotDisturb: .red
         case .offline: .gray
         case .other: nil
+        }
+    }
+}
+
+extension AttributedString {
+    private static let linkDetector = try! NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+
+    /// Bios are untrusted text, so only web links found in it become tappable, like links in messages.
+    init(linkingWebURLsIn text: String) {
+        self.init(text)
+        for match in Self.linkDetector.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+            guard let url = match.url, ["http", "https"].contains(url.scheme?.lowercased()),
+                  let range = Range(match.range, in: text),
+                  let lower = AttributedString.Index(range.lowerBound, within: self),
+                  let upper = AttributedString.Index(range.upperBound, within: self)
+            else { continue }
+            self[lower ..< upper].link = url
         }
     }
 }

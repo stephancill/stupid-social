@@ -94,4 +94,32 @@ final class ApronLinkTests: XCTestCase {
         XCTAssertEqual(ApronLink.displayValue("abc\u{202E}def"), "abc\\u{202E}def")
         XCTAssertEqual(ApronLink.displayValue(String(repeating: "a", count: 60), limit: 11), "aaaaa…aaaaa")
     }
+
+    /// apron-web draws only links read strictly as a place in their own words (docs/behavior.md, "Links as chips").
+    func testOnlyStrictPlacesReadAsPlaces() throws {
+        let server = try XCTUnwrap(URL(string: "wss://server.apron.chat/"))
+        func place(_ link: String) -> ApronLink? {
+            ApronLink.place(URL(string: link)!, contentServer: server)
+        }
+        let message = try XCTUnwrap(place("https://link.apron.chat/#server=wss://server.apron.chat/&room=general&message=1793292155981"))
+        XCTAssertEqual(message.room, "general")
+        XCTAssertEqual(message.message, "1793292155981")
+        XCTAssertEqual(place("https://link.apron.chat/#server=wss://foo.bar.baz/&room=1791590929296")?.host, "foo.bar.baz")
+        XCTAssertEqual(place("apron:?room=general")?.serverURL, server, "without a server, the content's")
+        XCTAssertEqual(place("https://link.apron.chat/#room=general&user=ada")?.user, "ada")
+        for link in [
+            "https://link.apron.chat/#weird=foo&token=bar",
+            "https://link.apron.chat/#server=wss://server.apron.chat/",
+            "https://link.apron.chat/#room=general&room=other",
+            "https://link.apron.chat/#room=general&extra=1",
+            "https://link.apron.chat/#room=general&message=1&user=ada",
+            "https://link.apron.chat/#room=general&message=abc",
+            "https://link.apron.chat/#room=",
+            "https://link.apron.chat/#room=general&",
+            "https://link.apron.chat/?x=1#room=general",
+            "https://link.apron.chat/#server=ws://example.com/&room=general",
+        ] {
+            XCTAssertNil(place(link), link)
+        }
+    }
 }

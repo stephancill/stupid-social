@@ -246,6 +246,38 @@ final class TelegramTests: XCTestCase {
         XCTAssertTrue(message.previewText.hasSuffix("the answer is ⠿⠿⠿ ok"))
     }
 
+    // MARK: Mentions
+
+    /// Entity shapes as the probe's `mentions` and `send` read them back from Saved Messages.
+    func testMentionEntitiesKeepTheirUserOrUsername() {
+        let message = TelegramClient.message(TLObject("message", [
+            "id": .int(1), "date": .int(0), "message": .string("👋 @ann_b and Bob"),
+            "entities": .vector([
+                .object(TLObject("messageEntityMention", ["offset": .int(3), "length": .int(6)])),
+                .object(TLObject("messageEntityMentionName", ["offset": .int(14), "length": .int(3), "user_id": .long(42)])),
+                .object(TLObject("messageEntityBold", ["offset": .int(0), "length": .int(2)])),
+            ]),
+        ]))
+        XCTAssertEqual(message.mentions, [
+            TelegramMention(offset: 3, length: 6, userId: nil, username: "ann_b"),
+            TelegramMention(offset: 14, length: 3, userId: 42, username: nil),
+        ])
+    }
+
+    func testComposedIdMentionsBecomeNameMentions() {
+        let (text, mentions) = TelegramChatAdapter.resolvingMentions(in: "hi @42 and @7, cc @ann and email@99", names: [42: "Bob Smith", 99: "Eve"])
+        XCTAssertEqual(text, "hi Bob Smith and @7, cc @ann and email@99", "unknown ids, usernames and emails stay as typed")
+        XCTAssertEqual(mentions, [TelegramMention(offset: 3, length: 9, userId: 42, username: nil)])
+    }
+
+    func testProfileTargets() {
+        XCTAssertEqual(TelegramProfileViewModel.parse("42"), .user(42))
+        XCTAssertEqual(TelegramProfileViewModel.parse("user:42"), .user(42))
+        XCTAssertEqual(TelegramProfileViewModel.parse("@ann_b"), .username("ann_b"))
+        XCTAssertNil(TelegramProfileViewModel.parse("channel:42"))
+        XCTAssertNil(TelegramProfileViewModel.parse("@"))
+    }
+
     func testServiceAccountLoginCodeIsHidden() {
         let text = "Login code: 12345. Do not give this code to anyone.\n\nSent 2026-10-28 at 10:00."
         XCTAssertEqual(SpoilerText.loginCodeRanges(in: text), [NSRange(location: 12, length: 5)])

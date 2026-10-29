@@ -54,6 +54,7 @@ Sources/
       SettingsView.swift            # Settings: account list, Add Account sheet, account detail, remove
       TelegramConnectionView.swift  # Telegram sign-in: phone, code, 2FA password
       TelegramChatView.swift        # Telegram chat with the group member list from the title
+      TelegramProfileView.swift     # Telegram user profile from mentions, avatars and members: bio, last seen, Message
   NoFeedSocialPush/                 # Shared with the notification extension: Web Push decryption, push store, notification content
     WebPushDecryptor.swift
     ApronPushStore.swift
@@ -141,6 +142,7 @@ Sources/
       ApronRoomViewModel.swift       # Apron room members, profiles and notification level, kept current by the room's adapter
       ApronLinkViewModel.swift       # What an opened Apron link offers: add server, sign in, join, open
       TelegramMembersViewModel.swift # Telegram group member list, opened from the chat title
+      TelegramProfileViewModel.swift # Telegram profile by user id or @username
       TelegramConnectionViewModel.swift # Telegram sign-in steps
       XChatUnlockViewModel.swift     # X Chat PIN unlock and Forget Keys
 ```

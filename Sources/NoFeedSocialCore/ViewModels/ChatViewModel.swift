@@ -55,6 +55,19 @@ public enum ChatEmbed: Hashable, Sendable {
 }
 
 /// One message as the chat shows it. Each network maps its own messages to this.
+/// A mention a network marks by position rather than writing as `@user_id`, such as a Telegram name mention.
+public struct ChatMessageMention: Hashable, Sendable {
+    /// UTF-16 range in the message's text.
+    public let range: NSRange
+    /// What tapping it shows, as a profile: the network's user id, or one it still has to look up.
+    public let userId: String
+
+    public init(range: NSRange, userId: String) {
+        self.range = range
+        self.userId = userId
+    }
+}
+
 public struct ChatMessage: Hashable, Identifiable, Sendable {
     /// Stable across edits; replies and reactions refer to it.
     public let id: String
@@ -73,6 +86,8 @@ public struct ChatMessage: Hashable, Identifiable, Sendable {
     public let isSending: Bool
     /// Parts of `text` hidden until tapped (UTF-16 ranges); plain text only.
     public let spoilers: [NSRange]
+    /// Mentions in `text` by position; plain text only.
+    public let mentions: [ChatMessageMention]
 
     public init(
         id: String,
@@ -87,6 +102,7 @@ public struct ChatMessage: Hashable, Identifiable, Sendable {
         isNotice: Bool = false,
         isSending: Bool = false,
         spoilers: [NSRange] = [],
+        mentions: [ChatMessageMention] = [],
     ) {
         self.id = id
         self.sender = sender
@@ -100,6 +116,7 @@ public struct ChatMessage: Hashable, Identifiable, Sendable {
         self.isNotice = isNotice
         self.isSending = isSending
         self.spoilers = spoilers
+        self.mentions = mentions
     }
 
     /// The message with `image` in place of its first image or pending upload, such as the picked file for a
@@ -119,7 +136,7 @@ public struct ChatMessage: Hashable, Identifiable, Sendable {
         return ChatMessage(
             id: id, sender: sender, timestamp: timestamp, text: text, isMarkdown: isMarkdown, embeds: embeds,
             replyToId: replyToId, isDeleted: isDeleted, isOwn: isOwn, isNotice: isNotice, isSending: isSending,
-            spoilers: spoilers,
+            spoilers: spoilers, mentions: mentions,
         )
     }
 
@@ -266,6 +283,25 @@ public enum ChatConnectionState: Equatable {
 }
 
 /// Where a link in a chat's messages points within that same chat.
+/// How a place in a network reads where a message names it, such as a room's name for a link to the room or
+/// for its `#room_id`.
+public struct ChatPlaceLabel: Hashable, Sendable {
+    public let text: String
+    /// An SF Symbol before the text, for the kind of place.
+    public let systemImage: String?
+    /// Somewhere opening leaves for, such as another server: drawn in the text's own color with an arrow after.
+    public let isElsewhere: Bool
+    /// What a tap opens.
+    public let url: URL
+
+    public init(text: String, systemImage: String? = nil, isElsewhere: Bool = false, url: URL) {
+        self.text = text
+        self.systemImage = systemImage
+        self.isElsewhere = isElsewhere
+        self.url = url
+    }
+}
+
 public enum ChatLinkTarget: Equatable {
     /// The chat itself, which is already showing.
     case chat
@@ -769,6 +805,21 @@ public class ChatViewModel: ObservableObject {
 
     /// The base for relative links in this chat's messages, such as an Apron room's server.
     public var linkBaseURL: URL? {
+        nil
+    }
+
+    /// How a link written as its URL reads instead; `nil` keeps the URL.
+    public func placeLabel(forLink _: URL) -> ChatPlaceLabel? {
+        nil
+    }
+
+    /// Finds references to places written in text, such as `#room_id`; the first capture group is the reference.
+    public var referencePattern: NSRegularExpression? {
+        nil
+    }
+
+    /// How a reference reads; `nil` keeps it as written, such as for a room that isn't known.
+    public func placeLabel(forReference _: String) -> ChatPlaceLabel? {
         nil
     }
 

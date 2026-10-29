@@ -2,9 +2,10 @@ import Foundation
 
 /// One Telegram chat: pages its history, refreshes when Telegram pushes an update on the open session (with a
 /// slow poll as a fallback), sends text, replies, photos and files, reacts, and moves the read cursor as
-/// messages are read. Media, avatars and link previews load lazily through `tgfile:` URLs.
+/// messages are read. Media, avatars and link previews load lazily through `tgfile:` URLs. In groups it offers
+/// members to mention: `@username`, or for someone without one a name mention.
 @MainActor
-public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUnseenReactions, ChatLiveUpdating, ChatReferenceResolving {
+public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUnseenReactions, ChatLiveUpdating, ChatReferenceResolving, ChatMentioning {
     public let network = SocialNetwork.telegram
     public let canReply = true
     public let acceptsAttachments = true
@@ -27,6 +28,11 @@ public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUn
     private var loaded: [Int32: TelegramMessage] = [:]
     private var names: [Int64: String] = [:]
     private var avatars: [Int64: URL] = [:]
+    /// Lowercased username → user id, so `@username` mentions open the user's profile without looking them up.
+    private var usernames: [String: Int64] = [:]
+    /// A group's members, offered while typing `@`; loaded once with the chat.
+    private var members: [TelegramMember] = []
+    private var hasLoadedMembers = false
     /// Telegram's read cursor for incoming messages, locally ahead while a mark is pending.
     private var readInboxMaxId: Int32 = 0
     private var refreshTask: Task<Void, Never>?
@@ -75,6 +81,7 @@ public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUn
         let subtitle: String
         /// Saved so a private chat's "last seen" shows, freshly worded, as it opens.
         var userStatus: ChatPresence?
+        var usernames: [String: Int64]?
     }
 
     public func restore(snapshot data: Data) {
@@ -84,6 +91,7 @@ public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUn
         }
         names = snapshot.names
         avatars = snapshot.avatars
+        usernames = snapshot.usernames ?? [:]
         readInboxMaxId = snapshot.readInboxMaxId
         userStatus = listedStatus ?? snapshot.userStatus
         info.title = snapshot.title
@@ -95,7 +103,7 @@ public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUn
         let newest = loaded.values.sorted { $0.id < $1.id }.suffix(ChatSnapshotCache.messageLimit)
         return try? JSONEncoder().encode(Snapshot(
             messages: Array(newest), names: names, avatars: avatars, readInboxMaxId: readInboxMaxId,
-            title: info.title, subtitle: info.subtitle, userStatus: userStatus,
+            title: info.title, subtitle: info.subtitle, userStatus: userStatus, usernames: usernames,
         ))
     }
 
@@ -116,6 +124,22 @@ public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUn
             hasEarlierMessages = history.hasMore
         }
         merge(history)
+        await loadMembersIfNeeded()
+    }
+
+    /// Who can be mentioned; a group that hides its members just offers none.
+    private func loadMembersIfNeeded() async {
+        guard peer.kind != .user, !hasLoadedMembers else { return }
+        hasLoadedMembers = true
+        guard let list = try? await client.members(peer: peer) else { return }
+        members = list.members
+        for member in list.members {
+            if let username = member.username {
+                usernames[username.lowercased()] = member.id
+            }
+            avatars[member.id] = avatars[member.id] ?? member.avatarURL
+        }
+        publish()
     }
 
     private func apply(_ dialog: TelegramDialogState) {
@@ -186,6 +210,7 @@ public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUn
     /// refresh after sending loads.
     public func send(_ message: ChatOutgoing) async throws -> String? {
         let replyTo = message.replyToId.flatMap { Int32($0) }
+        let (text, mentions) = Self.resolvingMentions(in: message.text, names: Dictionary(members.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first }))
         let id = if let attachment = message.attachment {
             try await client.sendMedia(
                 peer: peer,
@@ -193,19 +218,72 @@ public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUn
                 mimeType: attachment.mimeType,
                 filename: attachment.filename,
                 isImage: attachment.isImage,
-                caption: message.text,
+                caption: text,
+                mentions: mentions,
                 replyTo: replyTo,
             )
         } else {
-            try await client.send(peer: peer, text: message.text, replyTo: replyTo)
+            try await client.send(peer: peer, text: text, mentions: mentions, replyTo: replyTo)
         }
         if message.attachment == nil, let id {
-            loaded[id] = TelegramMessage(id: id, date: Date(), text: message.text, caption: message.text, senderId: nil, isOutgoing: true, replyToId: replyTo, isService: false)
+            loaded[id] = TelegramMessage(id: id, date: Date(), text: text, caption: text, mentions: mentions.isEmpty ? nil : mentions, senderId: nil, isOutgoing: true, replyToId: replyTo, isService: false)
             publish()
         } else {
             scheduleRefresh()
         }
         return id.map(String.init)
+    }
+
+    /// The draft with each `@<user id>` the composer put in for someone without a username replaced by their
+    /// name, and the name mentions that go with it. Usernames can't start with a digit, so these can't be one;
+    /// ids of people not in `names` stay as typed.
+    nonisolated static func resolvingMentions(in text: String, names: [Int64: String]) -> (text: String, mentions: [TelegramMention]) {
+        let source = text as NSString
+        let output = NSMutableString()
+        var mentions: [TelegramMention] = []
+        var cursor = 0
+        for match in idMentionPattern.matches(in: text, range: NSRange(location: 0, length: source.length)) {
+            guard let id = Int64(source.substring(with: match.range(at: 1))), let name = names[id] else { continue }
+            output.append(source.substring(with: NSRange(location: cursor, length: match.range.location - cursor)))
+            mentions.append(TelegramMention(offset: output.length, length: (name as NSString).length, userId: id, username: nil))
+            output.append(name)
+            cursor = NSMaxRange(match.range)
+        }
+        output.append(source.substring(from: cursor))
+        return (output as String, mentions)
+    }
+
+    private nonisolated static let idMentionPattern = try! NSRegularExpression(pattern: #"(?<![\w@])@([0-9]+)(?!\w)"#)
+
+    // MARK: Mentions
+
+    /// Mentions are marked by position (`ChatMessage.mentions`), not written as `@user_id`.
+    public var mentionPattern: NSRegularExpression? {
+        nil
+    }
+
+    public var mentionNames: [String: String] {
+        [:]
+    }
+
+    /// Members whose name or username starts with the query, then whose name has a word that does; online ones
+    /// first for a bare `@`. Each is inserted as `@username`, or `@<user id>` for someone without one, which
+    /// sending turns into their name.
+    public func mentionSuggestions(for query: String) -> [ChatUser] {
+        let query = query.lowercased()
+        func rank(_ member: TelegramMember) -> Int? {
+            if query.isEmpty { return member.status == .online ? 0 : 1 }
+            let name = member.name.lowercased()
+            if name.hasPrefix(query) || member.username?.lowercased().hasPrefix(query) == true { return 0 }
+            if name.split(separator: " ").contains(where: { $0.hasPrefix(query) }) { return 1 }
+            return nil
+        }
+        return members
+            .filter { !$0.isYou }
+            .compactMap { member in rank(member).map { (member, $0) } }
+            .sorted { $0.1 < $1.1 }
+            .prefix(5)
+            .map { member, _ in ChatUser(id: member.username ?? String(member.id), name: member.name, avatarURL: member.avatarURL) }
     }
 
     // MARK: Read position
@@ -310,6 +388,7 @@ public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUn
         guard let found = try? await client.messages(peer: peer, ids: Array(missing)) else { return }
         names.merge(found.names) { $1 }
         avatars.merge(found.avatars) { $1 }
+        usernames.merge(found.usernames) { $1 }
         for message in found.messages {
             referencedMessages[String(message.id)] = chatMessage(message)
         }
@@ -323,6 +402,7 @@ public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUn
     private func merge(_ page: TelegramHistoryPage) {
         names.merge(page.names) { $1 }
         avatars.merge(page.avatars) { $1 }
+        usernames.merge(page.usernames) { $1 }
         for message in page.messages {
             loaded[message.id] = message
         }
@@ -390,6 +470,13 @@ public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUn
             replyToId: message.replyToId.map(String.init),
             isOwn: message.isOutgoing,
             spoilers: text == message.caption ? message.spoilers ?? [] : [],
+            mentions: text == message.caption ? (message.mentions ?? []).map(chatMention) : [],
         )
+    }
+
+    /// A mention opens its user's profile: by id, or by `@username` when that user isn't loaded.
+    private func chatMention(_ mention: TelegramMention) -> ChatMessageMention {
+        let userId = mention.userId ?? mention.username.flatMap { usernames[$0.lowercased()] }
+        return ChatMessageMention(range: mention.range, userId: userId.map(String.init) ?? "@\(mention.username ?? "")")
     }
 }

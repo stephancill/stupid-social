@@ -7,7 +7,7 @@ public final class TelegramMembersViewModel: ObservableObject {
     @Published public private(set) var members: TelegramMemberList?
     @Published public private(set) var errorMessage: String?
 
-    private let client: TelegramClient
+    let client: TelegramClient
     public let peer: TelegramPeer
 
     public init(client: TelegramClient, peer: TelegramPeer) {

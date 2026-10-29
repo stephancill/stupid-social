@@ -15,6 +15,7 @@ enum ChatAttributedText {
         redactsMentions: Bool,
         customEmojis: [String: ChatCustomEmoji] = [:],
         emojiImageDidLoad: @escaping () -> Void = {},
+        places: ChatPlaces = ChatPlaces(),
         font base: UIFont,
         formatsQuotes: Bool,
     ) -> NSAttributedString {
@@ -50,6 +51,8 @@ enum ChatAttributedText {
                 if run.link == nil {
                     detectLinks(in: segment, color: linkColor)
                 }
+                // Before mentions, so a mention can't claim part of a link's URL that a label replaces.
+                labelPlaces(in: segment, writtenAsURL: run.link.map { String(text[run.range].characters) == $0.absoluteString } ?? true, places: places, color: color, linkColor: linkColor)
                 if let mentionPattern {
                     highlightMentions(in: segment, pattern: mentionPattern, color: linkColor, underline: underlinesMentions, names: mentionNames, redacts: redactsMentions)
                 }
@@ -134,7 +137,66 @@ enum ChatAttributedText {
     }
 }
 
+/// What the chat knows about places in its network, for links and references in messages to read as names.
+struct ChatPlaces {
+    var label: (URL) -> ChatPlaceLabel? = { _ in nil }
+    var referencePattern: NSRegularExpression?
+    var referenceLabel: (String) -> ChatPlaceLabel? = { _ in nil }
+}
+
 extension ChatAttributedText {
+    /// Links written as their URL, and references such as `#room_id`, become what they name, led by their kind's
+    /// icon; a place elsewhere is in the text's color with an arrow after. Each keeps opening its place. Code spans
+    /// hold none, and a link written with its own text keeps it.
+    private static func labelPlaces(in segment: NSMutableAttributedString, writtenAsURL: Bool, places: ChatPlaces, color: UIColor, linkColor: UIColor) {
+        var labels: [(NSRange, ChatPlaceLabel)] = []
+        if writtenAsURL {
+            segment.enumerateAttribute(.chatLink, in: NSRange(location: 0, length: segment.length)) { value, range, _ in
+                if let url = value as? URL, let label = places.label(url) {
+                    labels.append((range, label))
+                }
+            }
+        }
+        if let pattern = places.referencePattern {
+            for match in pattern.matches(in: segment.string, range: NSRange(location: 0, length: segment.length)) {
+                guard segment.attribute(.chatLink, at: match.range.location, effectiveRange: nil) == nil,
+                      let label = places.referenceLabel((segment.string as NSString).substring(with: match.range(at: 1)))
+                else { continue }
+                labels.append((match.range, label))
+            }
+        }
+        // Back to front, so replacing a place's text doesn't move the ones before it.
+        for (range, label) in labels.sorted(by: { $0.0.location > $1.0.location }) {
+            var attributes = segment.attributes(at: range.location, effectiveRange: nil)
+            let tint = label.isElsewhere ? color : linkColor
+            attributes[.foregroundColor] = tint
+            attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
+            attributes[.chatLink] = label.url
+            let font = attributes[.font] as? UIFont ?? .preferredFont(forTextStyle: .body)
+            let replacement = NSMutableAttributedString()
+            if let icon = label.systemImage {
+                replacement.append(symbol(icon, font: font, tint: tint, attributes: attributes))
+                replacement.append(NSAttributedString(string: "\u{202F}", attributes: attributes))
+            }
+            replacement.append(NSAttributedString(string: label.text, attributes: attributes))
+            if label.isElsewhere {
+                replacement.append(NSAttributedString(string: "\u{202F}", attributes: attributes))
+                replacement.append(symbol("arrow.up.right", font: font, tint: tint, attributes: attributes))
+            }
+            segment.replaceCharacters(in: range, with: replacement)
+        }
+    }
+
+    private static func symbol(_ name: String, font: UIFont, tint: UIColor, attributes: [NSAttributedString.Key: Any]) -> NSAttributedString {
+        let configuration = UIImage.SymbolConfiguration(font: font, scale: .small)
+        guard let image = UIImage(systemName: name, withConfiguration: configuration)?.withTintColor(tint, renderingMode: .alwaysOriginal) else {
+            return NSAttributedString()
+        }
+        let symbol = NSMutableAttributedString(attachment: NSTextAttachment(image: image))
+        symbol.addAttributes(attributes, range: NSRange(location: 0, length: symbol.length))
+        return symbol
+    }
+
     /// Custom emoji keys become inline images the height of the line; code spans keep them as text, and so do
     /// links and mentions, whose text can hold a `:`.
     private static func insertCustomEmojis(in segment: NSMutableAttributedString, catalog: [String: ChatCustomEmoji], onLoad: @escaping () -> Void) {

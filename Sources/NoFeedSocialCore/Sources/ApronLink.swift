@@ -100,6 +100,30 @@ public struct ApronLink: Hashable, Sendable {
         }
     }
 
+    /// The link read strictly as a place, as apron-web draws one in its own words (its docs/behavior.md, "Links
+    /// as chips"): only `server`, `room`, `message` and `user`, each given once as `key=value` with a value that
+    /// decodes, in the shapes Appendix A.4 lists (`room`; `room` and `message`; `room` and `user`). Anything else
+    /// is `nil` and stays a plain link, so nothing that isn't what it seems looks official.
+    public static func place(_ url: URL, contentServer: URL?) -> ApronLink? {
+        guard isLink(url), let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
+        let isURI = url.scheme?.lowercased() == "apron"
+        // The web form keeps its keys in the fragment; a query there is something else.
+        guard isURI || components.percentEncodedQuery == nil,
+              let encoded = isURI ? components.percentEncodedQuery : components.percentEncodedFragment, !encoded.isEmpty
+        else { return nil }
+        var keys: Set<String> = []
+        for part in encoded.split(separator: "&", omittingEmptySubsequences: false) {
+            let pieces = part.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+            guard pieces.count == 2, let key = pieces[0].removingPercentEncoding, let value = pieces[1].removingPercentEncoding,
+                  !value.isEmpty, ["server", "room", "message", "user"].contains(key), keys.insert(key).inserted
+            else { return nil }
+        }
+        guard keys.contains("room"), !(keys.contains("message") && keys.contains("user")),
+              let link = try? ApronLink(url: url, contentServer: contentServer), link.token == nil
+        else { return nil }
+        return link
+    }
+
     /// The web form, for sharing. It never carries a token.
     public var webURL: URL {
         var parts = ["server=\(Self.encode(serverURL.absoluteString))"]

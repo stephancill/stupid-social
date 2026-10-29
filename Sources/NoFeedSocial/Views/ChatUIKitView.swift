@@ -772,7 +772,8 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     private func attributedBody(for message: ChatMessage, isOwn: Bool) -> NSAttributedString? {
         guard !message.isDeleted, let text = message.text, !text.isEmpty else { return nil }
         let hidesSpoilers = !message.spoilers.isEmpty && !revealedSpoilers.contains(message.id)
-        let key = "\(message.id)|\(isOwn)|\(hidesSpoilers)|\(text)"
+        // Mentions are in the key: a Telegram `@username` gets its user id once the user loads.
+        let key = "\(message.id)|\(isOwn)|\(hidesSpoilers)|\(message.mentions.map(\.userId))|\(text)"
         if let cached = attributedCache[key] {
             return cached
         }
@@ -789,14 +790,20 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
             redactsMentions: DebugRedaction.isEnabled,
             customEmojis: viewModel.customEmojis,
             emojiImageDidLoad: { [weak self] in self?.customEmojiImagesDidLoad() },
+            places: ChatPlaces(
+                label: { [viewModel] in viewModel.placeLabel(forLink: $0) },
+                referencePattern: viewModel.referencePattern,
+                referenceLabel: { [viewModel] in viewModel.placeLabel(forReference: $0) },
+            ),
             font: isSystem ? .preferredFont(forTextStyle: .footnote) : .preferredFont(forTextStyle: .body),
             formatsQuotes: message.isMarkdown,
         )
+        let marked = mentionsMarked(message.mentions, in: rendered, isOwn: isOwn)
         guard hidesSpoilers else {
-            attributedCache[key] = rendered
-            return rendered
+            attributedCache[key] = marked
+            return marked
         }
-        let hidden = NSMutableAttributedString(attributedString: rendered)
+        let hidden = NSMutableAttributedString(attributedString: marked)
         let color = isOwn ? UIColor.white : UIColor.label
         for range in message.spoilers where NSMaxRange(range) <= hidden.length {
             // A hidden link or mention reveals the spoiler instead of opening.
@@ -806,6 +813,23 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         }
         attributedCache[key] = hidden
         return hidden
+    }
+
+    /// Mentions a network marks by position, styled and tappable like `@user_id` ones. They apply to plain text,
+    /// whose rendering keeps the text's length.
+    private func mentionsMarked(_ mentions: [ChatMessageMention], in text: NSAttributedString, isOwn: Bool) -> NSAttributedString {
+        guard !mentions.isEmpty else { return text }
+        let marked = NSMutableAttributedString(attributedString: text)
+        for mention in mentions where NSMaxRange(mention.range) <= marked.length {
+            marked.addAttribute(.chatMention, value: mention.userId, range: mention.range)
+            // White text on the blue bubble can't use the link color, so mentions there are underlined instead.
+            if isOwn {
+                marked.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: mention.range)
+            } else {
+                marked.addAttribute(.foregroundColor, value: UIColor.link, range: mention.range)
+            }
+        }
+        return marked
     }
 
     /// Opens at the "New Messages" divider when there is one, like Telegram, otherwise at the newest message.

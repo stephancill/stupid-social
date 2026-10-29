@@ -908,6 +908,8 @@ class Client:
         self.store.save()
 
     def input_peer(self, key: str) -> dict:
+        if key == "self":
+            return {"_": "inputPeerSelf"}
         kind, peer_id = key.split(":")
         access_hash = self.store.data["peers"].get(key)
         if kind == "chat":
@@ -1141,6 +1143,15 @@ def main():
     send.add_argument("--peer", required=True)
     send.add_argument("--text", required=True)
     send.add_argument("--reply-to", type=int)
+    send.add_argument("--mention-user", type=int, help="a user id to mention by name over --mention-range (inputMessageEntityMentionName)")
+    send.add_argument("--mention-range", help="OFFSET:LENGTH of the name in --text, in UTF-16 units")
+    resolve = sub.add_parser("resolve", help="contacts.resolveUsername: the user or chat an @username names")
+    resolve.add_argument("--username", required=True)
+    profile = sub.add_parser("profile", help="users.getFullUser: a user's profile, bio and status")
+    profile.add_argument("--user", type=int, required=True, help="a user id whose access hash is known (from dialogs, history or resolve)")
+    mentions = sub.add_parser("mentions", help="a chat's mention entities, without message text")
+    mentions.add_argument("--peer", required=True)
+    mentions.add_argument("--limit", type=int, default=100)
     read = sub.add_parser("read")
     read.add_argument("--peer", required=True)
     read.add_argument("--max-id", type=int, required=True)
@@ -1293,6 +1304,10 @@ def main():
         method = {"_": "messages.sendMessage", "peer": client.input_peer(args.peer), "message": args.text, "random_id": secrets.randbits(63)}
         if args.reply_to:
             method["reply_to"] = {"_": "inputReplyToMessage", "reply_to_msg_id": args.reply_to}
+        if args.mention_user:
+            offset, length = (int(x) for x in args.mention_range.split(":"))
+            user = {"_": "inputUser", "user_id": args.mention_user, "access_hash": client.store.data["peers"][f"user:{args.mention_user}"]}
+            method["entities"] = [{"_": "inputMessageEntityMentionName", "offset": offset, "length": length, "user_id": user}]
         result = client.call(method)
         print(json.dumps(to_json(result), indent=1, ensure_ascii=False)[:2000])
     elif args.command == "read":
@@ -1382,6 +1397,36 @@ def main():
             if update["_"] == "updateMessageReactions":
                 counts = [(r["reaction"].get("emoticon"), r["count"], "chosen_order" in r) for r in update["reactions"]["results"]]
                 print("updateMessageReactions", counts)
+    elif args.command == "resolve":
+        result = client.call({"_": "contacts.resolveUsername", "username": args.username.lstrip("@")})
+        client.remember_peers(result["users"], result["chats"])
+        user = next((u for u in result["users"] if u["id"] == result["peer"].get("user_id")), None)
+        chat = next((c for c in result["chats"] if c["id"] in (result["peer"].get("channel_id"), result["peer"].get("chat_id"))), None)
+        if user:
+            print(json.dumps({"peer": f"user:{user['id']}", "name": " ".join(filter(None, [user.get("first_name"), user.get("last_name")])), "username": user.get("username"), "bot": bool(user.get("bot")), "photo": (user.get("photo") or {}).get("_"), "status": (user.get("status") or {}).get("_")}, indent=1, ensure_ascii=False))
+        else:
+            print(json.dumps({"peer": peer_key(result["peer"]), "title": (chat or {}).get("title"), "broadcast": bool((chat or {}).get("broadcast"))}, indent=1, ensure_ascii=False))
+    elif args.command == "profile":
+        user = {"_": "inputUser", "user_id": args.user, "access_hash": client.store.data["peers"][f"user:{args.user}"]}
+        result = client.call({"_": "users.getFullUser", "id": user})
+        full = result["full_user"]
+        listed = next(u for u in result["users"] if u["id"] == args.user)
+        print(json.dumps({"name": " ".join(filter(None, [listed.get("first_name"), listed.get("last_name")])), "username": listed.get("username"), "about": full.get("about"), "status": to_json(listed.get("status")), "photo": (full.get("profile_photo") or {}).get("_"), "common_chats_count": full.get("common_chats_count")}, indent=1, ensure_ascii=False))
+    elif args.command == "mentions":
+        result = client.call({"_": "messages.getHistory", "peer": client.input_peer(args.peer), "offset_id": 0, "offset_date": 0, "add_offset": 0, "limit": args.limit, "max_id": 0, "min_id": 0, "hash": 0})
+        client.remember_peers(result["users"], result["chats"])
+        usernames = {(u.get("username") or "").lower(): u["id"] for u in result["users"] if u.get("username")}
+        user_ids = {u["id"] for u in result["users"]}
+        for message in result["messages"]:
+            utf16 = message.get("message", "").encode("utf-16-le")
+            for entity in message.get("entities") or []:
+                if entity["_"] == "messageEntityMention":
+                    # Offsets and lengths count UTF-16 code units, as Telegram's do.
+                    name = utf16[entity["offset"] * 2:(entity["offset"] + entity["length"]) * 2].decode("utf-16-le")
+                    found = usernames.get(name[1:].lower())
+                    print(f"{message['id']:>8} @username {entity['offset']}:{entity['length']} -> {f'user:{found} (in response)' if found else 'resolve on tap'}")
+                elif entity["_"] == "messageEntityMentionName":
+                    print(f"{message['id']:>8} name {entity['offset']}:{entity['length']} -> user:{entity['user_id']}{' (in response)' if entity['user_id'] in user_ids else ''}")
     elif args.command == "raw":
         params = json.loads(args.json)
         params["_"] = args.method

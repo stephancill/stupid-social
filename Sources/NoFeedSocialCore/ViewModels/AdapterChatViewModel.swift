@@ -153,8 +153,9 @@ public protocol ChatTyping: ChatAdapter {
 /// `@` mentions in message text.
 @MainActor
 public protocol ChatMentioning: ChatAdapter {
-    /// Matches a mention, such as `@user_id`, which shows by name and is tappable.
-    var mentionPattern: NSRegularExpression { get }
+    /// Matches a mention written in the text, such as `@user_id`, which shows by name and is tappable; `nil`
+    /// for a network that marks mentions by position (`ChatMessage.mentions`).
+    var mentionPattern: NSRegularExpression? { get }
     /// User id → name.
     var mentionNames: [String: String] { get }
     func mentionSuggestions(for query: String) -> [ChatUser]
@@ -180,6 +181,12 @@ public protocol ChatLinking: ChatAdapter {
     func link(toMessage messageId: String) -> URL?
     func linkTarget(for url: URL) -> ChatLinkTarget?
     var linkBaseURL: URL? { get }
+    /// How a link written as its URL reads, such as "Message in #general"; `nil` keeps the URL.
+    func placeLabel(forLink url: URL) -> ChatPlaceLabel?
+    /// Finds references to places written in text, such as `#room_id`; the first capture group is the reference.
+    var referencePattern: NSRegularExpression? { get }
+    /// How a reference reads; `nil` keeps it as written.
+    func placeLabel(forReference reference: String) -> ChatPlaceLabel?
 }
 
 /// The shared chat screen's model for a network that has a `ChatAdapter`.
@@ -209,7 +216,7 @@ public final class AdapterChatViewModel<Adapter: ChatAdapter>: ChatViewModel {
             subtitle: adapter.info.subtitle,
             canReply: adapter.canReply,
             offersAttachments: adapter.acceptsAttachments,
-            mentionPattern: (adapter as? any ChatMentioning)?.mentionPattern,
+            mentionPattern: (adapter as? any ChatMentioning)?.mentionPattern ?? nil,
             draftStore: draftStore,
         )
         tracksUnseenReactions = adapter is any ChatUnseenReactions
@@ -454,6 +461,18 @@ public final class AdapterChatViewModel<Adapter: ChatAdapter>: ChatViewModel {
 
     override public var linkBaseURL: URL? {
         (adapter as? any ChatLinking)?.linkBaseURL
+    }
+
+    override public func placeLabel(forLink url: URL) -> ChatPlaceLabel? {
+        (adapter as? any ChatLinking)?.placeLabel(forLink: url)
+    }
+
+    override public var referencePattern: NSRegularExpression? {
+        (adapter as? any ChatLinking)?.referencePattern ?? nil
+    }
+
+    override public func placeLabel(forReference reference: String) -> ChatPlaceLabel? {
+        (adapter as? any ChatLinking)?.placeLabel(forReference: reference)
     }
 
     // MARK: Publishing

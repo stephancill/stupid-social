@@ -1,5 +1,6 @@
 import Foundation
 import NoFeedSocialPush
+import Synchronization
 
 /// When private chats and groups are muted until by default, as Unix times.
 struct TelegramMuteDefaults {
@@ -55,6 +56,8 @@ public struct TelegramMessage: Codable, Sendable, Hashable {
     /// Hidden parts of `caption` (UTF-16 ranges): spoiler entities, and the login code in messages from Telegram's
     /// service account. Optional so chat snapshots saved before it existed still decode.
     public var spoilers: [NSRange]?
+    /// Mentions in `caption`. Optional so chat snapshots saved before it existed still decode.
+    public var mentions: [TelegramMention]?
     public var embeds: [TelegramEmbed] = []
     public var reactions: [TelegramReaction] = []
     public var reactors: [TelegramReactor] = []
@@ -71,6 +74,43 @@ public struct TelegramMessage: Codable, Sendable, Hashable {
         let shift = text.utf16.count - caption.utf16.count
         return SpoilerText.mask(text, ranges: spoilers.map { NSRange(location: $0.location + shift, length: $0.length) })
     }
+}
+
+/// A mention in a message's text: `@username` (`messageEntityMention`), which Telegram marks by itself in text
+/// that's sent, or a name tied to a user (`messageEntityMentionName`), for people without a username.
+public struct TelegramMention: Codable, Sendable, Hashable {
+    /// UTF-16 offset and length, as Telegram counts them.
+    public let offset: Int
+    public let length: Int
+    public let userId: Int64?
+    /// Without the `@`; set for `@username` mentions, whose user the chat may not have loaded.
+    public let username: String?
+
+    public init(offset: Int, length: Int, userId: Int64?, username: String?) {
+        self.offset = offset
+        self.length = length
+        self.userId = userId
+        self.username = username
+    }
+
+    public var range: NSRange {
+        NSRange(location: offset, length: length)
+    }
+}
+
+/// A Telegram user's profile page: who they are, their bio and last seen, and their private chat.
+public struct TelegramProfile: Sendable, Equatable {
+    public let id: Int64
+    public let name: String
+    public let username: String?
+    public let about: String?
+    public let avatarURL: URL?
+    /// Last seen; `nil` for yourself and bots.
+    public let status: ChatPresence?
+    public let isBot: Bool
+    public let isYou: Bool
+    /// The private chat with them; `nil` when Telegram gave no usable access hash.
+    public let peer: TelegramPeer?
 }
 
 /// Someone in a group, as its member list shows them.
@@ -101,6 +141,8 @@ public struct TelegramHistoryPage: Sendable {
     public let names: [Int64: String]
     /// User and chat id → profile photo (a `tgfile:` URL).
     public let avatars: [Int64: URL]
+    /// Lowercased username → user id, for `@username` mentions of users in the response.
+    public var usernames: [String: Int64] = [:]
     public let hasMore: Bool
 }
 
@@ -175,6 +217,11 @@ public actor TelegramClient: ChatListProvider {
     private var openingFileSessions: [Int: Task<MTProtoSession, Error>] = [:]
     /// Downloads in flight by cache key, so a file shown twice downloads once.
     private var downloads: [String: Task<Data, Error>] = [:]
+    /// How to name each user seen in a history, member list or lookup to Telegram (`InputUser`), for profiles and
+    /// name mentions: with their access hash, or through a message they sent when Telegram gave a "min" user.
+    private var inputUsers: [Int64: TLObject] = [:]
+    /// Names of people whose profile opened, so a private chat opened from it can be titled before it loads.
+    private nonisolated let profileNames = Mutex<[Int64: String]>([:])
     private let mediaDirectory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appending(path: "telegram-media", directoryHint: .isDirectory)
 
     public init(keychain: KeychainCredentialStore) {
@@ -756,7 +803,7 @@ public actor TelegramClient: ChatListProvider {
         ])).object else { throw TelegramError.protocolViolation("no history") }
         let page = page(from: result, peer: peer)
         let hasMore = result.name == "messages.messages" ? false : page.messages.count >= limit
-        return TelegramHistoryPage(messages: page.messages, names: page.names, avatars: page.avatars, hasMore: hasMore)
+        return TelegramHistoryPage(messages: page.messages, names: page.names, avatars: page.avatars, usernames: page.usernames, hasMore: hasMore)
     }
 
     /// Specific messages, such as the ones replies quote that aren't loaded; missing ids are left out.
@@ -779,17 +826,23 @@ public actor TelegramClient: ChatListProvider {
         let rawMessages = result.objects("messages").filter { $0.name != "messageEmpty" }
         var names: [Int64: String] = [:]
         var avatars: [Int64: URL] = [:]
+        var usernames: [String: Int64] = [:]
         for user in result.objects("users") {
             guard let id = user["id"]?.long else { continue }
             names[id] = Self.name(of: user)
+            for username in Self.usernames(of: user) {
+                usernames[username.lowercased()] = id
+            }
             // A "min" user's access hash can't be used; its photo is reached through a message it sent.
+            let sent = rawMessages.first(where: { $0["from_id"]?.object?["user_id"]?.long == id })?["id"]?.int
             let inputPeer: TLObject? = if !user.flag("min"), let hash = user["access_hash"]?.long {
                 TLObject("inputPeerUser", ["user_id": .long(id), "access_hash": .long(hash)])
-            } else if let sent = rawMessages.first(where: { $0["from_id"]?.object?["user_id"]?.long == id })?["id"]?.int {
+            } else if let sent {
                 TLObject("inputPeerUserFromMessage", ["peer": .object(peer.inputPeer), "msg_id": .int(sent), "user_id": .long(id)])
             } else {
                 nil
             }
+            remember(user, sentIn: sent.map { (peer, $0) })
             if let inputPeer, let url = TelegramMediaParser.avatarURL(photo: user["photo"]?.object, inputPeer: inputPeer, key: "user:\(id)") {
                 avatars[id] = url
             }
@@ -811,7 +864,74 @@ public actor TelegramClient: ChatListProvider {
             }
         }
         let messages = rawMessages.map { Self.message($0, selfId: stored.account?.userId, names: names) }
-        return TelegramHistoryPage(messages: messages, names: names, avatars: avatars, hasMore: false)
+        return TelegramHistoryPage(messages: messages, names: names, avatars: avatars, usernames: usernames, hasMore: false)
+    }
+
+    /// Keeps how to name `user` to Telegram: its access hash, or for a "min" user, whose hash can't be used, a
+    /// message it sent (`sentIn`).
+    private func remember(_ user: TLObject, sentIn message: (peer: TelegramPeer, id: Int32)?) {
+        guard let id = user["id"]?.long else { return }
+        if !user.flag("min"), let hash = user["access_hash"]?.long {
+            inputUsers[id] = TLObject("inputUser", ["user_id": .long(id), "access_hash": .long(hash)])
+        } else if inputUsers[id] == nil, let message {
+            inputUsers[id] = TLObject("inputUserFromMessage", ["peer": .object(message.peer.inputPeer), "msg_id": .int(message.id), "user_id": .long(id)])
+        }
+    }
+
+    /// A user's usernames, the main one first; collectible ones are in `usernames`.
+    static func usernames(of user: TLObject) -> [String] {
+        ([user["username"]?.string] + user.objects("usernames").map { $0["username"]?.string }).compactMap(\.self)
+    }
+
+    /// A user's profile with their bio (`users.getFullUser`), for someone seen in a chat or member list
+    /// (validated with the probe's `profile`).
+    public func profile(userId: Int64) async throws -> TelegramProfile {
+        try requireAccount()
+        let input = userId == stored.account?.userId ? TLObject("inputUserSelf") : inputUsers[userId]
+        guard let input else { throw TelegramError.unknownUser }
+        guard let result = try await invoke(TLObject("users.getFullUser", ["id": .object(input)])).object else {
+            throw TelegramError.protocolViolation("no full user")
+        }
+        let user = result.objects("users").first { $0["id"]?.long == userId }
+        if let user {
+            remember(user, sentIn: nil)
+        }
+        let hash = user.flatMap { $0.flag("min") ? nil : $0["access_hash"]?.long }
+        let name = user.map(Self.name(of:)) ?? "Telegram User"
+        profileNames.withLock { $0[userId] = name }
+        let avatar = hash.flatMap { hash in
+            TelegramMediaParser.avatarURL(
+                photo: user?["photo"]?.object,
+                inputPeer: TLObject("inputPeerUser", ["user_id": .long(userId), "access_hash": .long(hash)]),
+                key: "user:\(userId)",
+            )
+        }
+        let about = result["full_user"]?.object?["about"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return TelegramProfile(
+            id: userId,
+            name: name,
+            username: user.flatMap { Self.usernames(of: $0).first },
+            about: about?.isEmpty == false ? about : nil,
+            avatarURL: avatar,
+            status: user.flatMap(Self.userStatus),
+            isBot: user?.flag("bot") ?? false,
+            isYou: userId == stored.account?.userId,
+            peer: hash.map { TelegramPeer(kind: .user, id: userId, accessHash: $0) },
+        )
+    }
+
+    /// The profile an `@username` mention names (`contacts.resolveUsername`, validated with the probe's
+    /// `resolve`); a username can also name a channel or group, which has no profile here.
+    public func profile(username: String) async throws -> TelegramProfile {
+        try requireAccount()
+        guard let result = try await invoke(TLObject("contacts.resolveUsername", ["username": .string(username)])).object else {
+            throw TelegramError.protocolViolation("no resolved peer")
+        }
+        for user in result.objects("users") {
+            remember(user, sentIn: nil)
+        }
+        guard let userId = result["peer"]?.object?["user_id"]?.long else { throw TelegramError.notAPerson }
+        return try await profile(userId: userId)
     }
 
     /// A group's members: `channels.getParticipants` (recent, up to 200) for supergroups, the full participant list
@@ -844,6 +964,9 @@ public actor TelegramClient: ChatListProvider {
             return TelegramMemberList(members: [], count: 0)
         }
         let users = Dictionary(result.objects("users").compactMap { user in user["id"]?.long.map { ($0, user) } }, uniquingKeysWith: { first, _ in first })
+        for user in users.values {
+            remember(user, sentIn: nil)
+        }
         let selfId = stored.account?.userId
         let members: [TelegramMember] = participants.compactMap { participant in
             guard let id = participant["user_id"]?.long ?? participant["peer"]?.object?["user_id"]?.long, let user = users[id] else { return nil }
@@ -890,15 +1013,30 @@ public actor TelegramClient: ChatListProvider {
         }
     }
 
-    /// Sends text, returning the new message's id.
-    public func send(peer: TelegramPeer, text: String, replyTo: Int32?) async throws -> Int32? {
+    /// Sends text, returning the new message's id. `mentions` are name mentions of users this device can name;
+    /// Telegram marks `@username`s in the text by itself (both validated with the probe's `send`).
+    public func send(peer: TelegramPeer, text: String, mentions: [TelegramMention] = [], replyTo: Int32?) async throws -> Int32? {
         try requireAccount()
         let randomId = Int64.random(in: 1 ... .max)
         var method = TLObject("messages.sendMessage", ["peer": .object(peer.inputPeer), "message": .string(text), "random_id": .long(randomId)])
         if let replyTo {
             method["reply_to"] = .object(TLObject("inputReplyToMessage", ["reply_to_msg_id": .int(replyTo)]))
         }
+        if let entities = mentionEntities(mentions) {
+            method["entities"] = entities
+        }
         return try await Self.sentMessageId(invoke(method).object, randomId: randomId)
+    }
+
+    /// `inputMessageEntityMentionName`s for the name mentions whose users this device can name.
+    private func mentionEntities(_ mentions: [TelegramMention]) -> TLValue? {
+        let entities: [TLValue] = mentions.compactMap { mention in
+            guard let userId = mention.userId, let user = inputUsers[userId] else { return nil }
+            return .object(TLObject("inputMessageEntityMentionName", [
+                "offset": .int(Int32(mention.offset)), "length": .int(Int32(mention.length)), "user_id": .object(user),
+            ]))
+        }
+        return entities.isEmpty ? nil : .vector(entities)
     }
 
     private static func sentMessageId(_ updates: TLObject?, randomId: Int64) -> Int32? {
@@ -914,7 +1052,7 @@ public actor TelegramClient: ChatListProvider {
 
     /// Uploads a photo or file in 512 KB parts and sends it with `caption`, returning the new message's id
     /// (validated with the probe's `send-photo`).
-    public func sendMedia(peer: TelegramPeer, data: Data, mimeType: String, filename: String, isImage: Bool, caption: String, replyTo: Int32?) async throws -> Int32? {
+    public func sendMedia(peer: TelegramPeer, data: Data, mimeType: String, filename: String, isImage: Bool, caption: String, mentions: [TelegramMention] = [], replyTo: Int32?) async throws -> Int32? {
         try requireAccount()
         let fileId = Int64.random(in: 1 ... .max)
         let partSize = 512 * 1024
@@ -942,6 +1080,9 @@ public actor TelegramClient: ChatListProvider {
         var method = TLObject("messages.sendMedia", ["peer": .object(peer.inputPeer), "media": .object(media), "message": .string(caption), "random_id": .long(randomId)])
         if let replyTo {
             method["reply_to"] = .object(TLObject("inputReplyToMessage", ["reply_to_msg_id": .int(replyTo)]))
+        }
+        if let entities = mentionEntities(mentions) {
+            method["entities"] = entities
         }
         return try await Self.sentMessageId(invoke(method).object, randomId: randomId)
     }
@@ -1054,12 +1195,28 @@ public actor TelegramClient: ChatListProvider {
         if senderId == SpoilerText.telegramServiceUserId, !isService {
             spoilers += SpoilerText.loginCodeRanges(in: caption)
         }
+        let mentions: [TelegramMention] = isService ? [] : message.objects("entities").compactMap { entity in
+            guard let offset = entity["offset"]?.int, let length = entity["length"]?.int else { return nil }
+            let range = NSRange(location: Int(offset), length: Int(length))
+            switch entity.name {
+            case "messageEntityMentionName":
+                guard let userId = entity["user_id"]?.long else { return nil }
+                return TelegramMention(offset: range.location, length: range.length, userId: userId, username: nil)
+            case "messageEntityMention":
+                guard NSMaxRange(range) <= (caption as NSString).length else { return nil }
+                let username = String((caption as NSString).substring(with: range).dropFirst())
+                return TelegramMention(offset: range.location, length: range.length, userId: nil, username: username)
+            default:
+                return nil
+            }
+        }
         return TelegramMessage(
             id: message["id"]?.int ?? 0,
             date: Date(timeIntervalSince1970: TimeInterval(message["date"]?.int ?? 0)),
             text: text,
             caption: isService ? "" : caption,
             spoilers: spoilers.isEmpty ? nil : spoilers,
+            mentions: mentions.isEmpty ? nil : mentions,
             embeds: embeds,
             reactions: reactions.totals,
             reactors: reactions.reactors,
@@ -1100,12 +1257,28 @@ public actor TelegramClient: ChatListProvider {
 }
 
 extension TelegramClient: ChatListResolving {
-    /// A notification names the chat without its access hash, so it matches on kind and id.
+    /// A notification names the chat without its access hash, so it matches on kind and id. A private chat opened
+    /// from a profile, with its access hash, opens even before you've messaged them: it's titled by the name the
+    /// profile showed until it loads.
     public nonisolated func chat(for destination: ChatSummary.Destination, in chats: [ChatSummary]) -> ChatSummary? {
         guard case let .telegram(peer) = destination else { return nil }
-        return chats.first { chat in
+        if let listed = chats.first(where: { chat in
             guard case let .telegram(listed) = chat.destination else { return false }
             return listed.kind == peer.kind && listed.id == peer.id
+        }) {
+            return listed
         }
+        guard peer.kind == .user, peer.accessHash != 0, let name = profileNames.withLock({ $0[peer.id] }) else { return nil }
+        return ChatSummary(
+            id: "telegram:\(peer.key)",
+            network: .telegram,
+            title: name,
+            avatarURL: nil,
+            avatarColorKey: String(peer.id),
+            preview: nil,
+            timestamp: nil,
+            unreadCount: 0,
+            destination: destination,
+        )
     }
 }

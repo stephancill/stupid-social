@@ -8,6 +8,10 @@ public enum TelegramError: LocalizedError, Equatable {
     case authKeyInvalid
     case protocolViolation(String)
     case rpc(code: Int32, message: String)
+    /// A user this device can't name to Telegram, such as one it hasn't seen in a chat yet.
+    case unknownUser
+    /// An `@username` that belongs to a channel or group rather than a person.
+    case notAPerson
 
     public var errorDescription: String? {
         switch self {
@@ -17,6 +21,8 @@ public enum TelegramError: LocalizedError, Equatable {
         case .authKeyInvalid: "Telegram no longer knows this device's key."
         case let .protocolViolation(reason): "Telegram protocol error: \(reason)."
         case let .rpc(code, message): Self.describe(code: code, message: message)
+        case .unknownUser: "This profile isn't available yet. Open a chat they're in, then try again."
+        case .notAPerson: "That's a channel or group, not a person."
         }
     }
 
@@ -27,6 +33,7 @@ public enum TelegramError: LocalizedError, Equatable {
         case "PHONE_CODE_EXPIRED": "That code expired. Request a new one."
         case "PASSWORD_HASH_INVALID": "That password isn't right."
         case "PHONE_NUMBER_UNOCCUPIED": "There's no Telegram account for this number."
+        case "USERNAME_NOT_OCCUPIED", "USERNAME_INVALID": "There's no one on Telegram with that username."
         default:
             if message.hasPrefix("FLOOD_WAIT_"), let seconds = Int(message.dropFirst("FLOOD_WAIT_".count)) {
                 "Telegram asked to wait \(seconds) seconds."

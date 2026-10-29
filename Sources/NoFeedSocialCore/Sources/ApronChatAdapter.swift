@@ -21,7 +21,7 @@ public final class ApronChatAdapter: ChatAdapter, ChatReactionSending, ChatUnsee
     public private(set) var typingNames: [String] = []
     /// User id → name, for showing `@` mentions by name.
     public private(set) var mentionNames: [String: String] = [:]
-    public var mentionPattern: NSRegularExpression {
+    public var mentionPattern: NSRegularExpression? {
         ApronMention.pattern
     }
 
@@ -54,6 +54,8 @@ public final class ApronChatAdapter: ChatAdapter, ChatReactionSending, ChatUnsee
     private var reactionEntries: [String: [String: (logId: Int64, emojis: [String])]] = [:]
     private var reactionAuthors: [String: ApronUser] = [:]
     private var memberIds: Set<String>?
+    /// The server's joined rooms, by id, which `#room_id`s and links in messages read by name.
+    private var knownRooms: [String: ApronRoom] = [:]
     private var isPrivateRoom = false
     private var notices: [ApronMessage] = []
     private var firstLogId: String?
@@ -228,6 +230,7 @@ public final class ApronChatAdapter: ChatAdapter, ChatReactionSending, ChatUnsee
             for user in listing.users {
                 users[user.userId] = user
             }
+            knownRooms = Dictionary(listing.rooms.map { ($0.roomId, $0) }, uniquingKeysWith: { first, _ in first })
             if let directUser {
                 showNewDirectChat(with: directUser, you: session.you)
                 return
@@ -1077,6 +1080,46 @@ public final class ApronChatAdapter: ChatAdapter, ChatReactionSending, ChatUnsee
 
     public var linkBaseURL: URL? {
         serverURL
+    }
+
+    /// An Apron link written as its URL reads as what it points at, as in apron-web: "Message in #general", a
+    /// room's name, `@name`. A link to another server names its host and the kind of place, since nothing about it
+    /// is known here; a user there, or anything not strictly a place, stays a URL.
+    public func placeLabel(forLink url: URL) -> ChatPlaceLabel? {
+        guard let link = ApronLink.place(url, contentServer: serverURL), let room = link.room else { return nil }
+        guard link.serverURL == serverURL else {
+            guard link.user == nil else { return nil }
+            return ChatPlaceLabel(text: "\(link.host) · \(link.message == nil ? "Room" : "Message")", systemImage: "globe", isElsewhere: true, url: link.webURL)
+        }
+        if let user = link.user {
+            return ChatPlaceLabel(text: "@\(users[user]?.displayName ?? ApronLink.displayValue(user))", url: link.webURL)
+        }
+        if link.message != nil {
+            return ChatPlaceLabel(text: "Message in #\(roomName(room))", systemImage: "text.bubble", url: link.webURL)
+        }
+        return ChatPlaceLabel(text: roomName(room), systemImage: "number", url: link.webURL)
+    }
+
+    /// `#room_id`, apron-web's ID grammar (Appendix A.3): letters, digits and `_.+@:-`, starting and ending with a
+    /// letter, digit or `_`, and not right after a letter or digit.
+    public var referencePattern: NSRegularExpression? {
+        Self.roomReferencePattern
+    }
+
+    private static let roomReferencePattern = try! NSRegularExpression(pattern: #"(?<![\p{L}\p{N}])#([\p{L}\p{N}_](?:[\p{L}\p{N}_.+@:-]*[\p{L}\p{N}_])?)"#)
+
+    /// A known room's `#room_id` shows its name and opens it; any other stays as written.
+    public func placeLabel(forReference reference: String) -> ChatPlaceLabel? {
+        guard knownRooms[reference] != nil else { return nil }
+        return ChatPlaceLabel(text: "#\(roomName(reference))", url: ApronLink(serverURL: serverURL, room: reference).webURL)
+    }
+
+    /// A known room's title, a thread's "in #parent"; an unknown one's id, made safe to show.
+    private func roomName(_ roomId: String) -> String {
+        guard let room = knownRooms[roomId] else { return ApronLink.displayValue(roomId) }
+        let title = room.displayTitle(users: users, you: you?.userId ?? "")
+        guard let parent = room.parentRoomId else { return title }
+        return "\(title) in #\(roomName(parent))"
     }
 
     // MARK: Display mapping
