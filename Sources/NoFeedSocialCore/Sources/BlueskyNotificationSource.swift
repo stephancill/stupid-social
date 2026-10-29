@@ -27,8 +27,16 @@ public struct BlueskyNotificationSource: NotificationFetching, AccountValidating
 
     public func fetchNotifications(reason _: RefreshReason) async throws -> [NotificationItem] {
         guard let account = metadataStore.blueskyAccount else { throw SourceError.notConfigured }
-        return try await client.notifications().map { notification in
-            normalize(notification, account: account)
+        do {
+            return try await client.notifications().map { notification in
+                normalize(notification, account: account)
+            }
+        } catch BlueskyClientError.refreshTokenRejected {
+            if var account = metadataStore.blueskyAccount {
+                account.status = .invalidCredentials
+                metadataStore.blueskyAccount = account
+            }
+            throw BlueskyClientError.refreshTokenRejected
         }
     }
 

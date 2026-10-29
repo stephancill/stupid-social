@@ -48,6 +48,8 @@ public final class BlueskyClient: @unchecked Sendable {
     public static let authServerURL = URL(string: "https://bsky.social")!
     public static let pdsURL = URL(string: "https://bsky.social")!
 
+    private static let refreshes = RefreshCoalescer()
+
     private let credentialStore: KeychainCredentialStore
     private let session: URLSession
     private let decoder: JSONDecoder
@@ -272,7 +274,9 @@ public final class BlueskyClient: @unchecked Sendable {
         {
             return try await tokenRequest(endpoint: endpoint, form: form, privateKeyData: privateKeyData, nonce: freshNonce, retryingNonce: false)
         }
-        guard http.statusCode == 200 else { throw SourceError.serviceError("OAuth token request failed") }
+        guard http.statusCode == 200 else {
+            throw BlueskyClientError.tokenRequestFailed(status: http.statusCode, error: (try? decoder.decode(BlueskyOAuthError.self, from: data))?.error)
+        }
         return try (decoder.decode(BlueskyTokenResponse.self, from: data), freshNonce ?? nonce)
     }
 
@@ -284,7 +288,32 @@ public final class BlueskyClient: @unchecked Sendable {
         return credentials
     }
 
+    /// Refreshes once per refresh token: concurrent callers, in any client for the account, share one request,
+    /// since servers that rotate refresh tokens (the Cirrus PDS) reject the second use with `invalid_grant`.
     private func refresh(credentials: BlueskyOAuthCredentials) async throws -> BlueskyOAuthCredentials {
+        try await Self.refreshes.run(key: credentials.refreshToken) { [self] in
+            try await refreshOrAdoptStored(credentials, adoptingStored: true)
+        }
+    }
+
+    /// When the server refuses the refresh token, another device (through iCloud Keychain) or client may already
+    /// have rotated it: use the tokens it saved, refreshing them if they're expiring too.
+    private func refreshOrAdoptStored(_ credentials: BlueskyOAuthCredentials, adoptingStored: Bool) async throws -> BlueskyOAuthCredentials {
+        do {
+            return try await performRefresh(credentials)
+        } catch BlueskyClientError.tokenRequestFailed(_, "invalid_grant") {
+            guard adoptingStored,
+                  let stored = try credentialStore.loadBlueskyCredentials(),
+                  stored.refreshToken != credentials.refreshToken
+            else { throw BlueskyClientError.refreshTokenRejected }
+            if let expiresAt = stored.expiresAt, expiresAt.timeIntervalSinceNow < 60 {
+                return try await refreshOrAdoptStored(stored, adoptingStored: false)
+            }
+            return stored
+        }
+    }
+
+    private func performRefresh(_ credentials: BlueskyOAuthCredentials) async throws -> BlueskyOAuthCredentials {
         let (token, nonce) = try await tokenRequest(endpoint: credentials.authServerURL.appending(path: "/oauth/token"), form: ["grant_type": "refresh_token", "refresh_token": credentials.refreshToken, "client_id": Self.clientID], privateKeyData: credentials.dpopPrivateKey, nonce: credentials.authNonce)
         var refreshed = credentials
         refreshed.authNonce = nonce
@@ -310,48 +339,67 @@ public final class BlueskyClient: @unchecked Sendable {
         try await authorizedWrite(url: url, body: body, credentials: &credentials)
     }
 
-    private func authorizedRequest<T: Decodable>(url: URL, credentials: inout BlueskyOAuthCredentials, response type: T.Type) async throws -> T {
+    private func authorizedRequest<T: Decodable>(url: URL, credentials: inout BlueskyOAuthCredentials, response _: T.Type) async throws -> T {
+        let data = try await authorizedData(method: "GET", url: url, body: nil, credentials: &credentials)
+        return try decoder.decode(T.self, from: data)
+    }
+
+    private func authorizedWrite(url: URL, body: Data, credentials: inout BlueskyOAuthCredentials) async throws {
+        _ = try await authorizedData(method: "POST", url: url, body: body, credentials: &credentials)
+    }
+
+    /// A DPoP-authenticated PDS request. Retries once with the server's nonce on `use_dpop_nonce`, and once with
+    /// fresh tokens on any other 401: the Cirrus PDS revokes an access token as soon as anyone refreshes the
+    /// session, so a token that hasn't expired yet can still be dead.
+    private func authorizedData(
+        method: String,
+        url: URL,
+        body: Data?,
+        credentials: inout BlueskyOAuthCredentials,
+        retryingNonce: Bool = true,
+        recoveringToken: Bool = true,
+    ) async throws -> Data {
         let privateKey = try P256.Signing.PrivateKey(rawRepresentation: credentials.dpopPrivateKey)
         var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.httpBody = body
         request.setValue("application/json", forHTTPHeaderField: "accept")
+        if body != nil {
+            request.setValue("application/json", forHTTPHeaderField: "content-type")
+        }
         request.setValue("DPoP \(credentials.accessToken)", forHTTPHeaderField: "authorization")
-        request.setValue(dpopProof(method: "GET", url: url, privateKey: privateKey, nonce: credentials.resourceNonce, accessToken: credentials.accessToken), forHTTPHeaderField: "DPoP")
+        request.setValue(dpopProof(method: method, url: url, privateKey: privateKey, nonce: credentials.resourceNonce, accessToken: credentials.accessToken), forHTTPHeaderField: "DPoP")
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw SourceError.invalidResponse }
         if let nonce = http.value(forHTTPHeaderField: "DPoP-Nonce"), nonce != credentials.resourceNonce {
             credentials.resourceNonce = nonce
             _ = try? credentialStore.saveBlueskyCredentials(credentials)
         }
-        if http.statusCode == 401, let nonce = http.value(forHTTPHeaderField: "DPoP-Nonce") {
-            credentials.resourceNonce = nonce
-            _ = try? credentialStore.saveBlueskyCredentials(credentials)
-            return try await authorizedRequest(url: url, credentials: &credentials, response: type)
+        if http.statusCode == 200 {
+            return data
         }
-        guard http.statusCode == 200 else { throw SourceError.serviceError("Bluesky request failed") }
-        return try decoder.decode(T.self, from: data)
+        guard http.statusCode == 401 else { throw BlueskyClientError.requestFailed(status: http.statusCode) }
+        if retryingNonce, http.value(forHTTPHeaderField: "DPoP-Nonce") != nil, Self.isNonceChallenge(http: http, data: data, decoder: decoder) {
+            return try await authorizedData(method: method, url: url, body: body, credentials: &credentials, retryingNonce: false, recoveringToken: recoveringToken)
+        }
+        guard recoveringToken else { throw BlueskyClientError.unauthorized }
+        credentials = try await recoveredCredentials(after: credentials)
+        return try await authorizedData(method: method, url: url, body: body, credentials: &credentials, retryingNonce: retryingNonce, recoveringToken: false)
     }
 
-    private func authorizedWrite(url: URL, body: Data, credentials: inout BlueskyOAuthCredentials) async throws {
-        let privateKey = try P256.Signing.PrivateKey(rawRepresentation: credentials.dpopPrivateKey)
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.httpBody = body
-        request.setValue("application/json", forHTTPHeaderField: "accept")
-        request.setValue("application/json", forHTTPHeaderField: "content-type")
-        request.setValue("DPoP \(credentials.accessToken)", forHTTPHeaderField: "authorization")
-        request.setValue(dpopProof(method: "POST", url: url, privateKey: privateKey, nonce: credentials.resourceNonce, accessToken: credentials.accessToken), forHTTPHeaderField: "DPoP")
-        let (_, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else { throw SourceError.invalidResponse }
-        if let nonce = http.value(forHTTPHeaderField: "DPoP-Nonce"), nonce != credentials.resourceNonce {
-            credentials.resourceNonce = nonce
-            _ = try? credentialStore.saveBlueskyCredentials(credentials)
+    /// Tokens to retry with after a 401: those another device or client saved since, or a refresh.
+    private func recoveredCredentials(after rejected: BlueskyOAuthCredentials) async throws -> BlueskyOAuthCredentials {
+        if let stored = try credentialStore.loadBlueskyCredentials(), stored.accessToken != rejected.accessToken {
+            return stored
         }
-        if http.statusCode == 401, let nonce = http.value(forHTTPHeaderField: "DPoP-Nonce") {
-            credentials.resourceNonce = nonce
-            _ = try? credentialStore.saveBlueskyCredentials(credentials)
-            return try await authorizedWrite(url: url, body: body, credentials: &credentials)
-        }
-        guard http.statusCode == 200 else { throw SourceError.serviceError("Bluesky request failed") }
+        return try await refresh(credentials: rejected)
+    }
+
+    /// Resource servers signal a nonce challenge in `WWW-Authenticate` (RFC 9449) or, like token endpoints, a JSON
+    /// `use_dpop_nonce` error.
+    private static func isNonceChallenge(http: HTTPURLResponse, data: Data, decoder: JSONDecoder) -> Bool {
+        if http.value(forHTTPHeaderField: "WWW-Authenticate")?.contains("use_dpop_nonce") == true { return true }
+        return (try? decoder.decode(BlueskyOAuthError.self, from: data))?.error == "use_dpop_nonce"
     }
 
     private func credentials(from token: BlueskyTokenResponse, session oauthSession: BlueskyOAuthSession) -> BlueskyOAuthCredentials {
@@ -475,6 +523,46 @@ private struct BlueskyTokenResponse: Decodable {
         case refreshToken = "refresh_token"
         case expiresIn = "expires_in"
         case sub, scope
+    }
+}
+
+public enum BlueskyClientError: LocalizedError, Equatable {
+    /// The authorization server refused the refresh token and no newer tokens were saved: the session was
+    /// revoked or used up elsewhere. The user signs in again.
+    case refreshTokenRejected
+    case tokenRequestFailed(status: Int, error: String?)
+    /// The PDS refused the access token even after fresh tokens.
+    case unauthorized
+    case requestFailed(status: Int)
+
+    public var errorDescription: String? {
+        switch self {
+        case .refreshTokenRejected: "Bluesky signed this app out. Log in again."
+        case let .tokenRequestFailed(status, _): "Bluesky sign-in request failed (HTTP \(status))."
+        case .unauthorized: "Bluesky didn't accept this app's sign-in."
+        case let .requestFailed(status): "Bluesky request failed (HTTP \(status))."
+        }
+    }
+}
+
+/// One refresh in flight per refresh token, shared by every caller.
+private final class RefreshCoalescer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var tasks: [String: Task<BlueskyOAuthCredentials, Error>] = [:]
+
+    func run(key: String, _ work: @escaping @Sendable () async throws -> BlueskyOAuthCredentials) async throws -> BlueskyOAuthCredentials {
+        let task = lock.withLock {
+            if let running = tasks[key] { return running }
+            let task = Task { try await work() }
+            tasks[key] = task
+            return task
+        }
+        defer {
+            lock.withLock {
+                if tasks[key] == task { tasks[key] = nil }
+            }
+        }
+        return try await task.value
     }
 }
 
