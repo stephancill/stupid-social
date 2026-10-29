@@ -39,6 +39,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     var showProfile: (ChatUser) -> Void = { _ in }
     private var cancellables = Set<AnyCancellable>()
     private var collectionView: UICollectionView!
+    private var contentSizeObservation: NSKeyValueObservation?
     private var dataSource: UICollectionViewDiffableDataSource<Section, Item>!
     private var messagesById: [String: ChatMessage] = [:]
     private var orderedMessages: [ChatMessage] = []
@@ -165,6 +166,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         performInitialScrollIfNeeded()
         updateTextViewHeight()
         updateContentInsetForComposer()
+        updateTopInsetForShortContent()
         reanchorIfPinned()
     }
 
@@ -188,6 +190,9 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         }
         collectionView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(collectionView)
+        contentSizeObservation = collectionView.observe(\.contentSize) { [weak self] _, _ in
+            MainActor.assumeIsolated { self?.updateTopInsetForShortContent() }
+        }
 
         let messageRegistration = UICollectionView.CellRegistration<ChatMessageCell, String> { [weak self] cell, _, id in
             guard let self, let message = messagesById[id], let index = indexById[id] else { return }
@@ -406,6 +411,19 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         guard collectionView.contentInset.bottom != inset else { return }
         collectionView.contentInset.bottom = inset
         collectionView.verticalScrollIndicatorInsets.bottom = inset
+    }
+
+    /// A chat shorter than the screen sits just above the composer, as in Messages, rather than under the title.
+    private func updateTopInsetForShortContent() {
+        let current = collectionView.contentInset.top
+        let barsTop = collectionView.adjustedContentInset.top - current
+        let available = collectionView.bounds.height - barsTop - collectionView.adjustedContentInset.bottom
+        let inset = max(0, available - collectionView.contentSize.height)
+        guard abs(current - inset) > 0.5 else { return }
+        collectionView.contentInset.top = inset
+        if inset > 0 || isPinnedToBottom {
+            collectionView.contentOffset.y = bottomOffset
+        }
     }
 
     /// Keeps a pinned list at the bottom, or an opening room at its divider, through bounds, inset and cell-size changes.
