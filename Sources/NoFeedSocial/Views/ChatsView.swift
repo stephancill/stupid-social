@@ -13,6 +13,8 @@ struct ChatsView: View {
     let telegramChat: (_ accountId: String, _ peer: TelegramPeer, _ title: String, _ userStatus: ChatPresence?) -> (chat: () -> ChatViewModel, members: () -> TelegramMembersViewModel)?
     /// The chat for an X account's conversation and title; `nil` until its X Chat PIN unlocks it.
     let xChat: (_ accountId: String, _ conversationId: String, _ title: String) -> (() -> ChatViewModel)?
+    /// The chat for a Bluesky account's conversation and title; `nil` when the account is gone.
+    let blueskyChat: (_ accountId: String, _ convoId: String, _ title: String) -> (() -> ChatViewModel)?
     /// Whether a chat is pushed, so the home pager can stop paging.
     @Binding var isShowingChat: Bool
     /// A chat to open, such as from a tapped notification; cleared once opened.
@@ -60,7 +62,7 @@ struct ChatsView: View {
                 ContentUnavailableView.search(text: query)
             } else if viewModel.chats.isEmpty {
                 if viewModel.hasLoaded {
-                    ContentUnavailableView("No Chats", systemImage: "bubble.left.and.bubble.right", description: Text("Chats from Apron servers, Spotify, Instagram, Telegram and X appear here."))
+                    ContentUnavailableView("No Chats", systemImage: "bubble.left.and.bubble.right", description: Text("Chats from Apron servers, Spotify, Instagram, Telegram, X and Bluesky appear here."))
                 } else {
                     ProgressView()
                 }
@@ -221,6 +223,12 @@ struct ChatsView: View {
                 NetworkChatView(viewModel: opened(makeChat(), chat: chat))
             } else {
                 ContentUnavailableView("X Chat Locked", systemImage: "lock", description: Text("Enter your X Chat PIN in this X account's settings."))
+            }
+        case let .bluesky(convoId):
+            if let makeChat = blueskyChat(chat.accountId, convoId, chat.title) {
+                NetworkChatView(viewModel: opened(makeChat(), chat: chat))
+            } else {
+                ContentUnavailableView("Bluesky Not Connected", systemImage: "bubble.left.and.bubble.right")
             }
         }
     }

@@ -11,6 +11,8 @@ public struct ChatSummary: Identifiable, Hashable, Codable, Sendable {
         case telegram(peer: TelegramPeer)
         /// An XChat conversation id: "<user id>:<user id>" for one-to-one chats.
         case x(conversationId: String)
+        /// A `chat.bsky.convo` id.
+        case bluesky(convoId: String)
     }
 
     /// Prefixed with the account's id, as two accounts can share a chat.

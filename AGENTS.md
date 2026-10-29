@@ -87,6 +87,8 @@ Sources/
       XClient.swift / XNotificationSource.swift
       FarcasterClient.swift / FarcasterNotificationSource.swift
       BlueskyClient.swift / BlueskyNotificationSource.swift
+      BlueskyChat.swift             # Bluesky chat.bsky.convo models and calls (proxied through the PDS), Chats list rows
+      BlueskyChatAdapter.swift      # Bluesky chat adapter: history, polling, send, reactions, read state
       DebugNotificationsClient.swift / DebugNotificationSource.swift
       ApronModels.swift / ApronClient.swift / ApronNotificationSource.swift  # Apron Chat Protocol WebSocket client
       ApronLink.swift               # Apron links (link.apron.chat and apron:): parse, validate, write

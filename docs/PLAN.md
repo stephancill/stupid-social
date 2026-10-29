@@ -153,13 +153,20 @@ Reference behavior from `docs/CLI_DOCS.md`:
 - Messages that don't decrypt show as "Couldn't decrypt this message." rather than disappearing. Shared posts and links show as cards; photos migrated from old DMs show in the bubble, and newer (encrypted) media shows as a card that opens X.
 - Not supported yet: sending replies and media, decrypting encrypted media, group titles, message requests, starting chats, and old (pre-X Chat) DM conversations that weren't migrated.
 
+### Bluesky Chat
+
+- Bluesky chats (DMs) appear on the Chats screen when Bluesky is connected: the newest 50 accepted chats with their latest message, time and unread count. Message requests are left out, and chats muted in Bluesky show a gray badge.
+- Opening a chat shows its history (older pages load on scroll) and new messages polled while it is open. The user can send text messages and add or remove reactions. Reading moves Bluesky's read state, so the chat is read in Bluesky's own apps too. Shared posts show as cards that open the post.
+- Chat needs the `transition:chat.bsky` OAuth scope, so accounts connected before chat support must sign in to Bluesky again; until then the Chats screen says so.
+- Not supported: message requests, starting chats, and sending posts or links as embeds (Bluesky chat has no replies or attachments).
+
 ### Chat Title
 
 - Every chat's title shows its network's icon before the subtitle.
 
 ### Sending
 
-- In every chat (Apron, Spotify, Instagram, Telegram, X), a sent message shows at once with a clock beside its time while it is sending, and the network's copy then takes its place without moving it. A photo shows from the picked image straight away. If sending fails, the message goes and its text and attachment return to the composer. Apron commands are the exception: they may not post a message, so the composer waits for them.
+- In every chat (Apron, Spotify, Instagram, Telegram, X, Bluesky), a sent message shows at once with a clock beside its time while it is sending, and the network's copy then takes its place without moving it. A photo shows from the picked image straight away. If sending fails, the message goes and its text and attachment return to the composer. Apron commands are the exception: they may not post a message, so the composer waits for them.
 
 ## Combined Feed
 
@@ -172,7 +179,7 @@ Reference behavior from `docs/CLI_DOCS.md`:
 - Spotify listening activity is not shown in the main notifications list.
 - Spotify Messages chats appear on the Chats screen, not in the notifications feed.
 - Opening a Spotify Messages chat shows the full chat in the same chat screen as Apron: paged history, new messages polled while open, sending text, and the chat marked seen in Spotify once its newest incoming message is shown. Shared tracks show their artwork, artists, album, year and length, and play their 30-second preview inline; other shares open in Spotify.
-- Swiping right from the feed shows a Chats screen to the left of the feed listing every chat: all joined Apron rooms on every server, the latest 50 Spotify Messages chats, the latest 35 Instagram Direct threads, Telegram chats and X chats, newest first, each with its latest message, time and unread count. Small page dots at the bottom centre show which side is visible. The app reopens on whichever side it was left on. A search bar under the Chats title filters chats by name and latest message. Swiping between them is disabled while a screen is pushed on either side, and the dots are hidden then.
+- Swiping right from the feed shows a Chats screen to the left of the feed listing every chat: all joined Apron rooms on every server, the latest 50 Spotify Messages chats, the latest 35 Instagram Direct threads, Telegram chats, X chats and the latest 50 Bluesky chats, newest first, each with its latest message, time and unread count. Small page dots at the bottom centre show which side is visible. The app reopens on whichever side it was left on. A search bar under the Chats title filters chats by name and latest message. Swiping between them is disabled while a screen is pushed on either side, and the dots are hidden then.
 - Instagram Direct threads appear on the Chats screen (newest 35). Opening one shows the same chat screen: paged history, new messages polled while open, sending text and replies, reacting to messages (one reaction per person, as in Instagram), and the thread marked read once its newest incoming message is shown. Photos open full screen; shared posts, reels and stories open in Instagram.
 - GitHub For You activity is not shown in the main notifications list, except "starred your repository" events, which route to the notifications feed.
 - GitHub story tiles group stars, follows, created repositories, and repository forks by actor, with each activity represented as a slide.

@@ -451,7 +451,7 @@ X Chat replaced X DMs in 2025 and is end-to-end encrypted. The app is a native c
 
 ## Chat Framework
 
-Chat is one framework with an adapter per chat network (Apron, Telegram, Instagram Direct, Spotify Messages, X Chat). The framework owns everything a user would expect to behave the same in every chat; an adapter only translates between its network and the framework's models. The rules for working on it are in AGENTS.md § Chat Framework. This section is written without platform specifics so another client of the same networks can follow it.
+Chat is one framework with an adapter per chat network (Apron, Telegram, Instagram Direct, Spotify Messages, X Chat, Bluesky). The framework owns everything a user would expect to behave the same in every chat; an adapter only translates between its network and the framework's models. The rules for working on it are in AGENTS.md § Chat Framework. This section is written without platform specifics so another client of the same networks can follow it.
 
 **Framework (shared):**
 

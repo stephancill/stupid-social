@@ -47,12 +47,14 @@ public final class BlueskyClient: @unchecked Sendable {
     public static let redirectURI = "net.stupidtech:/oauth/bluesky/callback"
     public static let authServerURL = URL(string: "https://bsky.social")!
     public static let pdsURL = URL(string: "https://bsky.social")!
+    /// `transition:chat.bsky` lets the PDS forward `chat.bsky.*` calls to the chat service.
+    static let scope = "atproto transition:generic transition:chat.bsky"
 
     private static let refreshes = RefreshCoalescer()
 
     private let credentialStore: KeychainCredentialStore
     private let session: URLSession
-    private let decoder: JSONDecoder
+    let decoder: JSONDecoder
 
     public init(credentialStore: KeychainCredentialStore, session: URLSession = .shared) {
         self.credentialStore = credentialStore
@@ -88,7 +90,7 @@ public final class BlueskyClient: @unchecked Sendable {
             "client_id": Self.clientID,
             "redirect_uri": Self.redirectURI,
             "response_type": "code",
-            "scope": "atproto transition:generic",
+            "scope": Self.scope,
             "state": state,
             "code_challenge": base64URL(Data(SHA256.hash(data: Data(verifier.utf8)))),
             "code_challenge_method": "S256",
@@ -280,10 +282,10 @@ public final class BlueskyClient: @unchecked Sendable {
         return try (decoder.decode(BlueskyTokenResponse.self, from: data), freshNonce ?? nonce)
     }
 
-    private func validCredentials() async throws -> BlueskyOAuthCredentials {
-        guard var credentials = try credentialStore.loadBlueskyCredentials() else { throw SourceError.notConfigured }
+    func validCredentials() async throws -> BlueskyOAuthCredentials {
+        guard let credentials = try credentialStore.loadBlueskyCredentials() else { throw SourceError.notConfigured }
         if let expiresAt = credentials.expiresAt, expiresAt.timeIntervalSinceNow < 60 {
-            credentials = try await refresh(credentials: credentials)
+            return try await refresh(credentials: credentials)
         }
         return credentials
     }
@@ -350,11 +352,13 @@ public final class BlueskyClient: @unchecked Sendable {
 
     /// A DPoP-authenticated PDS request. Retries once with the server's nonce on `use_dpop_nonce`, and once with
     /// fresh tokens on any other 401: the Cirrus PDS revokes an access token as soon as anyone refreshes the
-    /// session, so a token that hasn't expired yet can still be dead.
-    private func authorizedData(
+    /// session, so a token that hasn't expired yet can still be dead. `proxy` names the service the PDS forwards
+    /// the call to (`atproto-proxy`).
+    func authorizedData(
         method: String,
         url: URL,
         body: Data?,
+        proxy: String? = nil,
         credentials: inout BlueskyOAuthCredentials,
         retryingNonce: Bool = true,
         recoveringToken: Bool = true,
@@ -367,6 +371,9 @@ public final class BlueskyClient: @unchecked Sendable {
         if body != nil {
             request.setValue("application/json", forHTTPHeaderField: "content-type")
         }
+        if let proxy {
+            request.setValue(proxy, forHTTPHeaderField: "atproto-proxy")
+        }
         request.setValue("DPoP \(credentials.accessToken)", forHTTPHeaderField: "authorization")
         request.setValue(dpopProof(method: method, url: url, privateKey: privateKey, nonce: credentials.resourceNonce, accessToken: credentials.accessToken), forHTTPHeaderField: "DPoP")
         let (data, response) = try await session.data(for: request)
@@ -378,13 +385,19 @@ public final class BlueskyClient: @unchecked Sendable {
         if http.statusCode == 200 {
             return data
         }
-        guard http.statusCode == 401 else { throw BlueskyClientError.requestFailed(status: http.statusCode) }
+        guard http.statusCode == 401 else {
+            // XRPC errors carry a readable `message`, such as why someone can't be messaged.
+            if let message = (try? decoder.decode(BlueskyXRPCError.self, from: data))?.message, !message.isEmpty {
+                throw SourceError.serviceError(message)
+            }
+            throw BlueskyClientError.requestFailed(status: http.statusCode)
+        }
         if retryingNonce, http.value(forHTTPHeaderField: "DPoP-Nonce") != nil, Self.isNonceChallenge(http: http, data: data, decoder: decoder) {
-            return try await authorizedData(method: method, url: url, body: body, credentials: &credentials, retryingNonce: false, recoveringToken: recoveringToken)
+            return try await authorizedData(method: method, url: url, body: body, proxy: proxy, credentials: &credentials, retryingNonce: false, recoveringToken: recoveringToken)
         }
         guard recoveringToken else { throw BlueskyClientError.unauthorized }
         credentials = try await recoveredCredentials(after: credentials)
-        return try await authorizedData(method: method, url: url, body: body, credentials: &credentials, retryingNonce: retryingNonce, recoveringToken: false)
+        return try await authorizedData(method: method, url: url, body: body, proxy: proxy, credentials: &credentials, retryingNonce: retryingNonce, recoveringToken: false)
     }
 
     /// Tokens to retry with after a 401: those another device or client saved since, or a refresh.
@@ -458,6 +471,10 @@ private extension String {
     var blueskyURLFormEncoded: String {
         addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)?.replacingOccurrences(of: "+", with: "%2B") ?? self
     }
+}
+
+private struct BlueskyXRPCError: Decodable {
+    let message: String?
 }
 
 private struct BlueskyAuthorizationServerMetadata: Decodable {

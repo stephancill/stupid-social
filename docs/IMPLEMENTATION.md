@@ -290,6 +290,17 @@ How the app works today, by topic: decisions and their reasons, endpoint and pro
 ### UI
 - Badge PNGs from `web-cdn.bsky.app/static/favicon-16x16.png`, `favicon-32x32.png`, 48px resize of `favicon.png`; `bsky.app/favicon.ico` 404s.
 
+### Chat (DMs)
+- `chat.bsky.convo.*` (`BlueskyChat.swift`) go to the user's PDS with `atproto-proxy: did:web:api.bsky.chat#bsky_chat`, which forwards them to Bluesky's chat service. They need the `transition:chat.bsky` OAuth scope: the app requests `atproto transition:generic transition:chat.bsky`, and the hosted client metadata (`workers/oauth-metadata`, `docs/BLUESKY_OAUTH_CLIENT_METADATA.json`) must list it, since a request can only ask for scopes the metadata declares. Sessions signed in before chat support keep their old scope through refreshes, so chat calls check the stored scope first and fail with "Sign in to Bluesky again to use chats." rather than calling.
+- Chats list: `listConvos?status=accepted&limit=50` (message requests left out); `muted` → gray badge; no archive. Group titles are the other members' names.
+- Chat: `BlueskyChatAdapter` polls `getMessages` (newest first, `cursor` for older pages) every 10 s; the first load of a visit also reads `getConvo` for members and `unreadCount`. Bluesky reports no read cursor, only `unreadCount`, so the read position is just before the `unreadCount`-th newest message from others in the first page (or the newest message when nothing is unread). `markRead` sends `updateRead {convoId, messageId}`.
+- Sending is text only; Bluesky chat has no replies or attachments. Shared posts (`app.bsky.embed.record#view`) show as cards opening bsky.app; deleted messages (`#deletedMessageView`) as deleted. Facets aren't used.
+- Reactions: `addReaction` / `removeReaction {convoId, messageId, value}` return the message; several emoji per person, so toggling adds or removes only that emoji.
+- Unknown union members in `convos`/`messages` are skipped (`BlueskyLossyList`) rather than failing the page.
+- Non-401 XRPC errors with a `message` throw it as `SourceError.serviceError` (such as why someone can't be messaged); others stay `BlueskyClientError.requestFailed`.
+- Probe: `uv run --with cryptography scripts/bluesky-web-client.py convos|convo|messages --summary` (shape only; `--show-text` prints only the viewer's own text); `send`, `mark-read`, `react` and `unreact` require `--expect-member <handle>` matching the chat's other member. The probe reads the per-account fallback item (`credentials.bluesky-<uuid>`, `--account-id` with several), which exists only when the simulator's Keychain write failed; a session in the simulator Keychain can't be read by the probe (observed 2026-10-29).
+- Members of deleted accounts come back with the handle `missing.invalid` and no display name (observed 2026-10-29); they show as "Deleted Account", as in Bluesky's app.
+
 ## Instagram
 
 ### Web client and requests

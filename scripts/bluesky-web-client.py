@@ -13,6 +13,7 @@ import base64
 import hashlib
 import json
 import secrets
+import plistlib
 import subprocess
 import time
 import urllib.error
@@ -28,8 +29,11 @@ from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePrivateKey
 from cryptography.hazmat.primitives import hashes
 
 
-SIM_PREFS_SCRIPT = Path.home() / ".config/opencode/skills/sim-prefs/sim-prefs/scripts/read_prefs.py"
-BLUESKY_FALLBACK_KEY = "tech.stupid.StupidSocial.credentials.bluesky.localFallback"
+BUNDLE_ID = "tech.stupid.StupidSocial"
+FALLBACK_KEY_PREFIX = f"{BUNDLE_ID}.credentials.bluesky"
+# Bluesky chat lives on its own service; the PDS forwards `chat.bsky.*` calls to it when asked with this header.
+# The OAuth session needs the `transition:chat.bsky` scope for them.
+CHAT_PROXY = "did:web:api.bsky.chat#bsky_chat"
 USER_AGENT = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.3 Mobile/15E148 Safari/604.1"
 
 
@@ -61,12 +65,28 @@ def json_base64url(value: dict[str, Any]) -> str:
     return base64url(json.dumps(value, separators=(",", ":"), sort_keys=True).encode())
 
 
-def load_simulator_credentials() -> Credentials:
-    raw = subprocess.check_output(
-        ["python3", str(SIM_PREFS_SCRIPT), "--raw-key", BLUESKY_FALLBACK_KEY],
+def load_simulator_credentials(account_id: str | None) -> Credentials:
+    """Reads the debug build's UserDefaults fallback for a Bluesky account (`bluesky-<uuid>`, or the legacy
+    unscoped `bluesky` item)."""
+    container = subprocess.check_output(
+        ["xcrun", "simctl", "get_app_container", "booted", BUNDLE_ID, "data"],
         text=True,
+    ).strip()
+    with open(Path(container) / "Library/Preferences" / f"{BUNDLE_ID}.plist", "rb") as handle:
+        prefs = plistlib.load(handle)
+    keys = sorted(
+        key
+        for key in prefs
+        if key.startswith(FALLBACK_KEY_PREFIX) and key.endswith(".localFallback")
+        and (account_id is None or key == f"{BUNDLE_ID}.credentials.{account_id}.localFallback")
     )
-    value = json.loads(raw)
+    if not keys:
+        raise SystemExit("No Bluesky credentials in the booted simulator. Sign in to Bluesky in the app first.")
+    if len(keys) > 1:
+        names = ", ".join(key.removeprefix(f"{BUNDLE_ID}.credentials.").removesuffix(".localFallback") for key in keys)
+        raise SystemExit(f"Several Bluesky accounts; pass --account-id ({names}).")
+    raw = prefs[keys[0]]
+    value = json.loads(raw if isinstance(raw, (bytes, str)) else json.dumps(raw))
     return Credentials(
         access_token=value["accessToken"],
         refresh_token=value["refreshToken"],
@@ -131,6 +151,7 @@ def request_json(
     url: str,
     query: dict[str, str] | None = None,
     body: dict[str, Any] | None = None,
+    proxy: str | None = None,
     retry_nonce: bool = True,
 ) -> Any:
     if query:
@@ -151,6 +172,8 @@ def request_json(
     }
     if encoded_body is not None:
         headers["content-type"] = "application/json"
+    if proxy:
+        headers["atproto-proxy"] = proxy
     req = urllib.request.Request(
         url,
         method=method,
@@ -168,7 +191,7 @@ def request_json(
         nonce = error.headers.get("DPoP-Nonce")
         if retry_nonce and error.code == 401 and nonce:
             credentials.resource_nonce = nonce
-            return request_json(credentials=credentials, method=method, url=url, body=body, retry_nonce=False)
+            return request_json(credentials=credentials, method=method, url=url, body=body, proxy=proxy, retry_nonce=False)
         body = error.read().decode(errors="replace")
         raise SystemExit(f"HTTP {error.code} {url}\n{body}") from error
 
@@ -247,11 +270,67 @@ def mark_notifications_seen(*, credentials: Credentials, seen_at: str | None = N
     )
 
 
+def chat(
+    credentials: Credentials,
+    method: str,
+    name: str,
+    *,
+    query: dict[str, str] | None = None,
+    body: dict[str, Any] | None = None,
+) -> Any:
+    """A `chat.bsky.*` call, through the PDS to the chat service."""
+    if "transition:chat.bsky" not in credentials.scope.split():
+        raise SystemExit("This session lacks the transition:chat.bsky scope; sign in to Bluesky again in the app.")
+    return request_json(
+        credentials=credentials,
+        method=method,
+        url=f"{credentials.pds_url}/xrpc/{name}",
+        query=query,
+        body=body,
+        proxy=CHAT_PROXY,
+    )
+
+
+def member_name(member: dict[str, Any]) -> str:
+    return member.get("displayName") or member.get("handle") or member.get("did", "?")
+
+
+def summarize_convos(value: dict[str, Any], viewer: str) -> None:
+    """Shape only: members, counts and message kinds, never message text."""
+    convos = value.get("convos", [])
+    print(f"convos: {len(convos)} cursor={'yes' if value.get('cursor') else 'no'}")
+    for convo in convos:
+        others = [member_name(m) for m in convo.get("members", []) if m.get("did") != viewer]
+        last = convo.get("lastMessage") or {}
+        print(
+            f"- {convo.get('id')} with {', '.join(others)} status={convo.get('status')} muted={convo.get('muted')} "
+            f"unread={convo.get('unreadCount')} last={last.get('$type', '-').split('#')[-1]} at {last.get('sentAt')} "
+            f"from_viewer={last.get('sender', {}).get('did') == viewer}"
+        )
+
+
+def summarize_messages(value: dict[str, Any], viewer: str, show_text: bool) -> None:
+    messages = value.get("messages", [])
+    print(f"messages: {len(messages)} cursor={'yes' if value.get('cursor') else 'no'}")
+    for message in messages:
+        kind = message.get("$type", "?").split("#")[-1]
+        own = message.get("sender", {}).get("did") == viewer
+        reactions = [r.get("value") for r in message.get("reactions") or []]
+        embed = (message.get("embed") or {}).get("$type")
+        text = repr(message.get("text", "")[:80]) if show_text and own else f"<{len(message.get('text', ''))} chars>"
+        print(f"- {message.get('id')} {kind} own={own} at {message.get('sentAt')} reactions={reactions} embed={embed} facets={len(message.get('facets') or [])} {text}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Fetch Bluesky API responses using simulator OAuth credentials.")
     parser.add_argument(
-        "command", choices=["notifications", "load-notifications", "post-thread", "profile", "token-nonce"]
+        "command",
+        choices=[
+            "notifications", "load-notifications", "post-thread", "profile", "token-nonce",
+            "convos", "convo", "messages", "send", "mark-read", "react", "unreact",
+        ],
     )
+    parser.add_argument("--account-id", help="The app's account id (bluesky-<uuid>) when several are signed in.")
     parser.add_argument("--output", type=Path, help="Write raw JSON response to this path.")
     parser.add_argument("--limit", type=int, default=50)
     parser.add_argument("--uri", help="Post URI for post-thread. Defaults to first notification reasonSubject/uri.")
@@ -263,13 +342,71 @@ def main() -> None:
         default="probe-stale-nonce",
         help="Nonce to send first in token-nonce, standing in for one saved at sign-in.",
     )
+    parser.add_argument("--status", choices=["accepted", "request"], help="convos: only accepted chats or requests.")
+    parser.add_argument("--cursor", help="convos/messages: the page after this cursor.")
+    parser.add_argument("--convo", help="Chat id for convo, messages, send, mark-read, react and unreact.")
+    parser.add_argument("--message", help="Message id for mark-read (defaults to the newest), react and unreact.")
+    parser.add_argument("--text", help="send: the message text.")
+    parser.add_argument("--emoji", help="react/unreact: the emoji.")
+    parser.add_argument(
+        "--expect-member",
+        help="send/mark-read/react/unreact: the other member's handle; refuses to write to any other chat.",
+    )
+    parser.add_argument("--show-text", action="store_true", help="messages: print the text of the viewer's own messages.")
     args = parser.parse_args()
 
     if args.command == "token-nonce":
         token_nonce_probe(auth_server_url=args.auth_server, stale_nonce=args.stale_nonce)
         return
 
-    credentials = load_simulator_credentials()
+    credentials = load_simulator_credentials(args.account_id)
+    viewer = credentials.did
+
+    if args.command == "convos":
+        query = {"limit": str(args.limit)}
+        if args.status:
+            query["status"] = args.status
+        if args.cursor:
+            query["cursor"] = args.cursor
+        value = chat(credentials, "GET", "chat.bsky.convo.listConvos", query=query)
+        summarize_convos(value, viewer) if args.summary else write_output(value, args.output)
+        return
+
+    if args.command in {"convo", "messages", "send", "mark-read", "react", "unreact"}:
+        if not args.convo:
+            raise SystemExit("Pass --convo.")
+        convo = chat(credentials, "GET", "chat.bsky.convo.getConvo", query={"convoId": args.convo})["convo"]
+        if args.command == "convo":
+            summarize_convos({"convos": [convo]}, viewer) if args.summary else write_output(convo, args.output)
+            return
+        if args.command == "messages":
+            query = {"convoId": args.convo, "limit": str(args.limit)}
+            if args.cursor:
+                query["cursor"] = args.cursor
+            value = chat(credentials, "GET", "chat.bsky.convo.getMessages", query=query)
+            summarize_messages(value, viewer, args.show_text) if args.summary else write_output(value, args.output)
+            return
+
+        others = [m.get("handle") for m in convo.get("members", []) if m.get("did") != viewer]
+        if not args.expect_member or others != [args.expect_member]:
+            raise SystemExit(f"Refusing to write: pass --expect-member matching the chat's other member ({len(others)} others).")
+        if args.command == "send":
+            if not args.text:
+                raise SystemExit("Pass --text.")
+            value = chat(credentials, "POST", "chat.bsky.convo.sendMessage", body={"convoId": args.convo, "message": {"text": args.text}})
+        elif args.command == "mark-read":
+            body = {"convoId": args.convo}
+            if args.message:
+                body["messageId"] = args.message
+            value = chat(credentials, "POST", "chat.bsky.convo.updateRead", body=body)
+        else:
+            if not args.message or not args.emoji:
+                raise SystemExit("Pass --message and --emoji.")
+            name = "chat.bsky.convo.addReaction" if args.command == "react" else "chat.bsky.convo.removeReaction"
+            value = chat(credentials, "POST", name, body={"convoId": args.convo, "messageId": args.message, "value": args.emoji})
+        write_output(value, args.output)
+        return
+
 
     if args.command in {"notifications", "load-notifications"}:
         value = request_json(

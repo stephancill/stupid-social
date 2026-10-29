@@ -135,7 +135,7 @@ public final class AccountComponents {
 
     /// The account's chats, when its network has any. Apron servers list through one shared source instead.
     public var chatListProvider: (any ChatListProvider)? {
-        spotifyMessagesSource ?? instagramClient ?? telegramClient ?? xChatClient
+        spotifyMessagesSource ?? instagramClient ?? telegramClient ?? xChatClient ?? blueskyClient
     }
 
     /// Stops what runs in the background, when the account goes away.

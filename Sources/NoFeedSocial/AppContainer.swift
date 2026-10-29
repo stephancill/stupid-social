@@ -131,6 +131,12 @@ final class AppContainer {
         return { AdapterChatViewModel(adapter: InstagramChatAdapter(client: client, threadFbid: threadFbid, title: title), accountId: accountId) }
     }
 
+    /// `nil` when the Bluesky account is gone.
+    func blueskyChatFactory(accountId: String, convoId: String, title: String) -> (() -> ChatViewModel)? {
+        guard let client = services.component(id: accountId)?.blueskyClient else { return nil }
+        return { AdapterChatViewModel(adapter: BlueskyChatAdapter(client: client, convoId: convoId, title: title), accountId: accountId) }
+    }
+
     /// `nil` until the X Chat PIN has unlocked the account's keys.
     func xChatFactory(accountId: String, conversationId: String, title: String) -> (() -> ChatViewModel)? {
         guard let component = services.component(id: accountId), component.credentials.hasXChatKeys(),

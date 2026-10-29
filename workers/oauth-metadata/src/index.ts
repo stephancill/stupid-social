@@ -14,7 +14,7 @@ function metadataFor(url: URL) {
   grant_types: ["authorization_code", "refresh_token"],
   redirect_uris: [`${reversedHost(url.hostname)}:/oauth/bluesky/callback`],
   response_types: ["code"],
-  scope: "atproto transition:generic",
+  scope: "atproto transition:generic transition:chat.bsky",
   token_endpoint_auth_method: "none",
   } as const;
 }
