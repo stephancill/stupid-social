@@ -89,18 +89,7 @@ public struct XClient {
         request.httpMethod = "GET"
         request.allHTTPHeaderFields = headers(credentials: credentials)
 
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw SourceError.invalidResponse
-        }
-
-        if http.statusCode == 401 || http.statusCode == 403 {
-            throw SourceError.notConfigured
-        }
-
-        guard (200 ..< 300).contains(http.statusCode) else {
-            throw SourceError.invalidResponse
-        }
+        let data = try await send(request)
 
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
@@ -117,7 +106,7 @@ public struct XClient {
             followersCount: legacy.followersCount,
             friendsCount: legacy.friendsCount,
             statusesCount: legacy.statusesCount,
-            createdAt: result?.core?.createdAt.flatMap(Self.twitterDate(from:)),
+            createdAt: result?.core?.createdAt.flatMap(Date.twitter),
             verified: result?.isBlueVerified,
             profileImageUrlHttps: result?.avatar?.imageUrl,
             profileBannerUrl: legacy.profileBannerUrl,
@@ -162,18 +151,7 @@ public struct XClient {
         request.httpBody = body
         request.allHTTPHeaderFields = Self.apiHeaders(credentials: credentials)
 
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw SourceError.invalidResponse
-        }
-
-        if http.statusCode == 401 || http.statusCode == 403 {
-            throw SourceError.notConfigured
-        }
-
-        guard (200 ..< 300).contains(http.statusCode) else {
-            throw SourceError.invalidResponse
-        }
+        let data = try await send(request)
 
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
@@ -187,7 +165,7 @@ public struct XClient {
                 followersCount: user.legacy.followersCount,
                 friendsCount: user.legacy.friendsCount,
                 statusesCount: user.legacy.statusesCount,
-                createdAt: user.core.createdAt.flatMap(Self.twitterDate(from:)),
+                createdAt: user.core.createdAt.flatMap(Date.twitter),
                 verified: user.isBlueVerified ?? user.legacy.verified,
                 profileImageUrlHttps: user.avatar?.imageUrl ?? user.legacy.profileImageUrlHttps,
                 profileBannerUrl: nil,
@@ -207,18 +185,7 @@ public struct XClient {
         request.httpMethod = "GET"
         request.allHTTPHeaderFields = headers(credentials: credentials)
 
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw SourceError.invalidResponse
-        }
-
-        if http.statusCode == 401 || http.statusCode == 403 {
-            throw SourceError.notConfigured
-        }
-
-        guard (200 ..< 300).contains(http.statusCode) else {
-            throw SourceError.invalidResponse
-        }
+        let data = try await send(request)
 
         let decoded = try JSONDecoder().decode(XAccountListResponse.self, from: data)
         guard let user = decoded.users.first else {
@@ -272,18 +239,7 @@ public struct XClient {
         request.httpBody = body
         request.allHTTPHeaderFields = mutationHeaders(credentials: credentials)
 
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw SourceError.invalidResponse
-        }
-
-        if http.statusCode == 401 || http.statusCode == 403 {
-            throw SourceError.notConfigured
-        }
-
-        guard (200 ..< 300).contains(http.statusCode) else {
-            throw SourceError.invalidResponse
-        }
+        let data = try await send(request)
 
         return try? JSONDecoder().decode(XFriendshipMutationResponse.self, from: data)
     }
@@ -334,18 +290,7 @@ public struct XClient {
         request.httpMethod = "GET"
         request.allHTTPHeaderFields = headers(credentials: credentials)
 
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw SourceError.invalidResponse
-        }
-
-        if http.statusCode == 401 || http.statusCode == 403 {
-            throw SourceError.notConfigured
-        }
-
-        guard (200 ..< 300).contains(http.statusCode) else {
-            throw SourceError.invalidResponse
-        }
+        let data = try await send(request)
 
         let decoder = JSONDecoder()
         let decoded = try decoder.decode(XNotificationsTimelineResponse.self, from: data)
@@ -365,16 +310,7 @@ public struct XClient {
         request.httpMethod = "POST"
         request.allHTTPHeaderFields = mutationHeaders(credentials: credentials)
 
-        let (_, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw SourceError.invalidResponse
-        }
-        if http.statusCode == 401 || http.statusCode == 403 {
-            throw SourceError.notConfigured
-        }
-        guard (200 ..< 300).contains(http.statusCode) else {
-            throw SourceError.invalidResponse
-        }
+        _ = try await send(request)
     }
 
     func tweetDetails(tweetId: String) async throws -> NotificationTargetDetails {
@@ -392,18 +328,7 @@ public struct XClient {
         request.httpMethod = "GET"
         request.allHTTPHeaderFields = headers(credentials: credentials)
 
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw SourceError.invalidResponse
-        }
-
-        if http.statusCode == 401 || http.statusCode == 403 {
-            throw SourceError.notConfigured
-        }
-
-        guard (200 ..< 300).contains(http.statusCode) else {
-            throw SourceError.invalidResponse
-        }
+        let data = try await send(request)
 
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
@@ -420,18 +345,7 @@ public struct XClient {
         request.httpMethod = "GET"
         request.allHTTPHeaderFields = headers(credentials: credentials)
 
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw SourceError.invalidResponse
-        }
-
-        if http.statusCode == 401 || http.statusCode == 403 {
-            throw SourceError.notConfigured
-        }
-
-        guard (200 ..< 300).contains(http.statusCode) else {
-            throw SourceError.invalidResponse
-        }
+        let data = try await send(request)
 
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
@@ -447,35 +361,38 @@ public struct XClient {
         request.httpMethod = "GET"
         request.allHTTPHeaderFields = headers(credentials: credentials)
 
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw SourceError.invalidResponse
-        }
-
-        if http.statusCode == 401 || http.statusCode == 403 {
-            throw SourceError.notConfigured
-        }
-
-        guard (200 ..< 300).contains(http.statusCode) else {
-            throw SourceError.invalidResponse
-        }
+        let data = try await send(request)
 
         let decoded = try JSONDecoder().decode(XUnreadCountResponse.self, from: data)
         return decoded.unreadCount
     }
 
-    private static func twitterDate(from value: String) -> Date? {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "EEE MMM dd HH:mm:ss Z yyyy"
-        return formatter.date(from: value)
+    /// Sends the request and returns its body; 401 and 403 mean the session is gone.
+    private func send(_ request: URLRequest) async throws -> Data {
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw SourceError.invalidResponse
+        }
+        if http.statusCode == 401 || http.statusCode == 403 {
+            throw SourceError.notConfigured
+        }
+        guard (200 ..< 300).contains(http.statusCode) else {
+            throw SourceError.invalidResponse
+        }
+        return data
+    }
+
+    /// The bearer token and session cookies every request carries.
+    private nonisolated static func authHeaders(credentials: XCredentials) -> [String: String] {
+        [
+            "Authorization": "Bearer \(bearerToken)",
+            "Cookie": "auth_token=\(credentials.authToken); ct0=\(credentials.ct0)",
+            "X-Csrf-Token": credentials.ct0,
+        ]
     }
 
     private func headers(credentials: XCredentials) -> [String: String] {
-        [
-            "Authorization": "Bearer \(Self.bearerToken)",
-            "Cookie": "auth_token=\(credentials.authToken); ct0=\(credentials.ct0)",
-            "X-Csrf-Token": credentials.ct0,
+        Self.authHeaders(credentials: credentials).merging([
             "X-Twitter-Active-User": "yes",
             "X-Twitter-Auth-Type": "OAuth2Session",
             "X-Twitter-Client-Language": "en",
@@ -483,17 +400,12 @@ public struct XClient {
             "Referer": "https://x.com/",
             "Accept": "*/*",
             "Accept-Language": "en-US,en;q=0.9",
-        ]
+        ]) { _, new in new }
     }
 
     /// The headers X's web API needs and no more (see `scripts/x-web-client.py`); XChat uses them too.
     nonisolated static func apiHeaders(credentials: XCredentials) -> [String: String] {
-        [
-            "Authorization": "Bearer \(bearerToken)",
-            "Cookie": "auth_token=\(credentials.authToken); ct0=\(credentials.ct0)",
-            "X-Csrf-Token": credentials.ct0,
-            "User-Agent": appUserAgent,
-        ]
+        authHeaders(credentials: credentials).merging(["User-Agent": appUserAgent]) { _, new in new }
     }
 
     private func searchTimelineFeatures() -> [String: Any] {
@@ -965,7 +877,7 @@ private enum XNotificationParser {
     ) -> NotificationItem? {
         guard let tweet = tweets[tweetRef.id] else { return nil }
         guard let user = users[tweet.userIdStr] else { return nil }
-        guard let timestamp = parseTwitterDate(tweet.createdAt) else { return nil }
+        guard let timestamp = Date.twitter(tweet.createdAt) else { return nil }
 
         let actor = actor(from: user)
 
@@ -1155,16 +1067,9 @@ private enum XNotificationParser {
             imageURL: imageURL,
             imageURLs: tweet.mediaURLs,
             author: users[tweet.userIdStr].map(actor(from:)),
-            postedAt: parseTwitterDate(tweet.createdAt),
+            postedAt: Date.twitter(tweet.createdAt),
             likeCount: tweet.favoriteCount,
         )
-    }
-
-    private static func parseTwitterDate(_ value: String) -> Date? {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "EEE MMM dd HH:mm:ss Z yyyy"
-        return formatter.date(from: value)
     }
 }
 
@@ -1405,7 +1310,7 @@ private enum XNotificationsTimelineParser {
         guard let legacy = tweet.legacy, let createdAt = legacy.createdAt, let author = tweet.author else {
             return nil
         }
-        guard let timestamp = parseTwitterDate(createdAt) else { return nil }
+        guard let timestamp = Date.twitter(createdAt) else { return nil }
 
         let actor = actor(from: author)
         let sourceId = tweet.stableId
@@ -1574,15 +1479,8 @@ private enum XNotificationsTimelineParser {
             imageURL: imageURL,
             imageURLs: imageURLs,
             author: tweet.author.map(actor(from:)),
-            postedAt: tweet.legacy?.createdAt.flatMap(parseTwitterDate),
+            postedAt: tweet.legacy?.createdAt.flatMap(Date.twitter),
             likeCount: tweet.legacy?.favoriteCount,
         )
-    }
-
-    private static func parseTwitterDate(_ value: String) -> Date? {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "EEE MMM dd HH:mm:ss Z yyyy"
-        return formatter.date(from: value)
     }
 }

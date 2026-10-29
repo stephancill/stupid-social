@@ -171,25 +171,13 @@ public struct FarcasterClient {
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         decoder.dateDecodingStrategy = .custom { decoder in
             let value = try decoder.singleValueContainer().decode(String.self)
-            if let date = parseHypersnapDate(value) {
+            if let date = Date.iso8601(value) {
                 return date
             }
             throw SourceError.invalidResponse
         }
         return try decoder.decode(T.self, from: data)
     }
-}
-
-private func parseHypersnapDate(_ value: String) -> Date? {
-    let fractional = ISO8601DateFormatter()
-    fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    if let date = fractional.date(from: value) {
-        return date
-    }
-
-    let plain = ISO8601DateFormatter()
-    plain.formatOptions = [.withInternetDateTime]
-    return plain.date(from: value)
 }
 
 public struct FarcasterUserResponse: Decodable {

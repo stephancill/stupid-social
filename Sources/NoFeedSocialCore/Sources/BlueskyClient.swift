@@ -63,11 +63,7 @@ public final class BlueskyClient: @unchecked Sendable {
         decoder.dateDecodingStrategy = .custom { decoder in
             let container = try decoder.singleValueContainer()
             let value = try container.decode(String.self)
-            let formatterWithFractionalSeconds = ISO8601DateFormatter()
-            formatterWithFractionalSeconds.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            let formatter = ISO8601DateFormatter()
-            formatter.formatOptions = [.withInternetDateTime]
-            if let date = formatterWithFractionalSeconds.date(from: value) ?? formatter.date(from: value) {
+            if let date = Date.iso8601(value) {
                 return date
             }
             throw DecodingError.dataCorruptedError(in: container, debugDescription: "Invalid Bluesky date: \(value)")

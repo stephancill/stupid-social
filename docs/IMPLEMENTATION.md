@@ -65,6 +65,8 @@ How the app works today, by topic: decisions and their reasons, endpoint and pro
 - `AccountStatusSnapshot` has `.networkUnavailable` and `.serviceError` besides valid/invalid/not configured. Status is set when an account connects and when the GitHub and Instagram sources see an auth failure while fetching (they mark the account invalid); there is no separate health check of every account at startup
 - `NotificationActor.timestamp` is optional per-actor action time (Farcaster only); `NotificationTarget` has `imageURL` and an unused `album` field
 - `Date.compactRelativeTime` (`NoFeedSocialCore/Date+RelativeTime.swift`): shared compact relative time (`now`, `1m`, `12h`, `1d`, `2w`, `1mo`, `1y`)
+- `Date.twitter(_:)` (X's REST `EEE MMM dd HH:mm:ss Z yyyy`) and `Date.iso8601(_:)` (fractional seconds, then without) (`NoFeedSocialCore/Date+Parsing.swift`) parse every network's dates with formatters made once; X, Bluesky, Farcaster and GitHub use them instead of building formatters per date
+- `XClient.send(_:)` runs every X REST/GraphQL request: 401/403 throws `SourceError.notConfigured`, other non-2xx `invalidResponse`; callers decode. `headers` (web client headers) and `apiHeaders` (the API minimum plus User-Agent, shared with XChat) both start from `authHeaders`; they still differ on purpose, so don't merge them without checking `scripts/x-web-client.py`
 - `RefreshTiming.measure` emits an `os_signpost` interval plus duration log (subsystem `tech.stupid.StupidSocial`, category `Refresh`) around per-source fetches and cache writes in `FeedService`, story branches in `StoryBarViewModel`, Instagram tray/per-reel, Spotify buddylist/per-track
 
 ### Usage metrics

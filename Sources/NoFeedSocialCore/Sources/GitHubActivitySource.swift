@@ -426,7 +426,7 @@ public enum GitHubActivityParser {
     private static func normalize(_ card: ParsedCard) -> GitHubActivityItem? {
         let metadata = card.metadata
         let kind = GitHubActivityKind(rawValue: metadata.cardType) ?? .unknown
-        guard let timestamp = githubDate(metadata.createdAt) else { return nil }
+        guard let timestamp = Date.iso8601(metadata.createdAt) else { return nil }
 
         let actorId: String
         let actorAction: Action?
@@ -532,12 +532,6 @@ public enum GitHubActivityParser {
             .replacingOccurrences(of: "&lt;", with: "<")
             .replacingOccurrences(of: "&gt;", with: ">")
             .replacingOccurrences(of: "&amp;", with: "&")
-    }
-
-    private static func githubDate(_ value: String) -> Date? {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter.date(from: value)
     }
 
     fileprivate struct GitHubRepoMetadata {

@@ -29,18 +29,8 @@ let operationNames = [
 extension InstagramClient {
     func headers(credentials: InstagramCredentials) -> [String: String] {
         let deviceId = credentials.dsUserId
-
-        var cookieParts = [
-            "ds_user_id=\(credentials.dsUserId)",
-            "csrftoken=\(credentials.csrfToken)",
-            "sessionid=\(credentials.sessionId)",
-        ]
-        if let mid = credentials.mid { cookieParts.append("mid=\(mid)") }
-        if let rur = credentials.rur { cookieParts.append("rur=\(rur)") }
-        if let igDid = credentials.igDid { cookieParts.append("ig_did=\(igDid)") }
-
         return [
-            "Cookie": cookieParts.joined(separator: "; "),
+            "Cookie": cookieHeader(credentials: credentials),
             "X-CSRFToken": credentials.csrfToken,
             "User-Agent": Self.webUserAgent,
             "Accept": "*/*",
