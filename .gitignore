@@ -23,3 +23,6 @@ __pycache__/
 
 # Telegram api_id/api_hash, written by scripts/telegram-api-config.py
 /Sources/NoFeedSocialCore/Resources/TelegramAPI.json
+
+# Claude Code worktrees and local settings
+/.claude/
