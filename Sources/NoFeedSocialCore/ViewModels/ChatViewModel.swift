@@ -697,8 +697,13 @@ public class ChatViewModel: ObservableObject {
         []
     }
 
-    public func customEmojiSuggestions(for query: String) -> [ChatCustomEmoji] {
-        ChatCustomEmoji.suggestions(for: query, in: customEmojis)
+    /// Emoji for a typed `:query`: the network's custom emoji first, then Unicode emoji by name once the query
+    /// has two characters, so a bare `:` offers only custom emoji.
+    public func emojiSuggestions(for query: String) -> [ChatEmojiSuggestion] {
+        let limit = 40
+        let custom = ChatCustomEmoji.suggestions(for: query, in: customEmojis, limit: limit).map(ChatEmojiSuggestion.custom)
+        guard query.count >= 2 else { return custom }
+        return custom + UnicodeEmojiSearch.matches(for: query, limit: limit - custom.count)
     }
 
     // MARK: Reactions

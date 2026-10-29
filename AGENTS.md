@@ -135,6 +135,7 @@ Sources/
       ApronServersViewModel.swift
       ChatViewModel.swift            # Shared chat models (ChatMessage, ChatUser, ChatEmbed) and base view model: drafts, polling, unread, read markers, sending
       AdapterChatViewModel.swift     # ChatAdapter protocol and its optional abilities, and the view model that drives one (every network)
+      ChatEmojiSearch.swift          # Emoji offered for a typed `:word`: custom emoji, then Unicode emoji by name
       ChatListViewModel.swift        # Chats list: ChatSummary, ChatListProvider (one per network), merged list, opening a destination
       ApronRoomViewModel.swift       # Apron room members, profiles and notification level, kept current by the room's adapter
       ApronLinkViewModel.swift       # What an opened Apron link offers: add server, sign in, join, open

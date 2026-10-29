@@ -1,5 +1,6 @@
 import Combine
 import NoFeedSocialCore
+import NoFeedSocialPush
 import PhotosUI
 import SwiftUI
 import UIKit
@@ -1369,10 +1370,10 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     /// finished key suggests nothing.
     private static let emojiNameCharacters = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_+-")
 
-    /// Members for an `@` word, or custom emoji for a `:` word, at the caret.
+    /// Members for an `@` word, or emoji for a `:` word, at the caret.
     private func updateMentionSuggestions() {
         var match = wordQuery(prefix: ":", characters: Self.emojiNameCharacters)
-        let emojis = match.map { viewModel.customEmojiSuggestions(for: $0.query) } ?? []
+        let emojis = match.map { viewModel.emojiSuggestions(for: $0.query) } ?? []
         var users: [ChatUser] = []
         if emojis.isEmpty {
             match = wordQuery(prefix: "@", characters: Self.mentionCharacters)
@@ -1380,7 +1381,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         }
         let isEmpty = emojis.isEmpty && users.isEmpty
         mentionRange = isEmpty ? nil : match?.range
-        let ids = emojis.map(\.key) + users.map { "@\($0.id)" }
+        let ids = emojis.map(\.id) + users.map { "@\($0.id)" }
         guard ids != shownSuggestionIds else { return }
         shownSuggestionIds = ids
         mentionStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
@@ -1430,8 +1431,8 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         return row
     }
 
-    /// The custom emoji matching a `:` word, as a row of images that scrolls sideways; tapping one inserts its key.
-    private func emojiStrip(for emojis: [ChatCustomEmoji]) -> UIView {
+    /// The emoji matching a `:` word, in a row that scrolls sideways; tapping one inserts it, or a custom emoji's key.
+    private func emojiStrip(for emojis: [ChatEmojiSuggestion]) -> UIView {
         let row = UIStackView()
         row.spacing = 4
         row.alignment = .center
@@ -1439,18 +1440,25 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         row.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8)
         for emoji in emojis {
             var configuration = UIButton.Configuration.plain()
-            configuration.image = ChatCustomEmojiImages.shared.image(for: emoji, height: 32) { [weak self] in
-                // Rebuilt with the image once it loads.
-                self?.shownSuggestionIds = []
-                self?.updateMentionSuggestions()
+            switch emoji {
+            case let .custom(custom):
+                configuration.image = ChatCustomEmojiImages.shared.image(for: custom, height: 32) { [weak self] in
+                    // Rebuilt with the image once it loads.
+                    self?.shownSuggestionIds = []
+                    self?.updateMentionSuggestions()
+                }
+            case let .unicode(character, _):
+                var title = AttributedString(character)
+                title.font = UIFont.systemFont(ofSize: 28)
+                configuration.attributedTitle = title
             }
             configuration.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 6, bottom: 6, trailing: 6)
             let button = UIButton(configuration: configuration, primaryAction: UIAction { [weak self] _ in
-                self?.insertSuggestion(emoji.key)
+                self?.insertSuggestion(emoji.text)
             })
             button.accessibilityLabel = emoji.label
-            // Long press shows the key, as the strip has no room for names.
-            button.toolTip = emoji.key
+            // Long press shows the key or name, as the strip has no room for them.
+            button.toolTip = emoji.label
             row.addArrangedSubview(button)
         }
         let scroll = UIScrollView()
