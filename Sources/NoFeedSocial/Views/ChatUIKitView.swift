@@ -53,6 +53,9 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     private var messageIdByKey: [String: String] = [:]
     /// Messages whose spoilers were tapped open; they stay open while the chat is.
     private var revealedSpoilers: Set<String> = []
+    /// Message embeds tapped open to their full text, as `<message id>|<embed index>`; they stay open while the
+    /// chat is.
+    private var expandedEmbeds: Set<String> = []
     /// Read from the current layout: a list that fits on screen never scrolls, so a value kept from the last
     /// scroll could be one from before the view had its size.
     private var isNearBottom: Bool {
@@ -222,6 +225,8 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
                     },
                     openLink: { [weak self] url in self?.openLink(url) },
                     revealSpoilers: { [weak self] in self?.revealSpoilers(of: id) },
+                    isEmbedExpanded: { [weak self] index in self?.expandedEmbeds.contains("\(id)|\(index)") ?? false },
+                    toggleEmbed: { [weak self] index in self?.toggleEmbed(index, of: id) },
                     customEmoji: { [weak self] key in self?.viewModel.customEmojis[key] },
                     customEmojiImageDidLoad: { [weak self] in self?.customEmojiImagesDidLoad() },
                 ),
@@ -1394,7 +1399,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     /// finished key suggests nothing.
     private static let emojiNameCharacters = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_+-")
 
-    /// Members for an `@` word, or emoji for a `:` word, at the caret.
+    /// Members for an `@` word, emoji for a `:` word, or places for a reference such as a `#` word, at the caret.
     private func updateMentionSuggestions() {
         var match = wordQuery(prefix: ":", characters: Self.emojiNameCharacters)
         let emojis = match.map { viewModel.emojiSuggestions(for: $0.query) } ?? []
@@ -1403,9 +1408,14 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
             match = wordQuery(prefix: "@", characters: Self.mentionCharacters)
             users = match.map { viewModel.mentionSuggestions(for: $0.query) } ?? []
         }
-        let isEmpty = emojis.isEmpty && users.isEmpty
+        var places: [ChatReferenceSuggestion] = []
+        if emojis.isEmpty, users.isEmpty, let prefix = viewModel.referencePrefix {
+            match = wordQuery(prefix: prefix, characters: Self.mentionCharacters)
+            places = match.map { viewModel.referenceSuggestions(for: $0.query) } ?? []
+        }
+        let isEmpty = emojis.isEmpty && users.isEmpty && places.isEmpty
         mentionRange = isEmpty ? nil : match?.range
-        let ids = emojis.map(\.id) + users.map { "@\($0.id)" }
+        let ids = emojis.map(\.id) + users.map { "@\($0.id)" } + places.map { "#\($0.reference)" }
         guard ids != shownSuggestionIds else { return }
         shownSuggestionIds = ids
         mentionStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
@@ -1414,6 +1424,9 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         }
         for user in users {
             mentionStack.addArrangedSubview(mentionRow(for: user))
+        }
+        for place in places {
+            mentionStack.addArrangedSubview(referenceRow(for: place))
         }
         mentionGlass.isHidden = isEmpty
         // The card covers the typing capsule's spot; bring it back once the card goes.
@@ -1452,6 +1465,38 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         row.accessibilityLabel = "\(userName), \(userId.text ?? "")"
         row.accessibilityTraits = .button
         row.addGestureRecognizer(ChatActionTapGesture { [weak self] in self?.insertMention(of: user) })
+        return row
+    }
+
+    /// A place for a reference word, like a member row: its kind's icon, its name and the reference it inserts.
+    private func referenceRow(for place: ChatReferenceSuggestion) -> UIView {
+        let icon = UIImageView(image: UIImage(systemName: place.systemImage))
+        icon.tintColor = .secondaryLabel
+        icon.contentMode = .center
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            icon.widthAnchor.constraint(equalToConstant: 28),
+            icon.heightAnchor.constraint(equalToConstant: 28),
+        ])
+        let prefix = viewModel.referencePrefix ?? ""
+        let name = UILabel()
+        name.text = place.title
+        name.font = .preferredFont(forTextStyle: .subheadline)
+        name.setContentHuggingPriority(.required, for: .horizontal)
+        let reference = UILabel()
+        reference.text = "\(prefix)\(place.reference)"
+        reference.font = .preferredFont(forTextStyle: .footnote)
+        reference.textColor = .secondaryLabel
+        reference.lineBreakMode = .byTruncatingMiddle
+        let row = UIStackView(arrangedSubviews: [icon, name, reference])
+        row.spacing = 8
+        row.alignment = .center
+        row.isLayoutMarginsRelativeArrangement = true
+        row.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12)
+        row.isAccessibilityElement = true
+        row.accessibilityLabel = "\(place.title), \(reference.text ?? "")"
+        row.accessibilityTraits = .button
+        row.addGestureRecognizer(ChatActionTapGesture { [weak self] in self?.insertSuggestion("\(prefix)\(place.reference)") })
         return row
     }
 
@@ -1579,6 +1624,28 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         guard snapshot.itemIdentifiers.contains(item) else { return }
         snapshot.reconfigureItems([item])
         dataSource.apply(snapshot, animatingDifferences: false)
+    }
+
+    private func toggleEmbed(_ index: Int, of id: String) {
+        let key = "\(id)|\(index)"
+        let isExpanding = expandedEmbeds.remove(key) == nil
+        if isExpanding {
+            expandedEmbeds.insert(key)
+        }
+        var snapshot = dataSource.snapshot()
+        let item = Item.message(itemKey(for: id))
+        guard snapshot.itemIdentifiers.contains(item) else { return }
+        snapshot.reconfigureItems([item])
+        dataSource.apply(snapshot, animatingDifferences: true) { [weak self] in
+            // An opened message near the bottom grows under the composer; bring its end into view.
+            guard isExpanding, let self, let indexPath = dataSource.indexPath(for: item),
+                  let frame = collectionView.layoutAttributesForItem(at: indexPath)?.frame
+            else { return }
+            let visibleBottom = collectionView.contentOffset.y + collectionView.bounds.height - collectionView.adjustedContentInset.bottom
+            if frame.maxY > visibleBottom {
+                collectionView.scrollToItem(at: indexPath, at: .bottom, animated: true)
+            }
+        }
     }
 
     private func toggleReaction(_ emoji: String, on id: String) {

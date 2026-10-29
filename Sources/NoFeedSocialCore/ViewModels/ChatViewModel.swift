@@ -52,9 +52,11 @@ public enum ChatEmbed: Hashable, Sendable {
     /// A song or other audio with artwork and an inline preview, which plays from `audioPreviewURL(for:)`;
     /// tapping elsewhere on the card opens `link`.
     case audio(previewId: String, title: String, subtitle: String?, detail: String?, imageURL: URL?, link: URL?)
+    /// A message from elsewhere, such as one a link points at, drawn like a reply quote: who sent it where
+    /// (`title`) and its text, a few lines until tapped open. Tapping the title opens `link`.
+    case message(title: String, text: String, link: URL?)
 }
 
-/// One message as the chat shows it. Each network maps its own messages to this.
 /// A mention a network marks by position rather than writing as `@user_id`, such as a Telegram name mention.
 public struct ChatMessageMention: Hashable, Sendable {
     /// UTF-16 range in the message's text.
@@ -68,6 +70,7 @@ public struct ChatMessageMention: Hashable, Sendable {
     }
 }
 
+/// One message as the chat shows it. Each network maps its own messages to this.
 public struct ChatMessage: Hashable, Identifiable, Sendable {
     /// Stable across edits; replies and reactions refer to it.
     public let id: String
@@ -152,7 +155,7 @@ public struct ChatMessage: Hashable, Identifiable, Sendable {
         for embed in embeds {
             switch embed {
             case .image: return "Photo"
-            case let .card(title, _, _, _, _): return title
+            case let .card(title, _, _, _, _), let .message(title, _, _): return title
             case let .audio(_, title, _, _, _, _): return title
             case let .pending(title): return title
             }
@@ -284,21 +287,30 @@ public enum ChatConnectionState: Equatable {
 
 /// Where a link in a chat's messages points within that same chat.
 /// How a place in a network reads where a message names it, such as a room's name for a link to the room or
-/// for its `#room_id`.
+/// for its `#room_id`. It's drawn like a mention.
 public struct ChatPlaceLabel: Hashable, Sendable {
     public let text: String
-    /// An SF Symbol before the text, for the kind of place.
-    public let systemImage: String?
-    /// Somewhere opening leaves for, such as another server: drawn in the text's own color with an arrow after.
-    public let isElsewhere: Bool
     /// What a tap opens.
     public let url: URL
 
-    public init(text: String, systemImage: String? = nil, isElsewhere: Bool = false, url: URL) {
+    public init(text: String, url: URL) {
         self.text = text
-        self.systemImage = systemImage
-        self.isElsewhere = isElsewhere
         self.url = url
+    }
+}
+
+/// A place offered while typing a reference to one, such as a room after `#`.
+public struct ChatReferenceSuggestion: Hashable, Sendable {
+    /// What follows the prefix in the text, such as a `room_id`.
+    public let reference: String
+    public let title: String
+    /// An SF Symbol for the kind of place.
+    public let systemImage: String
+
+    public init(reference: String, title: String, systemImage: String) {
+        self.reference = reference
+        self.title = title
+        self.systemImage = systemImage
     }
 }
 
@@ -770,7 +782,7 @@ public class ChatViewModel: ObservableObject {
             return showingMentionNames(SpoilerText.mask(text, ranges: message.spoilers)).replacingOccurrences(of: "\n", with: " ")
         }
         switch message.embeds.first {
-        case let .audio(_, title, _, _, _, _), let .card(title, _, _, _, _):
+        case let .audio(_, title, _, _, _, _), let .card(title, _, _, _, _), let .message(title, _, _):
             return "Shared “\(title)”"
         case .image:
             return "Photo"
@@ -821,6 +833,16 @@ public class ChatViewModel: ObservableObject {
     /// How a reference reads; `nil` keeps it as written, such as for a room that isn't known.
     public func placeLabel(forReference _: String) -> ChatPlaceLabel? {
         nil
+    }
+
+    /// What starts a reference the composer completes, such as `#`; `nil` when the chat has none.
+    public var referencePrefix: String? {
+        nil
+    }
+
+    /// Places to offer for a typed reference; an empty query lists them to browse.
+    public func referenceSuggestions(for _: String) -> [ChatReferenceSuggestion] {
+        []
     }
 
     public func message(withId id: String) -> ChatMessage? {

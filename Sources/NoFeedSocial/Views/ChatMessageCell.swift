@@ -83,6 +83,9 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
         var showMentionedUser: (String) -> Void = { _ in }
         var openLink: (URL) -> Void = { _ in }
         var revealSpoilers: () -> Void = {}
+        /// Whether the message embed at an index is open to its full text.
+        var isEmbedExpanded: (Int) -> Bool = { _ in false }
+        var toggleEmbed: (Int) -> Void = { _ in }
         /// The chat's custom emoji for a reaction key, shown as its image.
         var customEmoji: (String) -> ChatCustomEmoji? = { _ in nil }
         var customEmojiImageDidLoad: () -> Void = {}
@@ -451,21 +454,23 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
         } else {
             body
         }
+        // The time sits beside the text's last line when the text ends the bubble, and on a line of its own after
+        // cards and reactions.
+        let otherEmbeds = embeds.count { if case .image(_, _, _, _, true) = $0 { false } else { true } }
+        let endsWithText = otherEmbeds == 0 && reactions.isEmpty
         if let text {
             bodyLabel.isHidden = false
-            bodyLabel.attributedText = Self.reservingTimeSpace(in: text, time: time)
+            bodyLabel.attributedText = endsWithText ? Self.reservingTimeSpace(in: text, time: time) : text
         } else {
             bodyLabel.isHidden = true
             bodyLabel.attributedText = nil
         }
 
-        var otherEmbeds = 0
-        for embed in embeds {
+        for (index, embed) in embeds.enumerated() {
             if case .image(_, _, _, _, true) = embed {
-                mediaStack.addArrangedSubview(makeView(for: embed))
+                mediaStack.addArrangedSubview(makeView(for: embed, index: index))
             } else {
-                embedsStack.addArrangedSubview(makeView(for: embed))
-                otherEmbeds += 1
+                embedsStack.addArrangedSubview(makeView(for: embed, index: index))
             }
         }
         embedsStack.isHidden = otherEmbeds == 0
@@ -474,8 +479,8 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
         let hasHeader = layout.showsName || reply != nil
         let hasMedia = !mediaStack.arrangedSubviews.isEmpty
         let hasContent = text != nil || otherEmbeds > 0 || !reactions.isEmpty || !hasMedia
-        // Without text or reactions the time needs its own line under the embeds; on a lone image it sits on it.
-        timeSpacer.isHidden = text != nil || !reactions.isEmpty || !hasContent
+        // After cards the time needs its own line; reactions leave it room beside them, and on a lone image it sits on it.
+        timeSpacer.isHidden = (text != nil && endsWithText) || !reactions.isEmpty || !hasContent
         headerStack.isHidden = !hasHeader
         mediaStack.isHidden = !hasMedia
         contentStack.isHidden = !hasContent
@@ -673,7 +678,7 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
         return result
     }
 
-    private func makeView(for embed: ChatEmbed) -> UIView {
+    private func makeView(for embed: ChatEmbed, index: Int) -> UIView {
         switch embed {
         case let .image(url, aspectRatio, alt, link, opensViewer):
             let imageView = UIImageView()
@@ -753,7 +758,29 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
                 ])
             }
             return card(leading: icon, title: title, subtitle: subtitle, link: link)
+        case let .message(title, text, link):
+            return messageCard(title: title, text: text, link: link, index: index)
         }
+    }
+
+    /// A message from elsewhere, drawn like a reply quote: who sent it where, then its text, three lines until
+    /// tapped open. The name opens the message.
+    private func messageCard(title: String, text: String, link: URL?, index: Int) -> UIView {
+        let isExpanded = actions.isEmbedExpanded(index)
+        let quote = ChatReplyQuoteView()
+        quote.configure(
+            name: DebugRedaction.name(title),
+            text: text,
+            accent: isOwn ? .white : ChatUserColor.color(for: title),
+            onBubbleColor: isOwn,
+            lines: isExpanded ? 0 : 3,
+        )
+        quote.onTaps(
+            name: link.map(ChatLinkTapGesture.init(link:)),
+            text: ChatActionTapGesture { [weak self] in self?.actions.toggleEmbed(index) },
+        )
+        quote.accessibilityHint = isExpanded ? "Shows less" : "Shows the whole message"
+        return quote
     }
 
     private func loadImage(_ url: URL, into imageView: UIImageView) {
@@ -909,12 +936,23 @@ final class ChatReplyQuoteView: UIView {
         max(nameLabel.intrinsicContentSize.width, textLabel.intrinsicContentSize.width) + 3 + 8 + 8
     }
 
-    func configure(name: String, text: String, accent: UIColor, onBubbleColor: Bool) {
+    /// `lines` above one keeps the text's line breaks, as for a linked message; `0` shows all of it.
+    func configure(name: String, text: String, accent: UIColor, onBubbleColor: Bool, lines: Int = 1) {
         bar.backgroundColor = accent
         backgroundColor = accent.withAlphaComponent(onBubbleColor ? 0.2 : 0.12)
         nameLabel.text = name
         nameLabel.textColor = accent
-        textLabel.text = text.replacingOccurrences(of: "\n", with: " ")
+        textLabel.text = lines == 1 ? text.replacingOccurrences(of: "\n", with: " ") : text
+        textLabel.numberOfLines = lines
         textLabel.textColor = onBubbleColor ? .white : .label
+    }
+
+    /// Separate taps on the name and the text, such as opening a linked message and showing all of it.
+    func onTaps(name: UIGestureRecognizer?, text: UIGestureRecognizer) {
+        for (label, gesture) in [(nameLabel, name), (textLabel, text)] {
+            guard let gesture else { continue }
+            label.isUserInteractionEnabled = true
+            label.addGestureRecognizer(gesture)
+        }
     }
 }

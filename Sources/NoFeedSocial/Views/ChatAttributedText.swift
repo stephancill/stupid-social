@@ -52,7 +52,7 @@ enum ChatAttributedText {
                     detectLinks(in: segment, color: linkColor)
                 }
                 // Before mentions, so a mention can't claim part of a link's URL that a label replaces.
-                labelPlaces(in: segment, writtenAsURL: run.link.map { String(text[run.range].characters) == $0.absoluteString } ?? true, places: places, color: color, linkColor: linkColor)
+                labelPlaces(in: segment, writtenAsURL: run.link.map { String(text[run.range].characters) == $0.absoluteString } ?? true, places: places, color: linkColor, underline: underlinesMentions)
                 if let mentionPattern {
                     highlightMentions(in: segment, pattern: mentionPattern, color: linkColor, underline: underlinesMentions, names: mentionNames, redacts: redactsMentions)
                 }
@@ -145,10 +145,9 @@ struct ChatPlaces {
 }
 
 extension ChatAttributedText {
-    /// Links written as their URL, and references such as `#room_id`, become what they name, led by their kind's
-    /// icon; a place elsewhere is in the text's color with an arrow after. Each keeps opening its place. Code spans
-    /// hold none, and a link written with its own text keeps it.
-    private static func labelPlaces(in segment: NSMutableAttributedString, writtenAsURL: Bool, places: ChatPlaces, color: UIColor, linkColor: UIColor) {
+    /// Links written as their URL, and references such as `#room_id`, become what they name, drawn like mentions
+    /// and still opening their place. Code spans hold none, and a link written with its own text keeps it.
+    private static func labelPlaces(in segment: NSMutableAttributedString, writtenAsURL: Bool, places: ChatPlaces, color: UIColor, underline: Bool) {
         var labels: [(NSRange, ChatPlaceLabel)] = []
         if writtenAsURL {
             segment.enumerateAttribute(.chatLink, in: NSRange(location: 0, length: segment.length)) { value, range, _ in
@@ -168,33 +167,11 @@ extension ChatAttributedText {
         // Back to front, so replacing a place's text doesn't move the ones before it.
         for (range, label) in labels.sorted(by: { $0.0.location > $1.0.location }) {
             var attributes = segment.attributes(at: range.location, effectiveRange: nil)
-            let tint = label.isElsewhere ? color : linkColor
-            attributes[.foregroundColor] = tint
-            attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
+            attributes[.foregroundColor] = color
+            attributes[.underlineStyle] = underline ? NSUnderlineStyle.single.rawValue : nil
             attributes[.chatLink] = label.url
-            let font = attributes[.font] as? UIFont ?? .preferredFont(forTextStyle: .body)
-            let replacement = NSMutableAttributedString()
-            if let icon = label.systemImage {
-                replacement.append(symbol(icon, font: font, tint: tint, attributes: attributes))
-                replacement.append(NSAttributedString(string: "\u{202F}", attributes: attributes))
-            }
-            replacement.append(NSAttributedString(string: label.text, attributes: attributes))
-            if label.isElsewhere {
-                replacement.append(NSAttributedString(string: "\u{202F}", attributes: attributes))
-                replacement.append(symbol("arrow.up.right", font: font, tint: tint, attributes: attributes))
-            }
-            segment.replaceCharacters(in: range, with: replacement)
+            segment.replaceCharacters(in: range, with: NSAttributedString(string: label.text, attributes: attributes))
         }
-    }
-
-    private static func symbol(_ name: String, font: UIFont, tint: UIColor, attributes: [NSAttributedString.Key: Any]) -> NSAttributedString {
-        let configuration = UIImage.SymbolConfiguration(font: font, scale: .small)
-        guard let image = UIImage(systemName: name, withConfiguration: configuration)?.withTintColor(tint, renderingMode: .alwaysOriginal) else {
-            return NSAttributedString()
-        }
-        let symbol = NSMutableAttributedString(attachment: NSTextAttachment(image: image))
-        symbol.addAttributes(attributes, range: NSRange(location: 0, length: symbol.length))
-        return symbol
     }
 
     /// Custom emoji keys become inline images the height of the line; code spans keep them as text, and so do

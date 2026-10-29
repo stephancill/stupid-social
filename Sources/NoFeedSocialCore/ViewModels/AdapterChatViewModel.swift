@@ -187,6 +187,10 @@ public protocol ChatLinking: ChatAdapter {
     var referencePattern: NSRegularExpression? { get }
     /// How a reference reads; `nil` keeps it as written.
     func placeLabel(forReference reference: String) -> ChatPlaceLabel?
+    /// What starts a reference the composer completes, such as `#`.
+    var referencePrefix: String? { get }
+    /// Places to offer for a typed reference; an empty query lists them to browse.
+    func referenceSuggestions(for query: String) -> [ChatReferenceSuggestion]
 }
 
 /// The shared chat screen's model for a network that has a `ChatAdapter`.
@@ -473,6 +477,14 @@ public final class AdapterChatViewModel<Adapter: ChatAdapter>: ChatViewModel {
 
     override public func placeLabel(forReference reference: String) -> ChatPlaceLabel? {
         (adapter as? any ChatLinking)?.placeLabel(forReference: reference)
+    }
+
+    override public var referencePrefix: String? {
+        (adapter as? any ChatLinking)?.referencePrefix ?? nil
+    }
+
+    override public func referenceSuggestions(for query: String) -> [ChatReferenceSuggestion] {
+        (adapter as? any ChatLinking)?.referenceSuggestions(for: query) ?? []
     }
 
     // MARK: Publishing

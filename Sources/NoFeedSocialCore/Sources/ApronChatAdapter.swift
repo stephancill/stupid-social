@@ -56,6 +56,10 @@ public final class ApronChatAdapter: ChatAdapter, ChatReactionSending, ChatUnsee
     private var memberIds: Set<String>?
     /// The server's joined rooms, by id, which `#room_id`s and links in messages read by name.
     private var knownRooms: [String: ApronRoom] = [:]
+    /// Messages that links in this chat point at, fetched once each: their card, or `nil` when the message can't be
+    /// read here (another server without an account, a room you can't see, deleted).
+    private var linkedMessages: [ApronLink: ChatEmbed?] = [:]
+    private var pendingLinkedMessages: Set<ApronLink> = []
     private var isPrivateRoom = false
     private var notices: [ApronMessage] = []
     private var firstLogId: String?
@@ -510,7 +514,63 @@ public final class ApronChatAdapter: ChatAdapter, ChatReactionSending, ChatUnsee
         service.reactionStore.addOwnMessageIds(own, serverURL: serverURL, roomId: roomId)
         messages = (sortedSnapshots() + notices).map(chatMessage)
         fetchMissingReferences()
+        fetchLinkedMessages()
         onChange?()
+    }
+
+    // MARK: Linked messages
+
+    /// Apron links in either form, as message text writes them; trailing punctuation ends the sentence.
+    private static let apronLinkPattern = try! NSRegularExpression(pattern: #"(?:https://link\.apron\.chat/#|apron:\?)[^\s<>"'`]*[^\s<>"'`.,;:!?)\]]"#, options: .caseInsensitive)
+
+    /// The links to messages in a text, read strictly as places, other than to `message` itself; at most three,
+    /// as apron-web shows.
+    private func messageLinks(in text: String, of message: ApronMessage? = nil) -> [ApronLink] {
+        var links: [ApronLink] = []
+        for match in Self.apronLinkPattern.matches(in: text, range: NSRange(location: 0, length: (text as NSString).length)) {
+            guard let url = URL(string: (text as NSString).substring(with: match.range)),
+                  let link = ApronLink.place(url, contentServer: serverURL), let messageId = link.message,
+                  !(link.serverURL == serverURL && link.room == message?.roomId && messageId == message?.messageId),
+                  !links.contains(link)
+            else { continue }
+            links.append(link)
+        }
+        return Array(links.prefix(3))
+    }
+
+    /// Fetches the messages links point at, each once, on this server or on another the user has an account on;
+    /// nothing signs in anywhere new to show one.
+    private func fetchLinkedMessages() {
+        let links = Set(snapshots.values.flatMap { messageLinks(in: $0.body?.text ?? "", of: $0) })
+            .filter { linkedMessages[$0] == nil && !pendingLinkedMessages.contains($0) }
+        guard !links.isEmpty else { return }
+        pendingLinkedMessages.formUnion(links)
+        Task {
+            for link in links {
+                linkedMessages[link] = await .some(linkedMessageCard(link))
+                pendingLinkedMessages.remove(link)
+            }
+            publish()
+        }
+    }
+
+    /// A card for the linked message, as a reply quote shows it: who sent it where, and its text; `nil` when it
+    /// can't be read.
+    private func linkedMessageCard(_ link: ApronLink) async -> ChatEmbed? {
+        guard let roomId = link.room, let messageId = link.message else { return nil }
+        let isHere = link.serverURL == serverURL
+        guard isHere || service.servers.contains(where: { $0.serverURL == link.serverURL }),
+              let session = isHere ? session : try? await service.session(serverURL: link.serverURL),
+              session.server.has("history"),
+              let page = try? await session.connection.history(roomId: roomId, after: messageId, before: messageId, limit: 1),
+              let message = page.messages?.first(where: { $0.messageId == messageId }), !message.isDeleted
+        else { return nil }
+        let listing = isHere ? nil : try? await session.connection.joinedRooms()
+        let sender = (isHere ? users[message.from.userId] : listing?.users.first { $0.userId == message.from.userId }) ?? message.from
+        let room = isHere ? roomName(roomId) : listing?.rooms.first { $0.roomId == roomId }.map { $0.displayTitle(users: [:], you: session.you.userId) } ?? roomId
+        let text = (message.body?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
+        return .message(title: "\(sender.displayName) in #\(room)", text: text, link: link.webURL)
     }
 
     /// Fetches reply targets later pages and live messages quote, without holding up the update.
@@ -1082,22 +1142,18 @@ public final class ApronChatAdapter: ChatAdapter, ChatReactionSending, ChatUnsee
         serverURL
     }
 
-    /// An Apron link written as its URL reads as what it points at, as in apron-web: "Message in #general", a
-    /// room's name, `@name`. A link to another server names its host and the kind of place, since nothing about it
-    /// is known here; a user there, or anything not strictly a place, stays a URL.
+    /// A link to a room or member of this server, written as its URL, reads as `#<room name>` or `@name`. Links to
+    /// messages stay links with the message as a card under them (`linkedMessageCard`), and links to other servers,
+    /// or anything not strictly a place, stay URLs.
     public func placeLabel(forLink url: URL) -> ChatPlaceLabel? {
-        guard let link = ApronLink.place(url, contentServer: serverURL), let room = link.room else { return nil }
-        guard link.serverURL == serverURL else {
-            guard link.user == nil else { return nil }
-            return ChatPlaceLabel(text: "\(link.host) · \(link.message == nil ? "Room" : "Message")", systemImage: "globe", isElsewhere: true, url: link.webURL)
-        }
+        // Messages show as cards instead, and other servers' places stay links.
+        guard let link = ApronLink.place(url, contentServer: serverURL), let room = link.room,
+              link.serverURL == serverURL, link.message == nil
+        else { return nil }
         if let user = link.user {
             return ChatPlaceLabel(text: "@\(users[user]?.displayName ?? ApronLink.displayValue(user))", url: link.webURL)
         }
-        if link.message != nil {
-            return ChatPlaceLabel(text: "Message in #\(roomName(room))", systemImage: "text.bubble", url: link.webURL)
-        }
-        return ChatPlaceLabel(text: roomName(room), systemImage: "number", url: link.webURL)
+        return ChatPlaceLabel(text: "#\(roomName(room))", url: link.webURL)
     }
 
     /// `#room_id`, apron-web's ID grammar (Appendix A.3): letters, digits and `_.+@:-`, starting and ending with a
@@ -1112,6 +1168,35 @@ public final class ApronChatAdapter: ChatAdapter, ChatReactionSending, ChatUnsee
     public func placeLabel(forReference reference: String) -> ChatPlaceLabel? {
         guard knownRooms[reference] != nil else { return nil }
         return ChatPlaceLabel(text: "#\(roomName(reference))", url: ApronLink(serverURL: serverURL, room: reference).webURL)
+    }
+
+    public var referencePrefix: String? {
+        "#"
+    }
+
+    /// Joined rooms and threads whose id or title starts with the query, then whose title has a word that does;
+    /// a bare `#` lists them all by name. Rooms named for their members (direct and group messages) aren't places
+    /// to point others at, so they aren't offered.
+    public func referenceSuggestions(for query: String) -> [ChatReferenceSuggestion] {
+        let query = query.lowercased()
+        func rank(_ room: ApronRoom, title: String) -> Int? {
+            if query.isEmpty { return 0 }
+            let title = title.lowercased()
+            if room.roomId.lowercased().hasPrefix(query) || title.hasPrefix(query) { return 0 }
+            if title.split(whereSeparator: { $0.isWhitespace }).contains(where: { $0.hasPrefix(query) }) { return 1 }
+            return nil
+        }
+        return knownRooms.values
+            .filter { !$0.isNamedForMembers }
+            .compactMap { room -> (ChatReferenceSuggestion, Int)? in
+                let title = roomName(room.roomId)
+                return rank(room, title: title).map {
+                    (ChatReferenceSuggestion(reference: room.roomId, title: title, systemImage: room.parentRoomId == nil ? "number" : "bubble.left.and.text.bubble.right"), $0)
+                }
+            }
+            .sorted { ($0.1, $0.0.title.localizedLowercase) < ($1.1, $1.0.title.localizedLowercase) }
+            .prefix(8)
+            .map(\.0)
     }
 
     /// A known room's title, a thread's "in #parent"; an unknown one's id, made safe to show.
@@ -1138,7 +1223,8 @@ public final class ApronChatAdapter: ChatAdapter, ChatReactionSending, ChatUnsee
             timestamp: message.timestamp,
             text: message.body?.text,
             isMarkdown: message.isMarkdown,
-            embeds: message.isDeleted ? [] : (message.body?.embeds ?? []).map(chatEmbed),
+            embeds: message.isDeleted ? [] : (message.body?.embeds ?? []).map(chatEmbed)
+                + messageLinks(in: message.body?.text ?? "", of: message).compactMap { linkedMessages[$0] ?? nil },
             replyToId: message.replyTo?.messageId,
             isDeleted: message.isDeleted,
             isOwn: !from.isSystem && isOwn(message),
