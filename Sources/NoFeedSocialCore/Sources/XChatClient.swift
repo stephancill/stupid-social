@@ -464,7 +464,13 @@ public actor XChatClient: ChatListProvider {
 
     func decrypt(_ event: XChatEvent) throws -> XChatEntry? {
         guard let create = event.messageCreate else { return nil }
-        guard let contents = create.data(100), let version = create.string(101), let key = conversationKeys[event.conversationId]?[version] else {
+        guard let contents = create.data(100) else { throw SourceError.invalidResponse }
+        // Without a key version (101) the message was sent unencrypted (109 is then true), such as to someone
+        // without X Chat keys: the contents are the plain `MessageEntryHolder`.
+        guard let version = create.string(101) else {
+            return try XChatEntry(plaintext: contents)
+        }
+        guard let key = conversationKeys[event.conversationId]?[version] else {
             throw SourceError.serviceError("Missing the key for an encrypted X message.")
         }
         // Version 1 derives a key per message; no account seen so far sends it, so it fails loudly instead.

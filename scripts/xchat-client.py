@@ -567,11 +567,16 @@ def summarize_events(events: list[dict[int, Any]], keys_by_version: dict[str, by
         row: dict[str, Any] = {"sequence_id": text(event.get(1)), "own": text(event.get(3)) == viewer_id, "detail": sorted(detail)}
         create = detail.get(1)
         if create:
+            # Without a key version (101) the message was sent unencrypted (109 true): contents are the plain
+            # `MessageEntryHolder`.
+            plain = 101 not in create
             key = keys_by_version.get(text(create.get(101)) or "")
-            if key is None:
+            if plain:
+                row["encrypted"] = False
+            if not plain and key is None:
                 row["decrypt"] = "missing conversation key"
             else:
-                contents = thrift(open_sealed(key, create[100])).get(1, {})
+                contents = thrift(create[100] if plain else open_sealed(key, create[100])).get(1, {})
                 row["entry"] = sorted(contents)
                 message = contents.get(1)
                 if message and show_text:
@@ -631,6 +636,91 @@ def unread_count(item: dict[str, Any], keys: dict[str, Any]) -> int:
             count += 1
     return count
 
+def plain_holder_shape(contents: Any) -> Any:
+    """Whether create-event contents parse as an unencrypted Thrift `MessageEntryHolder`, by field numbers only."""
+    if not isinstance(contents, bytes):
+        return None
+    try:
+        holder = thrift(contents)
+    except Exception as error:  # noqa: BLE001 - the failure kind is the finding
+        return {"parses": type(error).__name__}
+
+    def shape(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {field: shape(inner) for field, inner in value.items()}
+        if isinstance(value, list):
+            return [shape(inner) for inner in value[:3]]
+        return type(value).__name__
+
+    return {"parses": True, "shape": shape(holder)}
+
+
+def key_changes_summary(client: "XChatClient", conversation_id: str, keys: dict[str, Any], pages: int) -> dict[str, Any]:
+    """Where a conversation's keys could come from, without contents: the inbox item's latest key changes, each
+    page's missing ones, and key-change events among the messages, paging back."""
+    me = keys["user_id"].encode()
+
+    def describe(source: str, event: dict[int, Any]) -> dict[str, Any]:
+        change = event.get(7, {}).get(3) or {}
+        participants = change.get(2) or []
+        mine = [p for p in participants if p.get(1) == me]
+        row: dict[str, Any] = {
+            "source": source,
+            "sequence_id": text(event.get(1)),
+            "key_version": text(change.get(1)),
+            "participants": len(participants),
+            "participant_fields": sorted({field for p in participants for field in p}),
+            "wraps_for_viewer": bool(mine),
+            "change_fields": sorted(change),
+        }
+        if mine:
+            try:
+                unwrap_conversation_key(keys["identity_private"], mine[0][2])
+                row["unwraps"] = True
+            except Exception as error:  # noqa: BLE001 - the failure kind is the finding
+                row["unwraps"] = type(error).__name__
+            # Any field beside the user id and wrapped key, such as the public key version it was wrapped for.
+            row["viewer_entry_extra"] = {field: text(value) if isinstance(value, bytes) else value for field, value in mine[0].items() if field not in (1, 2)}
+        return row
+
+    state = client.conversation_state(conversation_id, keys)
+    rows = [describe("inbox latest", thrift(base64.b64decode(e))) for e in state["item"].get("latest_conversation_key_change_events") or []]
+    min_sequence = NEWEST_SEQUENCE_ID
+    message_events = 0
+    message_key_versions: set[str] = set()
+    message_shapes: list[dict[str, Any]] = []
+    for page_number in range(pages):
+        conversation = client.conversation_page(conversation_id, min_sequence)["data"]["get_conversation_page"]
+        events = [thrift(base64.b64decode(e)) for e in conversation.get("encoded_message_events") or []]
+        rows += [describe(f"page {page_number} missing", thrift(base64.b64decode(e))) for e in conversation.get("missing_conversation_key_change_events") or []]
+        rows += [describe(f"page {page_number} event", e) for e in events if 3 in e.get(7, {})]
+        for event in events:
+            create = event.get(7, {}).get(1)
+            if create is not None:
+                message_events += 1
+                message_key_versions.add(text(create.get(101)) or "none")
+                message_shapes.append({
+                    "event_fields": sorted(event),
+                    "detail_fields": sorted(event.get(7, {})),
+                    "create_fields": sorted(create) if isinstance(create, dict) else type(create).__name__,
+                    "field_types": {field: type(value).__name__ for field, value in create.items()} if isinstance(create, dict) else None,
+                    # Values of the small fields only; contents (100) stay out.
+                    "flags": {field: value for field, value in create.items() if isinstance(value, (bool, int))},
+                    "event_extra": {field: type(event[field]).__name__ for field in (8, 9, 11) if field in event},
+                    "contents_as_plain_holder": plain_holder_shape(create.get(100)),
+                })
+        if not conversation.get("has_more") or not events:
+            break
+        min_sequence = min((text(e.get(1)) for e in events), key=int)
+    return {
+        "viewer_key_version": keys["version"],
+        "message_events_read": message_events,
+        "message_key_versions": sorted(message_key_versions),
+        "message_shapes": message_shapes,
+        "key_changes": rows,
+    }
+
+
 def key_versions_summary(users: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
         {
@@ -669,6 +759,12 @@ def build_parser() -> argparse.ArgumentParser:
     conversation = subparsers.add_parser("conversation", help="Decrypt the newest events of one conversation (shapes; text with --show-text).")
     conversation.add_argument("conversation_id")
     conversation.add_argument("--show-text", action="store_true")
+    key_changes = subparsers.add_parser(
+        "key-changes",
+        help="Summarize a conversation's key-change events from the inbox and its pages: versions, and whether each wraps a key for the viewer.",
+    )
+    key_changes.add_argument("conversation_id")
+    key_changes.add_argument("--pages", type=int, default=5, help="Older pages to read looking for key changes.")
     send = subparsers.add_parser("send-message", help="Send an encrypted text message. Only to a conversation agreed for testing.")
     send.add_argument("conversation_id")
     send.add_argument("text")
@@ -719,6 +815,8 @@ def main() -> None:
             "key_versions": sorted(all_keys),
             "events": summarize_events(events, all_keys, keys["user_id"], args.show_text),
         }
+    elif args.command == "key-changes":
+        result = key_changes_summary(client, args.conversation_id, load_keys(), args.pages)
     elif args.command == "send-message":
         result = client.send_message(args.conversation_id, args.expect_participant, args.text)
     elif args.command == "react":

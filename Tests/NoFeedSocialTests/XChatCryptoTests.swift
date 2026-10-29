@@ -91,4 +91,33 @@ final class XChatCryptoTests: XCTestCase {
         XCTAssertEqual(decoded.int(6), -2)
         XCTAssertEqual(decoded.int(10), 2_115_195_109_255_905_280)
     }
+
+    /// A message sent without encryption has no key version (101) and carries the plain `MessageEntryHolder`
+    /// (observed 2026-10-29), so it reads without any conversation key.
+    func testUnencryptedMessageReadsWithoutAConversationKey() async throws {
+        var message = ThriftStruct()
+        message[1] = .string("Sent without encryption")
+        var entry = ThriftStruct()
+        entry[1] = .structure(message)
+        var holder = ThriftStruct()
+        holder[1] = .structure(entry)
+        var create = ThriftStruct()
+        create[100] = .binary(ThriftCoder.encode(holder))
+        create[102] = .bool(true)
+        create[109] = .bool(true)
+        var detail = ThriftStruct()
+        detail[1] = .structure(create)
+        var event = ThriftStruct()
+        event[1] = .string("2115726270839333051")
+        event[3] = .string("1")
+        event[4] = .string("1:2")
+        event[7] = .structure(detail)
+
+        let suite = "XChatCryptoTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let client = XChatClient(credentialStore: KeychainCredentialStore(service: suite, fallbackStore: defaults, prefersSynchronizable: false, allowsInsecureFallback: true))
+        let decoded = try await client.decrypt(XChatEvent(event))
+        guard case let .message(contents) = decoded else { return XCTFail("expected a message, got \(String(describing: decoded))") }
+        XCTAssertEqual(contents.text, "Sent without encryption")
+    }
 }
