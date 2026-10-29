@@ -12,6 +12,10 @@ public final class ApronNotificationSource: ChatListProvider {
     /// Enough to count unread messages up to "50+" without paging further.
     private let historyLimit = 50
     public static let unreadCap = 50
+    /// Whether a server's live connection keeps its rows current (`ApronLiveFeed`), so a reload keeps them
+    /// instead of reading each room's history again: servers allow few history pages a day (the public demo,
+    /// 1,000 per user across all their devices).
+    var keepsRowsCurrent: (URL) -> Bool = { _ in false }
 
     public init(service: ApronService) {
         self.service = service
@@ -28,6 +32,10 @@ public final class ApronNotificationSource: ChatListProvider {
         for server in servers {
             let accountId = Account.apronId(serverURL: server.serverURL)
             let label = "\(network.displayName) \(server.displayTitle)"
+            if keepsRowsCurrent(server.serverURL) {
+                accounts.append(.init(accountId: accountId, label: label, error: nil, isCurrent: true))
+                continue
+            }
             do {
                 // The shared connection stays open for live updates and chat; it isn't closed here.
                 let session = try await service.session(serverURL: server.serverURL)
@@ -89,10 +97,7 @@ public final class ApronNotificationSource: ChatListProvider {
         for room in rooms where roomIds?.contains(room.roomId) ?? true {
             let page = if let firstPage { firstPage } else { try await session.connection.history(roomId: room.roomId, limit: historyLimit) }
             let latest = latestMessage(in: page)
-            let preview = latest.map { message in
-                let text = (message.body?.text ?? "").replacingOccurrences(of: "\n", with: " ")
-                return own.contains(message.from.userId) ? "You: \(text)" : "\(message.from.displayName): \(text)"
-            }
+            let preview = latest.map { preview(of: $0, isOwn: own.contains($0.from.userId)) }
             let unread = latest.flatMap { message in
                 message.messageId.flatMap(Int64.init).map { unreadCount(in: page, roomId: room.roomId, latest: $0, session: session) }
             } ?? 0
@@ -118,6 +123,33 @@ public final class ApronNotificationSource: ChatListProvider {
             ).scoped(to: Account.apronId(serverURL: session.serverURL)))
         }
         return summaries
+    }
+
+    /// The room's row with a new message a live connection delivered, built from the message alone so a
+    /// delivery costs no history page. `nil` for an edit, deletion or move (a later `log_id` than its
+    /// `message_id`, §4.3.1), which the caller rebuilds from history.
+    public func summary(_ row: ChatSummary, adding message: ApronMessage, session: ApronSession) -> ChatSummary? {
+        guard let messageId = message.messageId, let id = Int64(messageId), let roomId = message.roomId,
+              message.logId == nil || message.logId == messageId, !message.isDeleted
+        else { return nil }
+        var row = row
+        let isOwn = service.readStore.ownUserIds(serverURL: session.serverURL).union([session.you.userId]).contains(message.from.userId)
+        if !(message.body?.text ?? "").isEmpty {
+            row.preview = preview(of: message, isOwn: isOwn)
+            row.timestamp = message.timestamp ?? row.timestamp
+        }
+        if isOwn {
+            // Later reactions to it are the user's to see.
+            service.reactionStore.addOwnMessageIds([messageId], serverURL: session.serverURL, roomId: roomId)
+        } else if !message.from.isSystem, let cursor = service.readStore.cursor(serverURL: session.serverURL, roomId: roomId), id > cursor {
+            row.unreadCount = min(row.unreadCount + 1, Self.unreadCap)
+        }
+        return row
+    }
+
+    private func preview(of message: ApronMessage, isOwn: Bool) -> String {
+        let text = (message.body?.text ?? "").replacingOccurrences(of: "\n", with: " ")
+        return isOwn ? "You: \(text)" : "\(message.from.displayName): \(text)"
     }
 
     /// A room's Chats row id, before it is scoped to its server's account.

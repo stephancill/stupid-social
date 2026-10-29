@@ -78,4 +78,16 @@ final class ApronModelsTests: XCTestCase {
         XCTAssertEqual(result.notJoined?.first?.members?.count, 1)
         XCTAssertEqual(result.users?.first?.avatarURL?.absoluteString, "https://example.com/ada.png")
     }
+
+    func testARoomUpdateNamesOnlyTheRoomsThatChangedUnlessTheUsersRoomsDid() throws {
+        func update(_ json: String) throws -> ApronRoomUpdate {
+            try JSONDecoder().decode(ApronRoomUpdate.self, from: Data(json.utf8))
+        }
+        let renamed = try update(#"{"updated":[{"room_id":"general","title":"General (ops)"}]}"#)
+        XCTAssertEqual(renamed.changedRoomIds, ["general"])
+        let membership = try update(#"{"memberships":[{"room_id":"dm","members":[{"user":{"user_id":"ada"},"joined":false}]}]}"#)
+        XCTAssertEqual(membership.changedRoomIds, ["dm"])
+        XCTAssertNil(try update(#"{"left":[{"room_id":"general"}]}"#).changedRoomIds)
+        XCTAssertNil(try update(#"{"joined":[{"room_id":"new"}]}"#).changedRoomIds)
+    }
 }

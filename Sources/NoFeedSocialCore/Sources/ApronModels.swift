@@ -760,9 +760,27 @@ struct ApronUserUpdate: Decodable {
 
 /// A `room_update` frame; only the parts the chat uses (§4.2.3).
 struct ApronRoomUpdate: Decodable {
+    struct Left: Decodable {
+        let roomId: String
+
+        enum CodingKeys: String, CodingKey {
+            case roomId = "room_id"
+        }
+    }
+
     let joined: [ApronRoom]?
+    let left: [Left]?
     let memberships: [ApronMembershipRecord]?
+    /// Room records that changed while the user's membership didn't (§4.2.3).
+    let updated: [ApronRoom]?
     let users: [ApronUser]?
+
+    /// The rooms whose records or members changed, when the user's own rooms didn't; `nil` when the user
+    /// joined or left a room, which changes which rooms there are.
+    var changedRoomIds: Set<String>? {
+        guard (joined ?? []).isEmpty, (left ?? []).isEmpty else { return nil }
+        return Set((updated ?? []).map(\.roomId) + (memberships ?? []).map(\.roomId))
+    }
 }
 
 /// One logged membership change; each entry replaces that user's membership (§4.2.2).

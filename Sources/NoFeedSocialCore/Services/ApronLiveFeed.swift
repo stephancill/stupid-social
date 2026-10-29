@@ -4,9 +4,11 @@ import OSLog
 /// Keeps one WebSocket open to each saved Apron server while the app is in the foreground, so the Chats list
 /// (latest message, unread count) updates in realtime instead of on the next reload.
 ///
-/// New messages and room changes rebuild that server's rows on the already-open connection, debounced so
-/// a burst of messages costs one rebuild. Read cursors the server sends for the user update unread badges
-/// directly. Dropped connections reconnect with backoff; a `denied` sign-in stops until the user acts (§1.1).
+/// A new message updates its room's row from the message itself; edits, reactions and room changes rebuild
+/// rows from history on the already-open connection, debounced so a burst costs one rebuild. Servers allow few
+/// history pages a day, so once a connection's rows are built, Chats reloads keep them instead of reading every
+/// room again. Read cursors the server sends for the user update unread badges directly. Dropped connections
+/// reconnect with backoff; a `denied` sign-in stops until the user acts (§1.1).
 @MainActor
 public final class ApronLiveFeed {
     /// Posted by settings after a server is added or removed.
@@ -24,11 +26,14 @@ public final class ApronLiveFeed {
     private var rebuilds: [URL: Task<Void, Never>] = [:]
     /// Rooms with new messages since the last rebuild; `nil` rebuilds every room, as after `room_update`.
     private var pendingRooms: [URL: Set<String>?] = [:]
+    /// Servers whose rows were built on the open connection, which keeps them current until it closes.
+    private var currentServers: Set<URL> = []
 
     public init(service: ApronService, source: ApronNotificationSource, chatList: ChatListViewModel) {
         self.service = service
         self.source = source
         self.chatList = chatList
+        source.keepsRowsCurrent = { [weak self] url in self?.currentServers.contains(url) ?? false }
         NotificationCenter.default.addObserver(forName: Self.serversDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.sync() }
         }
@@ -65,6 +70,7 @@ public final class ApronLiveFeed {
         loops.removeValue(forKey: url)?.cancel()
         rebuilds.removeValue(forKey: url)?.cancel()
         pendingRooms[url] = nil
+        currentServers.remove(url)
         sessions[url] = nil
         // In the background the shared connection closes too; chat reopens it on demand.
         service.closeSessions(for: url)
@@ -92,6 +98,7 @@ public final class ApronLiveFeed {
                     scheduleRebuild(url, immediately: true)
                 }
                 sessions[url] = nil
+                currentServers.remove(url)
             } catch let error as ApronError where error.isDenied {
                 logger.info("Apron live feed stopped for \(url.host() ?? "server", privacy: .public): sign-in denied")
                 return
@@ -108,15 +115,35 @@ public final class ApronLiveFeed {
         switch method {
         case "message":
             // Only logged messages change a room's latest message; transient notices don't (§3.5.3).
-            guard let message = try? JSONDecoder().decode(ApronMessage.self, from: params), message.messageId != nil else { return }
-            // Only that room changed; rebuilding just it keeps within the server's frame budget.
-            scheduleRebuild(session.serverURL, roomId: message.roomId)
+            guard let message = try? JSONDecoder().decode(ApronMessage.self, from: params), let roomId = message.roomId, message.messageId != nil else { return }
+            let destination = ChatSummary.Destination.apron(serverURL: session.serverURL, roomId: roomId)
+            // Before the rows are built, the rebuild under way may predate the message.
+            if currentServers.contains(session.serverURL),
+               let row = chatList.chats.first(where: { $0.destination == destination }),
+               let updated = source.summary(row, adding: message, session: session)
+            {
+                chatList.updateChats([updated])
+            } else {
+                // Only that room changed; rebuilding just it keeps within the server's frame budget.
+                scheduleRebuild(session.serverURL, roomId: roomId)
+            }
         case "reactions":
             // A reaction to the user's message changes the room's unseen reactions.
             guard let record = try? JSONDecoder().decode(ApronReactionRecord.self, from: params) else { return }
             scheduleRebuild(session.serverURL, roomId: record.roomId)
         case "room_update":
-            scheduleRebuild(session.serverURL)
+            // A room renamed or someone joining or leaving changes only those rooms' rows; rebuilding every
+            // room would read a history page for each.
+            guard let changed = (try? JSONDecoder().decode(ApronRoomUpdate.self, from: params))?.changedRoomIds else {
+                scheduleRebuild(session.serverURL)
+                return
+            }
+            for roomId in changed {
+                scheduleRebuild(session.serverURL, roomId: roomId)
+            }
+            if !changed.isEmpty, session.server.has("rooms") {
+                Task { try? await service.push.updateRoomTitles(session: session, rooms: session.connection.joinedRooms()) }
+            }
         case "activity":
             guard service.serverTracksCursors(session),
                   let activity = try? JSONDecoder().decode(ApronActivity.self, from: params),
@@ -125,6 +152,12 @@ public final class ApronLiveFeed {
                   let cursor = activity.readMessageId.flatMap(Int64.init)
             else { return }
             service.readStore.setServerCursor(cursor, serverURL: session.serverURL, roomId: roomId)
+            // Read on another device: only history says what is still unread. Read here, the open chat already
+            // cleared the row.
+            let destination = ChatSummary.Destination.apron(serverURL: session.serverURL, roomId: roomId)
+            if chatList.chats.first(where: { $0.destination == destination })?.unreadCount ?? 0 > 0 {
+                scheduleRebuild(session.serverURL, roomId: roomId)
+            }
         default:
             break
         }
@@ -145,6 +178,10 @@ public final class ApronLiveFeed {
                     try await chatList.updateChats(source.chatSummaries(in: session, roomIds: roomIds))
                 } else {
                     try await chatList.replaceChats(where: { $0.isApronRoom(on: url) }, with: source.chatSummaries(in: session))
+                    // Only while that connection is still open.
+                    if sessions[url] != nil {
+                        currentServers.insert(url)
+                    }
                     // Rooms changed: notifications title new rooms, such as a new DM, by name.
                     if session.server.has("rooms") {
                         try await service.push.updateRoomTitles(session: session, rooms: session.connection.joinedRooms())

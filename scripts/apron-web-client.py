@@ -395,7 +395,23 @@ def cmd_listen(session: Session, args: argparse.Namespace) -> None:
         session.drain(min(5, deadline - time.time()))
         for frame in session.notifications:
             print(json.dumps(redact(frame), ensure_ascii=False))
+            kind = live_message_kind(frame)
+            if kind:
+                # The app updates a Chats row from a new message alone, and reads history for the rest.
+                print(json.dumps({"live_message": kind}))
         session.notifications.clear()
+
+
+def live_message_kind(frame: dict) -> str | None:
+    """A live `message` frame is new when its log_id is its message_id (§4.3.1); edits and moves carry a later one."""
+    if frame.get("method") != "message":
+        return None
+    params = frame.get("params") or {}
+    if not params.get("message_id"):
+        return "transient"
+    if params.get("deleted"):
+        return "delete"
+    return "new" if params.get("log_id") in (None, params["message_id"]) else "edit"
 
 
 # --- Push (§4.9): dependency-free P-256, HKDF and AES-128-GCM for Web Push payloads (RFC 8291) ---

@@ -117,6 +117,28 @@ final class ChatListViewModelTests: XCTestCase {
         XCTAssertEqual(list.connections[1].error, ApronError.rejected(status: 503).localizedDescription)
     }
 
+    func testACurrentAccountInAPageKeepsTheRowsItHas() async throws {
+        let server = try XCTUnwrap(URL(string: "wss://one.example"))
+        let accountId = Account.apronId(serverURL: server)
+        let first = row("a", .apron, minutesAgo: 5, destination: .apron(serverURL: server, roomId: "a")).scoped(to: accountId)
+        let apron = FakeProvider(network: .apron, page: .init(chats: [first], archived: [], accounts: [
+            .init(accountId: accountId, label: "one", error: nil),
+        ]))
+        let list = makeList([(apron, nil)])
+        await list.load()
+        // A live connection updates the row, then a reload finds its rows current.
+        var live = first
+        live.preview = "live"
+        list.updateChats([live])
+        apron.page = .init(chats: [], archived: [], accounts: [
+            .init(accountId: accountId, label: "one", error: nil, isCurrent: true),
+        ])
+        await list.load()
+        XCTAssertEqual(list.chats.map(\.preview), ["live"])
+        XCTAssertEqual(list.connections.map(\.id), [accountId])
+        XCTAssertNil(list.connections[0].error)
+    }
+
     func testTheLastListShowsAtLaunch() async {
         let first = makeList([(FakeProvider(network: .spotify, page: .init(chats: [row("s", .spotify, minutesAgo: 1)], archived: [])), "spotify")])
         await first.load()

@@ -122,11 +122,15 @@ public struct ChatListPage: Sendable {
         public let label: String
         /// Why the account's rows didn't load; `nil` when they did.
         public let error: Error?
+        /// Whether the rows already listed for the account are current, kept so by a live connection; the page
+        /// then has none of them and the list keeps them, so a reload doesn't read them again.
+        public let isCurrent: Bool
 
-        public init(accountId: String, label: String, error: Error?) {
+        public init(accountId: String, label: String, error: Error?, isCurrent: Bool = false) {
             self.accountId = accountId
             self.label = label
             self.error = error
+            self.isCurrent = isCurrent
         }
     }
 
@@ -277,8 +281,8 @@ public final class ChatListViewModel: ObservableObject {
                 }
                 for account in accounts {
                     statuses.append(status(id: account.accountId, network: network, label: account.label, error: account.error))
-                    // An account that failed keeps the rows it had.
-                    if account.error != nil {
+                    // An account that failed, or whose rows are kept current, keeps the rows it had.
+                    if account.error != nil || account.isCurrent {
                         merged += chats.filter { $0.accountId == account.accountId }
                         archived += archivedChats.filter { $0.accountId == account.accountId }
                     }
