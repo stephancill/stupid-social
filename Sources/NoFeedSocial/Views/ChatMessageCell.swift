@@ -91,6 +91,9 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
         var showMentionedUser: (String) -> Void = { _ in }
         var openLink: (URL) -> Void = { _ in }
         var revealSpoilers: () -> Void = {}
+        /// The chat's custom emoji for a reaction key, shown as its image.
+        var customEmoji: (String) -> ChatCustomEmoji? = { _ in nil }
+        var customEmojiImageDidLoad: () -> Void = {}
     }
 
     private static let timeFormatter: DateFormatter = {
@@ -572,12 +575,20 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
             var configuration = UIButton.Configuration.filled()
             configuration.cornerStyle = .capsule
             configuration.contentInsets = NSDirectionalEdgeInsets(top: 5, leading: 10, bottom: 5, trailing: 11)
-            var emojiTitle = AttributedString(reaction.emoji)
-            emojiTitle.font = UIFont.systemFont(ofSize: 20)
             var count = AttributedString(" \(reaction.count)")
             count.font = UIFont.preferredFont(forTextStyle: .subheadline).withWeight(.semibold)
             count.baselineOffset = 1
-            configuration.attributedTitle = emojiTitle + count
+            let custom = actions.customEmoji(reaction.emoji)
+            if let custom {
+                // About the height of the 20 pt emoji glyphs in other chips.
+                configuration.image = ChatCustomEmojiImages.shared.image(for: custom, height: 22, onLoad: actions.customEmojiImageDidLoad)
+                configuration.imagePadding = 0
+                configuration.attributedTitle = count
+            } else {
+                var emojiTitle = AttributedString(reaction.emoji)
+                emojiTitle.font = UIFont.systemFont(ofSize: 20)
+                configuration.attributedTitle = emojiTitle + count
+            }
             // Your reactions are highlighted blue; everyone else's stay neutral. On your own blue bubble,
             // yours invert to white with blue text so they still stand out.
             if reaction.includesYou {
@@ -592,7 +603,7 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
             let chip = UIButton(configuration: configuration)
             chip.titleLabel?.numberOfLines = 1
             chip.setContentCompressionResistancePriority(.required, for: .horizontal)
-            chip.accessibilityLabel = "\(reaction.emoji), \(reaction.count)\(reaction.includesYou ? ", including you" : "")"
+            chip.accessibilityLabel = "\(custom?.label ?? reaction.emoji), \(reaction.count)\(reaction.includesYou ? ", including you" : "")"
             chip.isUserInteractionEnabled = canReact
             let emoji = reaction.emoji
             chip.addAction(UIAction { [weak self] _ in self?.actions.toggleReaction(emoji) }, for: .primaryActionTriggered)

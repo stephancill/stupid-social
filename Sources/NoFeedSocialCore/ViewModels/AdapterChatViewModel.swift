@@ -34,7 +34,7 @@ public struct ChatOutgoing {
 /// the divider, read-marker debouncing, snapshots, drafts and optimistic sending.
 ///
 /// Optional abilities are separate protocols (reactions, unseen reactions, audio previews, live updates, quoted
-/// messages, windows of older history, typing, mentions, commands, links), so a chat offers an action exactly when its adapter
+/// messages, windows of older history, typing, mentions, custom emoji, commands, links), so a chat offers an action exactly when its adapter
 /// implements it.
 @MainActor
 public protocol ChatAdapter: AnyObject {
@@ -158,6 +158,13 @@ public protocol ChatMentioning: ChatAdapter {
     /// User id → name.
     var mentionNames: [String: String] { get }
     func mentionSuggestions(for query: String) -> [ChatUser]
+}
+
+/// Custom emoji the network defines, written as `:name:` keys in reactions and text.
+@MainActor
+public protocol ChatCustomEmojis: ChatAdapter {
+    /// Key → emoji; empty until the network's catalog loads, then the adapter calls `onChange`.
+    var customEmojis: [String: ChatCustomEmoji] { get }
 }
 
 /// Text that runs a command rather than posting a message, which may post nothing.
@@ -481,6 +488,9 @@ public final class AdapterChatViewModel<Adapter: ChatAdapter>: ChatViewModel {
         }
         if let mentioning = adapter as? any ChatMentioning, mentionNames != mentioning.mentionNames {
             mentionNames = mentioning.mentionNames
+        }
+        if let emojis = adapter as? any ChatCustomEmojis, customEmojis != emojis.customEmojis {
+            customEmojis = emojis.customEmojis
         }
         if let resolving = adapter as? any ChatReferenceResolving {
             if referencedMessages != resolving.referencedMessages {

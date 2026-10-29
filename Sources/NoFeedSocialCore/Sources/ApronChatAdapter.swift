@@ -3,7 +3,7 @@ import Foundation
 /// One Apron room: loads recent history, applies live snapshots, posts messages and commands, and keeps the
 /// room's members, typing indications and read cursor.
 @MainActor
-public final class ApronChatAdapter: ChatAdapter, ChatReactionSending, ChatUnseenReactions, ChatLiveUpdating, ChatReferenceResolving, ChatWindowing, ChatTyping, ChatMentioning, ChatCommanding, ChatLinking {
+public final class ApronChatAdapter: ChatAdapter, ChatReactionSending, ChatUnseenReactions, ChatLiveUpdating, ChatReferenceResolving, ChatWindowing, ChatTyping, ChatMentioning, ChatCustomEmojis, ChatCommanding, ChatLinking {
     public let network = SocialNetwork.apron
     public let canReply = true
     public let pollInterval: Duration? = nil
@@ -25,6 +25,9 @@ public final class ApronChatAdapter: ChatAdapter, ChatReactionSending, ChatUnsee
         ApronMention.pattern
     }
 
+    /// The server's custom emoji (`ext:emoji`), once its catalog loads.
+    public private(set) var customEmojis: [String: ChatCustomEmoji] = [:]
+
     /// The members, profile and notification screens' model, kept current from this room's connection.
     public let room: ApronRoomViewModel
     public let serverURL: URL
@@ -37,6 +40,8 @@ public final class ApronChatAdapter: ChatAdapter, ChatReactionSending, ChatUnsee
     /// The server's `ext.media` origins, kept from the last connection so cached image embeds render as images
     /// before the connection is up.
     private var mediaOrigins: [URL] = []
+    /// The catalog `customEmojis` came from or is loading from.
+    private var emojiCatalogURL: URL?
     private var snapshots: [String: ApronMessage] = [:]
     /// Kept current user objects (§3.3.1); messages carry recorded `from` objects that often omit avatars.
     /// Mentions show these names; a name another known user shares is left out, so those mentions keep their
@@ -144,11 +149,16 @@ public final class ApronChatAdapter: ChatAdapter, ChatReactionSending, ChatUnsee
         let reactions: [ApronReactionRecord]
         /// So cached image embeds render as images before the connection is up instead of growing from cards.
         let mediaOrigins: [URL]
+        /// So custom emoji render before the connection is up; the catalog is cached for as long as its URL stays.
+        var emojiCatalogURL: URL?
     }
 
     public func restore(snapshot data: Data) {
         guard snapshots.isEmpty, let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data) else { return }
         mediaOrigins = snapshot.mediaOrigins
+        if let url = snapshot.emojiCatalogURL {
+            loadEmojiCatalog(url)
+        }
         for user in snapshot.users where users[user.userId] == nil {
             users[user.userId] = user
         }
@@ -183,6 +193,7 @@ public final class ApronChatAdapter: ChatAdapter, ChatReactionSending, ChatUnsee
             users: users.values.filter { authors.contains($0.userId) },
             reactions: reactions,
             mediaOrigins: mediaOrigins,
+            emojiCatalogURL: emojiCatalogURL,
         ))
     }
 
@@ -205,6 +216,7 @@ public final class ApronChatAdapter: ChatAdapter, ChatReactionSending, ChatUnsee
         you = session.you
         ownUserIds.insert(session.you.userId)
         mediaOrigins = session.server.ext?.mediaOrigins ?? mediaOrigins
+        updateEmojiCatalog(session.connection.server ?? session.server)
         tracksCursors = service.serverTracksCursors(session)
         observerToken = session.connection.observe(
             notifications: { [weak self] method, params in self?.handle(method: method, params: params) },
@@ -539,6 +551,11 @@ public final class ApronChatAdapter: ChatAdapter, ChatReactionSending, ChatUnsee
     // MARK: Live frames
 
     private func handle(method: String, params: Data) {
+        if method == "server", let server = session?.connection.server {
+            // A new `catalog_url` means the catalog changed (`ext:emoji`).
+            updateEmojiCatalog(server)
+            return
+        }
         if method == "status" {
             // The connection already applied it; this room's level may have changed, also from another device.
             updateNotifications()
@@ -607,6 +624,39 @@ public final class ApronChatAdapter: ChatAdapter, ChatReactionSending, ChatUnsee
             Task { try? await send() }
         }
         publish()
+    }
+
+    // MARK: Custom emoji
+
+    /// Follows the latest `server` frame: its catalog while it lists `ext:emoji`, otherwise none.
+    private func updateEmojiCatalog(_ server: ApronServerInfo) {
+        let url = server.has("ext:emoji") ? server.ext?.emojiCatalogURL : nil
+        guard let url else {
+            emojiCatalogURL = nil
+            if !customEmojis.isEmpty {
+                customEmojis = [:]
+                onChange?()
+            }
+            return
+        }
+        loadEmojiCatalog(url)
+    }
+
+    /// Keys keep showing as text until the catalog loads, and the previous catalog stays until a new one has.
+    private func loadEmojiCatalog(_ url: URL) {
+        guard url != emojiCatalogURL else { return }
+        emojiCatalogURL = url
+        Task { [weak self, service] in
+            let catalog = try? await service.emojiCatalog(url: url)
+            guard let self, emojiCatalogURL == url else { return }
+            guard let catalog else {
+                // Tried again on the next connection or `server` frame.
+                emojiCatalogURL = nil
+                return
+            }
+            customEmojis = catalog
+            onChange?()
+        }
     }
 
     // MARK: Members

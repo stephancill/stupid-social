@@ -84,6 +84,7 @@ public final class ApronNotificationSource: ChatListProvider {
         }
         let own = service.readStore.ownUserIds(serverURL: session.serverURL).union([session.you.userId])
         let serverTitle = session.serverTitle
+        let serverAvatarURL = (session.connection.server ?? session.server).avatarURL
         var summaries: [ChatSummary] = []
         for room in rooms where roomIds?.contains(room.roomId) ?? true {
             let page = if let firstPage { firstPage } else { try await session.connection.history(roomId: room.roomId, limit: historyLimit) }
@@ -95,9 +96,10 @@ public final class ApronNotificationSource: ChatListProvider {
             let unread = latest.flatMap { message in
                 message.messageId.flatMap(Int64.init).map { unreadCount(in: page, roomId: room.roomId, latest: $0, session: session) }
             } ?? 0
-            // A DM shows the other person's avatar, as apron-web does.
+            // A DM shows the other person's avatar, as apron-web does; rooms have none of their own (§4.2), so
+            // they show the server's (§3.1).
             let others = room.isNamedForMembers ? room.otherMembers(you: session.you.userId) : []
-            let avatarURL = others.count == 1 ? (users[others[0].userId] ?? others[0]).avatarURL : nil
+            let avatarURL = others.count == 1 ? (users[others[0].userId] ?? others[0]).avatarURL : serverAvatarURL
             summaries.append(ChatSummary(
                 id: Self.chatId(serverURL: session.serverURL, roomId: room.roomId),
                 network: .apron,
@@ -191,7 +193,7 @@ extension ApronNotificationSource: ChatListResolving {
                 network: .apron,
                 title: roomId,
                 titlePrefix: serverURL.host() ?? serverURL.absoluteString,
-                avatarURL: nil,
+                avatarURL: service.server(for: serverURL)?.avatarURL,
                 preview: nil,
                 timestamp: nil,
                 unreadCount: 0,

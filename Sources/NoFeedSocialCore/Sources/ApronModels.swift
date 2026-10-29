@@ -383,10 +383,21 @@ public struct ApronServerExt: Decodable, Equatable, Sendable {
     public let uploadLimits: [String: Int]
     /// The demo server's `ext.settings.read_cursors: false` says it keeps no read cursors.
     public let readCursorsDisabled: Bool
+    /// `ext.emoji.catalog_url` (EXTENSIONS.md `ext:emoji`); use it only while the server lists `ext:emoji`.
+    public let emojiCatalogURL: URL?
 
     private enum CodingKeys: String, CodingKey {
         case media
         case settings
+        case emoji
+    }
+
+    private struct Emoji: Decodable {
+        let catalogURL: String?
+
+        enum CodingKeys: String, CodingKey {
+            case catalogURL = "catalog_url"
+        }
     }
 
     private struct Settings: Decodable {
@@ -415,8 +426,55 @@ public struct ApronServerExt: Decodable, Equatable, Sendable {
         let media = try? container?.decodeIfPresent(Media.self, forKey: .media)
         let settings = try? container?.decodeIfPresent(Settings.self, forKey: .settings)
         readCursorsDisabled = settings?.readCursors == false
+        let emoji = try? container?.decodeIfPresent(Emoji.self, forKey: .emoji)
+        emojiCatalogURL = ApronEmojiCatalog.catalogURL(emoji?.catalogURL)
         mediaOrigins = (media?.origins ?? []).compactMap(URL.init(string:))
         uploadLimits = (media?.upload ?? [:]).compactMapValues(\.maxBytes)
+    }
+}
+
+/// Custom emoji (EXTENSIONS.md `ext:emoji`): the catalog a server's `catalog_url` returns, keyed by `:name:`.
+public enum ApronEmojiCatalog {
+    private static let keyPattern = try! NSRegularExpression(pattern: "^:[A-Za-z0-9_+-]+:$")
+
+    /// `https:`, `http:` on a loopback host, or `data:application/json`.
+    static func catalogURL(_ string: String?) -> URL? {
+        guard let string, let url = URL(string: string) else { return nil }
+        switch url.scheme?.lowercased() {
+        case "https": return url
+        case "http": return ["localhost", "127.0.0.1", "::1"].contains(url.host()?.lowercased() ?? "") ? url : nil
+        case "data": return string.lowercased().hasPrefix("data:application/json") ? url : nil
+        default: return nil
+        }
+    }
+
+    /// Entries with an invalid key or no usable `url` are left out; other fields of the wrong type take their
+    /// defaults.
+    public static func parse(_ data: Data) throws -> [String: ChatCustomEmoji] {
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw URLError(.cannotParseResponse)
+        }
+        var catalog: [String: ChatCustomEmoji] = [:]
+        for (key, value) in object {
+            guard keyPattern.firstMatch(in: key, range: NSRange(key.startIndex..., in: key)) != nil,
+                  let entry = value as? [String: Any],
+                  let url = ApronUser.avatarURL(entry["url"] as? String)
+            else { continue }
+            let width = (entry["width"] as? NSNumber)?.doubleValue
+            let height = (entry["height"] as? NSNumber)?.doubleValue
+            let aspectRatio = if let width, let height, width > 0, height > 0 { width / height } else { 1.0 }
+            catalog[key] = ChatCustomEmoji(
+                key: key,
+                url: url,
+                staticURL: ApronUser.avatarURL(entry["static_url"] as? String),
+                alt: (entry["alt"] as? String).flatMap { $0.isEmpty ? nil : $0 },
+                aspectRatio: aspectRatio,
+                category: (entry["category"] as? String).flatMap { $0.isEmpty ? nil : $0 },
+                tags: (entry["tags"] as? [Any])?.compactMap { $0 as? String } ?? [],
+                isHidden: entry["hidden"] as? Bool ?? false,
+            )
+        }
+        return catalog
     }
 }
 

@@ -157,6 +157,80 @@ public struct ChatReaction: Hashable, Sendable {
     }
 }
 
+/// A picture a network defines for a `:name:` key, which reactions and message text use like an emoji.
+public struct ChatCustomEmoji: Hashable, Codable, Sendable {
+    public let key: String
+    public let url: URL
+    /// A still copy of an animated image.
+    public let staticURL: URL?
+    public let alt: String?
+    /// Width / height; square when the network doesn't say.
+    public let aspectRatio: Double
+    /// Groups the picker.
+    public let category: String?
+    /// More words to find it by.
+    public let tags: [String]
+    /// Rendered, but not offered in the picker or suggestions.
+    public let isHidden: Bool
+
+    public init(key: String, url: URL, staticURL: URL? = nil, alt: String? = nil, aspectRatio: Double = 1, category: String? = nil, tags: [String] = [], isHidden: Bool = false) {
+        self.key = key
+        self.url = url
+        self.staticURL = staticURL
+        self.alt = alt
+        self.aspectRatio = aspectRatio
+        self.category = category
+        self.tags = tags
+        self.isHidden = isHidden
+    }
+
+    /// Chats show emoji as still images, so the still copy loads when there is one.
+    public var imageURL: URL {
+        staticURL ?? url
+    }
+
+    /// For VoiceOver and long presses.
+    public var label: String {
+        alt ?? key
+    }
+
+    /// The keys in text that the catalog has, left to right. At each `:`, the text up to the next `:` is a key
+    /// when the catalog has it, and the scan continues after it; otherwise it continues at that next `:`. So
+    /// `:a::b:` is two keys and `12:30:a:` is one.
+    public static func ranges(in text: String, catalog: [String: ChatCustomEmoji]) -> [(range: NSRange, emoji: ChatCustomEmoji)] {
+        guard !catalog.isEmpty else { return [] }
+        let string = text as NSString
+        var found: [(NSRange, ChatCustomEmoji)] = []
+        var start = string.range(of: ":").location
+        while start != NSNotFound {
+            let rest = NSRange(location: start + 1, length: string.length - start - 1)
+            let end = string.range(of: ":", range: rest).location
+            guard end != NSNotFound else { break }
+            let range = NSRange(location: start, length: end - start + 1)
+            if let emoji = catalog[string.substring(with: range)] {
+                found.append((range, emoji))
+                let after = NSRange(location: end + 1, length: string.length - end - 1)
+                start = string.range(of: ":", range: after).location
+            } else {
+                start = end
+            }
+        }
+        return found
+    }
+
+    /// Emoji offered for a typed `:query`: every one for a bare `:`, else names starting with it first, then names
+    /// and tags containing it.
+    public static func suggestions(for query: String, in catalog: [String: ChatCustomEmoji], limit: Int = 40) -> [ChatCustomEmoji] {
+        let offered = catalog.values.filter { !$0.isHidden }.sorted { $0.key.localizedStandardCompare($1.key) == .orderedAscending }
+        guard !query.isEmpty else { return Array(offered.prefix(limit)) }
+        let prefix = offered.filter { $0.key.dropFirst().lowercased().hasPrefix(query.lowercased()) }
+        let containing = offered.filter { emoji in
+            !prefix.contains(emoji) && ([String(emoji.key.dropFirst().dropLast())] + emoji.tags).contains { $0.localizedCaseInsensitiveContains(query) }
+        }
+        return Array((prefix + containing).prefix(limit))
+    }
+}
+
 /// Who reacted with an emoji, for a reaction chip's long-press list.
 public struct ChatReactor: Hashable, Sendable {
     public let user: ChatUser
@@ -278,6 +352,8 @@ public class ChatViewModel: ObservableObject {
     @Published public internal(set) var typingNames: [String] = []
     /// User id → name, for showing `@` mentions by name.
     @Published public internal(set) var mentionNames: [String: String] = [:]
+    /// Key → the network's custom emoji, shown as images in text and reactions; empty when it has none.
+    @Published public internal(set) var customEmojis: [String: ChatCustomEmoji] = [:]
     @Published public var errorMessage: String?
 
     /// Names head each sender's group of bubbles; one-to-one chats turn them off.
@@ -619,6 +695,10 @@ public class ChatViewModel: ObservableObject {
 
     public func mentionSuggestions(for _: String) -> [ChatUser] {
         []
+    }
+
+    public func customEmojiSuggestions(for query: String) -> [ChatCustomEmoji] {
+        ChatCustomEmoji.suggestions(for: query, in: customEmojis)
     }
 
     // MARK: Reactions

@@ -46,6 +46,8 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     /// Keyed by item key (`itemKey(for:)`), so a sent message compares with its "sending" copy.
     private var renderedMessages: [String: (message: ChatMessage, layout: ChatBubbleLayout, reply: ChatReplyQuote?)] = [:]
     private var attributedCache: [String: NSAttributedString] = [:]
+    /// Set while a re-render for newly loaded custom emoji images is waiting, so a burst of loads renders once.
+    private var emojiReconfigurePending = false
     /// Item keys back to message ids; see `itemKey(for:)`.
     private var messageIdByKey: [String: String] = [:]
     /// Messages whose spoilers were tapped open; they stay open while the chat is.
@@ -104,7 +106,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     private let typingView = ChatGlass.make(cornerRadius: 14)
     private let mentionGlass = ChatGlass.make(cornerRadius: 18)
     private let mentionStack = UIStackView()
-    /// The `@query` word being completed, in the text view's text, and the suggestions shown for it.
+    /// The `@query` or `:query` word being completed, in the text view's text, and the suggestions shown for it.
     private var mentionRange: NSRange?
     private var shownSuggestionIds: [String] = []
     private let typingLabel = UILabel()
@@ -219,6 +221,8 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
                     },
                     openLink: { [weak self] url in self?.openLink(url) },
                     revealSpoilers: { [weak self] in self?.revealSpoilers(of: id) },
+                    customEmoji: { [weak self] key in self?.viewModel.customEmojis[key] },
+                    customEmojiImageDidLoad: { [weak self] in self?.customEmojiImagesDidLoad() },
                 ),
                 availableWidth: collectionView.bounds.width > 0 ? collectionView.bounds.width : view.bounds.width,
             )
@@ -478,6 +482,9 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         viewModel.$mentionNames.dropFirst().removeDuplicates()
             .sink { [weak self] _ in DispatchQueue.main.async { self?.reconfigureMentions() } }
             .store(in: &cancellables)
+        viewModel.$customEmojis.dropFirst().removeDuplicates()
+            .sink { [weak self] _ in DispatchQueue.main.async { self?.reconfigureCustomEmojis() } }
+            .store(in: &cancellables)
         viewModel.$canAttach.sink { [weak self] canAttach in
             self?.attachButton.isEnabled = canAttach
             self?.attachButton.alpha = canAttach ? 1 : 0.35
@@ -591,6 +598,29 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         guard !changed.isEmpty else { return }
         snapshot.reconfigureItems(changed)
         applyKeepingBottom(snapshot)
+    }
+
+    /// Messages whose text or reactions may hold custom emoji render again when the catalog changes or images
+    /// load. Cached text holds the attachments, so it goes too.
+    private func reconfigureCustomEmojis() {
+        attributedCache.removeAll()
+        var snapshot = dataSource.snapshot()
+        let changed = items(in: .messages, of: snapshot).filter { item in
+            guard case let .message(key) = item, case let id = messageId(forKey: key), let message = messagesById[id] else { return false }
+            return (message.text ?? "").contains(":") || (reactionTotals[id] ?? []).contains { $0.emoji.hasPrefix(":") }
+        }
+        guard !changed.isEmpty else { return }
+        snapshot.reconfigureItems(changed)
+        applyKeepingBottom(snapshot)
+    }
+
+    private func customEmojiImagesDidLoad() {
+        guard !emojiReconfigurePending else { return }
+        emojiReconfigurePending = true
+        DispatchQueue.main.async { [weak self] in
+            self?.emojiReconfigurePending = false
+            self?.reconfigureCustomEmojis()
+        }
     }
 
     /// Re-renders replies whose quote changed, such as when a quoted message outside the loaded ones arrives.
@@ -756,6 +786,8 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
             mentionPattern: viewModel.mentionPattern,
             mentionNames: viewModel.mentionNames,
             redactsMentions: DebugRedaction.isEnabled,
+            customEmojis: viewModel.customEmojis,
+            emojiImageDidLoad: { [weak self] in self?.customEmojiImagesDidLoad() },
             font: isSystem ? .preferredFont(forTextStyle: .footnote) : .preferredFont(forTextStyle: .body),
             formatsQuotes: message.isMarkdown,
         )
@@ -1316,8 +1348,9 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         mentionGlass.isHidden = true
     }
 
-    /// The `@` word ending at the caret, if the caret is in one: its range including `@`, and the text after it.
-    private func mentionQuery() -> (range: NSRange, query: String)? {
+    /// The word ending at the caret, if the caret is in one that starts with `prefix` and continues with only
+    /// `characters`: its range including the prefix, and the text after it.
+    private func wordQuery(prefix: String, characters: CharacterSet) -> (range: NSRange, query: String)? {
         let selection = textView.selectedRange
         guard selection.length == 0, textView.isFirstResponder else { return nil }
         let text = textView.text as NSString
@@ -1327,25 +1360,39 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         }
         let range = NSRange(location: start, length: selection.location - start)
         let word = text.substring(with: range)
-        let idCharacters = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.+:-")
-        guard word.hasPrefix("@"), word.dropFirst().unicodeScalars.allSatisfy(idCharacters.contains) else { return nil }
+        guard word.hasPrefix(prefix), word.dropFirst().unicodeScalars.allSatisfy(characters.contains) else { return nil }
         return (range, String(word.dropFirst()))
     }
 
+    private static let mentionCharacters = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.+:-")
+    /// A custom emoji name (`ext:emoji`); a bare `:` offers every emoji, and a closing `:` ends the word, so a
+    /// finished key suggests nothing.
+    private static let emojiNameCharacters = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_+-")
+
+    /// Members for an `@` word, or custom emoji for a `:` word, at the caret.
     private func updateMentionSuggestions() {
-        let match = mentionQuery()
-        let suggestions = match.map { viewModel.mentionSuggestions(for: $0.query) } ?? []
-        mentionRange = suggestions.isEmpty ? nil : match?.range
-        let ids = suggestions.map(\.id)
+        var match = wordQuery(prefix: ":", characters: Self.emojiNameCharacters)
+        let emojis = match.map { viewModel.customEmojiSuggestions(for: $0.query) } ?? []
+        var users: [ChatUser] = []
+        if emojis.isEmpty {
+            match = wordQuery(prefix: "@", characters: Self.mentionCharacters)
+            users = match.map { viewModel.mentionSuggestions(for: $0.query) } ?? []
+        }
+        let isEmpty = emojis.isEmpty && users.isEmpty
+        mentionRange = isEmpty ? nil : match?.range
+        let ids = emojis.map(\.key) + users.map { "@\($0.id)" }
         guard ids != shownSuggestionIds else { return }
         shownSuggestionIds = ids
         mentionStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        for user in suggestions {
+        if !emojis.isEmpty {
+            mentionStack.addArrangedSubview(emojiStrip(for: emojis))
+        }
+        for user in users {
             mentionStack.addArrangedSubview(mentionRow(for: user))
         }
-        mentionGlass.isHidden = suggestions.isEmpty
+        mentionGlass.isHidden = isEmpty
         // The card covers the typing capsule's spot; bring it back once the card goes.
-        if suggestions.isEmpty {
+        if isEmpty {
             updateTypingIndicator(viewModel.typingNames)
         } else {
             typingView.isHidden = true
@@ -1383,10 +1430,55 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         return row
     }
 
+    /// The custom emoji matching a `:` word, as a row of images that scrolls sideways; tapping one inserts its key.
+    private func emojiStrip(for emojis: [ChatCustomEmoji]) -> UIView {
+        let row = UIStackView()
+        row.spacing = 4
+        row.alignment = .center
+        row.isLayoutMarginsRelativeArrangement = true
+        row.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8)
+        for emoji in emojis {
+            var configuration = UIButton.Configuration.plain()
+            configuration.image = ChatCustomEmojiImages.shared.image(for: emoji, height: 32) { [weak self] in
+                // Rebuilt with the image once it loads.
+                self?.shownSuggestionIds = []
+                self?.updateMentionSuggestions()
+            }
+            configuration.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 6, bottom: 6, trailing: 6)
+            let button = UIButton(configuration: configuration, primaryAction: UIAction { [weak self] _ in
+                self?.insertSuggestion(emoji.key)
+            })
+            button.accessibilityLabel = emoji.label
+            // Long press shows the key, as the strip has no room for names.
+            button.toolTip = emoji.key
+            row.addArrangedSubview(button)
+        }
+        let scroll = UIScrollView()
+        scroll.showsHorizontalScrollIndicator = false
+        scroll.alwaysBounceHorizontal = true
+        row.translatesAutoresizingMaskIntoConstraints = false
+        scroll.addSubview(row)
+        NSLayoutConstraint.activate([
+            row.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor),
+            row.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor),
+            row.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor),
+            row.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor),
+            row.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor),
+            scroll.heightAnchor.constraint(equalToConstant: 44),
+        ])
+        return scroll
+    }
+
     /// Replaces the `@` word with the user's `@user_id` and a space; messages then show it by name.
     private func insertMention(of user: ChatUser) {
+        insertSuggestion("@\(user.id)")
+    }
+
+    /// Replaces the word being completed with `text` and a space, which also keeps a key apart from a mention
+    /// after it (a mention can contain `:`).
+    private func insertSuggestion(_ text: String) {
         guard let range = mentionRange else { return }
-        let replacement = "@\(user.id) "
+        let replacement = "\(text) "
         textView.text = (textView.text as NSString).replacingCharacters(in: range, with: replacement)
         textView.selectedRange = NSRange(location: range.location + (replacement as NSString).length, length: 0)
         textViewDidChange(textView)
@@ -1464,7 +1556,10 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     }
 
     private func presentReactionPicker(for id: String) {
-        let picker = ChatReactionPickerViewController(selected: Set(viewModel.yourEmojis(on: id))) { [weak self] emoji in
+        let picker = ChatReactionPickerViewController(
+            selected: Set(viewModel.yourEmojis(on: id)),
+            customEmojis: viewModel.customEmojis.values.filter { !$0.isHidden },
+        ) { [weak self] emoji in
             self?.toggleReaction(emoji, on: id)
         }
         if let sheet = picker.sheetPresentationController {

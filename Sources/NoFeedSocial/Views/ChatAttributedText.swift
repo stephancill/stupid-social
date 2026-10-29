@@ -1,6 +1,8 @@
+import NoFeedSocialCore
 import UIKit
 
 /// Converts parsed inline Markdown into UIKit attributes; `AttributedString`'s presentation intents carry no fonts.
+@MainActor
 enum ChatAttributedText {
     static func make(
         _ text: AttributedString,
@@ -11,6 +13,8 @@ enum ChatAttributedText {
         mentionPattern: NSRegularExpression?,
         mentionNames: [String: String],
         redactsMentions: Bool,
+        customEmojis: [String: ChatCustomEmoji] = [:],
+        emojiImageDidLoad: @escaping () -> Void = {},
         font base: UIFont,
         formatsQuotes: Bool,
     ) -> NSAttributedString {
@@ -49,6 +53,7 @@ enum ChatAttributedText {
                 if let mentionPattern {
                     highlightMentions(in: segment, pattern: mentionPattern, color: linkColor, underline: underlinesMentions, names: mentionNames, redacts: redactsMentions)
                 }
+                insertCustomEmojis(in: segment, catalog: customEmojis, onLoad: emojiImageDidLoad)
             }
             result.append(segment)
         }
@@ -125,6 +130,21 @@ enum ChatAttributedText {
             if let name = redacts ? "Redacted" : names[userId], segment.attribute(.chatLink, at: match.range.location, effectiveRange: nil) == nil {
                 segment.replaceCharacters(in: match.range, with: "@\(name)")
             }
+        }
+    }
+}
+
+extension ChatAttributedText {
+    /// Custom emoji keys become inline images the height of the line; code spans keep them as text, and so do
+    /// links and mentions, whose text can hold a `:`.
+    private static func insertCustomEmojis(in segment: NSMutableAttributedString, catalog: [String: ChatCustomEmoji], onLoad: @escaping () -> Void) {
+        // Back to front, so replacing a key doesn't move the ones before it.
+        for (range, emoji) in ChatCustomEmoji.ranges(in: segment.string, catalog: catalog).reversed() {
+            var attributes = segment.attributes(at: range.location, effectiveRange: nil)
+            guard attributes[.chatLink] == nil, attributes[.chatMention] == nil else { continue }
+            let font = attributes[.font] as? UIFont ?? .preferredFont(forTextStyle: .body)
+            attributes[.attachment] = ChatCustomEmojiImages.shared.attachment(for: emoji, font: font, onLoad: onLoad)
+            segment.replaceCharacters(in: range, with: NSAttributedString(string: "\u{FFFC}", attributes: attributes))
         }
     }
 }

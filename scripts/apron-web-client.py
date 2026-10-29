@@ -16,6 +16,7 @@ Examples:
   scripts/apron-web-client.py push-capture --port 8099   # local push endpoint that decrypts what it receives
   scripts/apron-web-client.py push-register ws://127.0.0.1:8080/ws --endpoint http://127.0.0.1:8099/p --wake mentions
   scripts/apron-web-client.py mute ws://127.0.0.1:8080/ws --room general
+  scripts/apron-web-client.py emoji wss://server.apron.chat/ --scan "12:30:apron::SideTable:" --images
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ import json
 import mimetypes
 import os
 import random
+import re
 import secrets
 import socket
 import ssl
@@ -700,6 +702,54 @@ def cmd_mute(session: Session, args: argparse.Namespace) -> None:
     print_json({"status": [n for n in session.notifications if n.get("method") == "status"]})
 
 
+EMOJI_KEY = re.compile(r"^:[A-Za-z0-9_+-]+:$")
+
+
+def emoji_keys(text: str, catalog: dict[str, Any]) -> list[tuple[int, str]]:
+    """Custom emoji keys in text, scanning as EXTENSIONS.md ext:emoji § Text says: at each `:`, a key the catalog
+    has up to the next `:` renders and the scan continues after it, otherwise it continues at that next `:`."""
+    found = []
+    start = text.find(":")
+    while start != -1:
+        end = text.find(":", start + 1)
+        if end == -1:
+            break
+        key = text[start : end + 1]
+        if key in catalog:
+            found.append((start, key))
+            start = text.find(":", end + 1)
+        else:
+            start = end
+    return found
+
+
+def cmd_emoji(session: Session, args: argparse.Namespace) -> None:
+    """The ext:emoji catalog: fetched from `catalog_url`, each key checked, and each image's type and size."""
+    server = session.wait_server()
+    if args.sign_in:
+        authenticate(session, args)
+        session.drain(args.wait)
+        server = next((n["params"] for n in reversed(session.notifications) if n.get("method") == "server"), server)
+    if "ext:emoji" not in server.get("capabilities", []):
+        raise SystemExit("server does not list ext:emoji")
+    catalog_url = server.get("ext", {}).get("emoji", {}).get("catalog_url")
+    if not isinstance(catalog_url, str):
+        raise SystemExit("no ext.emoji.catalog_url")
+    with urllib.request.urlopen(urllib.request.Request(catalog_url, headers={"User-Agent": "apron-probe/1"}), timeout=15) as response:
+        headers = {k: response.headers.get(k) for k in ("Content-Type", "Cache-Control", "ETag")}
+        catalog = json.load(response)
+    output: dict[str, Any] = {"catalog_url": catalog_url, "headers": headers, "count": len(catalog), "emoji": {}}
+    for key, emoji in catalog.items():
+        entry: dict[str, Any] = {"valid_key": bool(EMOJI_KEY.match(key)), **emoji}
+        if args.images and isinstance(emoji, dict) and isinstance(emoji.get("url"), str):
+            with urllib.request.urlopen(urllib.request.Request(emoji["url"], method="HEAD", headers={"User-Agent": "apron-probe/1"}), timeout=15) as image:
+                entry["image"] = {k: image.headers.get(k) for k in ("Content-Type", "Content-Length", "Cache-Control")}
+        output["emoji"][key] = entry
+    if args.scan is not None:
+        output["scan"] = {"text": args.scan, "keys": emoji_keys(args.scan, catalog)}
+    print_json(output)
+
+
 def cmd_push_capture(args: argparse.Namespace) -> None:
     """Serves a local push endpoint (with a server run with --push.allow-insecure), logging each POST's headers
     and decrypting its body with --keys-file."""
@@ -825,6 +875,10 @@ def main() -> None:
     mute = add("mute", cmd_mute)
     mute.add_argument("--room")
     mute.add_argument("--off", action="store_true")
+    emoji = add("emoji", cmd_emoji)
+    emoji.add_argument("--sign-in", action="store_true", help="read the catalog from the server frame sent after auth")
+    emoji.add_argument("--images", action="store_true", help="HEAD each image")
+    emoji.add_argument("--scan", help="text to find catalog keys in")
     capture = sub.add_parser("push-capture")
     capture.add_argument("--port", type=int, default=8099)
     capture.add_argument("--keys-file", default="logs/apron-push-keys.json")

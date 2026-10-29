@@ -23,6 +23,8 @@ public final class ApronService {
     private let agent: String
     private var sharedSessions: [URL: ApronSession] = [:]
     private var pendingSessions: [URL: Task<ApronSession, Error>] = [:]
+    /// Custom emoji catalogs by `catalog_url`, which a server changes whenever the catalog changes (`ext:emoji`).
+    private var emojiCatalogs: [URL: Task<[String: ChatCustomEmoji], Error>] = [:]
     public let readStore: ApronReadStore
     public let reactionStore = ApronReactionStore()
     public let snapshotCache = ChatSnapshotCache()
@@ -204,6 +206,27 @@ public final class ApronService {
             }
         })
         return session
+    }
+
+    /// A server's custom emoji catalog, fetched once per `catalog_url`; a failed fetch is tried again next time.
+    public func emojiCatalog(url: URL) async throws -> [String: ChatCustomEmoji] {
+        if let task = emojiCatalogs[url] {
+            return try await task.value
+        }
+        let task = Task {
+            let (data, response) = try await URLSession.shared.data(from: url)
+            if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
+                throw URLError(.badServerResponse)
+            }
+            return try ApronEmojiCatalog.parse(data)
+        }
+        emojiCatalogs[url] = task
+        do {
+            return try await task.value
+        } catch {
+            emojiCatalogs[url] = nil
+            throw error
+        }
     }
 
     /// Closes shared connections, such as when the app goes to the background; the next use reopens them.
