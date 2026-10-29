@@ -343,6 +343,12 @@ private struct ChatRow: View {
                     Text(DebugRedaction.chatTitle(chat, enabled: redactionEnabled))
                         .font(.headline)
                         .lineLimit(1)
+                    if chat.isMuted {
+                        Image(systemName: "speaker.slash.fill")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .accessibilityLabel("Muted")
+                    }
                     Spacer(minLength: 8)
                     if let timestamp = chat.timestamp {
                         Text(Self.timeLabel(for: timestamp))

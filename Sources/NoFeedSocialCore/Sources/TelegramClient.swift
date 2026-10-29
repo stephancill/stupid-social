@@ -1,6 +1,12 @@
 import Foundation
 import NoFeedSocialPush
 
+/// When private chats and groups are muted until by default, as Unix times.
+struct TelegramMuteDefaults {
+    let users: TimeInterval
+    let groups: TimeInterval
+}
+
 /// A user, basic group or supergroup, with the access hash its input peer needs.
 public struct TelegramPeer: Hashable, Codable, Sendable {
     public enum Kind: String, Codable, Sendable {
@@ -605,12 +611,25 @@ public actor TelegramClient: ChatListProvider {
 
     /// The main list and the Archive, loaded together; an Archive that fails keeps its listed rows.
     public func chatList() async throws -> ChatListPage {
-        async let archived = try? chatSummaries(archived: true)
-        let chats = try await chatSummaries()
+        let defaults = try await muteDefaults()
+        async let archived = try? chatSummaries(archived: true, muteDefaults: defaults)
+        let chats = try await chatSummaries(muteDefaults: defaults)
         return await ChatListPage(chats: chats, archived: archived)
     }
 
-    func chatSummaries(archived: Bool = false, limit: Int = 50) async throws -> [ChatSummary] {
+    /// When private chats and groups are muted until by default; a chat without its own `mute_until` follows
+    /// its kind's (`scripts/telegram-client.py notify-defaults`).
+    func muteDefaults() async throws -> TelegramMuteDefaults {
+        try requireAccount()
+        async let users = invoke(TLObject("account.getNotifySettings", ["peer": .object(TLObject("inputNotifyUsers"))]))
+        async let groups = invoke(TLObject("account.getNotifySettings", ["peer": .object(TLObject("inputNotifyChats"))]))
+        return try await TelegramMuteDefaults(
+            users: TimeInterval(users.object?["mute_until"]?.int ?? 0),
+            groups: TimeInterval(groups.object?["mute_until"]?.int ?? 0),
+        )
+    }
+
+    func chatSummaries(archived: Bool = false, limit: Int = 50, muteDefaults: TelegramMuteDefaults) async throws -> [ChatSummary] {
         try requireAccount()
         guard let result = try await invoke(TLObject("messages.getDialogs", [
             "folder_id": .int(archived ? 1 : 0),
@@ -662,8 +681,10 @@ public actor TelegramClient: ChatListProvider {
                 destination: .telegram(peer: peer),
                 namesSenderInPreview: peer.kind != .user,
                 titleNamesPeople: peer.kind == .user,
-                // Muted chats have `mute_until` in the future (2147483647 for "forever").
-                isMuted: TimeInterval(dialog["notify_settings"]?.object?["mute_until"]?.int ?? 0) > Date().timeIntervalSince1970,
+                // Muted chats have `mute_until` in the future (2147483647 for "forever"); without one, the chat
+                // follows the default for its kind.
+                isMuted: (dialog["notify_settings"]?.object?["mute_until"]?.int.map(TimeInterval.init)
+                    ?? (peer.kind == .user ? muteDefaults.users : muteDefaults.groups)) > Date().timeIntervalSince1970,
                 presence: peer.kind == .user ? users[peer.id].flatMap(Self.userStatus) : nil,
             )
         }

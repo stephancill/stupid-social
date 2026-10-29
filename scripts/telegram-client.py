@@ -1131,6 +1131,7 @@ def main():
     dialogs.add_argument("--limit", type=int, default=20)
     dialogs.add_argument("--json", action="store_true")
     dialogs.add_argument("--archived", action="store_true", help="the Archive folder (folder_id 1)")
+    sub.add_parser("notify-defaults", help="when private chats, groups and channels are muted until by default, which chats without their own mute_until follow")
     history = sub.add_parser("history")
     history.add_argument("--peer", required=True)
     history.add_argument("--limit", type=int, default=20)
@@ -1230,6 +1231,7 @@ def main():
         users = {u["id"]: u for u in result["users"]}
         chats = {c["id"]: c for c in result["chats"]}
         messages = {(peer_key(m["peer_id"]), m["id"]): m for m in result["messages"] if "peer_id" in m}
+        defaults = {kind: client.call({"_": "account.getNotifySettings", "peer": {"_": peer}}).get("mute_until", 0) for kind, peer in (("user", "inputNotifyUsers"), ("group", "inputNotifyChats"), ("broadcast", "inputNotifyBroadcasts"))}
         print(f"{result['_']} count={result.get('count', len(result['dialogs']))}")
         for dialog in result["dialogs"]:
             if dialog["_"] == "dialogFolder":
@@ -1239,9 +1241,13 @@ def main():
             chat = chats.get(int(key.split(":")[1])) if not key.startswith("user") else None
             kind = "broadcast" if chat and chat.get("broadcast") else "group" if chat else "user"
             top = messages.get((key, dialog["top_message"]))
-            print(f"{key:<24} {kind:<9} unread={dialog['unread_count']:<4} read_in={dialog['read_inbox_max_id']} read_out={dialog['read_outbox_max_id']}  {name_of(users, chats, key)}")
+            muted = dialog["notify_settings"].get("mute_until", defaults[kind]) > time.time()
+            print(f"{key:<24} {kind:<9} {'muted' if muted else '':<5} unread={dialog['unread_count']:<4} read_in={dialog['read_inbox_max_id']} read_out={dialog['read_outbox_max_id']}  {name_of(users, chats, key)}")
             if top:
                 print("    " + message_line(top, users, chats))
+    elif args.command == "notify-defaults":
+        for peer in ("inputNotifyUsers", "inputNotifyChats", "inputNotifyBroadcasts"):
+            print(f"{peer:<22} mute_until={client.call({'_': 'account.getNotifySettings', 'peer': {'_': peer}}).get('mute_until', 0)}")
     elif args.command == "history":
         result = client.call({"_": "messages.getHistory", "peer": client.input_peer(args.peer), "offset_id": args.offset_id, "offset_date": 0, "add_offset": 0, "limit": args.limit, "max_id": 0, "min_id": 0, "hash": 0})
         client.remember_peers(result["users"], result["chats"])
