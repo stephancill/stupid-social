@@ -86,7 +86,7 @@ public final class ApronChatViewModel: ChatViewModel {
         )
     }
 
-    /// Matches the room's `ChatSummary.id`.
+    /// Each server is its own account, so the server and room name the chat without an account id.
     static func chatKey(serverURL: URL, roomId: String) -> String {
         "apron:\(serverURL.absoluteString)|\(roomId)"
     }

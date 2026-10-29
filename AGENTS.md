@@ -178,7 +178,7 @@ Chat is one framework with an adapter per network; `docs/TECHNICAL_DESIGN.md` §
 - Every capability a network declares (`canReply`, `canReact`, `canAttach`, …) is implemented; never leave a declared action as the base class's no-op.
 - A network's Chats rows come from its `ChatListProvider` conformance; each account contributes one through `AccountComponents.chatListProvider`, and the list scopes the rows to that account. Live row changes use `updateChats(_:accountId:)` or `replaceChats(where:with:)`.
 - Adding a network should only take its adapter, its `ChatListProvider` (and its line in `AccountComponents.chatListProvider`), a `Destination` case and its one place in the destination-to-chat switch. If it needs more, extend the framework first.
-- Every chat has a `chatKey` (`<network>:<id>`), used for drafts and snapshots.
+- Every chat has a `chatKey` (`<account id>|<network>:<id>`), used for drafts and snapshots; two accounts can share a chat, so keys always include the account.
 - Shared behavior is covered in `ChatViewModelTests`; network mapping is tested against recorded pages without the UI.
 
 ## Network Integration

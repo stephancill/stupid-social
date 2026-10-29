@@ -122,13 +122,13 @@ final class AppContainer {
         guard let component = services.component(id: accountId), let client = component.spotifyClient,
               let viewer = component.metadata.spotifyAccount?.username
         else { return nil }
-        return { SpotifyChatViewModel(client: client, chatId: chatId, title: title, viewerUsername: viewer) }
+        return { SpotifyChatViewModel(client: client, accountId: accountId, chatId: chatId, title: title, viewerUsername: viewer) }
     }
 
     /// `nil` when the Instagram account is gone.
     func instagramChatFactory(accountId: String, threadFbid: String, title: String) -> (() -> ChatViewModel)? {
         guard let client = services.component(id: accountId)?.instagramClient else { return nil }
-        return { InstagramChatViewModel(client: client, threadFbid: threadFbid, title: title) }
+        return { InstagramChatViewModel(client: client, accountId: accountId, threadFbid: threadFbid, title: title) }
     }
 
     /// `nil` until the X Chat PIN has unlocked the account's keys.
@@ -136,12 +136,12 @@ final class AppContainer {
         guard let component = services.component(id: accountId), component.credentials.hasXChatKeys(),
               let client = component.xChatClient, let liveFeed = component.xChatLiveFeed
         else { return nil }
-        return { XChatViewModel(client: client, liveFeed: liveFeed, conversationId: conversationId, title: title) }
+        return { XChatViewModel(client: client, liveFeed: liveFeed, accountId: accountId, conversationId: conversationId, title: title) }
     }
 
     func telegramChatFactory(accountId: String, peer: TelegramPeer, title: String, userStatus: ChatPresence?) -> (() -> TelegramChatViewModel)? {
         guard let client = services.component(id: accountId)?.telegramClient else { return nil }
-        return { TelegramChatViewModel(client: client, peer: peer, title: title, userStatus: userStatus) }
+        return { TelegramChatViewModel(client: client, accountId: accountId, peer: peer, title: title, userStatus: userStatus) }
     }
 
     func loadDemoData() {

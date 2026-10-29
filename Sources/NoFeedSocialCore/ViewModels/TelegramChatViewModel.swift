@@ -32,11 +32,11 @@ public final class TelegramChatViewModel: ChatViewModel {
         peer.kind != .user
     }
 
-    public init(client: TelegramClient, peer: TelegramPeer, title: String, userStatus: ChatPresence? = nil, snapshotCache: ChatSnapshotCache = ChatSnapshotCache()) {
+    public init(client: TelegramClient, accountId: String, peer: TelegramPeer, title: String, userStatus: ChatPresence? = nil, snapshotCache: ChatSnapshotCache = ChatSnapshotCache()) {
         self.client = client
         self.peer = peer
         self.snapshotCache = snapshotCache
-        super.init(network: .telegram, chatKey: "telegram:\(peer.key)", title: title, subtitle: "Telegram", canReply: true, offersAttachments: true)
+        super.init(network: .telegram, chatKey: "\(accountId)|telegram:\(peer.key)", title: title, subtitle: "Telegram", canReply: true, offersAttachments: true)
         showsSenderNames = peer.kind != .user
         restoreSnapshot()
         // The Chats list's status is newer than the snapshot's.

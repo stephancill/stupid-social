@@ -20,11 +20,11 @@ public final class InstagramChatViewModel: ChatViewModel {
     /// Whether the thread came from Instagram this visit; until then the messages are the cached snapshot.
     private var hasLoadedHistory = false
 
-    public init(client: InstagramClient, threadFbid: String, title: String, snapshotCache: ChatSnapshotCache = ChatSnapshotCache()) {
+    public init(client: InstagramClient, accountId: String, threadFbid: String, title: String, snapshotCache: ChatSnapshotCache = ChatSnapshotCache()) {
         self.client = client
         self.threadFbid = threadFbid
         self.snapshotCache = snapshotCache
-        super.init(network: .instagram, chatKey: "instagram:\(threadFbid)", title: title, subtitle: "Instagram", canReply: true)
+        super.init(network: .instagram, chatKey: "\(accountId)|instagram:\(threadFbid)", title: title, subtitle: "Instagram", canReply: true)
         restoreSnapshot()
     }
 

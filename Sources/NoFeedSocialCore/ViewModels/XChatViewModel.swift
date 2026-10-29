@@ -20,11 +20,11 @@ public final class XChatViewModel: ChatViewModel {
     private let liveFeed: XChatLiveFeed
     private var observation: UUID?
 
-    public init(client: XChatClient, liveFeed: XChatLiveFeed, conversationId: String, title: String) {
+    public init(client: XChatClient, liveFeed: XChatLiveFeed, accountId: String, conversationId: String, title: String) {
         self.client = client
         self.liveFeed = liveFeed
         self.conversationId = conversationId
-        super.init(network: .x, chatKey: "x:\(conversationId)", title: title, subtitle: "X", canReply: false)
+        super.init(network: .x, chatKey: "\(accountId)|x:\(conversationId)", title: title, subtitle: "X", canReply: false)
     }
 
     override public func connect() async {

@@ -26,12 +26,12 @@ public final class SpotifyChatViewModel: ChatViewModel {
     private let pollInterval: Duration = .seconds(10)
 
     /// `chatId` is the base62 id from `spotify:chat:<id>`.
-    public init(client: SpotifyClient, chatId: String, title: String, viewerUsername: String, snapshotCache: ChatSnapshotCache = ChatSnapshotCache()) {
+    public init(client: SpotifyClient, accountId: String, chatId: String, title: String, viewerUsername: String, snapshotCache: ChatSnapshotCache = ChatSnapshotCache()) {
         self.client = client
         self.chatId = chatId
         self.viewerUsername = viewerUsername
         self.snapshotCache = snapshotCache
-        super.init(network: .spotify, chatKey: "spotify:\(chatId)", title: title, subtitle: "Spotify", canReply: false)
+        super.init(network: .spotify, chatKey: "\(accountId)|spotify:\(chatId)", title: title, subtitle: "Spotify", canReply: false)
         restoreSnapshot()
     }
 
