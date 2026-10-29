@@ -192,6 +192,51 @@ def summarize_notifications(value: dict[str, Any]) -> None:
         print(f"- {item.get('reason')} from {author}: {subject} {text[:80]!r}")
 
 
+CLIENT_ID = "https://stupidtech.net/stupid-social/oauth/client-metadata.json"
+
+
+def token_nonce_probe(*, auth_server_url: str, stale_nonce: str) -> None:
+    """Shows how the token endpoint treats a DPoP nonce the server no longer accepts.
+
+    Uses a throwaway DPoP key and an invalid refresh token, so it never touches a real session:
+    the first request sends `stale_nonce` (as the app's refresh does with the nonce saved at
+    sign-in), the second retries with the nonce the server returned.
+    """
+    raw_key = secrets.token_bytes(32)
+    endpoint = f"{auth_server_url.rstrip('/')}/oauth/token"
+    form = urllib.parse.urlencode(
+        {"grant_type": "refresh_token", "refresh_token": "invalid-probe-token", "client_id": CLIENT_ID}
+    ).encode()
+
+    def attempt(label: str, nonce: str | None) -> str | None:
+        proof = dpop_proof(method="POST", url=endpoint, raw_private_key=raw_key, nonce=nonce, access_token=None)
+        req = urllib.request.Request(
+            endpoint,
+            method="POST",
+            data=form,
+            headers={"content-type": "application/x-www-form-urlencoded", "dpop": proof, "user-agent": USER_AGENT},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30) as response:
+                status, headers, body = response.status, response.headers, response.read()
+        except urllib.error.HTTPError as error:
+            status, headers, body = error.code, error.headers, error.read()
+        try:
+            detail = json.loads(body)
+        except json.JSONDecodeError:
+            detail = {"body": body[:200].decode(errors="replace")}
+        fresh = headers.get("DPoP-Nonce")
+        print(
+            f"{label}: HTTP {status} error={detail.get('error')!r} "
+            f"description={detail.get('error_description')!r} dpop_nonce_header={'yes' if fresh else 'no'}"
+        )
+        return fresh
+
+    fresh = attempt("stale nonce", stale_nonce)
+    if fresh:
+        attempt("fresh nonce", fresh)
+
+
 def mark_notifications_seen(*, credentials: Credentials, seen_at: str | None = None) -> Any:
     timestamp = seen_at or datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
     return request_json(
@@ -204,13 +249,25 @@ def mark_notifications_seen(*, credentials: Credentials, seen_at: str | None = N
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Fetch Bluesky API responses using simulator OAuth credentials.")
-    parser.add_argument("command", choices=["notifications", "load-notifications", "post-thread", "profile"])
+    parser.add_argument(
+        "command", choices=["notifications", "load-notifications", "post-thread", "profile", "token-nonce"]
+    )
     parser.add_argument("--output", type=Path, help="Write raw JSON response to this path.")
     parser.add_argument("--limit", type=int, default=50)
     parser.add_argument("--uri", help="Post URI for post-thread. Defaults to first notification reasonSubject/uri.")
     parser.add_argument("--actor", help="Actor DID/handle for profile. Defaults to the signed-in DID.")
     parser.add_argument("--summary", action="store_true", help="Print a compact response summary instead of raw JSON.")
+    parser.add_argument("--auth-server", default="https://bsky.social", help="Authorization server for token-nonce.")
+    parser.add_argument(
+        "--stale-nonce",
+        default="probe-stale-nonce",
+        help="Nonce to send first in token-nonce, standing in for one saved at sign-in.",
+    )
     args = parser.parse_args()
+
+    if args.command == "token-nonce":
+        token_nonce_probe(auth_server_url=args.auth_server, stale_nonce=args.stale_nonce)
+        return
 
     credentials = load_simulator_credentials()
 

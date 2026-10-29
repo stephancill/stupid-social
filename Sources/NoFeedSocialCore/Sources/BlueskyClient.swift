@@ -120,7 +120,7 @@ public final class BlueskyClient: @unchecked Sendable {
               components.queryItems?.first(where: { $0.name == "state" })?.value == oauthSession.state
         else { throw SourceError.invalidResponse }
 
-        let token = try await tokenRequest(
+        let (token, nonce) = try await tokenRequest(
             endpoint: oauthSession.tokenEndpoint,
             form: [
                 "grant_type": "authorization_code",
@@ -133,6 +133,7 @@ public final class BlueskyClient: @unchecked Sendable {
             nonce: oauthSession.authNonce,
         )
         var credentials = credentials(from: token, session: oauthSession)
+        credentials.authNonce = nonce
         let profile = try? await profile(did: credentials.did, credentials: &credentials)
         credentials.handle = profile?.handle ?? oauthSession.loginHint
         _ = try credentialStore.saveBlueskyCredentials(credentials)
@@ -253,7 +254,10 @@ public final class BlueskyClient: @unchecked Sendable {
         return .success(decoded.requestURI, http.value(forHTTPHeaderField: "DPoP-Nonce"))
     }
 
-    private func tokenRequest(endpoint: URL, form: [String: String], privateKeyData: Data, nonce: String?) async throws -> BlueskyTokenResponse {
+    /// Returns the token and the authorization server's latest DPoP nonce, to send with the next token request.
+    /// The server rotates nonces within minutes and answers a stale one with `use_dpop_nonce` and a fresh nonce,
+    /// so a refresh made long after sign-in retries once with it.
+    private func tokenRequest(endpoint: URL, form: [String: String], privateKeyData: Data, nonce: String?, retryingNonce: Bool = true) async throws -> (BlueskyTokenResponse, String?) {
         let privateKey = try P256.Signing.PrivateKey(rawRepresentation: privateKeyData)
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
@@ -262,8 +266,14 @@ public final class BlueskyClient: @unchecked Sendable {
         request.httpBody = formURLEncoded(form)
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw SourceError.invalidResponse }
+        let freshNonce = http.value(forHTTPHeaderField: "DPoP-Nonce")
+        if retryingNonce, http.statusCode == 400 || http.statusCode == 401, let freshNonce,
+           (try? decoder.decode(BlueskyOAuthError.self, from: data))?.error == "use_dpop_nonce"
+        {
+            return try await tokenRequest(endpoint: endpoint, form: form, privateKeyData: privateKeyData, nonce: freshNonce, retryingNonce: false)
+        }
         guard http.statusCode == 200 else { throw SourceError.serviceError("OAuth token request failed") }
-        return try decoder.decode(BlueskyTokenResponse.self, from: data)
+        return try (decoder.decode(BlueskyTokenResponse.self, from: data), freshNonce ?? nonce)
     }
 
     private func validCredentials() async throws -> BlueskyOAuthCredentials {
@@ -275,8 +285,9 @@ public final class BlueskyClient: @unchecked Sendable {
     }
 
     private func refresh(credentials: BlueskyOAuthCredentials) async throws -> BlueskyOAuthCredentials {
-        let token = try await tokenRequest(endpoint: credentials.authServerURL.appending(path: "/oauth/token"), form: ["grant_type": "refresh_token", "refresh_token": credentials.refreshToken, "client_id": Self.clientID], privateKeyData: credentials.dpopPrivateKey, nonce: credentials.authNonce)
+        let (token, nonce) = try await tokenRequest(endpoint: credentials.authServerURL.appending(path: "/oauth/token"), form: ["grant_type": "refresh_token", "refresh_token": credentials.refreshToken, "client_id": Self.clientID], privateKeyData: credentials.dpopPrivateKey, nonce: credentials.authNonce)
         var refreshed = credentials
+        refreshed.authNonce = nonce
         refreshed.accessToken = token.accessToken
         refreshed.refreshToken = token.refreshToken
         refreshed.scope = token.scope
@@ -465,6 +476,10 @@ private struct BlueskyTokenResponse: Decodable {
         case expiresIn = "expires_in"
         case sub, scope
     }
+}
+
+private struct BlueskyOAuthError: Decodable {
+    let error: String
 }
 
 public struct BlueskyNotificationsResponse: Decodable, Sendable {
