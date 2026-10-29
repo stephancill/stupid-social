@@ -24,7 +24,8 @@ final class ChatListViewModelTests: XCTestCase {
         XCTAssertEqual(list.chats.map(\.id), ["telegram|t", "spotify|s"])
         XCTAssertEqual(list.chats.map(\.accountId), ["telegram", "spotify"])
         XCTAssertEqual(list.archivedChats.map(\.id), ["telegram|ta"])
-        XCTAssertNil(list.errorMessage)
+        XCTAssertEqual(list.connections.map(\.id), ["spotify", "telegram"])
+        XCTAssertTrue(list.connections.allSatisfy { $0.error == nil })
     }
 
     func testTwoAccountsListTheSameChatApart() async {
@@ -49,7 +50,9 @@ final class ChatListViewModelTests: XCTestCase {
         await list.load()
         XCTAssertEqual(list.chats.map(\.id), ["telegram-1|t1"], "the other Telegram account's rows go, the failing one's stay")
         XCTAssertEqual(list.archivedChats.map(\.id), ["telegram-1|ta"])
-        XCTAssertTrue(list.errorMessage?.hasPrefix("Telegram Alice:") == true)
+        XCTAssertEqual(list.connections.map(\.label), ["Telegram Alice", "Telegram Bob"])
+        XCTAssertNotNil(list.connections[0].error)
+        XCTAssertNil(list.connections[1].error)
     }
 
     func testAnArchiveThatDidNotLoadKeepsItsRows() async {
@@ -70,7 +73,7 @@ final class ChatListViewModelTests: XCTestCase {
         await list.load()
         XCTAssertTrue(list.chats.isEmpty)
         XCTAssertTrue(list.archivedChats.isEmpty)
-        XCTAssertNil(list.errorMessage)
+        XCTAssertTrue(list.connections.isEmpty, "an account that isn't connected has no status")
     }
 
     func testRowsThatNameTheirAccountKeepItAndAFailureKeepsThemByNetwork() async throws {
@@ -88,6 +91,30 @@ final class ChatListViewModelTests: XCTestCase {
         XCTAssertEqual(list.chats.count, 2)
         list.replaceChats(where: { $0.isApronRoom(on: one) }, with: [])
         XCTAssertEqual(list.chats.map(\.accountId), [Account.apronId(serverURL: two)])
+    }
+
+    func testAFailingAccountInAPageKeepsItsRowsAndIsReported() async throws {
+        let one = try XCTUnwrap(URL(string: "wss://one.example"))
+        let two = try XCTUnwrap(URL(string: "wss://two.example"))
+        let oneId = Account.apronId(serverURL: one)
+        let twoId = Account.apronId(serverURL: two)
+        let rowOne = row("a", .apron, minutesAgo: 1, destination: .apron(serverURL: one, roomId: "a")).scoped(to: oneId)
+        let rowTwo = row("b", .apron, minutesAgo: 2, destination: .apron(serverURL: two, roomId: "b")).scoped(to: twoId)
+        let apron = FakeProvider(network: .apron, page: .init(chats: [rowOne, rowTwo], archived: [], accounts: [
+            .init(accountId: oneId, label: "one", error: nil),
+            .init(accountId: twoId, label: "two", error: nil),
+        ]))
+        let list = makeList([(apron, nil)])
+        await list.load()
+        apron.page = .init(chats: [rowOne], archived: [], accounts: [
+            .init(accountId: oneId, label: "one", error: nil),
+            .init(accountId: twoId, label: "two", error: ApronError.rejected(status: 503)),
+        ])
+        await list.load()
+        XCTAssertEqual(list.chats.map(\.accountId), [oneId, twoId], "the failing server's rows stay")
+        XCTAssertEqual(list.connections.map(\.id), [oneId, twoId])
+        XCTAssertNil(list.connections[0].error)
+        XCTAssertEqual(list.connections[1].error, ApronError.rejected(status: 503).localizedDescription)
     }
 
     func testTheLastListShowsAtLaunch() async {

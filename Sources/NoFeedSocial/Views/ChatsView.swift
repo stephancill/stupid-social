@@ -60,19 +60,10 @@ struct ChatsView: View {
                 ContentUnavailableView.search(text: query)
             } else if viewModel.chats.isEmpty {
                 if viewModel.hasLoaded {
-                    ContentUnavailableView("No Chats", systemImage: "bubble.left.and.bubble.right", description: Text(viewModel.errorMessage ?? "Chats from Apron servers, Spotify, Instagram, Telegram and X appear here."))
+                    ContentUnavailableView("No Chats", systemImage: "bubble.left.and.bubble.right", description: Text("Chats from Apron servers, Spotify, Instagram, Telegram and X appear here."))
                 } else {
                     ProgressView()
                 }
-            }
-        }
-        .safeAreaInset(edge: .top) {
-            if let error = viewModel.errorMessage, !viewModel.chats.isEmpty {
-                Text(error)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal)
             }
         }
         .refreshable {
@@ -83,6 +74,13 @@ struct ChatsView: View {
             hasAppeared = true
         }
         .navigationTitle("Chats")
+        .toolbar {
+            if !viewModel.connections.isEmpty {
+                ToolbarItem(placement: .primaryAction) {
+                    ConnectionStatusButton(viewModel: viewModel)
+                }
+            }
+        }
         .searchBar(text: $query, placement: .navigationBarDrawer(displayMode: .always))
         .onChange(of: selection == nil && !isShowingArchive) { _, isOnList in
             isShowingChat = !isOnList
@@ -309,6 +307,83 @@ private struct ArchivedChatsRow: View {
         .alignmentGuide(.listRowSeparatorLeading) { _ in 58 }
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// A dot that is green while every connection loads and red, after the failing networks' icons, when one
+/// fails; tapping it lists each connection and why any failed.
+private struct ConnectionStatusButton: View {
+    @ObservedObject var viewModel: ChatListViewModel
+    @State private var isShowingStatus = false
+
+    var body: some View {
+        Button {
+            isShowingStatus = true
+        } label: {
+            HStack(spacing: 4) {
+                ForEach(failedNetworks, id: \.self) { network in
+                    NetworkBadgeIcon(network: network)
+                }
+                Image(systemName: failures == 0 ? "circle.fill" : "exclamationmark.circle.fill")
+                    .imageScale(failures == 0 ? .small : .medium)
+                    .foregroundStyle(failures == 0 ? .green : .red)
+            }
+        }
+        .accessibilityLabel("Connections")
+        .accessibilityValue(failures == 0 ? "All connected" : "\(failures) failed")
+        .popover(isPresented: $isShowingStatus) {
+            ConnectionStatusList(viewModel: viewModel)
+                .presentationCompactAdaptation(.popover)
+        }
+    }
+
+    private var failures: Int {
+        viewModel.connections.count { $0.error != nil }
+    }
+
+    /// Each network with a failed connection, once, in list order.
+    private var failedNetworks: [SocialNetwork] {
+        viewModel.connections.filter { $0.error != nil }.map(\.network).reduce(into: []) { networks, network in
+            if !networks.contains(network) {
+                networks.append(network)
+            }
+        }
+    }
+}
+
+private struct ConnectionStatusList: View {
+    @ObservedObject var viewModel: ChatListViewModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ForEach(viewModel.connections) { connection in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Image(systemName: connection.error == nil ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                        .foregroundStyle(connection.error == nil ? .green : .red)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(connection.label)
+                        Text(connection.error ?? "Connected")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            if viewModel.connections.contains(where: { $0.error != nil }) {
+                Button {
+                    Task { await viewModel.load() }
+                } label: {
+                    if viewModel.isLoading {
+                        ProgressView()
+                    } else {
+                        Text("Retry")
+                    }
+                }
+                .disabled(viewModel.isLoading)
+            }
+        }
+        .padding()
+        .frame(width: 300, alignment: .leading)
     }
 }
 

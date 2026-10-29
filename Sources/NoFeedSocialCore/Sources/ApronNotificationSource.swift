@@ -21,33 +21,28 @@ public final class ApronNotificationSource: AccountValidating, ChatListProvider 
         service.servers.isEmpty ? .notConfigured : .valid
     }
 
-    public func chatList() async throws -> ChatListPage {
-        try await ChatListPage(chats: chatSummaries(), archived: [])
-    }
-
     /// Every joined room on every server with its latest message, for the Chats list. Unlike the feed, rooms
-    /// stay listed however old their latest message is. Each row belongs to its server's account.
-    func chatSummaries() async throws -> [ChatSummary] {
+    /// stay listed however old their latest message is. Each server is its own account, and one that fails
+    /// doesn't fail the rest.
+    public func chatList() async throws -> ChatListPage {
         let servers = service.servers
         guard !servers.isEmpty else { throw SourceError.notConfigured }
         var summaries: [ChatSummary] = []
-        var firstError: Error?
-        var succeeded = false
+        var accounts: [ChatListPage.AccountResult] = []
         for server in servers {
+            let accountId = Account.apronId(serverURL: server.serverURL)
+            let label = "\(network.displayName) \(server.serverURL.host() ?? server.serverURL.absoluteString)"
             do {
                 // The shared connection stays open for live updates and chat; it isn't closed here.
                 let session = try await service.session(serverURL: server.serverURL)
                 try await summaries.append(contentsOf: chatSummariesTrackingCursors(in: session))
-                succeeded = true
+                accounts.append(.init(accountId: accountId, label: label, error: nil))
             } catch {
-                logger.error("Apron chat list failed for \(server.serverURL.host() ?? "server", privacy: .public): \(error.localizedDescription, privacy: .public)")
-                firstError = firstError ?? error
+                logger.error("Apron chat list failed for \(label, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                accounts.append(.init(accountId: accountId, label: label, error: error))
             }
         }
-        if !succeeded, let firstError {
-            throw firstError
-        }
-        return summaries
+        return ChatListPage(chats: summaries, archived: [], accounts: accounts)
     }
 
     /// On a short-lived read, also stores the read cursors the server sends after `room_list` (§4.6); they

@@ -88,10 +88,27 @@ public struct ChatListPage: Sendable {
     /// The chats the user archived on the network; `nil` when the archive didn't load, so the rows already
     /// listed stay. Networks without an archive return none.
     public let archived: [ChatSummary]?
+    /// The accounts a provider without one lists apart, such as each Apron server, with how each one's load
+    /// went; `nil` when the page is all one account's.
+    public let accounts: [AccountResult]?
 
-    public init(chats: [ChatSummary], archived: [ChatSummary]?) {
+    public struct AccountResult: Sendable {
+        public let accountId: String
+        public let label: String
+        /// Why the account's rows didn't load; `nil` when they did.
+        public let error: Error?
+
+        public init(accountId: String, label: String, error: Error?) {
+            self.accountId = accountId
+            self.label = label
+            self.error = error
+        }
+    }
+
+    public init(chats: [ChatSummary], archived: [ChatSummary]?, accounts: [AccountResult]? = nil) {
         self.chats = chats
         self.archived = archived
+        self.accounts = accounts
     }
 }
 
@@ -119,6 +136,16 @@ public struct ChatListSource {
     }
 }
 
+/// How one connection's chats last loaded, for the Chats list's status indicator.
+public struct ChatConnectionStatus: Identifiable, Equatable, Sendable {
+    /// The account id, or the network's name for a provider that lists no accounts apart.
+    public let id: String
+    public let network: SocialNetwork
+    public let label: String
+    /// Why the last load failed; `nil` when it loaded.
+    public let error: String?
+}
+
 /// Every chat across every account's chat networks, newest first.
 @MainActor
 public final class ChatListViewModel: ObservableObject {
@@ -128,8 +155,9 @@ public final class ChatListViewModel: ObservableObject {
     @Published public private(set) var archivedChats: [ChatSummary] = []
     @Published public private(set) var isLoading = false
     @Published public private(set) var hasLoaded = false
-    /// Networks that failed to load, with the reason.
-    @Published public private(set) var errorMessage: String?
+    /// Every connected account as of the last load, in source order, with the reason for any failure.
+    /// Accounts that aren't connected aren't listed.
+    @Published public private(set) var connections: [ChatConnectionStatus] = []
 
     /// The accounts' providers as of each load, since accounts come and go.
     private let sources: () -> [ChatListSource]
@@ -170,12 +198,22 @@ public final class ChatListViewModel: ObservableObject {
 
         var merged: [ChatSummary] = []
         var archived: [ChatSummary] = []
-        var failures: [String] = []
+        var statuses: [ChatConnectionStatus] = []
+        let previous = Dictionary(connections.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        func status(id: String, network: SocialNetwork, label: String, error: Error?) -> ChatConnectionStatus {
+            // A reload cut short (such as by opening a chat) isn't a failure worth showing; the last status stays.
+            if let error, Self.isCancellation(error) {
+                return previous[id] ?? ChatConnectionStatus(id: id, network: network, label: label, error: nil)
+            }
+            return ChatConnectionStatus(id: id, network: network, label: label, error: error?.localizedDescription)
+        }
         for (source, result) in zip(sources, results) {
+            let network = source.provider.network
             // Without an account, the source's rows are those of its network, such as every Apron server's.
             let belongs: (ChatSummary) -> Bool = { chat in
-                source.accountId.map { chat.accountId == $0 } ?? (chat.network == source.provider.network)
+                source.accountId.map { chat.accountId == $0 } ?? (chat.network == network)
             }
+            let sourceId = source.accountId ?? network.rawValue
             switch result {
             case let .success(page):
                 merged += page.chats.map { $0.scoped(to: source.accountId) }
@@ -184,16 +222,25 @@ public final class ChatListViewModel: ObservableObject {
                 } else {
                     archived += archivedChats.filter(belongs)
                 }
+                guard let accounts = page.accounts else {
+                    statuses.append(status(id: sourceId, network: network, label: source.label, error: nil))
+                    continue
+                }
+                for account in accounts {
+                    statuses.append(status(id: account.accountId, network: network, label: account.label, error: account.error))
+                    // An account that failed keeps the rows it had.
+                    if account.error != nil {
+                        merged += chats.filter { $0.accountId == account.accountId }
+                        archived += archivedChats.filter { $0.accountId == account.accountId }
+                    }
+                }
             case let .failure(error):
                 merged += chats.filter(belongs)
                 archived += archivedChats.filter(belongs)
-                // A reload cut short (such as by opening a chat) isn't a failure worth showing.
-                if !Self.isCancellation(error) {
-                    failures.append("\(source.label): \(error.localizedDescription)")
-                }
+                statuses.append(status(id: sourceId, network: network, label: source.label, error: error))
             }
         }
-        errorMessage = failures.isEmpty ? nil : failures.joined(separator: "\n")
+        connections = statuses
         setChats(merged)
         setArchivedChats(archived)
     }
@@ -281,7 +328,7 @@ public final class ChatListViewModel: ObservableObject {
         do {
             return try await .success(load())
         } catch SourceError.notConfigured {
-            return .success(ChatListPage(chats: [], archived: []))
+            return .success(ChatListPage(chats: [], archived: [], accounts: []))
         } catch {
             return .failure(error)
         }
