@@ -6,19 +6,32 @@ import Foundation
 /// by the notification extension, and by Settings → Debug to post the same thing locally.
 public enum CommunicationNotification {
     /// A Telegram message from its sender, with the photos the app saved: the sender's in a private chat, and the
-    /// group's in a group, shown as a group conversation.
+    /// group's in a group, shown as a group conversation. A group push that names only the group shows the group as
+    /// the sender, as Telegram's own app does, since a group conversation would show its name twice.
     public static func telegram(_ notification: TelegramPushNotification, content: UNMutableNotificationContent) async -> UNNotificationContent? {
         let store = TelegramAvatarStore()
-        let sender = INPerson(
-            personHandle: INPersonHandle(value: String(notification.senderId), type: .unknown),
-            nameComponents: nil,
-            displayName: notification.group == nil ? notification.title : notification.senderName,
-            image: store.load(userId: notification.senderId).map { INImage(imageData: $0) },
-            contactIdentifier: nil,
-            customIdentifier: "telegram|\(notification.senderId)",
-        )
-        let group = notification.group.map { group in
-            (name: group.name, image: store.load(groupId: group.id).map { INImage(imageData: $0) })
+        let groupImage = notification.group.flatMap { store.load(groupId: $0.id) }.map { INImage(imageData: $0) }
+        let sender: INPerson
+        var group: (name: String, image: INImage?)?
+        if let chat = notification.group, notification.senderName == nil {
+            sender = INPerson(
+                personHandle: INPersonHandle(value: "group-\(chat.id)", type: .unknown),
+                nameComponents: nil,
+                displayName: chat.name,
+                image: groupImage,
+                contactIdentifier: nil,
+                customIdentifier: "telegram|group-\(chat.id)",
+            )
+        } else {
+            sender = INPerson(
+                personHandle: INPersonHandle(value: String(notification.senderId), type: .unknown),
+                nameComponents: nil,
+                displayName: notification.senderName ?? notification.title,
+                image: store.load(userId: notification.senderId).map { INImage(imageData: $0) },
+                contactIdentifier: nil,
+                customIdentifier: "telegram|\(notification.senderId)",
+            )
+            group = notification.group.map { (name: $0.name, image: groupImage) }
         }
         return await self.content(
             content,
@@ -29,7 +42,7 @@ public enum CommunicationNotification {
             log: PushExtensionLog.Entry(
                 network: "telegram",
                 chat: notification.conversationId,
-                hasAvatar: group.map { $0.image != nil } ?? (sender.image != nil),
+                hasAvatar: notification.group == nil ? sender.image != nil : groupImage != nil,
             ),
         )
     }

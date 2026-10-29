@@ -273,6 +273,28 @@ final class TelegramTests: XCTestCase {
         XCTAssertEqual(push?.group, TelegramPushNotification.Group(id: 99, name: "Friends"))
     }
 
+    func testGroupAlertPushWithoutSubtitleNamesOnlyTheGroup() {
+        let userInfo: [AnyHashable: Any] = [
+            "aps": ["alert": ["title": "Friends", "body": "Ann: hi"]],
+            "custom": ["channel_id": 99, "chat_from_id": 42],
+        ]
+        let push = TelegramPushNotification.make(userInfo: userInfo) { _, _ in nil }
+        XCTAssertEqual(push?.title, "Friends")
+        XCTAssertEqual(push?.body, "Ann: hi")
+        XCTAssertNil(push?.senderName)
+        XCTAssertEqual(push?.group, TelegramPushNotification.Group(id: 99, name: "Friends"))
+    }
+
+    func testGroupAlertPushTakesTheSenderFromTheSubtitle() {
+        let userInfo: [AnyHashable: Any] = [
+            "aps": ["alert": ["title": "Friends", "subtitle": "Ann", "body": "hi"]],
+            "custom": ["channel_id": 99, "chat_from_id": 42],
+        ]
+        let push = TelegramPushNotification.make(userInfo: userInfo) { _, _ in nil }
+        XCTAssertEqual(push?.title, "Ann in Friends")
+        XCTAssertEqual(push?.senderName, "Ann")
+    }
+
     func testPushWithTopLevelFieldsAndLocalizedAlert() {
         let userInfo: [AnyHashable: Any] = [
             "aps": ["alert": ["title": "Ann", "body": "hi there"]],

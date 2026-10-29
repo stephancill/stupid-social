@@ -8,7 +8,9 @@ public struct TelegramPushNotification: Equatable, Sendable {
     public let title: String
     public let body: String
     public let senderId: Int64
-    public let senderName: String
+    /// The person who sent it, where the push names them apart from the chat; `nil` for a group push that names
+    /// only the group.
+    public let senderName: String?
     /// A group message's group, whose photo the notification shows; `nil` in a private chat.
     public let group: Group?
     /// The chat's peer key (`user:…`, `chat:…`, `channel:…`), so a chat's notifications are one conversation.
@@ -37,7 +39,7 @@ public struct TelegramPushNotification: Equatable, Sendable {
         }
 
         let senderId: Int64
-        let senderName: String
+        let senderName: String?
         let title: String
         var group: Group?
         switch chat {
@@ -56,10 +58,13 @@ public struct TelegramPushNotification: Equatable, Sendable {
                 group = Group(id: groupId, name: args[1])
                 title = "\(args[0]) in \(args[1])"
             } else {
+                // Telegram's app shows `title` (the group), `subtitle` and `body`; the sender, when named apart
+                // from the text, is the subtitle.
                 guard let groupName = alert?["title"] as? String else { return nil }
-                senderName = groupName
+                let subtitle = (alert?["subtitle"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+                senderName = subtitle?.isEmpty == false ? subtitle : nil
                 group = Group(id: groupId, name: groupName)
-                title = groupName
+                title = senderName.map { "\($0) in \(groupName)" } ?? groupName
             }
         }
         // The text alone for text messages, since the title already names the sender; otherwise Telegram's line,
