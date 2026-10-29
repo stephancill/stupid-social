@@ -76,6 +76,7 @@ final class AppContainer {
         services.onAccountsChange = { [weak self] in
             self?.accountsDidChange()
         }
+        AppMetrics.accounts(accountStore.accounts)
 
         if DemoData.shouldAutoLoad {
             loadDemoData()

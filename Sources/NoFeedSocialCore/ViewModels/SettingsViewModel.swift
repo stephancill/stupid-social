@@ -129,6 +129,7 @@ public final class SettingsViewModel: ObservableObject {
         do {
             identity = try await identify(credentials)
         } catch SourceError.notConfigured {
+            AppMetrics.accountConnectFailed(network: network, error: SourceError.notConfigured)
             if accountId == nil {
                 credentials.deleteAccountCredentials()
             } else {
@@ -137,6 +138,7 @@ public final class SettingsViewModel: ObservableObject {
             message = "\(network.displayName) login expired. Log in again."
             return nil
         } catch {
+            AppMetrics.accountConnectFailed(network: network, error: error)
             if accountId == nil {
                 credentials.deleteAccountCredentials()
             }
@@ -164,6 +166,7 @@ public final class SettingsViewModel: ObservableObject {
         account.avatarURL = identity.avatarURL ?? account.avatarURL
         store.setStatus(.valid, id: account.id)
         store.save(account)
+        AppMetrics.accountConnected(network: network, isReconnect: accountId != nil)
         loadStatuses()
         message = accountId == nil ? "\(network.displayName) account added." : "\(network.displayName) account reconnected."
         if account.avatarURL == nil {
@@ -453,6 +456,7 @@ public final class SettingsViewModel: ObservableObject {
         account.displayName = telegram.name
         store.setStatus(.valid, id: account.id)
         store.save(account)
+        AppMetrics.accountConnected(network: .telegram, isReconnect: false)
         // Built now, so registering for pushes right after finds the new account's client.
         _ = services.components(for: account)
         loadStatuses()
@@ -571,6 +575,7 @@ public final class SettingsViewModel: ObservableObject {
         services.keychain.scoped(to: accountId).deleteAccountCredentials()
         try? cacheStore.deleteAccount(network: account.network, accountId: accountId)
         store.remove(id: accountId)
+        AppMetrics.accountRemoved(network: account.network)
         loadStatuses()
         message = "\(account.network.displayName) account removed."
     }

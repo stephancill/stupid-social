@@ -68,6 +68,7 @@ Sources/
       ApronLiveFeed.swift           # Foreground WebSocket per Apron server for realtime feed items
       XChatLiveFeed.swift           # Foreground X Chat WebSocket: pushed events for open chats and the Chats list
       ApronPushService.swift        # Apron push registration through the push.stupidtech.net relay
+      AppMetrics.swift              # Every anonymous usage event and error sent to metrics.stupidtech.net
       ApronRoomNotifications.swift  # Per-room notification levels mapped to mute and wake scopes
       TelegramPushService.swift     # Telegram APNs registration (token type 1) after sign-in, at launch, on token change
     Sources/                        # Network clients + notification sources
@@ -129,7 +130,7 @@ Sources/
       XChatUnlockViewModel.swift     # X Chat PIN unlock and Forget Keys
 ```
 
-Outside `Sources/`: `NotificationService/` holds the extension's Info.plist and entitlements, `workers/push-relay/` the Apron push relay Worker (`bun run push-relay:test`, `bun run push-relay:deploy`), and `Vendor/JuiceboxSdk/` the vendored Juicebox SDK (Swift wrapper and static-library XCFramework) that X Chat key recovery uses; regenerate it with `scripts/vendor-juicebox.sh`, never edit it by hand.
+Outside `Sources/`: `NotificationService/` holds the extension's Info.plist and entitlements, `workers/push-relay/` the Apron push relay Worker (`bun run push-relay:test`, `bun run push-relay:deploy`), and `Vendor/JuiceboxSdk/` the vendored Juicebox SDK (Swift wrapper and static-library XCFramework) that X Chat key recovery uses; regenerate it with `scripts/vendor-juicebox.sh`, never edit it by hand. `Vendor/StupidMetrics/` is the vendored StupidMetrics Swift package (usage metrics); update it with `scripts/vendor-stupid-metrics.sh <tag>`, never edit it by hand.
 
 - Keep `## Project Structure` in sync when files are added, moved, or renamed.
 

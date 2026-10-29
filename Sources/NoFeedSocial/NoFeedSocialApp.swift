@@ -9,6 +9,7 @@ struct NoFeedSocialApp: App {
     private let modelContainer: ModelContainer
 
     init() {
+        AppMetrics.configure()
         do {
             modelContainer = try ModelContainer(for: CachedNotification.self)
         } catch {

@@ -67,6 +67,13 @@ How the app works today, by topic: decisions and their reasons, endpoint and pro
 - `Date.compactRelativeTime` (`NoFeedSocialCore/Date+RelativeTime.swift`): shared compact relative time (`now`, `1m`, `12h`, `1d`, `2w`, `1mo`, `1y`)
 - `RefreshTiming.measure` emits an `os_signpost` interval plus duration log (subsystem `tech.stupid.StupidSocial`, category `Refresh`) around per-source fetches and cache writes in `FeedService`, story branches in `StoryBarViewModel`, Instagram tray/per-reel, Spotify buddylist/per-track
 
+### Usage metrics
+- `AppMetrics` (`NoFeedSocialCore/Services/AppMetrics.swift`) names every event and holds the app's public ingest key; `NoFeedSocialApp.init` configures it. Events: `refresh` {network, trigger `manual`/`foreground`, outcome, value ms} plus `source_error` (both from `FeedService.fetchSourcesConcurrently`; `notConfigured` and `endpointSpikeRequired` are skips, not errors), `story_source_error` (Instagram reels), `accounts` {network, value count} once per `AppContainer` init, `chat_open` (`ChatView.task`, which re-runs when a chat reappears after a pushed screen), `message_send` {network, attachment, reply, outcome} and `message_send_failed` (`ChatViewModel.sendOptimistically`; Apron commands and over-size attachments don't pass through it), `notification_open` / `notification_reply` (Apron and Telegram, `AppDelegate`), `account_connect` {network, reconnect} / `account_connect_failed` / `account_remove` (`SettingsViewModel`), `story_open` and `story_post` / `story_post_failed`
+- `StupidMetrics` is vendored in `Vendor/StupidMetrics` by `scripts/vendor-stupid-metrics.sh <tag>` (the private repo, over SSH), because stupid-app builds only local sources and static-library XCFrameworks: it fails loudly on remote SwiftPM product dependencies (observed 2026-10-29, "Unsupported build input 'product dependency'")
+- Settings → Privacy → Share Usage Data mirrors `StupidMetrics.isEnabled`; turning it off drops the queue and the install id
+- The notification service extension doesn't report: push decrypt failures stay in `PushExtensionLog`. MetricKit diagnostics cover the app process only
+- Dashboard: `https://metrics.stupidtech.net/dashboard/apps/tech.stupid.StupidSocial`
+
 ### Preview / demo mode
 - App Review preview content works in release builds (no `#if DEBUG` around `DemoData`, `FeedService`/`StoryBarViewModel` demo paths, `AppContainer`, `SettingsView`); requirement in `docs/PLAN.md` § App Review Preview Access
 - Reveal: tap the Settings About heading four times, then Demo Data → **Load preview content** / Unload (explicit buttons only; the dev toggle doesn't auto-load). Also launch arg `-demoData` / env `DEMO_DATA=1`. Activation persists across launches

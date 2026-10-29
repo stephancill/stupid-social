@@ -366,7 +366,9 @@ public class ChatViewModel: ObservableObject {
                 historyAtSend[localId] = nil
                 outgoing.removeAll { $0.id == localId }
             }
+            AppMetrics.messageSent(network: network, hasAttachment: attachment != nil, isReply: replyToId != nil, error: nil)
         } catch {
+            AppMetrics.messageSent(network: network, hasAttachment: attachment != nil, isReply: replyToId != nil, error: error)
             historyAtSend[localId] = nil
             outgoing.removeAll { $0.id == localId }
             if draft.isEmpty, self.attachment == nil {

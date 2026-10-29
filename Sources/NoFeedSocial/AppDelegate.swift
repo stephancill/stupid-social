@@ -58,6 +58,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             let opens = response.actionIdentifier == UNNotificationDefaultActionIdentifier
             Task { @MainActor in
                 if opens {
+                    AppMetrics.notificationOpened(network: .telegram)
                     NotificationRouter.shared.pendingChat = .telegram(peer: peer)
                 }
                 completion()
@@ -83,6 +84,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
                     await NotificationRouter.shared.sendReply(text, to: destination, replyTo: replyTo, title: title)
                 }
             } else if action == UNNotificationDefaultActionIdentifier {
+                AppMetrics.notificationOpened(network: .apron)
                 NotificationRouter.shared.pendingChat = destination
             }
             completion()
@@ -223,8 +225,10 @@ final class NotificationRouter: ObservableObject {
         let service = apronService ?? ApronService(accountStore: AccountStore(), keychainStore: KeychainCredentialStore())
         do {
             try await service.send(text: text, serverURL: serverURL, roomId: roomId, replyTo: replyTo)
+            AppMetrics.notificationReplied(network: .apron, error: nil)
             clearNotifications(thread: ApronPushNotification.threadIdentifier(serverURL: serverURL, roomId: roomId))
         } catch {
+            AppMetrics.notificationReplied(network: .apron, error: error)
             let content = UNMutableNotificationContent()
             content.title = "Reply not sent"
             content.body = "Your reply to \(title) wasn't sent: \(error.localizedDescription)"

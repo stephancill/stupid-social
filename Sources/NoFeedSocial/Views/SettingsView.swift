@@ -10,6 +10,7 @@ struct SettingsView: View {
     @AppStorage("devModeEnabled") private var devModeEnabled = false
     @AppStorage("redactionEnabled") private var redactionEnabled = false
     @State private var isAddingAccount = false
+    @State private var sharesUsageData = AppMetrics.isEnabled
 
     var body: some View {
         Form {
@@ -69,6 +70,17 @@ struct SettingsView: View {
                 } footer: {
                     Text("Preview content uses sample notifications and stories. Unload it to return to your connected accounts.")
                 }
+            }
+
+            Section {
+                Toggle("Share Usage Data", isOn: $sharesUsageData)
+                    .onChange(of: sharesUsageData) { _, enabled in
+                        AppMetrics.isEnabled = enabled
+                    }
+            } header: {
+                Text("Privacy")
+            } footer: {
+                Text("Sends anonymous usage counts, errors and crash reports to Stupid Tech to improve the app. Never includes your accounts, messages or notifications.")
             }
 
             Section {

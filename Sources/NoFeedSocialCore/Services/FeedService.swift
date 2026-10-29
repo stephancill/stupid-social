@@ -150,12 +150,20 @@ public final class FeedService {
         return await withTaskGroup(of: FetchResult.self) { group in
             for fetcher in fetchers {
                 group.addTask {
+                    let start = ContinuousClock.now
                     do {
                         let items = try await RefreshTiming.measure("\(timingPrefix)-source-\(fetcher.network.rawValue)") {
                             try await fetcher.fetch()
                         }
+                        AppMetrics.sourceRefreshed(network: fetcher.network, trigger: timingPrefix, duration: .now - start, error: nil)
                         return FetchResult(accountId: fetcher.accountId, network: fetcher.network, items: items.map { $0.scoped(to: fetcher.accountId) }, error: nil)
                     } catch {
+                        switch error {
+                        case SourceError.notConfigured, SourceError.endpointSpikeRequired:
+                            break
+                        default:
+                            AppMetrics.sourceRefreshed(network: fetcher.network, trigger: timingPrefix, duration: .now - start, error: error)
+                        }
                         return FetchResult(accountId: fetcher.accountId, network: fetcher.network, items: [], error: error)
                     }
                 }

@@ -338,6 +338,7 @@ Use minimal `OSLog`.
 - Log high-level events such as refresh start/success/failure and source status.
 - Do not log request bodies, response bodies, cookie headers, tokens, or raw payloads.
 - Do not write persistent file logs in the MVP.
+- Anonymous usage metrics go through `AppMetrics` (`NoFeedSocialCore/Services/AppMetrics.swift`), the only file that names events. Call sites pass networks, triggers and outcomes, plus errors, which `StupidMetrics` reduces to their type and case. Nothing that `OSLog` would redact goes to metrics.
 
 ## Testing Strategy
 

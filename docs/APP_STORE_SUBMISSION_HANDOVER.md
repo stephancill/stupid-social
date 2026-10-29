@@ -124,9 +124,15 @@ Manual release (you hit "Release") or set Auto.
 ---
 
 ## 6. Privacy expectations
-App stores: HTTPS-only, user credentials in iCloud Keychain, no analytics currently
-shipped. Export compliance: `ITSAppUsesNonExemptEncryption = false` in `Info.plist` (no
-non-exempt encryption). This aligns with the "Data Not Collected" App Privacy setting.
+App stores: HTTPS-only, user credentials in iCloud Keychain. Export compliance:
+`ITSAppUsesNonExemptEncryption = false` in `Info.plist` (no non-exempt encryption).
+
+The app sends anonymous usage metrics (see `docs/PLAN.md` § Usage Metrics). Before
+submitting a build with them, change the App Privacy answers from "Data Not Collected"
+to: **Diagnostics** (Crash Data, Performance Data, Other Diagnostic Data) and **Usage
+Data** (Product Interaction), all *not linked to the user* and *not used for tracking*,
+for App Functionality and Analytics. Then republish the responses, and check that the
+privacy policy at `https://stupidtech.net/privacy` covers it.
 
 ---
 

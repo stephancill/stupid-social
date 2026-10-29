@@ -33,6 +33,7 @@ struct FeedView: View {
                     },
                     onOwnStoryTap: {
                         if let ownInstagramStoryReel = storyViewModel.ownInstagramStoryReel {
+                            AppMetrics.storyOpened(network: .instagram)
                             storyViewerSelection = StoryViewerSelection(
                                 items: [.instagram(ownInstagramStoryReel)],
                                 startIndex: 0,
@@ -43,6 +44,7 @@ struct FeedView: View {
                         }
                     },
                     onItemTap: { selectedItem, visibleItems in
+                        AppMetrics.storyOpened(network: selectedItem.network)
                         let items = storyViewModel.storyViewerItems(for: selectedItem, in: visibleItems)
                         storyViewerSelection = StoryViewerSelection(
                             items: items,

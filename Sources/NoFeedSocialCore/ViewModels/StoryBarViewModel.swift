@@ -200,8 +200,10 @@ public final class StoryBarViewModel: ObservableObject {
         Task {
             do {
                 try await instagramSource.postPhotoStory(imageData: imageData, width: width, height: height, mimeType: mimeType, mentions: mentions, closeFriends: closeFriends)
+                AppMetrics.storyPosted(error: nil)
                 await fetchStoryBarContent()
             } catch {
+                AppMetrics.storyPosted(error: error)
                 removeOptimisticInstagramStory(slideID: slideID)
                 errorMessage = "Could not post Instagram story."
             }
@@ -408,6 +410,7 @@ public final class StoryBarViewModel: ObservableObject {
             } catch SourceError.notConfigured {
                 continue
             } catch {
+                AppMetrics.storySourceFailed(network: .instagram, error: error)
                 failed += 1
             }
         }

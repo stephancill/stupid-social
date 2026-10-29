@@ -47,6 +47,7 @@ struct ChatView: View {
                 }
             }
             .task {
+                AppMetrics.chatOpened(network: viewModel.network)
                 await viewModel.connect()
             }
             .onDisappear {

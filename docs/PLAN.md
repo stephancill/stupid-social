@@ -26,7 +26,7 @@ Build an iOS app with xtool that shows a combined social network notifications f
 
 - Cross-posting.
 - Syncing full notification items across devices.
-- Backend service for polling or normalization. The one exception is the stateless Apron push relay (see Apron).
+- Backend service for polling or normalization. The exceptions are the stateless Apron push relay (see Apron) and anonymous usage metrics (see Usage Metrics).
 - App lock, Face ID lock, hidden previews, or custom privacy overlay.
 - Cross-network identity merging.
 
@@ -247,6 +247,13 @@ Use a minimal display model first. Suggested fields:
 - `target`: referenced post, cast, profile, or other object needed for display/navigation
 
 Do not persist raw source payloads for the MVP unless needed during development diagnostics, and never log or store secrets with notification data.
+
+## Usage Metrics
+
+- The app reports anonymous usage and errors to Stupid Metrics (`metrics.stupidtech.net`, a separate Stupid Tech service): sessions, feed refreshes per network (duration, outcome), chat opens, message sends, notification opens and replies, account connects and removals, story opens and posts, connected-account counts per network, errors by type and case, and MetricKit crash, hang and exit reports.
+- Only networks, triggers and outcomes are sent, with the app version, OS version, device model and a random install id. Never account names, handles, message or notification text, URLs or ids.
+- On by default. Settings → Privacy → Share Usage Data turns it off, which also deletes anything queued and the install id.
+- The App Store privacy answers must declare Diagnostics and Usage Data, not linked to the user and not used for tracking, before a build with metrics is submitted.
 
 ## App Review Preview Access
 
