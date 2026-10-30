@@ -24,6 +24,23 @@ struct ChatView: View {
         redactionEnabled && viewModel.subtitle.hasPrefix("@") ? "Redacted" : viewModel.subtitle
     }
 
+    private var isSearching: Bool {
+        viewModel.searchQuery != nil
+    }
+
+    /// Tapping runs `onTitleTap`; long-pressing searches the chat. The pill draws its own capsule, so the pointer's
+    /// hover outline (on a Mac) is turned off.
+    private var titlePill: some View {
+        ChatTitlePill(title: displayTitle, subtitle: displaySubtitle, network: viewModel.network, avatar: viewModel.titleAvatar)
+            .contentShape(.capsule)
+            .onTapGesture { onTitleTap?() }
+            .onLongPressGesture(minimumDuration: 0.4) { viewModel.beginSearch() }
+            .sensoryFeedback(.impact, trigger: isSearching) { _, searching in searching }
+            .accessibilityAddTraits(onTitleTap == nil ? [] : .isButton)
+            .accessibilityAction(named: "Search Messages") { viewModel.beginSearch() }
+            .hoverEffectDisabled()
+    }
+
     var body: some View {
         ChatUIKitView(viewModel: viewModel, showProfile: showProfile)
             .ignoresSafeArea(.keyboard)
@@ -36,19 +53,13 @@ struct ChatView: View {
             // swiping back, until the pop finished.
             .toolbar {
                 ToolbarItem(placement: .principal) {
-                    // Without an action it isn't a button: a disabled button would dim the title.
-                    // The pill draws its own capsule, so the pointer's hover outline (on a Mac) is turned off.
-                    Group {
-                        if let onTitleTap {
-                            Button(action: onTitleTap) {
-                                ChatTitlePill(title: displayTitle, subtitle: displaySubtitle, network: viewModel.network, avatar: viewModel.titleAvatar)
-                            }
-                            .buttonStyle(.plain)
-                        } else {
-                            ChatTitlePill(title: displayTitle, subtitle: displaySubtitle, network: viewModel.network, avatar: viewModel.titleAvatar)
-                        }
-                    }
-                    .hoverEffectDisabled()
+                    titlePill
+                }
+            }
+            // On a background, so starting and ending a search doesn't rebuild the chat's view and lose its place.
+            .background {
+                if isSearching {
+                    ChatSearchField(viewModel: viewModel)
                 }
             }
             .task {
@@ -57,6 +68,7 @@ struct ChatView: View {
             }
             .onDisappear {
                 guard !keepsConnection else { return }
+                viewModel.endSearch()
                 viewModel.disconnect()
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
@@ -75,6 +87,29 @@ struct NetworkChatView: View {
 
     var body: some View {
         ChatView(viewModel: viewModel)
+    }
+}
+
+/// The app's search field under the chat's title while searching, focused as it appears. Its Cancel ends the
+/// search; Return looks further back when nothing loaded matches.
+private struct ChatSearchField: View {
+    @ObservedObject var viewModel: ChatViewModel
+    @State private var text = ""
+    @State private var isPresented = false
+
+    var body: some View {
+        Color.clear
+            .searchBar(text: $text, isPresented: $isPresented, prompt: "Search Messages", placement: .navigationBarDrawer(displayMode: .always))
+            .onSubmit(of: .search) { Task { await viewModel.submitSearch() } }
+            .onChange(of: text) { _, query in viewModel.updateSearch(query) }
+            .onChange(of: isPresented) { _, presented in
+                if !presented { viewModel.endSearch() }
+            }
+            .task {
+                // Presenting in the same pass the field appears doesn't take.
+                try? await Task.sleep(for: .milliseconds(150))
+                isPresented = true
+            }
     }
 }
 

@@ -362,6 +362,9 @@ public class ChatViewModel: ObservableObject {
         didSet {
             messagesById = Dictionary(messages.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
             reportSummary()
+            if searchQuery != nil {
+                refreshSearchMatches()
+            }
         }
     }
 
@@ -410,6 +413,14 @@ public class ChatViewModel: ObservableObject {
     @Published public internal(set) var replyingTo: ChatMessage?
     /// A message the view should scroll to and highlight, set by `jump(to:)`.
     @Published public internal(set) var jumpTarget: String?
+    /// While set, the user is searching the chat (`beginSearch()`), and the composer gives way to the results.
+    @Published public private(set) var searchQuery: String?
+    /// Loaded messages that match `searchQuery`, oldest first.
+    @Published public private(set) var searchMatchIds: [String] = []
+    /// The match being shown, an index into `searchMatchIds`.
+    @Published public private(set) var searchMatchIndex: Int?
+    /// While earlier history loads to find older matches.
+    @Published public private(set) var isSearchingEarlier = false
     /// Incremented when the view should scroll to the newest message.
     @Published public internal(set) var scrollToLatestRequest = 0
     /// Reply targets outside the loaded messages.
@@ -488,6 +499,7 @@ public class ChatViewModel: ObservableObject {
     private var pollTask: Task<Void, Never>?
     private var readSendTask: Task<Void, Never>?
     private var reactionsSeenSendTask: Task<Void, Never>?
+    private var searchJumpTask: Task<Void, Never>?
 
     init(
         network: SocialNetwork,
@@ -922,10 +934,168 @@ public class ChatViewModel: ObservableObject {
         renderedTextCache[text] = rendered
         return rendered
     }
+
+    // MARK: Search
+
+    /// Earlier pages loaded per search for older matches, so a rare word doesn't page in the whole chat at once.
+    static let searchPageLimit = 10
+
+    /// Starts searching the loaded messages; older matches load earlier history as the user goes back to them.
+    public func beginSearch() {
+        guard searchQuery == nil else { return }
+        searchQuery = ""
+        AppMetrics.chatSearched(network: network)
+    }
+
+    public func endSearch() {
+        searchJumpTask?.cancel()
+        searchQuery = nil
+        searchMatchIds = []
+        searchMatchIndex = nil
+    }
+
+    /// Shows the newest match as the user types, once they pause.
+    public func updateSearch(_ query: String) {
+        guard searchQuery != nil, query != searchQuery else { return }
+        searchQuery = query
+        searchMatchIndex = nil
+        refreshSearchMatches()
+        searchJumpTask?.cancel()
+        guard !searchMatchIds.isEmpty else { return }
+        searchJumpTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled, let self else { return }
+            await showSearchMatch(at: searchMatchIds.count - 1)
+        }
+    }
+
+    /// The search field's Return: shows the newest match, or looks further back when none is loaded.
+    public func submitSearch() async {
+        searchJumpTask?.cancel()
+        if searchMatchIds.isEmpty {
+            await searchEarlier()
+        }
+        if searchMatchIndex == nil, !searchMatchIds.isEmpty {
+            await showSearchMatch(at: searchMatchIds.count - 1)
+        }
+    }
+
+    public var canShowOlderMatch: Bool {
+        guard let query = searchQuery, !ChatSearch.normalized(query).isEmpty else { return false }
+        return (searchMatchIndex ?? searchMatchIds.count) > 0 || hasEarlierMessages
+    }
+
+    public var canShowNewerMatch: Bool {
+        guard let index = searchMatchIndex else { return false }
+        return index < searchMatchIds.count - 1
+    }
+
+    public func showOlderMatch() async {
+        searchJumpTask?.cancel()
+        let index = searchMatchIndex ?? searchMatchIds.count
+        if index > 0 {
+            await showSearchMatch(at: index - 1)
+            return
+        }
+        let shown = searchMatchIndex.map { searchMatchIds[$0] }
+        await searchEarlier()
+        // Earlier history puts its matches before the one shown.
+        let position = shown.flatMap { searchMatchIds.firstIndex(of: $0) } ?? searchMatchIds.count
+        if position > 0 {
+            await showSearchMatch(at: position - 1)
+        }
+    }
+
+    public func showNewerMatch() async {
+        searchJumpTask?.cancel()
+        guard let index = searchMatchIndex, index + 1 < searchMatchIds.count else { return }
+        await showSearchMatch(at: index + 1)
+    }
+
+    private func showSearchMatch(at index: Int) async {
+        guard searchMatchIds.indices.contains(index) else { return }
+        searchMatchIndex = index
+        await jump(to: searchMatchIds[index])
+    }
+
+    /// Loads earlier pages until one brings an older match, up to `searchPageLimit` of them.
+    private func searchEarlier() async {
+        guard !isSearchingEarlier else { return }
+        isSearchingEarlier = true
+        defer { isSearchingEarlier = false }
+        let oldest = searchMatchIds.first
+        for _ in 0 ..< Self.searchPageLimit where hasEarlierMessages && searchQuery != nil && searchMatchIds.first == oldest {
+            // Scrolling may already be loading a page; wait for it rather than skipping the turn.
+            while isLoadingEarlier {
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+            await loadEarlier()
+        }
+    }
+
+    /// Matches follow the messages as pages load and messages arrive; the one shown stays selected.
+    private func refreshSearchMatches() {
+        let shown = searchMatchIndex.flatMap { searchMatchIds.indices.contains($0) ? searchMatchIds[$0] : nil }
+        let ids = ChatSearch.matchingIds(of: searchQuery ?? "", in: messages, text: searchableText(of:))
+        if ids != searchMatchIds {
+            searchMatchIds = ids
+        }
+        let index = shown.flatMap { ids.firstIndex(of: $0) }
+        if index != searchMatchIndex {
+            searchMatchIndex = index
+        }
+    }
+
+    /// What a message is found by: its text as shown (Markdown rendered, mentions by name), and the titles and text
+    /// of what it shares.
+    public func searchableText(of message: ChatMessage) -> String {
+        guard !message.isDeleted, !message.isNotice else { return "" }
+        var parts = [showingMentionNames(String(renderedText(for: message).characters))]
+        for embed in message.embeds {
+            switch embed {
+            case let .card(title, subtitle, _, _, _): parts += [title, subtitle ?? ""]
+            case let .audio(_, title, subtitle, _, _, _): parts += [title, subtitle ?? ""]
+            case let .message(title, text, _): parts += [title, text]
+            case let .image(_, _, alt, _, _): parts.append(alt ?? "")
+            case let .file(_, filename, subtitle, _): parts += [filename, subtitle ?? ""]
+            case .pending, .video, .voice: break
+            }
+        }
+        return parts.joined(separator: "\n")
+    }
 }
 
 /// A picture beside a chat's title; without a URL, initials on the color of `colorKey`, or a gray initial.
 public struct ChatTitleAvatar: Equatable, Sendable {
     public let url: URL?
     public let colorKey: String?
+}
+
+/// Finding text in chat messages, ignoring case and accents.
+public enum ChatSearch {
+    static let options: String.CompareOptions = [.caseInsensitive, .diacriticInsensitive, .widthInsensitive]
+
+    public static func normalized(_ query: String) -> String {
+        query.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Ids of the messages whose text contains the query, oldest first; none for an empty query.
+    public static func matchingIds(of query: String, in messages: [ChatMessage], text: (ChatMessage) -> String) -> [String] {
+        let query = normalized(query)
+        guard !query.isEmpty else { return [] }
+        return messages.filter { text($0).range(of: query, options: options) != nil }.map(\.id)
+    }
+
+    /// Where the query occurs in the text, for highlighting.
+    public static func ranges(of query: String, in text: String) -> [NSRange] {
+        let query = normalized(query)
+        guard !query.isEmpty else { return [] }
+        var ranges: [NSRange] = []
+        var searchRange = text.startIndex ..< text.endIndex
+        while let found = text.range(of: query, options: options, range: searchRange) {
+            ranges.append(NSRange(found, in: text))
+            searchRange = found.upperBound ..< text.endIndex
+        }
+        return ranges
+    }
 }

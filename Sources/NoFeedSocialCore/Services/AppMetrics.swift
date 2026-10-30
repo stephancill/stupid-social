@@ -50,6 +50,11 @@ public enum AppMetrics {
         StupidMetrics.track("chat_open", properties: ["network": network.rawValue])
     }
 
+    /// Search was opened in a chat (long-pressing its title).
+    static func chatSearched(network: SocialNetwork) {
+        StupidMetrics.track("chat_search", properties: ["network": network.rawValue])
+    }
+
     static func messageSent(network: SocialNetwork, hasAttachment: Bool, isReply: Bool, error: (any Error)?) {
         StupidMetrics.track("message_send", properties: [
             "network": network.rawValue,

@@ -223,6 +223,76 @@ final class AdapterChatViewModelTests: XCTestCase {
         chat.disconnect()
     }
 
+    func testSearchFindsLoadedMessagesAndStepsBetweenThem() async {
+        let adapter = FakeAdapter()
+        adapter.pages = [[said(1, "Lunch at noon?"), said(2, "sure"), said(3, "Café LUNCH was great")]]
+        let chat = makeChat(adapter)
+        await chat.connect()
+        chat.beginSearch()
+        chat.updateSearch("lunch ")
+        XCTAssertEqual(chat.searchMatchIds, ["1", "3"], "ignores case, accents and surrounding spaces")
+        await chat.submitSearch()
+        XCTAssertEqual(chat.searchMatchIndex, 1, "starts at the newest match")
+        XCTAssertEqual(chat.jumpTarget, "3")
+        await chat.showOlderMatch()
+        XCTAssertEqual(chat.jumpTarget, "1")
+        XCTAssertFalse(chat.canShowOlderMatch)
+        XCTAssertTrue(chat.canShowNewerMatch)
+        chat.endSearch()
+        XCTAssertNil(chat.searchQuery)
+        XCTAssertTrue(chat.searchMatchIds.isEmpty)
+        chat.disconnect()
+    }
+
+    func testSearchPagesBackForOlderMatches() async {
+        let adapter = FakeUnseenReactionsAdapter()
+        adapter.pages = [[said(4, "lunch?"), said(5, "ok")]]
+        adapter.earlierPages = [[said(3, "nothing")], [said(2, "lunch again")], [said(1, "lunch first")]]
+        let chat = makeChat(adapter)
+        await chat.connect()
+        chat.beginSearch()
+        chat.updateSearch("lunch")
+        await chat.submitSearch()
+        XCTAssertEqual(chat.jumpTarget, "4")
+        XCTAssertTrue(chat.canShowOlderMatch, "earlier history may have more")
+        await chat.showOlderMatch()
+        XCTAssertEqual(chat.jumpTarget, "2", "loads pages until one brings an older match, and no further")
+        XCTAssertEqual(chat.messages.map(\.id), ["2", "3", "4", "5"])
+        XCTAssertEqual(chat.searchMatchIds, ["2", "4"])
+        XCTAssertEqual(chat.searchMatchIndex, 0)
+        chat.disconnect()
+    }
+
+    func testSearchWithNothingLoadedLooksFurtherBackOnReturn() async {
+        let adapter = FakeUnseenReactionsAdapter()
+        adapter.pages = [[said(3, "hi")]]
+        adapter.earlierPages = [[said(2, "nope")], [said(1, "the plan")]]
+        let chat = makeChat(adapter)
+        await chat.connect()
+        chat.beginSearch()
+        chat.updateSearch("plan")
+        XCTAssertTrue(chat.searchMatchIds.isEmpty)
+        await chat.submitSearch()
+        XCTAssertEqual(chat.searchMatchIds, ["1"])
+        XCTAssertEqual(chat.jumpTarget, "1")
+        chat.disconnect()
+    }
+
+    func testSearchMatchesFollowNewMessagesAndKeepTheShownOne() async {
+        let adapter = FakeAdapter()
+        adapter.pages = [[said(1, "lunch")]]
+        let chat = makeChat(adapter)
+        await chat.connect()
+        chat.beginSearch()
+        chat.updateSearch("lunch")
+        await chat.submitSearch()
+        adapter.append(said(2, "more lunch"))
+        adapter.onChange?()
+        XCTAssertEqual(chat.searchMatchIds, ["1", "2"])
+        XCTAssertEqual(chat.searchMatchIndex, 0, "still shows the same message")
+        chat.disconnect()
+    }
+
     private func makeChat(_ adapter: FakeAdapter) -> AdapterChatViewModel<FakeAdapter> {
         let suite = "AdapterChatViewModelTests-\(UUID().uuidString)"
         return AdapterChatViewModel(
@@ -236,6 +306,10 @@ final class AdapterChatViewModelTests: XCTestCase {
 
 private func message(_ id: Int, own: Bool = false) -> ChatMessage {
     ChatMessage(id: "\(id)", sender: ChatUser(id: own ? "you" : "ada", name: own ? "You" : "Ada", avatarURL: nil), timestamp: Date(timeIntervalSince1970: Double(id)), text: "Message \(id)", isOwn: own)
+}
+
+private func said(_ id: Int, _ text: String) -> ChatMessage {
+    ChatMessage(id: "\(id)", sender: ChatUser(id: "ada", name: "Ada", avatarURL: nil), timestamp: Date(timeIntervalSince1970: Double(id)), text: text, isOwn: false)
 }
 
 /// Read position is a message id, like Telegram's.

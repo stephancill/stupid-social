@@ -2,6 +2,56 @@ import NoFeedSocialCore
 import NoFeedSocialPush
 import UIKit
 
+/// A day's date in a small glass capsule, heading its messages. Headers pin to the top while their day scrolls
+/// past, as in Telegram, and the pinned one fades out once scrolling stops.
+final class ChatDateHeaderView: UICollectionReusableView {
+    private let glass = ChatGlass.make(cornerRadius: 13)
+    private let label = UILabel()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        label.font = UIFont.preferredFont(forTextStyle: .footnote).withWeight(.semibold)
+        label.textColor = .secondaryLabel
+        label.translatesAutoresizingMaskIntoConstraints = false
+        glass.contentView.addSubview(label)
+        glass.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(glass)
+        NSLayoutConstraint.activate([
+            label.topAnchor.constraint(equalTo: glass.contentView.topAnchor, constant: 5),
+            label.bottomAnchor.constraint(equalTo: glass.contentView.bottomAnchor, constant: -5),
+            label.leadingAnchor.constraint(equalTo: glass.contentView.leadingAnchor, constant: 10),
+            label.trailingAnchor.constraint(equalTo: glass.contentView.trailingAnchor, constant: -10),
+            glass.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+            glass.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -4),
+            glass.centerXAnchor.constraint(equalTo: centerXAnchor),
+        ])
+        isAccessibilityElement = true
+        accessibilityTraits = .header
+    }
+
+    @available(*, unavailable)
+    required init?(coder _: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func configure(day: Date) {
+        label.text = Self.title(for: day)
+        accessibilityLabel = label.text
+    }
+
+    /// "Today", "Yesterday", "October 12", or with the year when it isn't this one, as Telegram does.
+    static func title(for day: Date, now: Date = Date(), calendar: Calendar = .current) -> String {
+        if calendar.isDate(day, inSameDayAs: now) { return "Today" }
+        if let yesterday = calendar.date(byAdding: .day, value: -1, to: now), calendar.isDate(day, inSameDayAs: yesterday) {
+            return "Yesterday"
+        }
+        if calendar.isDate(day, equalTo: now, toGranularity: .year) {
+            return day.formatted(.dateTime.month(.wide).day())
+        }
+        return day.formatted(.dateTime.month(.wide).day().year())
+    }
+}
+
 /// The boundary above the first unread message: a hairline either side of a "New Messages" label.
 final class ChatUnreadDividerCell: UICollectionViewListCell {
     override init(frame: CGRect) {

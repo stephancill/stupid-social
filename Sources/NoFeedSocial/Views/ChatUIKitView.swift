@@ -27,8 +27,10 @@ struct ChatUIKitView: UIViewControllerRepresentable {
 final class ChatViewController: UIViewController, UICollectionViewDelegate, UITextViewDelegate,
     PHPickerViewControllerDelegate, UIDocumentPickerDelegate
 {
-    private enum Section {
-        case messages
+    /// One section per calendar day, headed by its date (`ChatDateHeaderView`).
+    private enum Section: Hashable {
+        /// The start of the day.
+        case day(Date)
     }
 
     private enum Item: Hashable {
@@ -64,6 +66,16 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     /// Message embeds tapped open to their full text, as `<message id>|<embed index>`; they stay open while the
     /// chat is.
     private var expandedEmbeds: Set<String> = []
+    /// Hides the pinned date header a moment after scrolling stops.
+    private var dateHeaderHideWork: DispatchWorkItem?
+    /// What message text highlights while searching; see `ChatSearch`.
+    private var searchQuery: String?
+    private let searchBar = ChatGlass.make(cornerRadius: 22)
+    private let searchStatusLabel = UILabel()
+    private let searchSpinner = UIActivityIndicatorView(style: .medium)
+    private let olderMatchButton = UIButton(type: .system)
+    private let newerMatchButton = UIButton(type: .system)
+    private var inputRow: UIStackView!
     /// Read from the current layout: a list that fits on screen never scrolls, so a value kept from the last
     /// scroll could be one from before the view had its size.
     private var isNearBottom: Bool {
@@ -184,7 +196,16 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         var configuration = UICollectionLayoutListConfiguration(appearance: .plain)
         configuration.showsSeparators = false
         configuration.backgroundColor = .clear
-        collectionView = UICollectionView(frame: .zero, collectionViewLayout: UICollectionViewCompositionalLayout.list(using: configuration))
+        configuration.headerMode = .supplementary
+        let layout = UICollectionViewCompositionalLayout { _, environment in
+            let section = NSCollectionLayoutSection.list(using: configuration, layoutEnvironment: environment)
+            for header in section.boundarySupplementaryItems {
+                header.pinToVisibleBounds = true
+                header.zIndex = 2
+            }
+            return section
+        }
+        collectionView = UICollectionView(frame: .zero, collectionViewLayout: layout)
         collectionView.delegate = self
         collectionView.keyboardDismissMode = .interactive
         // Tapping the messages dismisses the keyboard; touches still reach links, images and reactions.
@@ -266,6 +287,16 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
             case .typing:
                 collectionView.dequeueConfiguredReusableCell(using: typingRegistration, for: indexPath, item: item)
             }
+        }
+        let headerRegistration = UICollectionView.SupplementaryRegistration<ChatDateHeaderView>(
+            elementKind: UICollectionView.elementKindSectionHeader,
+        ) { [weak self] header, _, indexPath in
+            guard let self, case let .day(day) = dataSource.sectionIdentifier(for: indexPath.section) else { return }
+            header.configure(day: day)
+            header.alpha = 1
+        }
+        dataSource.supplementaryViewProvider = { collectionView, _, indexPath in
+            collectionView.dequeueConfiguredReusableSupplementary(using: headerRegistration, for: indexPath)
         }
 
         // History loads as the user nears either end; a small spinner under the title shows it is coming.
@@ -386,7 +417,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         inputPill.contentView.addSubview(pillStack)
         pillStack.pinToEdges(of: inputPill.contentView)
 
-        let inputRow = UIStackView(arrangedSubviews: [attachGlass, inputPill])
+        inputRow = UIStackView(arrangedSubviews: [attachGlass, inputPill])
         inputRow.alignment = .bottom
         inputRow.spacing = 8
 
@@ -394,6 +425,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         composer.spacing = 8
         composer.addArrangedSubview(noticeView)
         composer.addArrangedSubview(inputRow)
+        composer.addArrangedSubview(configureSearchBar())
         composer.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(composer)
         if #available(iOS 26.0, *) {
@@ -422,6 +454,82 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
             sendButton.widthAnchor.constraint(equalToConstant: minimumTextHeight),
             sendButton.heightAnchor.constraint(equalToConstant: minimumTextHeight),
         ])
+    }
+
+    /// While searching, the input row gives way to where the shown match is among them, with arrows to older and newer
+    /// matches, as in Telegram. The search field itself is in the navigation bar (`ChatView`).
+    private func configureSearchBar() -> UIView {
+        searchStatusLabel.font = .preferredFont(forTextStyle: .subheadline).monospacedDigits()
+        searchStatusLabel.textColor = .secondaryLabel
+        searchSpinner.hidesWhenStopped = true
+        let symbol = UIImage.SymbolConfiguration(pointSize: 17, weight: .semibold)
+        olderMatchButton.setImage(UIImage(systemName: "chevron.up", withConfiguration: symbol), for: .normal)
+        olderMatchButton.accessibilityLabel = "Previous Result"
+        olderMatchButton.addAction(UIAction { [weak self] _ in
+            Task { await self?.viewModel.showOlderMatch() }
+        }, for: .primaryActionTriggered)
+        newerMatchButton.setImage(UIImage(systemName: "chevron.down", withConfiguration: symbol), for: .normal)
+        newerMatchButton.accessibilityLabel = "Next Result"
+        newerMatchButton.addAction(UIAction { [weak self] _ in
+            Task { await self?.viewModel.showNewerMatch() }
+        }, for: .primaryActionTriggered)
+        for button in [olderMatchButton, newerMatchButton] {
+            button.widthAnchor.constraint(equalToConstant: 40).isActive = true
+            button.setContentHuggingPriority(.required, for: .horizontal)
+        }
+        let row = UIStackView(arrangedSubviews: [searchSpinner, searchStatusLabel, olderMatchButton, newerMatchButton])
+        row.alignment = .center
+        row.spacing = 8
+        row.isLayoutMarginsRelativeArrangement = true
+        row.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 6)
+        searchBar.contentView.addSubview(row)
+        row.pinToEdges(of: searchBar.contentView)
+        searchBar.heightAnchor.constraint(equalToConstant: 44).isActive = true
+        searchBar.isHidden = true
+        return searchBar
+    }
+
+    private func updateSearchBar() {
+        let isSearching = viewModel.searchQuery != nil
+        inputRow.isHidden = isSearching
+        searchBar.isHidden = !isSearching
+        guard isSearching else { return }
+        let count = viewModel.searchMatchIds.count
+        if viewModel.isSearchingEarlier {
+            searchSpinner.startAnimating()
+        } else {
+            searchSpinner.stopAnimating()
+        }
+        if ChatSearch.normalized(viewModel.searchQuery ?? "").isEmpty {
+            searchStatusLabel.text = nil
+        } else if viewModel.isSearchingEarlier, count == 0 {
+            searchStatusLabel.text = "Searching…"
+        } else if count == 0 {
+            searchStatusLabel.text = viewModel.hasEarlierMessages ? "No results yet" : "No results"
+        } else if let index = viewModel.searchMatchIndex {
+            searchStatusLabel.text = "\(index + 1) of \(count)\(viewModel.hasEarlierMessages ? "+" : "")"
+        } else {
+            searchStatusLabel.text = "\(count)\(viewModel.hasEarlierMessages ? "+" : "") \(count == 1 ? "result" : "results")"
+        }
+        olderMatchButton.isEnabled = viewModel.canShowOlderMatch && !viewModel.isSearchingEarlier
+        newerMatchButton.isEnabled = viewModel.canShowNewerMatch
+    }
+
+    /// Re-renders messages whose highlights change with the query: those that matched it before or match it now.
+    private func searchQueryDidChange(_ query: String?) {
+        let previous = searchQuery
+        searchQuery = query.map(ChatSearch.normalized).flatMap { $0.isEmpty ? nil : $0 }
+        guard searchQuery != previous else { return }
+        attributedCache.removeAll()
+        var snapshot = dataSource.snapshot()
+        let changed = snapshot.itemIdentifiers.filter { item in
+            guard case let .message(key) = item, let message = messagesById[messageId(forKey: key)] else { return false }
+            let text = viewModel.searchableText(of: message)
+            return [previous, searchQuery].contains { $0.map { !ChatSearch.ranges(of: $0, in: text).isEmpty } ?? false }
+        }
+        guard !changed.isEmpty else { return }
+        snapshot.reconfigureItems(changed)
+        applyKeepingBottom(snapshot)
     }
 
     /// Messages scroll under the floating composer, so the list's bottom inset tracks its top edge.
@@ -543,6 +651,24 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
             self?.placeholderLabel.text = isReadOnly ? "Read only" : "Message"
             self?.refreshComposer()
         }.store(in: &cancellables)
+        // Emitted in willSet, so read the view model's search state a turn later.
+        Publishers.MergeMany(
+            viewModel.$searchQuery.map { _ in () }.eraseToAnyPublisher(),
+            viewModel.$searchMatchIds.map { _ in () }.eraseToAnyPublisher(),
+            viewModel.$searchMatchIndex.map { _ in () }.eraseToAnyPublisher(),
+            viewModel.$isSearchingEarlier.map { _ in () }.eraseToAnyPublisher(),
+            viewModel.$hasEarlierMessages.map { _ in () }.eraseToAnyPublisher(),
+        )
+        .receive(on: DispatchQueue.main)
+        .sink { [weak self] in self?.updateSearchBar() }
+        .store(in: &cancellables)
+        viewModel.$searchQuery.removeDuplicates().dropFirst().sink { [weak self] query in
+            DispatchQueue.main.async {
+                self?.searchQueryDidChange(query)
+                self?.updateMentionSuggestions()
+                self?.view.setNeedsLayout()
+            }
+        }.store(in: &cancellables)
         viewModel.$canAttach.sink { [weak self] canAttach in
             self?.attachButton.isEnabled = canAttach
             self?.attachButton.alpha = canAttach ? 1 : 0.35
@@ -550,7 +676,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     }
 
     private func applySnapshot(messages: [ChatMessage], hasEarlier _: Bool, hasLater: Bool) {
-        let previousItems = items(in: .messages, of: dataSource.snapshot())
+        let previousItems = dataSource.snapshot().itemIdentifiers
         let previousIds = previousItems.filter { if case .message = $0 { true } else { false } }
         let wasEmpty = previousIds.isEmpty
         let previousFirst = previousIds.first
@@ -560,17 +686,26 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         orderedMessages = messages
         indexById = Dictionary(messages.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { _, latest in latest })
         var snapshot = NSDiffableDataSourceSnapshot<Section, Item>()
-        snapshot.appendSections([.messages])
         messageIdByKey = Dictionary(messages.map { (itemKey(for: $0.id), $0.id) }, uniquingKeysWith: { _, latest in latest })
         let items = messages.map { Item.message(itemKey(for: $0.id)) }
-        var rows = items
-        if let firstUnread = viewModel.firstUnreadMessageId, let index = rows.firstIndex(of: .message(itemKey(for: firstUnread))) {
-            rows.insert(.unreadDivider, at: index)
+        let firstUnreadKey = viewModel.firstUnreadMessageId.map(itemKey(for:))
+        var rows: [Item] = []
+        for (day, dayMessages) in Self.days(of: messages) {
+            var dayRows = dayMessages.map { Item.message(itemKey(for: $0.id)) }
+            if let firstUnreadKey, let index = dayRows.firstIndex(of: .message(firstUnreadKey)) {
+                dayRows.insert(.unreadDivider, at: index)
+            }
+            snapshot.appendSections([.day(day)])
+            snapshot.appendItems(dayRows, toSection: .day(day))
+            rows += dayRows
         }
         if showsTypingRow {
+            if snapshot.sectionIdentifiers.isEmpty {
+                snapshot.appendSections([.day(Calendar.current.startOfDay(for: Date()))])
+            }
+            snapshot.appendItems([.typing], toSection: snapshot.sectionIdentifiers.last)
             rows.append(.typing)
         }
-        snapshot.appendItems(rows, toSection: .messages)
 
         // Edits, tombstones and finished uploads keep their id, and a new message can end the previous one's
         // group, so re-render items whose message or group position changed. A reply also re-renders when its
@@ -621,6 +756,23 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         DispatchQueue.main.async { [weak self] in self?.reportVisibleRead() }
     }
 
+    /// Messages split by the day they were sent, in order. A message without a time joins the one before it, and one
+    /// sent on a day already shown (out of order) stays in the current day, since a day is a section only once.
+    private static func days(of messages: [ChatMessage], calendar: Calendar = .current) -> [(Date, [ChatMessage])] {
+        var days: [(Date, [ChatMessage])] = []
+        var seen: Set<Date> = []
+        for message in messages {
+            let day = message.timestamp.map(calendar.startOfDay(for:)) ?? days.last?.0 ?? calendar.startOfDay(for: Date())
+            if days.isEmpty || !seen.contains(day) {
+                seen.insert(day)
+                days.append((day, [message]))
+            } else {
+                days[days.count - 1].1.append(message)
+            }
+        }
+        return days
+    }
+
     /// A sent message stays under the item of its "sending" copy, so confirming it reconfigures that cell rather
     /// than replacing it with a new one, whose estimated height would make the list jump.
     private func itemKey(for messageId: String) -> String {
@@ -651,7 +803,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     private func reconfigureMentions() {
         attributedCache.removeAll()
         var snapshot = dataSource.snapshot()
-        let changed = items(in: .messages, of: snapshot).filter { item in
+        let changed = snapshot.itemIdentifiers.filter { item in
             guard case let .message(key) = item, let message = messagesById[messageId(forKey: key)] else { return false }
             let quoted = message.replyToId.flatMap { viewModel.message(withId: $0)?.text } ?? ""
             return (message.text ?? "").contains("@") || quoted.contains("@")
@@ -666,7 +818,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     private func reconfigureCustomEmojis() {
         attributedCache.removeAll()
         var snapshot = dataSource.snapshot()
-        let changed = items(in: .messages, of: snapshot).filter { item in
+        let changed = snapshot.itemIdentifiers.filter { item in
             guard case let .message(key) = item, case let id = messageId(forKey: key), let message = messagesById[id] else { return false }
             return !message.customEmojis.isEmpty || (message.text ?? "").contains(":") || (reactionTotals[id] ?? []).contains { $0.emoji.hasPrefix(":") }
         }
@@ -687,7 +839,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     /// Re-renders replies whose quote changed, such as when a quoted message outside the loaded ones arrives.
     private func reconfigureReplies() {
         var snapshot = dataSource.snapshot()
-        let replies = items(in: .messages, of: snapshot).filter { item in
+        let replies = snapshot.itemIdentifiers.filter { item in
             guard case let .message(key) = item, let target = messagesById[messageId(forKey: key)]?.replyToId,
                   var rendered = renderedMessages[key] else { return false }
             let reply = replyQuote(for: target)
@@ -735,11 +887,6 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         }, completion: { _ in
             glass.isHidden = !visible
         })
-    }
-
-    /// `itemIdentifiers(inSection:)` raises for a section the snapshot doesn't have, such as before the first apply.
-    private func items(in section: Section, of snapshot: NSDiffableDataSourceSnapshot<Section, Item>) -> [Item] {
-        snapshot.sectionIdentifiers.contains(section) ? snapshot.itemIdentifiers(inSection: section) : []
     }
 
     private func refreshComposer() {
@@ -804,7 +951,8 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         view.setNeedsLayout()
     }
 
-    /// Consecutive messages from one sender within 10 minutes form a group: the name heads it and the avatar ends it.
+    /// Consecutive messages from one sender within 10 minutes on the same day form a group: the name heads it and
+    /// the avatar ends it.
     private func bubbleLayout(at index: Int) -> ChatBubbleLayout {
         let message = orderedMessages[index]
         let previous = index > 0 ? orderedMessages[index - 1] : nil
@@ -814,7 +962,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
                   earlier.sender.id == later.sender.id,
                   let start = earlier.timestamp, let end = later.timestamp
             else { return false }
-            return end.timeIntervalSince(start) < 600
+            return end.timeIntervalSince(start) < 600 && Calendar.current.isDate(start, inSameDayAs: end)
         }
         let isSystem = message.sender.isSystem
         let isOwn = !isSystem && message.isOwn
@@ -835,7 +983,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         // Mentions are in the key: a Telegram `@username` gets its user id once the user loads.
         // Custom emoji are in it too: they draw once the adapter's catalog has them.
         let emojis = message.customEmojis.compactMap { emoji in viewModel.customEmojis[emoji.key].map { (emoji.range, $0) } }
-        let key = "\(message.id)|\(isOwn)|\(hidesSpoilers)|\(message.mentions.map(\.userId))|\(emojis.map(\.1.key))|\(text)"
+        let key = "\(message.id)|\(isOwn)|\(hidesSpoilers)|\(message.mentions.map(\.userId))|\(emojis.map(\.1.key))|\(searchQuery ?? "")|\(text)"
         if let cached = attributedCache[key] {
             return cached
         }
@@ -860,7 +1008,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
             font: isSystem ? .preferredFont(forTextStyle: .footnote) : .preferredFont(forTextStyle: .body),
             formatsQuotes: message.isMarkdown,
         )
-        let marked = mentionsMarked(message.mentions, in: rendered, isOwn: isOwn)
+        let marked = searchHighlighted(mentionsMarked(message.mentions, in: rendered, isOwn: isOwn), isOwn: isOwn)
         let hidden = NSMutableAttributedString(attributedString: marked)
         if hidesSpoilers {
             let color = isOwn ? UIColor.white : UIColor.label
@@ -881,6 +1029,20 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         }
         attributedCache[key] = hidden
         return hidden
+    }
+
+    /// While searching, what the query matches is marked in the text.
+    private func searchHighlighted(_ text: NSAttributedString, isOwn: Bool) -> NSAttributedString {
+        guard let searchQuery else { return text }
+        let ranges = ChatSearch.ranges(of: searchQuery, in: text.string)
+        guard !ranges.isEmpty else { return text }
+        let highlighted = NSMutableAttributedString(attributedString: text)
+        // White text on the blue bubble can't take a yellow mark.
+        let color = isOwn ? UIColor.white.withAlphaComponent(0.35) : UIColor.systemYellow.withAlphaComponent(0.45)
+        for range in ranges {
+            highlighted.addAttribute(.backgroundColor, value: color, range: range)
+        }
+        return highlighted
     }
 
     /// Mentions a network marks by position, styled and tappable like `@user_id` ones. They apply to plain text,
@@ -904,7 +1066,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     /// Waits for real bounds: cached messages are applied before the view is first laid out.
     private func performInitialScrollIfNeeded() {
         guard !hasScrolledInitially, collectionView.bounds.height > 0,
-              !items(in: .messages, of: dataSource.snapshot()).isEmpty
+              !dataSource.snapshot().itemIdentifiers.isEmpty
         else { return }
         hasScrolledInitially = true
         // The first layout runs inside the navigation push's animation; without this the cells slide in from
@@ -922,8 +1084,9 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         }
     }
 
-    /// Puts the divider at the top. Two passes: the first lays out the cells around it, the second lands on it
-    /// exactly. When everything fits on screen the divider is also the bottom, so the list follows the bottom instead.
+    /// Puts the divider at the top, under its day's pinned date. Two passes: the first lays out the cells around it,
+    /// the second lands on it exactly. When everything fits on screen the divider is also the bottom, so the list
+    /// follows the bottom instead.
     private func scrollToDivider() {
         guard let divider = dataSource.indexPath(for: .unreadDivider) else {
             isAnchoredToDivider = false
@@ -932,9 +1095,14 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         for _ in 0 ..< 2 {
             collectionView.layoutIfNeeded()
             guard let frame = collectionView.layoutAttributesForItem(at: divider)?.frame else { break }
-            let target = min(frame.minY - collectionView.adjustedContentInset.top, bottomOffset)
+            let header = collectionView.layoutAttributesForSupplementaryElement(
+                ofKind: UICollectionView.elementKindSectionHeader,
+                at: IndexPath(item: 0, section: divider.section),
+            )?.frame.height ?? 0
+            let top = -collectionView.adjustedContentInset.top
+            let target = max(top, min(frame.minY - header + top, bottomOffset))
             guard abs(collectionView.contentOffset.y - target) > 0.5 else { break }
-            collectionView.scrollToItem(at: divider, at: .top, animated: false)
+            collectionView.setContentOffset(CGPoint(x: 0, y: target), animated: false)
         }
         collectionView.layoutIfNeeded()
         if collectionView.contentOffset.y >= bottomOffset - 1 {
@@ -1135,6 +1303,11 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     }
 
     @objc private func dismissKeyboard() {
+        if viewModel.searchQuery != nil {
+            // The search field is in the navigation bar, outside this view.
+            view.window?.endEditing(true)
+            return
+        }
         guard textView.isFirstResponder else { return }
         textView.resignFirstResponder()
     }
@@ -1181,6 +1354,37 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         updateJumpToLatestButton()
         loadMoreIfNeeded(scrollView)
         reportVisibleRead()
+        showDateHeaders()
+    }
+
+    /// Date headers show while the list moves; a moment after it stops, the one pinned over the messages fades out,
+    /// as in Telegram. A header in its own place, above its day's first message, stays.
+    private func showDateHeaders() {
+        for case let header as ChatDateHeaderView in collectionView.visibleSupplementaryViews(ofKind: UICollectionView.elementKindSectionHeader) where header.alpha < 1 {
+            UIView.animate(withDuration: 0.15, delay: 0, options: [.allowUserInteraction, .beginFromCurrentState]) { header.alpha = 1 }
+        }
+        dateHeaderHideWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.hideFloatingDateHeaders() }
+        dateHeaderHideWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: work)
+    }
+
+    private func hideFloatingDateHeaders() {
+        guard !collectionView.isTracking, !collectionView.isDecelerating else {
+            showDateHeaders()
+            return
+        }
+        let kind = UICollectionView.elementKindSectionHeader
+        for indexPath in collectionView.indexPathsForVisibleSupplementaryElements(ofKind: kind) {
+            guard let header = collectionView.supplementaryView(forElementKind: kind, at: indexPath),
+                  collectionView.numberOfItems(inSection: indexPath.section) > 0,
+                  let first = collectionView.layoutAttributesForItem(at: IndexPath(item: 0, section: indexPath.section))
+            else { continue }
+            let isFloating = header.frame.minY > first.frame.minY - header.frame.height + 0.5
+            if isFloating {
+                UIView.animate(withDuration: 0.3, delay: 0, options: [.allowUserInteraction, .beginFromCurrentState]) { header.alpha = 0 }
+            }
+        }
     }
 
     /// Marks read up to the newest message fully on screen, only while the chat is visible and the app active (§4.6).
@@ -1780,10 +1984,10 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     private func updateTypingRow(_ names: [String]) {
         typingNames = names
         var snapshot = dataSource.snapshot()
-        guard snapshot.sectionIdentifiers.contains(.messages) else { return }
+        guard let lastDay = snapshot.sectionIdentifiers.last else { return }
         let isShown = snapshot.indexOfItem(.typing) != nil
         switch (isShown, showsTypingRow) {
-        case (false, true): snapshot.appendItems([.typing], toSection: .messages)
+        case (false, true): snapshot.appendItems([.typing], toSection: lastDay)
         case (true, false): snapshot.deleteItems([.typing])
         case (true, true): snapshot.reconfigureItems([.typing])
         case (false, false): return
@@ -1982,7 +2186,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         reactionTotals = totals
         guard !changedIds.isEmpty else { return }
         var snapshot = dataSource.snapshot()
-        let present = Set(items(in: .messages, of: snapshot))
+        let present = Set(snapshot.itemIdentifiers)
         let changed = changedIds.map { Item.message(itemKey(for: $0)) }.filter(present.contains)
         guard !changed.isEmpty else { return }
         snapshot.reconfigureItems(changed)

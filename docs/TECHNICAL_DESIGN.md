@@ -457,7 +457,7 @@ Chat is one framework with an adapter per chat network (Apron, Telegram, Instagr
 **Framework (shared):**
 
 - Display models: message, user, embed (image, video, file, card, audio, voice message with waveform, pending upload), reaction totals, reactors, attachment. Media embeds name a URL the platform's loader can fetch, the network's own scheme included; the framework downloads videos and files to local files to play or preview them, and lays out several media in one message as an album grid.
-- The chat screen and its state: connection state, history paging (earlier, and later for windows that don't reach the newest message), jumping to a message, the "New Messages" divider, unread count, replies, reactions, mentions, typing names, composer and draft.
+- The chat screen and its state: connection state, history paging (earlier, and later for windows that don't reach the newest message), jumping to a message, searching the loaded messages (paging back for older matches), day sections with pinned date chips, the "New Messages" divider, unread count, replies, reactions, mentions, typing names, composer and draft.
 - Behavior: optimistic sending (see Sending), drafts per chat, polling or following pushed updates, debounced read markers, unread counting from the adapter's read position, the per-chat snapshot that opens a chat with content, and in-chat links.
 - The Chats list: rows from every network merged newest first, archived rows apart, a cached list at launch, a network that fails keeps its previous rows, and an open chat keeps its row current.
 
