@@ -20,6 +20,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         center.setNotificationCategories([
             UNNotificationCategory(identifier: ApronPushNotification.categoryIdentifier, actions: [reply], intentIdentifiers: []),
         ])
+        ChatReminderStore.startSync()
         // Issues a token without asking; alerts still need the user's permission, asked when a server offers push.
         application.registerForRemoteNotifications()
         return true
@@ -39,7 +40,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     ) {
         let content = notification.request.content
         if content.userInfo[ChatReminder.userInfoKey] != nil {
-            Task { @MainActor in NotificationCenter.default.post(name: ChatReminderStore.reminderDidFire, object: nil) }
+            let pushed = content.userInfo[ChatReminderNotification.reminderDataKey] as? Data
+            Task { @MainActor in
+                if let pushed {
+                    ChatReminderStore.adopt(pushed: pushed)
+                }
+                NotificationCenter.default.post(name: ChatReminderStore.reminderDidFire, object: nil)
+            }
         }
         let thread = Self.telegramPeer(content.userInfo).map { NotificationRouter.telegramThread($0) } ?? content.threadIdentifier
         nonisolated(unsafe) let completion = completionHandler
@@ -59,7 +66,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         let content = response.notification.request.content
         if let reminderId = content.userInfo[ChatReminder.userInfoKey] as? String {
             let opens = response.actionIdentifier == UNNotificationDefaultActionIdentifier
+            let pushed = content.userInfo[ChatReminderNotification.reminderDataKey] as? Data
             Task { @MainActor in
+                if let pushed {
+                    ChatReminderStore.adopt(pushed: pushed)
+                }
                 if opens {
                     NotificationRouter.shared.openReminder(id: reminderId)
                 }

@@ -75,6 +75,11 @@ public enum AppMetrics {
         }
     }
 
+    /// Registering for, scheduling or cancelling reminder pushes to the user's other devices failed.
+    static func chatReminderPushFailed(step: String, error: any Error) {
+        StupidMetrics.error("chat_reminder_push_failed", error: error, properties: ["step": step])
+    }
+
     // MARK: Accounts
 
     static func accountConnected(network: SocialNetwork, isReconnect: Bool) {

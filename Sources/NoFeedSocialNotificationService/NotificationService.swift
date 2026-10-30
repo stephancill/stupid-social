@@ -6,7 +6,8 @@ import NoFeedSocialPush
 /// Decrypts Apron pushes the relay forwards as `webpush` ciphertext and shows them as messages from the sender,
 /// with their avatar, through an `INSendMessageIntent` (Communication Notifications). A push it can't read keeps
 /// the relay's generic alert, since dropping a notification needs an entitlement. Telegram pushes become messages
-/// from their sender the same way, with the avatar the app saved.
+/// from their sender the same way, with the avatar the app saved. Chat reminders from the user's other devices
+/// come through the relay too, encrypted to this device's reminder keys.
 @objc(NotificationService)
 final class NotificationService: UNNotificationServiceExtension, @unchecked Sendable {
     // The system calls in on one thread at a time: `didReceive`, then possibly `serviceExtensionTimeWillExpire`.
@@ -30,6 +31,21 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
         if let chat = TelegramPushChat(userInfo: request.content.userInfo) {
             // A Telegram push left as it came, such as a channel post; logged so Debug shows the extension ran.
             PushExtensionLog().append(PushExtensionLog.Entry(network: "telegram", chat: chat.key, hasAvatar: false, updateError: "not from a person"))
+        }
+        if let ciphertext = request.content.userInfo["webpush"] as? String,
+           let body = Data(base64URLEncoded: ciphertext),
+           let registration = ChatReminderPushStore().load(),
+           let payload = try? WebPushDecryptor.decrypt(body, keys: registration.keys),
+           let reminder = try? ChatReminderNotification(payload: payload),
+           let content = request.content.mutableCopy() as? UNMutableNotificationContent
+        {
+            // A reminder another of the user's devices set, shown as this device would show its own.
+            content.title = reminder.title
+            content.subtitle = reminder.subtitle
+            content.body = reminder.body
+            content.userInfo = [ChatReminderNotification.userInfoKey: reminder.id, ChatReminderNotification.reminderDataKey: payload]
+            contentHandler(content)
+            return
         }
         guard let ciphertext = request.content.userInfo["webpush"] as? String,
               let body = Data(base64URLEncoded: ciphertext),

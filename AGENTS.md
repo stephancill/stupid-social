@@ -61,6 +61,7 @@ Sources/
     WebPushDecryptor.swift
     ApronPushStore.swift
     ApronPushNotification.swift
+    ChatReminderPush.swift          # Reminder push registration (App Group) and the reminder notification's content
     TelegramPushNotification.swift  # Telegram push → sender and text; TelegramAvatarStore for the extension
     CommunicationNotification.swift # INSendMessageIntent donation and content update, shared with Debug
     PushExtensionLog.swift          # What the extension did per push, shown in Settings → Debug
@@ -80,6 +81,7 @@ Sources/
       ApronLiveFeed.swift           # Foreground WebSocket per Apron server for realtime feed items
       XChatLiveFeed.swift           # Foreground X Chat WebSocket: pushed events for open chats and the Chats list
       ApronPushService.swift        # Apron push registration through the push.stupidtech.net relay
+      ChatReminderPush.swift        # Chat reminders pushed to the user's other devices, scheduled on the relay
       AppMetrics.swift              # Every anonymous usage event and error sent to metrics.stupidtech.net
       BackgroundActivity.swift      # Keeps a refresh running when the app is backgrounded; cancels it when iOS's time runs out
       ApronRoomNotifications.swift  # Per-room notification levels mapped to mute and wake scopes
@@ -133,7 +135,7 @@ Sources/
       ApronReactionStore.swift        # Which reactions to your Apron messages you've seen, per room (this device)
       ChatDraftStore.swift            # Unsent composer text per chat (by chatKey), every network
       ChatSnapshotCache.swift         # Last messages and metadata per adapter chat (by chatKey) for instant open
-      ChatReminderStore.swift         # Message reminders: local notifications and due items in the feed (this device)
+      ChatReminderStore.swift         # Message reminders: local notifications and due items in the feed, synced through iCloud KVS
     ViewModels/
       FeedViewModel.swift
       ProfileSearchViewModel.swift

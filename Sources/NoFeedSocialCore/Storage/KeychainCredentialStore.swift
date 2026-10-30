@@ -220,6 +220,15 @@ public final class KeychainCredentialStore: @unchecked Sendable {
         "apron.\(serverURL.absoluteString)"
     }
 
+    /// The VAPID key all the user's devices sign chat reminder pushes with (`ChatReminderPush`).
+    func saveChatReminderPushKey(_ key: Data) throws {
+        _ = try save(data: key, account: "chatReminderPush")
+    }
+
+    func loadChatReminderPushKey() -> Data? {
+        try? load(account: "chatReminderPush")
+    }
+
     /// Telegram auth keys stay on this device: each device signs in as its own Telegram session.
     func saveTelegramSession(_ data: Data) throws {
         do {

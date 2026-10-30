@@ -3,8 +3,12 @@ import { z } from "zod";
 /**
  * A Web Push endpoint (RFC 8030) for native apps: Apron servers deliver encrypted pushes here as they do to a
  * browser's push service, and the relay forwards the ciphertext to APNs, where the app's Notification Service
- * Extension decrypts it. The relay keeps no state: an endpoint's ID is the APNs device token, its environment and
+ * Extension decrypts it. Endpoints keep no state: an endpoint's ID is the APNs device token, its environment and
  * the one VAPID key allowed to push to it, sealed with RELAY_SECRET.
+ *
+ * Scheduled pushes are the one stored thing: the app's chat reminders, which one of the user's devices encrypts for
+ * the others and leaves here until they're due. Each is a Durable Object named by the sender's VAPID key and the
+ * reminder, which sends its pushes when its alarm fires and then deletes itself.
  */
 export type Env = {
   RELAY_SECRET: string;
@@ -12,6 +16,7 @@ export type Env = {
   APNS_TEAM_ID: string;
   APNS_PRIVATE_KEY: string;
   APNS_TOPIC: string;
+  SCHEDULED_PUSHES: DurableObjectNamespace;
 };
 
 const environments = ["sandbox", "production"] as const;
@@ -26,6 +31,30 @@ const registerSchema = z.object({
 /** A payload is at most 2048 bytes (§4.9.3), plus the aes128gcm header, padding delimiter and tag. */
 const maxBodyBytes = 4096 - 1024;
 const maxVapidLifetimeSeconds = 24 * 60 * 60;
+const maxScheduleSeconds = 400 * 24 * 60 * 60;
+/** How long APNs keeps trying to reach a device that is off when a scheduled push is sent. */
+const scheduledExpirationSeconds = 24 * 60 * 60;
+
+const scheduleSchema = z.object({
+  deliverAt: z.number().int(),
+  alert: z.object({ title: z.string().max(100), body: z.string().max(200) }),
+  pushes: z
+    .array(
+      z.object({
+        endpoint: z
+          .string()
+          .regex(/^[A-Za-z0-9_-]+$/)
+          .max(512),
+        payload: z
+          .string()
+          .regex(/^[A-Za-z0-9_-]+$/)
+          .max(Math.ceil((maxBodyBytes * 4) / 3)),
+      }),
+    )
+    .min(1)
+    .max(20),
+});
+type Schedule = z.infer<typeof scheduleSchema>;
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -37,9 +66,103 @@ export default {
     if (request.method === "POST" && match?.[1]) {
       return deliver(request, env, url, match[1]);
     }
+    const scheduled = url.pathname.match(/^\/scheduled\/([A-Za-z0-9_-]{1,64})$/);
+    if ((request.method === "PUT" || request.method === "DELETE") && scheduled?.[1]) {
+      return schedule(request, env, url, scheduled[1]);
+    }
     return new Response("Not Found", { status: 404 });
   },
 } satisfies ExportedHandler<Env>;
+
+/**
+ * `PUT /scheduled/<name>` stores pushes to send at `deliverAt` (seconds since 1970), replacing any under that name;
+ * `DELETE` cancels them. Both need a `vapid` `Authorization`, the name is scoped to its key, and every endpoint must
+ * be one that key may push to, so only the devices sharing it can schedule or cancel pushes to each other.
+ */
+async function schedule(request: Request, env: Env, url: URL, name: string): Promise<Response> {
+  const vapid = await verifyVapid(request.headers.get("Authorization"), url.origin);
+  if (!vapid) {
+    return new Response("Forbidden", { status: 403 });
+  }
+  const keyHash = base64UrlEncode(new Uint8Array(await crypto.subtle.digest("SHA-256", vapid)));
+  const stub = env.SCHEDULED_PUSHES.get(env.SCHEDULED_PUSHES.idFromName(`${keyHash}:${name}`));
+  if (request.method === "DELETE") {
+    await stub.fetch("https://scheduled/", { method: "DELETE" });
+    return new Response(null, { status: 204 });
+  }
+
+  const parsed = scheduleSchema.safeParse(await request.json().catch(() => null));
+  if (!parsed.success) {
+    return Response.json({ error: "invalid schedule" }, { status: 400 });
+  }
+  const now = Math.floor(Date.now() / 1000);
+  if (parsed.data.deliverAt > now + maxScheduleSeconds) {
+    return Response.json({ error: "deliverAt is too far ahead" }, { status: 400 });
+  }
+  for (const push of parsed.data.pushes) {
+    const endpoint = await openEndpoint(env, push.endpoint);
+    if (!endpoint || !equalBytes(endpoint.vapidKey, vapid)) {
+      return Response.json({ error: "unknown endpoint", endpoint: push.endpoint }, { status: 403 });
+    }
+    const length = base64UrlDecode(push.payload).length;
+    if (length === 0 || length > maxBodyBytes) {
+      return new Response("Payload Too Large", { status: 413 });
+    }
+  }
+  await stub.fetch("https://scheduled/", { method: "PUT", body: JSON.stringify(parsed.data) });
+  return new Response(null, { status: 204 });
+}
+
+/** One scheduled set of pushes: stored until its alarm, then sent and deleted. */
+export class ScheduledPushes {
+  constructor(
+    private readonly state: DurableObjectState,
+    private readonly env: Env,
+  ) {}
+
+  async fetch(request: Request): Promise<Response> {
+    if (request.method === "DELETE") {
+      await this.state.storage.deleteAlarm();
+      await this.state.storage.deleteAll();
+      return new Response(null, { status: 204 });
+    }
+    const scheduled = (await request.json()) as Schedule;
+    await this.state.storage.put("schedule", scheduled);
+    await this.state.storage.setAlarm(Math.max(scheduled.deliverAt * 1000, Date.now()));
+    return new Response(null, { status: 204 });
+  }
+
+  /** Sends every push; ones APNs refuses for a moment stay for the alarm's automatic retry. */
+  async alarm(): Promise<void> {
+    const scheduled = await this.state.storage.get<Schedule>("schedule");
+    if (!scheduled) {
+      return;
+    }
+    const remaining: Schedule["pushes"] = [];
+    for (const push of scheduled.pushes) {
+      const endpoint = await openEndpoint(this.env, push.endpoint);
+      if (!endpoint) {
+        continue;
+      }
+      const apns = await sendToApns(this.env, endpoint, {
+        ciphertext: push.payload,
+        expiration: Math.floor(Date.now() / 1000) + scheduledExpirationSeconds,
+        priority: 10,
+        alert: scheduled.alert,
+      });
+      if (apns.status === 429 || apns.status >= 500) {
+        remaining.push(push);
+      } else if (apns.status !== 200) {
+        console.error("apns rejected scheduled push", apns.status, apns.reason);
+      }
+    }
+    if (remaining.length > 0) {
+      await this.state.storage.put("schedule", { ...scheduled, pushes: remaining });
+      throw new Error(`${remaining.length} scheduled pushes not sent`);
+    }
+    await this.state.storage.deleteAll();
+  }
+}
 
 async function register(request: Request, env: Env, url: URL): Promise<Response> {
   const parsed = registerSchema.safeParse(await request.json().catch(() => null));
@@ -84,6 +207,7 @@ async function deliver(request: Request, env: Env, url: URL, id: string): Promis
     ciphertext: base64UrlEncode(body),
     expiration: ttl > 0 ? Math.floor(Date.now() / 1000) + ttl : 0,
     priority: urgency === "low" || urgency === "very-low" ? 5 : 10,
+    alert: { title: "Apron", body: "New message" },
   });
   if (apns.status === 200) {
     return new Response(null, { status: 201 });
@@ -265,7 +389,12 @@ async function providerToken(env: Env): Promise<string> {
 async function sendToApns(
   env: Env,
   endpoint: Endpoint,
-  push: { ciphertext: string; expiration: number; priority: number },
+  push: {
+    ciphertext: string;
+    expiration: number;
+    priority: number;
+    alert: { title: string; body: string };
+  },
 ): Promise<{ status: number; reason?: string }> {
   const host =
     endpoint.environment === "production" ? "api.push.apple.com" : "api.sandbox.push.apple.com";
@@ -282,7 +411,7 @@ async function sendToApns(
     // Shown as is only when the extension can't decrypt the push.
     body: JSON.stringify({
       aps: {
-        alert: { title: "Apron", body: "New message" },
+        alert: push.alert,
         sound: "default",
         "mutable-content": 1,
       },

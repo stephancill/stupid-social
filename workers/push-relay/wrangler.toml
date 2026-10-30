@@ -11,5 +11,13 @@ APNS_KEY_ID = "U7W6CW4B57"
 APNS_TEAM_ID = "6JKMV57Y77"
 # RELAY_SECRET and APNS_PRIVATE_KEY are secrets.
 
+[[durable_objects.bindings]]
+name = "SCHEDULED_PUSHES"
+class_name = "ScheduledPushes"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ScheduledPushes"]
+
 [observability]
 enabled = true

@@ -84,3 +84,26 @@ public extension Data {
             .replacingOccurrences(of: "=", with: "")
     }
 }
+
+public enum WebPushEncryptor {
+    /// Encrypts `plaintext` as one `aes128gcm` record (RFC 8188) to a subscription's `p256dh` and auth secret
+    /// (RFC 8291), what `WebPushDecryptor.decrypt` reads.
+    public static func encrypt(_ plaintext: Data, publicKey: Data, auth: Data) throws -> Data {
+        let receiver = try P256.KeyAgreement.PublicKey(x963Representation: publicKey)
+        let sender = P256.KeyAgreement.PrivateKey()
+        let senderPublic = sender.publicKey.x963Representation
+        var generator = SystemRandomNumberGenerator()
+        let salt = Data((0 ..< 16).map { _ in UInt8.random(in: .min ... .max, using: &generator) })
+
+        let shared = try sender.sharedSecretFromKeyAgreement(with: receiver)
+        let info = Data("WebPush: info\0".utf8) + publicKey + senderPublic
+        let ikm = shared.hkdfDerivedSymmetricKey(using: SHA256.self, salt: auth, sharedInfo: info, outputByteCount: 32)
+        let cek = HKDF<SHA256>.deriveKey(inputKeyMaterial: ikm, salt: salt, info: Data("Content-Encoding: aes128gcm\0".utf8), outputByteCount: 16)
+        let nonce = HKDF<SHA256>.deriveKey(inputKeyMaterial: ikm, salt: salt, info: Data("Content-Encoding: nonce\0".utf8), outputByteCount: 12)
+        let box = try AES.GCM.seal(plaintext + [2], using: cek, nonce: AES.GCM.Nonce(data: nonce.withUnsafeBytes { Data($0) }))
+        let record = box.ciphertext + box.tag
+        let recordSize = UInt32(record.count)
+        let header = salt + withUnsafeBytes(of: recordSize.bigEndian) { Data($0) } + [UInt8(senderPublic.count)] + senderPublic
+        return header + record
+    }
+}
