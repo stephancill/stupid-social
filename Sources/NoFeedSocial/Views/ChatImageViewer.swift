@@ -121,17 +121,16 @@ final class ChatImageViewerController: UIViewController, UIScrollViewDelegate, U
     }
 
     private func loadImage() {
-        if let cached = StoryImageCache.shared.image(for: url) {
+        if let cached = ChatMediaImageCache.shared.image(for: url) {
             imageView.image = cached
             return
         }
         spinner.startAnimating()
         loadTask = Task { [weak self, url] in
-            let image = await (try? URLSession.shared.data(from: url)).flatMap { UIImage(data: $0.0) }
+            let image = await ChatMediaImageCache.shared.load(url)
             guard let self, !Task.isCancelled else { return }
             spinner.stopAnimating()
             guard let image else { return }
-            StoryImageCache.shared.setImage(image, for: url)
             imageView.image = image
         }
     }

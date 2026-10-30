@@ -251,10 +251,18 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
     private let reactionsContainer = UIView()
     private let replyIcon = UIImageView(image: UIImage(systemName: "arrowshape.turn.up.left.fill"))
     private var imageTasks: [Task<Void, Never>] = []
+    /// The images this cell shows by URL. A reconfigure rebuilds the image views, and starts them on these so a
+    /// photo never blanks while it reloads.
+    private var shownImages: [URL: UIImage] = [:]
+    private var previousImages: [URL: UIImage] = [:]
     private var actions = Actions()
     /// The emoji each chip's long-press menu describes.
     private var chipEmojis: [ObjectIdentifier: (emoji: String, chip: UIView)] = [:]
     private var isOwn = false
+    /// The message and reactions last shown, so a reconfigure can tell which chips are new.
+    private var shownReactions: (messageId: String, emojis: Set<String>)?
+    /// Copies of removed chips while they shrink out.
+    private var outgoingChips: [UIView] = []
 
     // Swipe to reply: a pan drags the bubble left; past the threshold a haptic fires and release replies.
     private static let replyThreshold: CGFloat = 64
@@ -295,9 +303,14 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
         reactionsRow.spacing = 8
         reactionsRow.translatesAutoresizingMaskIntoConstraints = false
         reactionsContainer.addSubview(reactionsRow)
+        // A reaction is configured at the cell's old height and the cell grows inside an animation. The row keeps
+        // its full height while the container is squeezed, so the chips sit at their final size as the bubble grows
+        // around them rather than stretching open.
+        let rowBottom = reactionsRow.bottomAnchor.constraint(equalTo: reactionsContainer.bottomAnchor)
+        rowBottom.priority = .defaultLow
         NSLayoutConstraint.activate([
             reactionsRow.topAnchor.constraint(equalTo: reactionsContainer.topAnchor, constant: 4),
-            reactionsRow.bottomAnchor.constraint(equalTo: reactionsContainer.bottomAnchor),
+            rowBottom,
             reactionsRow.leadingAnchor.constraint(equalTo: reactionsContainer.leadingAnchor),
             // Leave room for the time, which sits at the bubble's bottom-right.
             reactionsRow.trailingAnchor.constraint(lessThanOrEqualTo: reactionsContainer.trailingAnchor, constant: -40),
@@ -411,6 +424,10 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
         super.prepareForReuse()
         imageTasks.forEach { $0.cancel() }
         imageTasks = []
+        shownImages = [:]
+        shownReactions = nil
+        outgoingChips.forEach { $0.removeFromSuperview() }
+        outgoingChips = []
         avatarView.reset()
         swipeAnimator?.stopAnimation(true)
         swipeAnimator = nil
@@ -528,6 +545,9 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
         isOwn = layout.isOwn
         imageTasks.forEach { $0.cancel() }
         imageTasks = []
+        previousImages = shownImages
+        shownImages = [:]
+        defer { previousImages = [:] }
         embedsStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         mediaStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
 
@@ -603,7 +623,7 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
             }
         }
         embedsStack.isHidden = otherEmbeds == 0
-        configureReactions(reactions, canReact: actions.canReact)
+        configureReactions(reactions, messageId: message.id, canReact: actions.canReact)
 
         let hasHeader = layout.showsName || reply != nil || reminderDue != nil
         let hasMedia = !mediaStack.arrangedSubviews.isEmpty
@@ -722,7 +742,17 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
         return "Due in " + (dueFormatter.string(from: max(60, (interval / 60).rounded(.up) * 60)) ?? "")
     }
 
-    private func configureReactions(_ reactions: [ChatReaction], canReact: Bool) {
+    private func configureReactions(_ reactions: [ChatReaction], messageId: String, canReact: Bool) {
+        // Like Telegram, a reaction that arrives on a shown message pops in, one that goes shrinks out, and the
+        // rest just move.
+        let previous = shownReactions?.messageId == messageId ? shownReactions?.emojis : nil
+        let emojis = Set(reactions.map(\.emoji))
+        shownReactions = (messageId, emojis)
+        if previous != nil {
+            for (emoji, chip) in chipEmojis.values where !emojis.contains(emoji) && chip.window != nil {
+                popOut(chip)
+            }
+        }
         reactionsRow.arrangedSubviews.forEach { $0.removeFromSuperview() }
         chipEmojis = [:]
         reactionsContainer.isHidden = reactions.isEmpty
@@ -768,6 +798,9 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
             chip.addInteraction(interaction)
             chipEmojis[ObjectIdentifier(interaction)] = (emoji, chip)
             reactionsRow.addArrangedSubview(chip)
+            if let previous, !previous.contains(emoji) {
+                Self.popIn(chip.layer)
+            }
         }
         if reactions.count > visible.count {
             let more = UILabel()
@@ -776,6 +809,54 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
             more.textColor = isOwn ? .white : .secondaryLabel
             reactionsRow.addArrangedSubview(more)
         }
+    }
+
+    /// Shrinks a copy of a removed chip where it was, over the bubble, since the chip itself leaves the row now.
+    /// The copy is a still image: a `snapshotView` mirrors the chip live, and goes blank once it is removed.
+    private func popOut(_ chip: UIView) {
+        let image = UIGraphicsImageRenderer(bounds: chip.bounds).image { _ in
+            chip.drawHierarchy(in: chip.bounds, afterScreenUpdates: false)
+        }
+        let copy = UIImageView(image: image)
+        copy.frame = chip.convert(chip.bounds, to: bubble)
+        bubble.addSubview(copy)
+        outgoingChips.append(copy)
+        // Layer animations, as in `popIn`: configure runs inside `apply`'s `performWithoutAnimation`, which would
+        // finish a UIView animation at once.
+        CATransaction.begin()
+        CATransaction.setCompletionBlock { [weak self] in
+            copy.removeFromSuperview()
+            self?.outgoingChips.removeAll { $0 === copy }
+        }
+        let scale = CABasicAnimation(keyPath: "transform.scale")
+        scale.fromValue = 1
+        scale.toValue = 0.01
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 1
+        fade.toValue = 0
+        for animation in [scale, fade] {
+            animation.duration = 0.2
+            animation.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            animation.fillMode = .forwards
+            animation.isRemovedOnCompletion = false
+            copy.layer.add(animation, forKey: animation.keyPath)
+        }
+        CATransaction.commit()
+    }
+
+    private static func popIn(_ layer: CALayer) {
+        let scale = CASpringAnimation(keyPath: "transform.scale")
+        scale.fromValue = 0.01
+        scale.toValue = 1
+        scale.damping = 18
+        scale.initialVelocity = 0
+        scale.duration = scale.settlingDuration
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 0
+        fade.toValue = 1
+        fade.duration = 0.2
+        layer.add(scale, forKey: "popIn.scale")
+        layer.add(fade, forKey: "popIn.opacity")
     }
 
     // MARK: Reaction chip menu
@@ -943,16 +1024,15 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
     }
 
     private func loadImage(_ url: URL, into imageView: UIImageView) {
-        if let cached = StoryImageCache.shared.image(for: url) {
-            imageView.image = cached
+        if let shown = previousImages[url] ?? ChatMediaImageCache.shared.image(for: url) {
+            imageView.image = shown
+            shownImages[url] = shown
             return
         }
-        imageTasks.append(Task { [weak imageView] in
-            guard let (data, _) = try? await URLSession.shared.data(from: url),
-                  let image = UIImage(data: data), !Task.isCancelled
-            else { return }
-            StoryImageCache.shared.setImage(image, for: url)
+        imageTasks.append(Task { [weak self, weak imageView] in
+            guard let image = await ChatMediaImageCache.shared.load(url), !Task.isCancelled else { return }
             imageView?.image = image
+            self?.shownImages[url] = image
         })
     }
 
@@ -1113,5 +1193,41 @@ final class ChatReplyQuoteView: UIView {
             label.isUserInteractionEnabled = true
             label.addGestureRecognizer(gesture)
         }
+    }
+}
+
+/// Photos, artwork and card icons shown in chat bubbles, decoded once off the main thread. Kept apart from
+/// `StoryImageCache`, whose few entries the chat's avatars would evict, blanking photos on every reconfigure.
+@MainActor
+final class ChatMediaImageCache {
+    static let shared = ChatMediaImageCache()
+
+    private let cache = NSCache<NSURL, UIImage>()
+    /// Loads outlive the cell that asked: a reconfigure mid-load picks up the same load instead of restarting it.
+    private var loading: [URL: Task<UIImage?, Never>] = [:]
+
+    private init() {
+        cache.totalCostLimit = 150 * 1024 * 1024
+    }
+
+    func image(for url: URL) -> UIImage? {
+        cache.object(forKey: url as NSURL)
+    }
+
+    func load(_ url: URL) async -> UIImage? {
+        if let image = image(for: url) { return image }
+        if let task = loading[url] { return await task.value }
+        let task = Task<UIImage?, Never> {
+            let data = try? await URLSession.shared.data(from: url).0
+            let image = await Task.detached { data.flatMap(UIImage.init(data:))?.preparingForDisplay() }.value
+            if let image {
+                let pixels = image.size.width * image.scale * image.size.height * image.scale
+                cache.setObject(image, forKey: url as NSURL, cost: Int(pixels) * 4)
+            }
+            loading[url] = nil
+            return image
+        }
+        loading[url] = task
+        return await task.value
     }
 }

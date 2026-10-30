@@ -77,6 +77,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     /// arrive after the cached first frame change cell heights above it. Cleared once the user scrolls.
     private var isAnchoredToDivider = false
     private var hasScrolledInitially = false
+    private var defersShortContentInset = false
 
     // Latest published composer state; @Published emits in willSet, so the view model still holds old values.
     private var state: ChatConnectionState = .connecting
@@ -429,6 +430,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
 
     /// A chat shorter than the screen sits just above the composer, as in Messages, rather than under the title.
     private func updateTopInsetForShortContent() {
+        guard !defersShortContentInset else { return }
         let current = collectionView.contentInset.top
         let barsTop = collectionView.adjustedContentInset.top - current
         let available = collectionView.bounds.height - barsTop - collectionView.adjustedContentInset.bottom
@@ -892,13 +894,18 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
               !items(in: .messages, of: dataSource.snapshot()).isEmpty
         else { return }
         hasScrolledInitially = true
-        collectionView.layoutIfNeeded()
-        isPinnedToBottom = dataSource.indexPath(for: .unreadDivider) == nil
-        if dataSource.indexPath(for: .unreadDivider) != nil {
-            isAnchoredToDivider = true
-            scrollToDivider()
-        } else {
-            scrollToBottom(animated: false)
+        // The first layout runs inside the navigation push's animation; without this the cells slide in from
+        // their zero frames alongside it.
+        UIView.performWithoutAnimation {
+            collectionView.layoutIfNeeded()
+            isPinnedToBottom = dataSource.indexPath(for: .unreadDivider) == nil
+            if dataSource.indexPath(for: .unreadDivider) != nil {
+                isAnchoredToDivider = true
+                scrollToDivider()
+            } else {
+                scrollToBottom(animated: false)
+            }
+            collectionView.layoutIfNeeded()
         }
     }
 
@@ -965,9 +972,24 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
             // from the bottom, the lowest visible message stays put, so growth above it also moves content up.
             collectionView.layoutIfNeeded()
             let anchor = wasAtBottom ? nil : lowestVisibleItem()
+            let framesBefore = collectionView.visibleCells.map { ($0, $0.frame) }
             UIView.animate(withDuration: 0.3, delay: 0, options: [.curveEaseOut, .allowUserInteraction, .beginFromCurrentState]) {
+                // `apply` lays out without animation: cells below a grown one would jump down, and a short chat's
+                // top inset would jump the list up. Both follow in this animation instead.
+                self.defersShortContentInset = true
                 self.dataSource.apply(snapshot, animatingDifferences: false)
+                self.defersShortContentInset = false
+                let moved = framesBefore.filter { $0.0.frame != $0.1 }.map { ($0.0, $0.0.frame) }
+                UIView.performWithoutAnimation {
+                    for (cell, frame) in framesBefore where cell.frame != frame {
+                        cell.frame = frame
+                    }
+                }
+                for (cell, frame) in moved {
+                    cell.frame = frame
+                }
                 self.collectionView.layoutIfNeeded()
+                self.updateTopInsetForShortContent()
                 if wasAtBottom {
                     self.collectionView.contentOffset.y = self.bottomOffset
                 } else if let anchor, let indexPath = self.dataSource.indexPath(for: anchor.item),
