@@ -7,6 +7,7 @@ a guest token between runs.
 
 Examples:
   scripts/apron-web-client.py hello wss://server.apron.chat/
+  scripts/apron-web-client.py limits wss://server.apron.chat/ --token-file ""   # docs/limits.md: status probe, pong, retry_after
   scripts/apron-web-client.py rooms wss://server.apron.chat/ --name probe
   scripts/apron-web-client.py history wss://server.apron.chat/ --room general --limit 20
   scripts/apron-web-client.py send wss://server.apron.chat/ --room general --text "hi"
@@ -36,6 +37,7 @@ import ssl
 import struct
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -228,6 +230,55 @@ def cmd_rooms(session: Session, args: argparse.Namespace) -> None:
         output["room_list"] = session.request("room_list", params)
     session.drain(args.wait)
     output["notifications"] = session.notifications
+    print_json(output)
+
+
+def connection_status(url: str) -> dict[str, Any]:
+    """The server's `?apron_connection_status=1` answer: why an upgrade would be refused, without opening a socket.
+    It counts as a connection attempt, so call it after a failure, not before every connect (docs/limits.md)."""
+    parsed = urllib.parse.urlparse(url)
+    scheme = "https" if parsed.scheme == "wss" else "http"
+    query = "apron_connection_status=1" + (f"&{parsed.query}" if parsed.query else "")
+    probe = urllib.parse.urlunparse((scheme, parsed.netloc, parsed.path or "/", "", query, ""))
+    request = urllib.request.Request(probe, headers={"User-Agent": "apron-probe/1"})
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            status, headers, body = response.status, response.headers, response.read()
+    except urllib.error.HTTPError as error:
+        status, headers, body = error.code, error.headers, error.read()
+    return {
+        "status": status,
+        "retry_after": headers.get("Retry-After"),
+        "from_apron": headers.get("Apron-Connection-Status") == "1",
+        "body": json.loads(body or b"null"),
+    }
+
+
+def cmd_limits(session: Session, args: argparse.Namespace) -> None:
+    """What docs/limits.md says a client should handle: the connection-status probe, the guest's write permission,
+    the pong to an exact ping, and the shape of a `retry_after` error (room_list allows 6 a minute per account)."""
+    output: dict[str, Any] = {"connection_status": connection_status(args.url)}
+    auth = authenticate(session, args)
+    output["you_ext"] = (auth.get("you") or {}).get("ext")
+    started = time.monotonic()
+    session.ws.send_text('{"method":"ping"}')
+    while True:
+        frame = session.next_frame()
+        if frame.get("method") == "pong":
+            output["pong"] = {"frame": frame, "elapsed_s": round(time.monotonic() - started, 3)}
+            break
+        session.notifications.append(frame)
+    for attempt in range(1, args.room_list_count + 1):
+        session.counter += 1
+        request_id = f"rl{session.counter}"
+        session.ws.send_text(json.dumps({"method": "room_list", "id": request_id, "params": {"filter": "all"}}))
+        reply = session.next_frame()
+        while reply.get("id") != request_id:
+            session.notifications.append(reply)
+            reply = session.next_frame()
+        if "error" in reply:
+            output["room_list_refused"] = {"attempt": attempt, "error": reply["error"]}
+            break
     print_json(output)
 
 
@@ -823,6 +874,7 @@ def main() -> None:
         return p
 
     add("hello", cmd_hello)
+    add("limits", cmd_limits).add_argument("--room-list-count", type=int, default=8)
     rooms = add("rooms", cmd_rooms)
     rooms.add_argument("--members", action="store_true")
     rooms.add_argument("--room-id")

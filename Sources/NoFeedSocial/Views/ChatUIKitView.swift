@@ -77,6 +77,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     // Latest published composer state; @Published emits in willSet, so the view model still holds old values.
     private var state: ChatConnectionState = .connecting
     private var isSending = false
+    private var isReadOnly = false
     private var draft = ""
     private var attachment: ChatAttachment?
     private var replyingTo: ChatMessage?
@@ -522,6 +523,12 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         viewModel.$customEmojis.dropFirst().removeDuplicates()
             .sink { [weak self] _ in DispatchQueue.main.async { self?.reconfigureCustomEmojis() } }
             .store(in: &cancellables)
+        viewModel.$isReadOnly.sink { [weak self] isReadOnly in
+            self?.isReadOnly = isReadOnly
+            self?.textView.isEditable = !isReadOnly
+            self?.placeholderLabel.text = isReadOnly ? "Read only" : "Message"
+            self?.refreshComposer()
+        }.store(in: &cancellables)
         viewModel.$canAttach.sink { [weak self] canAttach in
             self?.attachButton.isEnabled = canAttach
             self?.attachButton.alpha = canAttach ? 1 : 0.35
@@ -775,7 +782,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
                 inputPill.layoutIfNeeded()
             }
         }
-        sendButton.isEnabled = state == .connected && !isSending && hasContent
+        sendButton.isEnabled = state == .connected && !isSending && !isReadOnly && hasContent
         sendButton.configuration?.showsActivityIndicator = isSending
         view.setNeedsLayout()
     }

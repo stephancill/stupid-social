@@ -309,6 +309,12 @@ public final class ApronService {
         accountStore.setApronInfo(ApronSignInInfo(user: you, server: server), id: id)
     }
 
+    /// The server closed the connection because the account changed (removed, token replaced, signed out), so the
+    /// account asks the user to sign in again.
+    func signInEnded(serverURL: URL) {
+        updateStatus(serverURL: serverURL, status: .invalidCredentials)
+    }
+
     private func updateStatus(serverURL: URL, status: AccountStatusSnapshot) {
         accountStore.setStatus(status, id: Account.apronId(serverURL: serverURL))
     }

@@ -75,6 +75,9 @@ public struct ApronUser: Codable, Hashable, Sendable {
     public let seen: String?
     /// `ext.bio`, the profile text apron-web shows; `""` clears it (§4.12).
     public let bio: String?
+    /// `ext.permissions.write` on `you`: `false` for a guest who can only read, as on the demo server; `nil` when
+    /// the server doesn't say.
+    public let canWrite: Bool?
 
     enum CodingKeys: String, CodingKey {
         case userId = "user_id"
@@ -88,9 +91,14 @@ public struct ApronUser: Codable, Hashable, Sendable {
 
     private enum ExtKeys: String, CodingKey {
         case bio
+        case permissions
     }
 
-    public init(userId: String, name: String?, avatar: String?, roles: [String]?, status: String? = nil, seen: String? = nil, bio: String? = nil) {
+    private enum PermissionKeys: String, CodingKey {
+        case write
+    }
+
+    public init(userId: String, name: String?, avatar: String?, roles: [String]?, status: String? = nil, seen: String? = nil, bio: String? = nil, canWrite: Bool? = nil) {
         self.userId = userId
         self.name = name
         self.avatar = avatar
@@ -98,6 +106,7 @@ public struct ApronUser: Codable, Hashable, Sendable {
         self.status = status
         self.seen = seen
         self.bio = bio
+        self.canWrite = canWrite
     }
 
     public init(from decoder: Decoder) throws {
@@ -111,6 +120,8 @@ public struct ApronUser: Codable, Hashable, Sendable {
         // `ext` is free-form; a missing or odd `bio` never drops the user.
         let ext = try? container.nestedContainer(keyedBy: ExtKeys.self, forKey: .ext)
         bio = (try? ext?.decodeIfPresent(String.self, forKey: .bio)) ?? nil
+        let permissions = try? ext?.nestedContainer(keyedBy: PermissionKeys.self, forKey: .permissions)
+        canWrite = (try? permissions?.decodeIfPresent(Bool.self, forKey: .write)) ?? nil
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -121,9 +132,13 @@ public struct ApronUser: Codable, Hashable, Sendable {
         try container.encodeIfPresent(roles, forKey: .roles)
         try container.encodeIfPresent(status, forKey: .status)
         try container.encodeIfPresent(seen, forKey: .seen)
-        if let bio {
+        if bio != nil || canWrite != nil {
             var ext = container.nestedContainer(keyedBy: ExtKeys.self, forKey: .ext)
-            try ext.encode(bio, forKey: .bio)
+            try ext.encodeIfPresent(bio, forKey: .bio)
+            if let canWrite {
+                var permissions = ext.nestedContainer(keyedBy: PermissionKeys.self, forKey: .permissions)
+                try permissions.encode(canWrite, forKey: .write)
+            }
         }
     }
 
@@ -137,6 +152,7 @@ public struct ApronUser: Codable, Hashable, Sendable {
             status: update.status ?? status,
             seen: update.seen ?? seen,
             bio: update.bio ?? bio,
+            canWrite: update.canWrite ?? canWrite,
         )
     }
 

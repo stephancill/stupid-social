@@ -367,6 +367,8 @@ public class ChatViewModel: ObservableObject {
     @Published public internal(set) var isSending = false
     @Published public internal(set) var canAttach = false
     @Published public internal(set) var canReact = false
+    /// The user can read this chat but not post to it, such as a guest on a read-only server.
+    @Published public internal(set) var isReadOnly = false
     /// Per-message reaction totals, keyed by message id.
     @Published public internal(set) var reactions: [String: [ChatReaction]] = [:]
     /// Kept per chat across visits.

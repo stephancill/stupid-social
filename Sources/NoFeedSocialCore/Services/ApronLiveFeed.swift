@@ -19,6 +19,8 @@ public final class ApronLiveFeed {
     private let chatList: ChatListViewModel
     private let logger = Logger(subsystem: "tech.stupid.StupidSocial", category: "ApronLiveFeed")
     private let rebuildDelay: Duration = .milliseconds(800)
+    /// How long a connection must stay up before a drop counts as the first failure again.
+    private let stableConnection: Duration = .seconds(120)
 
     private var isRunning = false
     private var loops: [URL: Task<Void, Never>] = [:]
@@ -76,38 +78,53 @@ public final class ApronLiveFeed {
         service.closeSessions(for: url)
     }
 
+    /// Reconnects with exponential backoff and jitter (1 s doubling to 60 s, ±50%), reset only by a connection that
+    /// stayed up a while, and never sooner than the server asked (docs/limits.md, Checklist).
     private func run(_ url: URL) async {
-        var delay: Duration = .seconds(1)
+        var failures = 0
         while isRunning, !Task.isCancelled, service.server(for: url) != nil {
+            var error: Error?
             do {
                 let session = try await service.session(serverURL: url)
                 guard isRunning, !Task.isCancelled else { return }
                 sessions[url] = session
-                delay = .seconds(1)
+                let connectedAt = ContinuousClock.now
                 // Catch up on anything that arrived while disconnected, then follow live deliveries until
                 // the shared connection closes.
-                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                error = await withCheckedContinuation { (continuation: CheckedContinuation<Error?, Never>) in
                     guard session.connection.isOpen else {
-                        continuation.resume()
+                        continuation.resume(returning: nil)
                         return
                     }
                     session.connection.observe(
                         notifications: { [weak self] method, params in self?.handle(method: method, params: params, session: session) },
-                        onClose: { _ in continuation.resume() },
+                        onClose: { continuation.resume(returning: $0) },
                     )
                     scheduleRebuild(url, immediately: true)
                 }
                 sessions[url] = nil
                 currentServers.remove(url)
-            } catch let error as ApronError where error.isDenied {
+                if ContinuousClock.now - connectedAt >= stableConnection {
+                    failures = 0
+                }
+            } catch let caught as ApronError where caught.isDenied {
                 logger.info("Apron live feed stopped for \(url.host() ?? "server", privacy: .public): sign-in denied")
                 return
-            } catch {
-                logger.info("Apron live feed connect failed for \(url.host() ?? "server", privacy: .public): \(error.localizedDescription, privacy: .public)")
+            } catch let caught {
+                error = caught
             }
             guard isRunning, !Task.isCancelled else { return }
-            try? await Task.sleep(for: delay)
-            delay = min(delay * 2, .seconds(60))
+            if let apronError = error as? ApronError, apronError.endsSignIn {
+                logger.info("Apron live feed stopped for \(url.host() ?? "server", privacy: .public): signed out by the server")
+                service.signInEnded(serverURL: url)
+                return
+            }
+            if let error {
+                logger.info("Apron live feed disconnected from \(url.host() ?? "server", privacy: .public): \(error.localizedDescription, privacy: .public)")
+            }
+            let backoff = min(pow(2, Double(failures)), 60) * Double.random(in: 0.5 ... 1.5)
+            try? await Task.sleep(for: max(.seconds(backoff), (error as? ApronError)?.reconnectDelay ?? .zero))
+            failures += 1
         }
     }
 

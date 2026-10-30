@@ -3,7 +3,7 @@ import Foundation
 /// One Apron room: loads recent history, applies live snapshots, posts messages and commands, and keeps the
 /// room's members, typing indications and read cursor.
 @MainActor
-public final class ApronChatAdapter: ChatAdapter, ChatReactionSending, ChatUnseenReactions, ChatLiveUpdating, ChatReferenceResolving, ChatWindowing, ChatTyping, ChatMentioning, ChatCustomEmojis, ChatCommanding, ChatLinking {
+public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatReactionSending, ChatUnseenReactions, ChatLiveUpdating, ChatReferenceResolving, ChatWindowing, ChatTyping, ChatMentioning, ChatCustomEmojis, ChatCommanding, ChatLinking {
     public let network = SocialNetwork.apron
     public let canReply = true
     public let pollInterval: Duration? = nil
@@ -127,11 +127,16 @@ public final class ApronChatAdapter: ChatAdapter, ChatReactionSending, ChatUnsee
 
     /// Before connecting, uploads might be allowed; once connected, the server says (`embed:upload`).
     public var acceptsAttachments: Bool {
-        session?.server.has("embed:upload") ?? true
+        !isReadOnly && session?.server.has("embed:upload") ?? true
     }
 
     public var acceptsReactions: Bool {
-        session?.server.has("reactions") ?? false
+        !isReadOnly && session?.server.has("reactions") ?? false
+    }
+
+    /// A guest on a server that lets guests only read, such as the demo (`ext.permissions`).
+    public var isReadOnly: Bool {
+        you?.canWrite == false
     }
 
     /// Embed media loads only from the chat server or the origins it lists in `ext.media` (§4.8.1, §5.5).
@@ -581,7 +586,7 @@ public final class ApronChatAdapter: ChatAdapter, ChatReactionSending, ChatUnsee
         }
     }
 
-    /// Fetches, all at once, reply targets that aren't loaded, with `after` and `before` both at their id
+    /// Fetches, four at a time, reply targets that aren't loaded, with `after` and `before` both at their id
     /// (§4.3.1). The first load awaits it, so quotes show with the messages instead of loading after them
     /// (the server answers each in about 0.2 s; the wait was the fetches starting only after the chat showed).
     private func loadMissingReferences() async {
@@ -594,13 +599,20 @@ public final class ApronChatAdapter: ChatAdapter, ChatReactionSending, ChatUnsee
         let connection = session.connection
         let roomId = roomId
         await withTaskGroup(of: (String, ApronMessage?).self) { group in
-            for messageId in missing {
+            // A few at a time: servers close a connection with more than 8 requests unanswered.
+            var queue = Array(missing)
+            func fetchNext() {
+                guard let messageId = queue.popLast() else { return }
                 group.addTask {
                     let page = try? await connection.history(roomId: roomId, after: messageId, before: messageId, limit: 1)
                     return (messageId, page?.messages?.first { $0.messageId == messageId })
                 }
             }
+            for _ in 0 ..< 4 {
+                fetchNext()
+            }
             for await (messageId, message) in group {
+                fetchNext()
                 pendingReferences.remove(messageId)
                 if let message {
                     referencedMessages[messageId] = chatMessage(message)
@@ -839,10 +851,14 @@ public final class ApronChatAdapter: ChatAdapter, ChatReactionSending, ChatUnsee
         if let attachment = message.attachment, let limit = session.server.ext?.uploadLimits[attachment.mimeType], attachment.data.count > limit {
             throw SourceError.serviceError("\(attachment.filename) is larger than this server's \(ByteCountFormatter.string(fromByteCount: Int64(limit), countStyle: .file)) limit.")
         }
+        let bodyText = message.text.hasPrefix("//") ? String(message.text.dropFirst()) : message.text
+        // The server refuses longer text, and three refusals in a minute close the connection.
+        if bodyText.utf8.count > ApronConnection.maxTextBytes {
+            throw SourceError.serviceError("This message is too long; Apron messages can be at most \(ApronConnection.maxTextBytes) bytes.")
+        }
         // A new message ends the indication for others (§4.6).
         forgetTyping()
         try await ensureRoom(on: session)
-        let bodyText = message.text.hasPrefix("//") ? String(message.text.dropFirst()) : message.text
         let mentions = mentionedUserIds(in: bodyText)
         let result = try await session.connection.post(
             method: "message",

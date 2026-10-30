@@ -55,6 +55,32 @@ final class ApronModelsTests: XCTestCase {
         XCTAssertEqual(general.displayTitle(users: users, you: "me"), "general")
     }
 
+    func testGuestPermissionsSurviveEncoding() throws {
+        let json = #"{"user_id":"guest_1","name":"guest_1","ext":{"permissions":{"write":false}}}"#
+        let guest = try JSONDecoder().decode(ApronUser.self, from: Data(json.utf8))
+        XCTAssertEqual(guest.canWrite, false)
+        let restored = try JSONDecoder().decode(ApronUser.self, from: JSONEncoder().encode(guest))
+        XCTAssertEqual(restored.canWrite, false)
+        XCTAssertEqual(guest.merging(ApronUser(userId: "guest_1", name: "Guest", avatar: nil, roles: nil)).canWrite, false)
+        XCTAssertNil(users["alice"]?.canWrite)
+    }
+
+    func testReconnectDelayFollowsServerLimits() {
+        XCTAssertEqual(ApronError.rejected(status: 429, retryAfter: 60).reconnectDelay, .seconds(60))
+        XCTAssertNil(ApronError.rejected(status: 503).reconnectDelay)
+        XCTAssertEqual(ApronError.limited(message: "Connection limit reached for this account", retryAfter: 60, category: nil).reconnectDelay, .seconds(60))
+        XCTAssertEqual(ApronError.closedByServer(code: 1013, reason: "Frame rate limit reached").reconnectDelay, .seconds(300))
+        XCTAssertEqual(ApronError.closedByServer(code: 1008, reason: "Frame rate limit reached").reconnectDelay, .seconds(60))
+        XCTAssertNil(ApronError.closedByServer(code: 1001, reason: "Connection idle; reconnect to recover").reconnectDelay)
+    }
+
+    func testCredentialClosesEndSignIn() {
+        XCTAssertTrue(ApronError.closedByServer(code: 1008, reason: "Device token replaced").endsSignIn)
+        XCTAssertTrue(ApronError.closedByServer(code: 1008, reason: "Signed out after a week without signing in or posting").endsSignIn)
+        XCTAssertFalse(ApronError.closedByServer(code: 1008, reason: "Too many pending frames").endsSignIn)
+        XCTAssertFalse(ApronError.closedByServer(code: 1011, reason: "Delivery failed").endsSignIn)
+    }
+
     func testSeenShowsOnlyWhileOffline() throws {
         let offline = try JSONDecoder().decode(ApronUser.self, from: Data(#"{"user_id": "alice", "status": "offline", "seen": "1724803600000"}"#.utf8))
         XCTAssertEqual(offline.lastSeen, Date(timeIntervalSince1970: 1_724_803_600))

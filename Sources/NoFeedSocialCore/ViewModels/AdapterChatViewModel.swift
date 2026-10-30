@@ -78,6 +78,13 @@ public protocol ChatAdapter: AnyObject {
     func restore(snapshot: Data)
 }
 
+/// Chats the user may only be allowed to read, such as a guest on a server that lets guests only read.
+@MainActor
+public protocol ChatReadOnlyAccess: ChatAdapter {
+    /// Read once connected; while true the composer is disabled.
+    var isReadOnly: Bool { get }
+}
+
 /// Reacting to messages.
 @MainActor
 public protocol ChatReactionSending: ChatAdapter {
@@ -254,6 +261,7 @@ public final class AdapterChatViewModel<Adapter: ChatAdapter>: ChatViewModel {
             saveSnapshot()
             canReact = (adapter as? any ChatReactionSending)?.acceptsReactions ?? false
             canAttach = adapter.acceptsAttachments
+            isReadOnly = (adapter as? any ChatReadOnlyAccess)?.isReadOnly ?? false
             isOpen = true
             state = .connected
             if let live = adapter as? any ChatLiveUpdating {
