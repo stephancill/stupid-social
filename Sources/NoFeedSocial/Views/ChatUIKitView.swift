@@ -1222,6 +1222,11 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         if let animator { animator.addCompletion(finish) } else { finish() }
     }
 
+    private func isOnReactions(at point: CGPoint, indexPath: IndexPath, in collectionView: UICollectionView) -> Bool {
+        guard let cell = collectionView.cellForItem(at: indexPath) as? ChatMessageCell else { return false }
+        return cell.isOnReactions(at: collectionView.convert(point, to: cell))
+    }
+
     private func bubblePreview(at indexPath: IndexPath, in collectionView: UICollectionView) -> UITargetedPreview? {
         guard let cell = collectionView.cellForItem(at: indexPath) as? ChatMessageCell else { return nil }
         let bubble = cell.bubbleView
@@ -1231,9 +1236,12 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         return UITargetedPreview(view: bubble, parameters: parameters)
     }
 
-    /// A long press on a message lifts it (`liftMessage`); the context menu is left for presses beside bubbles.
-    func collectionView(_: UICollectionView, contextMenuConfigurationForItemsAt indexPaths: [IndexPath], point: CGPoint) -> UIContextMenuConfiguration? {
-        guard let indexPath = indexPaths.first, focusTarget(at: point) == nil,
+    /// A long press on a message lifts it (`liftMessage`); the context menu is left for presses beside bubbles,
+    /// not on reaction chips, whose own menu lists who reacted. On a Mac this menu is the right-click on bubbles
+    /// too: the Mac sends it only right-clicks, which never reach the long press.
+    func collectionView(_ collectionView: UICollectionView, contextMenuConfigurationForItemsAt indexPaths: [IndexPath], point: CGPoint) -> UIContextMenuConfiguration? {
+        guard let indexPath = indexPaths.first, ProcessInfo.processInfo.isiOSAppOnMac || focusTarget(at: point) == nil,
+              !isOnReactions(at: point, indexPath: indexPath, in: collectionView),
               case let .message(key) = dataSource.itemIdentifier(for: indexPath),
               let menu = messageMenu(for: messageId(forKey: key))
         else { return nil }
@@ -1878,7 +1886,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         return formatter
     }()
 
-    /// Long press on a reaction chip: who reacted with that emoji, oldest first, each with when.
+    /// Long press or right-click on a reaction chip: who reacted with that emoji, oldest first, each with when.
     private func reactionMenu(pressed emoji: String, on id: String) -> UIMenu? {
         guard messagesById[id]?.isNotice == false else { return nil }
         let rows = viewModel.reactors(of: emoji, on: id).map { reactor in

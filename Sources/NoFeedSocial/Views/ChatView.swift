@@ -31,19 +31,24 @@ struct ChatView: View {
             .ignoresSafeArea(edges: [.top, .bottom])
             .navigationTitle(viewModel.title)
             .navigationBarTitleDisplayMode(.inline)
-            // Messages scroll under a transparent bar; the title and subtitle sit in a floating pill.
-            .toolbarBackground(.hidden, for: .navigationBar)
+            // Messages scroll under the bar, which has no background on iOS 26; the title and subtitle sit in a
+            // floating pill. `.toolbarBackground(.hidden)` here hid the Chats search field's background while
+            // swiping back, until the pop finished.
             .toolbar {
                 ToolbarItem(placement: .principal) {
                     // Without an action it isn't a button: a disabled button would dim the title.
-                    if let onTitleTap {
-                        Button(action: onTitleTap) {
+                    // The pill draws its own capsule, so the pointer's hover outline (on a Mac) is turned off.
+                    Group {
+                        if let onTitleTap {
+                            Button(action: onTitleTap) {
+                                ChatTitlePill(title: displayTitle, subtitle: displaySubtitle, network: viewModel.network, avatar: viewModel.titleAvatar)
+                            }
+                            .buttonStyle(.plain)
+                        } else {
                             ChatTitlePill(title: displayTitle, subtitle: displaySubtitle, network: viewModel.network, avatar: viewModel.titleAvatar)
                         }
-                        .buttonStyle(.plain)
-                    } else {
-                        ChatTitlePill(title: displayTitle, subtitle: displaySubtitle, network: viewModel.network, avatar: viewModel.titleAvatar)
                     }
+                    .hoverEffectDisabled()
                 }
             }
             .task {

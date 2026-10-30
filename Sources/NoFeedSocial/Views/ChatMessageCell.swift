@@ -212,7 +212,12 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
     /// Whether a long press here lifts the message: on the bubble, not on its reaction chips, which have their own menu.
     func isFocusTarget(at point: CGPoint) -> Bool {
         guard !bubble.isHidden, bubble.frame.contains(point) else { return false }
-        return reactionsContainer.isHidden || !reactionsContainer.convert(reactionsContainer.bounds, to: self).contains(point)
+        return !isOnReactions(at: point)
+    }
+
+    /// Whether the point is on the reaction chips, whose own menu lists who reacted.
+    func isOnReactions(at point: CGPoint) -> Bool {
+        !bubble.isHidden && !reactionsContainer.isHidden && reactionsContainer.convert(reactionsContainer.bounds, to: self).contains(point)
     }
 
     /// The bubble as drawn, for the focus overlay to lift, with its text and where it sits so it can be selected.
@@ -790,10 +795,12 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
             chip.titleLabel?.numberOfLines = 1
             chip.setContentCompressionResistancePriority(.required, for: .horizontal)
             chip.accessibilityLabel = "\(custom?.label ?? reaction.emoji), \(reaction.count)\(reaction.includesYou ? ", including you" : "")"
-            chip.isUserInteractionEnabled = canReact
+            // Interactive even where you can't react, so a long press or right-click still lists who reacted.
             let emoji = reaction.emoji
-            chip.addAction(UIAction { [weak self] _ in self?.actions.toggleReaction(emoji) }, for: .primaryActionTriggered)
-            // Long press lists who reacted; it takes precedence over the bubble's own menu.
+            if canReact {
+                chip.addAction(UIAction { [weak self] _ in self?.actions.toggleReaction(emoji) }, for: .primaryActionTriggered)
+            }
+            // Long press or right-click lists who reacted; it takes precedence over the bubble's own menu.
             let interaction = UIContextMenuInteraction(delegate: self)
             chip.addInteraction(interaction)
             chipEmojis[ObjectIdentifier(interaction)] = (emoji, chip)

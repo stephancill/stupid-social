@@ -35,6 +35,8 @@
 			</array>
 		</dict>
 	</dict>
+	<key>CFBundleName</key>
+	<string>stupid social</string>
 	<key>CFBundleShortVersionString</key>
 	<string>1.0.1</string>
 	<key>CFBundleURLTypes</key>
