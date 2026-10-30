@@ -44,6 +44,100 @@ final class ChatUnreadDividerCell: UICollectionViewListCell {
     }
 }
 
+/// Others typing, as the last row: an incoming bubble with three pulsing dots, like Messages. Chats that head
+/// bubbles with names say who above it.
+final class ChatTypingCell: UICollectionViewListCell {
+    private let nameLabel = UILabel()
+    private let bubble = UIView()
+    private let dots = (0 ..< 3).map { _ in UIView() }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundConfiguration = .clear()
+        nameLabel.font = .preferredFont(forTextStyle: .footnote)
+        nameLabel.textColor = .secondaryLabel
+        nameLabel.lineBreakMode = .byTruncatingTail
+        bubble.backgroundColor = .secondarySystemBackground
+        bubble.layer.cornerRadius = 18
+        bubble.layer.cornerCurve = .continuous
+        let dotRow = UIStackView(arrangedSubviews: dots)
+        dotRow.spacing = 5
+        dotRow.translatesAutoresizingMaskIntoConstraints = false
+        for dot in dots {
+            dot.backgroundColor = .secondaryLabel
+            dot.layer.cornerRadius = 4
+            dot.widthAnchor.constraint(equalToConstant: 8).isActive = true
+            dot.heightAnchor.constraint(equalToConstant: 8).isActive = true
+        }
+        bubble.addSubview(dotRow)
+        let column = UIStackView(arrangedSubviews: [nameLabel, bubble])
+        column.axis = .vertical
+        column.alignment = .leading
+        column.spacing = 3
+        column.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(column)
+        NSLayoutConstraint.activate([
+            dotRow.centerXAnchor.constraint(equalTo: bubble.centerXAnchor),
+            dotRow.centerYAnchor.constraint(equalTo: bubble.centerYAnchor),
+            bubble.widthAnchor.constraint(equalToConstant: 60),
+            bubble.heightAnchor.constraint(equalToConstant: 38),
+            // In the incoming bubbles' column, past the avatar.
+            column.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 48),
+            column.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor, constant: -40),
+            column.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 8),
+            column.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+        ])
+        isAccessibilityElement = true
+    }
+
+    @available(*, unavailable)
+    required init?(coder _: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func configure(names: [String], showsNames: Bool) {
+        let names = names.map { DebugRedaction.name($0) }
+        let who = switch names.count {
+        case 0: ""
+        case 1: names[0]
+        case 2: "\(names[0]) and \(names[1])"
+        default: "\(names[0]) and \(names.count - 1) others"
+        }
+        nameLabel.text = who
+        nameLabel.isHidden = !showsNames || names.isEmpty
+        accessibilityLabel = names.count > 1 ? "\(who) are typing" : "\(who) is typing"
+    }
+
+    /// Core Animation drops animations when a view leaves the window, so they start again each time it returns.
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        guard window != nil else { return }
+        let reduceMotion = UIAccessibility.isReduceMotionEnabled
+        for (index, dot) in dots.enumerated() {
+            dot.layer.removeAllAnimations()
+            let fade = CAKeyframeAnimation(keyPath: "opacity")
+            fade.values = [0.35, 1, 0.35, 0.35]
+            let lift = CAKeyframeAnimation(keyPath: "transform.translation.y")
+            lift.values = [0, -3, 0, 0]
+            let pulse = CAAnimationGroup()
+            pulse.animations = reduceMotion ? [fade] : [fade, lift]
+            for animation in [fade, lift] {
+                animation.keyTimes = [0, 0.25, 0.5, 1]
+                animation.duration = 1.2
+                animation.timingFunctions = Array(repeating: CAMediaTimingFunction(name: .easeInEaseOut), count: 3)
+            }
+            pulse.duration = 1.2
+            pulse.repeatCount = .infinity
+            pulse.beginTime = CACurrentMediaTime() + Double(index) * 0.18
+            pulse.fillMode = .backwards
+            // Kept through the app going to the background and back.
+            pulse.isRemovedOnCompletion = false
+            dot.layer.opacity = 0.35
+            dot.layer.add(pulse, forKey: "typing")
+        }
+    }
+}
+
 /// What a reply quote shows: the target when loaded, otherwise a loading or unavailable placeholder.
 struct ChatReplyQuote: Equatable {
     let name: String

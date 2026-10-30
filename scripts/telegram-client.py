@@ -787,7 +787,7 @@ class Session:
             return None
         return None
 
-    def listen(self, seconds: float):
+    def listen(self, seconds: float, typing_only: bool = False):
         self.conn.sock.settimeout(1)
         deadline = time.time() + seconds
         last_ping = 0.0
@@ -801,7 +801,24 @@ class Session:
                 pass
             self._flush_acks()
             while self.updates:
-                print(json.dumps(to_json(self.updates.pop(0)), ensure_ascii=False))
+                update = self.updates.pop(0)
+                if typing_only:
+                    for typing in typing_updates(update):
+                        print(json.dumps(to_json(typing), ensure_ascii=False))
+                else:
+                    print(json.dumps(to_json(update), ensure_ascii=False))
+
+
+TYPING_UPDATES = {"updateUserTyping", "updateChatUserTyping", "updateChannelUserTyping"}
+
+
+def typing_updates(update: dict) -> list[dict]:
+    """Typing updates in a pushed update, which come alone in updateShort or among others in updates."""
+    if update["_"] == "updateShort":
+        return typing_updates(update["update"])
+    if update["_"] in ("updates", "updatesCombined"):
+        return [u for u in update["updates"] if u["_"] in TYPING_UPDATES]
+    return [update] if update["_"] in TYPING_UPDATES else []
 
 
 # MARK: Session storage and credentials
@@ -1157,6 +1174,10 @@ def main():
     read.add_argument("--max-id", type=int, required=True)
     listen = sub.add_parser("listen")
     listen.add_argument("--seconds", type=float, default=60)
+    listen.add_argument("--typing", action="store_true", help="print only typing updates (updateUserTyping, updateChatUserTyping, updateChannelUserTyping), without message text")
+    typing = sub.add_parser("typing", help="messages.setTyping: show the account typing in a chat for about 6 s, or stop it")
+    typing.add_argument("--peer", required=True)
+    typing.add_argument("--cancel", action="store_true", help="sendMessageCancelAction instead of sendMessageTypingAction")
     download = sub.add_parser("download")
     download.add_argument("--peer", required=True)
     download.add_argument("--msg-id", type=int, required=True)
@@ -1320,7 +1341,10 @@ def main():
     elif args.command == "listen":
         client.call({"_": "updates.getState"})
         print(f"Listening on DC {client.session.dc} for {args.seconds:.0f}s", file=sys.stderr)
-        client.session.listen(args.seconds)
+        client.session.listen(args.seconds, typing_only=args.typing)
+    elif args.command == "typing":
+        action = {"_": "sendMessageCancelAction" if args.cancel else "sendMessageTypingAction"}
+        print(to_json(client.call({"_": "messages.setTyping", "peer": client.input_peer(args.peer), "action": action})))
     elif args.command == "download":
         kind, peer_id = args.peer.split(":")
         if kind == "channel":

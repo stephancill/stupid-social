@@ -3,9 +3,10 @@ import Foundation
 /// One Telegram chat: pages its history, refreshes when Telegram pushes an update on the open session (with a
 /// slow poll as a fallback), sends text, replies, photos and files, reacts, and moves the read cursor as
 /// messages are read. Media, avatars and link previews load lazily through `tgfile:` URLs. In groups it offers
-/// members to mention: `@username`, or for someone without one a name mention.
+/// members to mention: `@username`, or for someone without one a name mention. Shows who is typing and shares
+/// the user's own typing.
 @MainActor
-public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUnseenReactions, ChatLiveUpdating, ChatReferenceResolving, ChatMentioning {
+public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUnseenReactions, ChatLiveUpdating, ChatReferenceResolving, ChatMentioning, ChatTyping {
     public let network = SocialNetwork.telegram
     public let canReply = true
     public let acceptsAttachments = true
@@ -22,6 +23,7 @@ public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUn
     public private(set) var referencedMessages: [String: ChatMessage] = [:]
     public private(set) var unavailableReferences: Set<String> = []
     public private(set) var unseenReactionMessageIds: [String] = []
+    public private(set) var typingNames: [String] = []
 
     private let client: TelegramClient
     public let peer: TelegramPeer
@@ -39,6 +41,12 @@ public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUn
     private var observer: UUID?
     private var statusObserver: UUID?
     private var reactionObserver: UUID?
+    private var typingObserver: UUID?
+    /// Who is typing, in the order they started, and when each indication lapses.
+    private var typingUsers: [(userId: Int64, expires: Date)] = []
+    private var typingExpiryTask: Task<Void, Never>?
+    /// When the user's own typing was last sent; Telegram's apps repeat it every 5 seconds while typing goes on.
+    private var typingSentAt: Date?
     /// The user's messages Telegram says have unseen reactions, including ones that aren't loaded.
     private var unreadReactionIds: Set<Int32> = []
     /// Seen here this visit, so they stay seen while Telegram catches up; `pendingSeen` hasn't been sent yet.
@@ -159,6 +167,9 @@ public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUn
         reactionObserver = await client.addReactionObserver(peer: peer) { [weak self] in
             Task { @MainActor in await self?.refreshUnseenReactions() }
         }
+        typingObserver = await client.addTypingObserver(peer: peer) { [weak self] userId, isTyping in
+            Task { @MainActor in self?.setTyping(userId: userId, isTyping: isTyping) }
+        }
         if peer.kind == .user {
             statusObserver = await client.addStatusObserver(userId: peer.id) { [weak self] status in
                 Task { @MainActor in self?.apply(status: status) }
@@ -168,12 +179,17 @@ public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUn
 
     public func stopFollowing() {
         refreshTask?.cancel()
-        for id in [observer, statusObserver, reactionObserver].compactMap(\.self) {
+        for id in [observer, statusObserver, reactionObserver, typingObserver].compactMap(\.self) {
             Task { [client] in await client.removeUpdateObserver(id) }
         }
         observer = nil
         statusObserver = nil
         reactionObserver = nil
+        typingObserver = nil
+        typingUsers = []
+        if updateTypingNames() {
+            onChange?()
+        }
     }
 
     private func apply(status: ChatPresence) {
@@ -209,6 +225,8 @@ public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUn
     /// Text is added as sent; media waits for Telegram's copy (its photo sizes and file reference), which the
     /// refresh after sending loads.
     public func send(_ message: ChatOutgoing) async throws -> String? {
+        // Telegram's apps end the sender's typing when the message arrives.
+        typingSentAt = nil
         let replyTo = message.replyToId.flatMap { Int32($0) }
         let (text, mentions) = Self.resolvingMentions(in: message.text, names: Dictionary(members.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first }))
         let id = if let attachment = message.attachment {
@@ -284,6 +302,63 @@ public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUn
             .sorted { $0.1 < $1.1 }
             .prefix(5)
             .map { member, _ in ChatUser(id: member.username ?? String(member.id), name: member.name, avatarURL: member.avatarURL) }
+    }
+
+    // MARK: Typing
+
+    private func setTyping(userId: Int64, isTyping: Bool) {
+        if !isTyping {
+            typingUsers.removeAll { $0.userId == userId }
+        } else if let index = typingUsers.firstIndex(where: { $0.userId == userId }) {
+            typingUsers[index].expires = Date().addingTimeInterval(6)
+        } else {
+            typingUsers.append((userId, Date().addingTimeInterval(6)))
+        }
+        if updateTypingNames() {
+            onChange?()
+        }
+    }
+
+    /// Drops lapsed indications, wakes again at the next one, and says whether the names changed.
+    private func updateTypingNames() -> Bool {
+        let now = Date()
+        typingUsers.removeAll { $0.expires <= now }
+        typingExpiryTask?.cancel()
+        if let next = typingUsers.map(\.expires).min() {
+            typingExpiryTask = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(next.timeIntervalSinceNow + 0.05))
+                guard !Task.isCancelled, let self else { return }
+                if updateTypingNames() {
+                    onChange?()
+                }
+            }
+        }
+        let names = typingUsers.map { typingName(of: $0.userId) }
+        guard names != typingNames else { return false }
+        typingNames = names
+        return true
+    }
+
+    private func typingName(of userId: Int64) -> String {
+        if peer.kind == .user {
+            return info.title
+        }
+        return names[userId] ?? members.first { $0.id == userId }?.name ?? "Someone"
+    }
+
+    /// Repeats the indication every 5 seconds while the draft changes, so it lapses 6 seconds after the last
+    /// edit; clearing the draft ends it now.
+    public func draftDidChange(_ draft: String) {
+        let isEmpty = draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if isEmpty {
+            guard let sentAt = typingSentAt, Date().timeIntervalSince(sentAt) < 6 else { return }
+            typingSentAt = nil
+            Task { [client, peer] in try? await client.setTyping(peer: peer, isTyping: false) }
+            return
+        }
+        if let typingSentAt, Date().timeIntervalSince(typingSentAt) < 5 { return }
+        typingSentAt = Date()
+        Task { [client, peer] in try? await client.setTyping(peer: peer, isTyping: true) }
     }
 
     // MARK: Read position
@@ -400,6 +475,12 @@ public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUn
     // MARK: Display
 
     private func merge(_ page: TelegramHistoryPage) {
+        // A new message from someone typing ends their indication.
+        let senders = Set(page.messages.filter { loaded[$0.id] == nil && !$0.isOutgoing }.compactMap { $0.senderId ?? (peer.kind == .user ? peer.id : nil) })
+        if typingUsers.contains(where: { senders.contains($0.userId) }) {
+            typingUsers.removeAll { senders.contains($0.userId) }
+            _ = updateTypingNames()
+        }
         names.merge(page.names) { $1 }
         avatars.merge(page.avatars) { $1 }
         usernames.merge(page.usernames) { $1 }

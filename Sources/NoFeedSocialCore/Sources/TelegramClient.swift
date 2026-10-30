@@ -458,7 +458,8 @@ public actor TelegramClient: ChatListProvider {
     // MARK: Updates
 
     /// Calls `observer` when Telegram pushes an update to `peer`'s messages (new, edited, deleted, read by
-    /// the other side) while the session is open. Status and typing updates, which arrive constantly, don't count.
+    /// the other side) while the session is open. Status and typing updates, which arrive constantly, don't count;
+    /// typing has `addTypingObserver`.
     public func addUpdateObserver(peer: TelegramPeer, _ observer: @escaping @Sendable () -> Void) -> UUID {
         let id = UUID()
         observers[id] = { update in
@@ -516,6 +517,48 @@ public actor TelegramClient: ChatListProvider {
             update["peer"]?.object.map(peerKey) == peer.key
         default:
             false
+        }
+    }
+
+    /// Calls `observer` with a user and whether they are now composing a message in `peer`, when Telegram pushes
+    /// a typing update. An indication lasts 6 seconds unless repeated.
+    public func addTypingObserver(peer: TelegramPeer, _ observer: @escaping @Sendable (_ userId: Int64, _ isTyping: Bool) -> Void) -> UUID {
+        let id = UUID()
+        observers[id] = { update in
+            for typing in Self.typingUpdates(update, concerns: peer) {
+                observer(typing.userId, typing.isTyping)
+            }
+        }
+        return id
+    }
+
+    static func typingUpdates(_ update: TLObject, concerns peer: TelegramPeer) -> [(userId: Int64, isTyping: Bool)] {
+        switch update.name {
+        case "updateShort":
+            update["update"]?.object.map { typingUpdates($0, concerns: peer) } ?? []
+        case "updates", "updatesCombined":
+            update.objects("updates").flatMap { typingUpdates($0, concerns: peer) }
+        case "updateUserTyping" where peer.kind == .user && update["user_id"]?.long == peer.id:
+            typing(userId: peer.id, action: update["action"]?.object)
+        case "updateChatUserTyping" where peer.kind == .chat && update["chat_id"]?.long == peer.id,
+             "updateChannelUserTyping" where peer.kind == .channel && update["channel_id"]?.long == peer.id:
+            typing(userId: update["from_id"]?.object.flatMap { $0.name == "peerUser" ? $0["user_id"]?.long : nil }, action: update["action"]?.object)
+        default:
+            []
+        }
+    }
+
+    /// Typing, recording and uploading all mean a message is coming; cancel ends it. Emoji interactions and
+    /// the like aren't messages.
+    private static func typing(userId: Int64?, action: TLObject?) -> [(userId: Int64, isTyping: Bool)] {
+        guard let userId, let action else { return [] }
+        switch action.name {
+        case "sendMessageCancelAction":
+            return [(userId, false)]
+        case "sendMessageEmojiInteraction", "sendMessageEmojiInteractionSeen", "speakingInGroupCallAction", "sendMessageHistoryImportAction", "sendMessageGamePlayAction":
+            return []
+        default:
+            return [(userId, true)]
         }
     }
 
@@ -1119,6 +1162,14 @@ public actor TelegramClient: ChatListProvider {
         } else {
             _ = try await invoke(TLObject("messages.readMessageContents", ["id": ids]))
         }
+    }
+
+    /// Shows the account typing in `peer` for about 6 seconds, or stops it. Nobody sees typing in Saved Messages.
+    public func setTyping(peer: TelegramPeer, isTyping: Bool) async throws {
+        try requireAccount()
+        guard peer.kind != .user || peer.id != account?.userId else { return }
+        let action = TLObject(isTyping ? "sendMessageTypingAction" : "sendMessageCancelAction")
+        _ = try await invoke(TLObject("messages.setTyping", ["peer": .object(peer.inputPeer), "action": .object(action)]))
     }
 
     public func markRead(peer: TelegramPeer, maxId: Int32) async throws {

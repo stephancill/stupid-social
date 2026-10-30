@@ -41,7 +41,7 @@ Sources/
       ApronLinkView.swift           # Confirmation sheet for opened Apron links
       ChatView.swift                # Shared chat screen: title pill, connection lifecycle; NetworkChatView for Spotify
       ChatUIKitView.swift           # Shared chat UIKit view controller: message list, floating composer, attachments
-      ChatMessageCell.swift         # Chat message cell, unread divider, avatar and reply quote views
+      ChatMessageCell.swift         # Chat message cell, unread divider, typing bubble, avatar and reply quote views
       ChatTextViews.swift           # Chat composer text view, link/mention label and tap gestures
       ChatAttributedText.swift      # Inline Markdown to UIKit attributes for chat messages
       ChatReactionPicker.swift      # "More Reactions" emoji sheet, custom emoji by category first
@@ -111,7 +111,7 @@ Sources/
       TelegramMTProto.swift         # MTProto transport, auth key exchange, encrypted session actor
       TelegramClient.swift          # Telegram account: DCs, sign-in, dialogs, history, send, read, files, push
       TelegramMedia.swift           # tgfile: URLs and their URLProtocol, media/avatar/reaction parsing
-      TelegramChatAdapter.swift     # Telegram chat adapter: history, pushed updates, send, replies, media, reactions, read cursor
+      TelegramChatAdapter.swift     # Telegram chat adapter: history, pushed updates, send, replies, media, reactions, typing, read cursor
       XChatThrift.swift             # Thrift binary protocol values and coder for X Chat events
       XChatCrypto.swift             # X Chat crypto: ECIES key unwrap, XSalsa20-Poly1305 secretbox, franking, signing
       XChatClient.swift             # X Chat (encrypted X DMs): GraphQL inbox/history/send/read, Juicebox key recovery

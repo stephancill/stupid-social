@@ -33,6 +33,8 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     private enum Item: Hashable {
         case message(String)
         case unreadDivider
+        /// Others typing, after the newest message.
+        case typing
     }
 
     private let viewModel: ChatViewModel
@@ -52,6 +54,8 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     private var emojiReconfigurePending = false
     /// Item keys back to message ids; see `itemKey(for:)`.
     private var messageIdByKey: [String: String] = [:]
+    /// Names of the others typing, which the typing row at the end of the list shows.
+    private var typingNames: [String] = []
     /// Messages whose spoilers were tapped open; they stay open while the chat is.
     private var revealedSpoilers: Set<String> = []
     /// Messages in this chat with a reminder, by id, and when it is due.
@@ -111,13 +115,11 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     private let audioPlayer = ChatAudioPreviewPlayer()
 
     private let composer = UIStackView()
-    private let typingView = ChatGlass.make(cornerRadius: 14)
     private let mentionGlass = ChatGlass.make(cornerRadius: 18)
     private let mentionStack = UIStackView()
     /// The `@query` or `:query` word being completed, in the text view's text, and the suggestions shown for it.
     private var mentionRange: NSRange?
     private var shownSuggestionIds: [String] = []
-    private let typingLabel = UILabel()
     private let noticeView = ChatGlass.make(cornerRadius: 16)
     private let noticeLabel = UILabel()
     private let reconnectButton = UIButton(type: .system)
@@ -154,7 +156,6 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         configureComposer()
         configureJumpToLatestButton()
         configureUnseenReactionsButton()
-        configureTypingIndicator()
         configureMentionSuggestions()
         bind()
     }
@@ -246,12 +247,18 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
             )
         }
         let dividerRegistration = UICollectionView.CellRegistration<ChatUnreadDividerCell, Item> { _, _, _ in }
+        let typingRegistration = UICollectionView.CellRegistration<ChatTypingCell, Item> { [weak self] cell, _, _ in
+            guard let self else { return }
+            cell.configure(names: typingNames, showsNames: viewModel.showsSenderNames)
+        }
         dataSource = UICollectionViewDiffableDataSource(collectionView: collectionView) { collectionView, indexPath, item in
             switch item {
             case let .message(key):
                 collectionView.dequeueConfiguredReusableCell(using: messageRegistration, for: indexPath, item: self.messageId(forKey: key))
             case .unreadDivider:
                 collectionView.dequeueConfiguredReusableCell(using: dividerRegistration, for: indexPath, item: item)
+            case .typing:
+                collectionView.dequeueConfiguredReusableCell(using: typingRegistration, for: indexPath, item: item)
             }
         }
 
@@ -490,7 +497,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
             .merge(with: Timer.publish(every: 60, on: .main, in: .common).autoconnect().map { _ in () })
             .sink { [weak self] in self?.reloadReminders() }
             .store(in: &cancellables)
-        viewModel.$typingNames.sink { [weak self] names in self?.updateTypingIndicator(names) }.store(in: &cancellables)
+        viewModel.$typingNames.removeDuplicates().sink { [weak self] names in self?.updateTypingRow(names) }.store(in: &cancellables)
         viewModel.$scrollToLatestRequest.dropFirst().sink { [weak self] _ in
             DispatchQueue.main.async {
                 self?.isAnchoredToDivider = false
@@ -537,7 +544,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
 
     private func applySnapshot(messages: [ChatMessage], hasEarlier _: Bool, hasLater: Bool) {
         let previousItems = items(in: .messages, of: dataSource.snapshot())
-        let previousIds = previousItems.filter { $0 != .unreadDivider }
+        let previousIds = previousItems.filter { if case .message = $0 { true } else { false } }
         let wasEmpty = previousIds.isEmpty
         let previousFirst = previousIds.first
         let previousLast = previousIds.last
@@ -552,6 +559,9 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         var rows = items
         if let firstUnread = viewModel.firstUnreadMessageId, let index = rows.firstIndex(of: .message(itemKey(for: firstUnread))) {
             rows.insert(.unreadDivider, at: index)
+        }
+        if showsTypingRow {
+            rows.append(.typing)
         }
         snapshot.appendItems(rows, toSection: .messages)
 
@@ -1500,31 +1510,9 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         })
     }
 
-    /// "Name is typing…" in a small glass capsule over the list above the composer. It floats, so showing
-    /// it never changes the list's insets.
-    private func configureTypingIndicator() {
-        typingLabel.font = .preferredFont(forTextStyle: .footnote)
-        typingLabel.textColor = .secondaryLabel
-        typingLabel.lineBreakMode = .byTruncatingTail
-        let row = UIStackView(arrangedSubviews: [typingLabel])
-        row.isLayoutMarginsRelativeArrangement = true
-        row.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12)
-        typingView.contentView.addSubview(row)
-        row.pinToEdges(of: typingView.contentView)
-        typingView.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(typingView)
-        NSLayoutConstraint.activate([
-            typingView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 14),
-            typingView.trailingAnchor.constraint(lessThanOrEqualTo: jumpToLatestGlass.leadingAnchor, constant: -10),
-            typingView.bottomAnchor.constraint(equalTo: composer.topAnchor, constant: -10),
-        ])
-        typingView.isHidden = true
-        typingView.alpha = 0
-    }
-
     // MARK: - Mention suggestions
 
-    /// Members matching the `@` word at the caret, in a glass card above the composer, like the typing capsule.
+    /// Members matching the `@` word at the caret, in a glass card above the composer.
     private func configureMentionSuggestions() {
         mentionStack.axis = .vertical
         mentionStack.isLayoutMarginsRelativeArrangement = true
@@ -1592,13 +1580,6 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
             mentionStack.addArrangedSubview(referenceRow(for: place))
         }
         mentionGlass.isHidden = isEmpty
-        // The card covers the typing capsule's spot; bring it back once the card goes.
-        if isEmpty {
-            updateTypingIndicator(viewModel.typingNames)
-        } else {
-            typingView.isHidden = true
-            typingView.alpha = 0
-        }
     }
 
     private func mentionRow(for user: ChatUser) -> UIView {
@@ -1724,26 +1705,24 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         textViewDidChange(textView)
     }
 
-    private func updateTypingIndicator(_ names: [String]) {
-        let names = names.map { DebugRedaction.name($0) }
-        let text: String? = switch names.count {
-        case 0: nil
-        case 1: "\(names[0]) is typing…"
-        case 2: "\(names[0]) and \(names[1]) are typing…"
-        default: "\(names[0]) and \(names.count - 1) others are typing…"
+    /// Others typing show at the end of the list, unless it's an older window that doesn't reach the newest message.
+    private var showsTypingRow: Bool {
+        !typingNames.isEmpty && !hasLater
+    }
+
+    /// Adds, updates or removes the typing row, following the bottom as it comes and goes.
+    private func updateTypingRow(_ names: [String]) {
+        typingNames = names
+        var snapshot = dataSource.snapshot()
+        guard snapshot.sectionIdentifiers.contains(.messages) else { return }
+        let isShown = snapshot.indexOfItem(.typing) != nil
+        switch (isShown, showsTypingRow) {
+        case (false, true): snapshot.appendItems([.typing], toSection: .messages)
+        case (true, false): snapshot.deleteItems([.typing])
+        case (true, true): snapshot.reconfigureItems([.typing])
+        case (false, false): return
         }
-        if let text {
-            typingLabel.text = text
-        }
-        // Mention suggestions sit where the capsule would.
-        let visible = text != nil && mentionGlass.isHidden
-        guard typingView.isHidden == visible else { return }
-        if visible { typingView.isHidden = false }
-        UIView.animate(withDuration: 0.2, animations: {
-            self.typingView.alpha = visible ? 1 : 0
-        }, completion: { _ in
-            self.typingView.isHidden = self.typingView.alpha == 0
-        })
+        applyKeepingBottom(snapshot, animated: isShown != showsTypingRow)
     }
 
     private func configureReplyPreview() {

@@ -197,6 +197,26 @@ final class TelegramTests: XCTestCase {
         XCTAssertFalse(TelegramClient.update(shortMessage, concerns: group))
     }
 
+    func testTypingUpdatesConcernOnlyTheirChat() {
+        let group = TelegramPeer(kind: .channel, id: 2_009_589_709, accessHash: 1)
+        let dm = TelegramPeer(kind: .user, id: 185_733_531, accessHash: 2)
+        let action: (String) -> TLValue = { .object(TLObject($0)) }
+        let userTyping = TLObject("updateShort", ["update": .object(TLObject("updateUserTyping", ["user_id": .long(185_733_531), "action": action("sendMessageTypingAction")]))])
+        let channelTyping = TLObject("updates", ["updates": .vector([
+            .object(TLObject("updateChannelUserTyping", ["channel_id": .long(2_009_589_709), "from_id": .object(TLObject("peerUser", ["user_id": .long(42)])), "action": action("sendMessageUploadPhotoAction")])),
+            .object(TLObject("updateChannelUserTyping", ["channel_id": .long(2_009_589_709), "from_id": .object(TLObject("peerUser", ["user_id": .long(43)])), "action": action("sendMessageCancelAction")])),
+            .object(TLObject("updateChannelUserTyping", ["channel_id": .long(2_009_589_709), "from_id": .object(TLObject("peerUser", ["user_id": .long(44)])), "action": action("sendMessageEmojiInteractionSeen")])),
+        ])])
+
+        XCTAssertEqual(TelegramClient.typingUpdates(userTyping, concerns: dm).map(\.userId), [185_733_531])
+        XCTAssertEqual(TelegramClient.typingUpdates(userTyping, concerns: dm).map(\.isTyping), [true])
+        XCTAssertTrue(TelegramClient.typingUpdates(userTyping, concerns: group).isEmpty)
+        let inGroup = TelegramClient.typingUpdates(channelTyping, concerns: group)
+        XCTAssertEqual(inGroup.map(\.userId), [42, 43])
+        XCTAssertEqual(inGroup.map(\.isTyping), [true, false])
+        XCTAssertTrue(TelegramClient.typingUpdates(channelTyping, concerns: dm).isEmpty)
+    }
+
     func testUnreadRecentReactionsAreFlagged() throws {
         let peer: (Int64) -> TLValue = { .object(TLObject("peerUser", ["user_id": .long($0)])) }
         let thumbs = TLValue.object(TLObject("reactionEmoji", ["emoticon": .string("👍")]))
