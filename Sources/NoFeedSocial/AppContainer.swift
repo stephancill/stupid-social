@@ -201,6 +201,7 @@ final class AppContainer {
         DemoData.enableDemoMode()
         feedViewModel.loadCachedFeed()
         storyBarViewModel.loadDemoStoryBarItems()
+        Task { await chatListViewModel.load() }
     }
 
     /// Turns demo mode off, clears the story bar, then reloads
@@ -210,6 +211,7 @@ final class AppContainer {
         feedViewModel.loadCachedFeed()
         storyBarViewModel.clearDemoStoryItems()
         Task {
+            await chatListViewModel.load()
             try? await feedService.foregroundActivationRefresh()
             feedViewModel.loadCachedFeed()
             await storyBarViewModel.fetchStoryBarContent()

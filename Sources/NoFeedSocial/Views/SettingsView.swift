@@ -11,6 +11,7 @@ struct SettingsView: View {
     @Environment(\.openURL) private var openURL
     @AppStorage("devModeEnabled") private var devModeEnabled = false
     @AppStorage("redactionEnabled") private var redactionEnabled = false
+    @AppStorage("demoModeEnabled") private var demoModeEnabled = false
     @State private var isAddingAccount = false
     @State private var sharesUsageData = AppMetrics.isEnabled
     @State private var showsAdvanced = false
@@ -60,21 +61,15 @@ struct SettingsView: View {
 
             if devModeEnabled {
                 Section {
-                    Button {
-                        onLoadDemoData?()
-                    } label: {
-                        Text("Load preview content")
-                    }
-                    Button(role: .destructive) {
-                        onClearDemoData?()
-                    } label: {
-                        Text("Unload preview content")
-                    }
+                    Toggle("Preview content", isOn: Binding(
+                        get: { demoModeEnabled },
+                        set: { $0 ? onLoadDemoData?() : onClearDemoData?() },
+                    ))
                     Toggle("Redact names", isOn: $redactionEnabled)
                 } header: {
                     Text("Demo Data")
                 } footer: {
-                    Text("Preview content uses sample notifications and stories. Unload it to return to your connected accounts.")
+                    Text("Preview content shows sample notifications, stories and chats in place of your connected accounts.")
                 }
             }
 
