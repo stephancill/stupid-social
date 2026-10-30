@@ -57,8 +57,8 @@ final class ApronLiveRowTests: XCTestCase {
     }
 
     private func message(id: String, log: String, from: String, text: String, deleted: Bool = false) throws -> ApronMessage {
-        let json = """
-        {"message_id":"\(id)","log_id":"\(log)","room_id":"general","from":{"user_id":"\(from)","name":"Ada"},"body":{"text":\(String(data: try JSONEncoder().encode(text), encoding: .utf8)!)},"deleted":\(deleted)}
+        let json = try """
+        {"message_id":"\(id)","log_id":"\(log)","room_id":"general","from":{"user_id":"\(from)","name":"Ada"},"body":{"text":\(String(data: JSONEncoder().encode(text), encoding: .utf8)!)},"deleted":\(deleted)}
         """
         return try JSONDecoder().decode(ApronMessage.self, from: Data(json.utf8))
     }

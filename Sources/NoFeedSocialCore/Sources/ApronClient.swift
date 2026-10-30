@@ -149,7 +149,7 @@ public final class ApronConnection {
         var retries = 0
         while true {
             do {
-                return try decoder.decode(Result.self, from: await send(text, id: id))
+                return try await decoder.decode(Result.self, from: send(text, id: id))
             } catch let ApronError.limited(_, retryAfter, _) where retryAfter <= longestRetryWait && retries < 2 && !isClosed {
                 retries += 1
                 try await Task.sleep(for: .seconds(max(retryAfter, 1)))
