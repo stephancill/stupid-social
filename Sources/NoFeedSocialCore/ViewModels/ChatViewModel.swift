@@ -55,6 +55,29 @@ public enum ChatEmbed: Hashable, Sendable {
     /// A message from elsewhere, such as one a link points at, drawn like a reply quote: who sent it where
     /// (`title`) and its text, a few lines until tapped open. Tapping the title opens `link`.
     case message(title: String, text: String, link: URL?)
+    /// A video shown by its poster, which plays full screen when tapped. `url` loads the whole file through
+    /// `URLSession` (a network's own scheme, such as `tgfile:`, included); a GIF plays muted and looped in the
+    /// bubble. `duration` is preformatted, such as "1:05".
+    case video(url: URL, posterURL: URL?, aspectRatio: Double?, duration: String?, isGIF: Bool)
+    /// A file that opens in Quick Look when tapped; `url` loads it through `URLSession`, and `filename` names it
+    /// so the preview knows its type.
+    case file(url: URL, filename: String, subtitle: String?, thumbnailURL: URL?)
+    /// A voice message: a play button by its waveform (levels from 0 to 1, empty when the network sends none) and
+    /// its length in seconds. It plays from `audioPreviewURL(for:)`, like `.audio`.
+    case voice(previewId: String, duration: Double?, waveform: [Double])
+}
+
+/// A custom emoji a network marks by position over fallback text, such as a Telegram custom emoji entity, rather
+/// than writing as a `:name:` key. `key` names it in the adapter's `ChatCustomEmojis` catalog.
+public struct ChatMessageCustomEmoji: Hashable, Sendable {
+    /// UTF-16 range in the message's text.
+    public let range: NSRange
+    public let key: String
+
+    public init(range: NSRange, key: String) {
+        self.range = range
+        self.key = key
+    }
 }
 
 /// A mention a network marks by position rather than writing as `@user_id`, such as a Telegram name mention.
@@ -91,6 +114,8 @@ public struct ChatMessage: Hashable, Identifiable, Sendable {
     public let spoilers: [NSRange]
     /// Mentions in `text` by position; plain text only.
     public let mentions: [ChatMessageMention]
+    /// Custom emoji in `text` by position, drawn over the fallback emoji they cover; plain text only.
+    public let customEmojis: [ChatMessageCustomEmoji]
 
     public init(
         id: String,
@@ -106,6 +131,7 @@ public struct ChatMessage: Hashable, Identifiable, Sendable {
         isSending: Bool = false,
         spoilers: [NSRange] = [],
         mentions: [ChatMessageMention] = [],
+        customEmojis: [ChatMessageCustomEmoji] = [],
     ) {
         self.id = id
         self.sender = sender
@@ -120,6 +146,7 @@ public struct ChatMessage: Hashable, Identifiable, Sendable {
         self.isSending = isSending
         self.spoilers = spoilers
         self.mentions = mentions
+        self.customEmojis = customEmojis
     }
 
     /// The message with `image` in place of its first image or pending upload, such as the picked file for a
@@ -139,7 +166,7 @@ public struct ChatMessage: Hashable, Identifiable, Sendable {
         return ChatMessage(
             id: id, sender: sender, timestamp: timestamp, text: text, isMarkdown: isMarkdown, embeds: embeds,
             replyToId: replyToId, isDeleted: isDeleted, isOwn: isOwn, isNotice: isNotice, isSending: isSending,
-            spoilers: spoilers, mentions: mentions,
+            spoilers: spoilers, mentions: mentions, customEmojis: customEmojis,
         )
     }
 
@@ -155,6 +182,9 @@ public struct ChatMessage: Hashable, Identifiable, Sendable {
         for embed in embeds {
             switch embed {
             case .image: return "Photo"
+            case let .video(_, _, _, _, isGIF): return isGIF ? "GIF" : "Video"
+            case let .file(_, filename, _, _): return filename
+            case .voice: return "Voice message"
             case let .card(title, _, _, _, _), let .message(title, _, _): return title
             case let .audio(_, title, _, _, _, _): return title
             case let .pending(title): return title
@@ -797,6 +827,12 @@ public class ChatViewModel: ObservableObject {
             return "Shared “\(title)”"
         case .image:
             return "Photo"
+        case let .video(_, _, _, _, isGIF):
+            return isGIF ? "GIF" : "Video"
+        case let .file(_, filename, _, _):
+            return filename
+        case .voice:
+            return "Voice message"
         case let .pending(title):
             return title
         case nil:

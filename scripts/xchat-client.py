@@ -749,6 +749,149 @@ def key_changes_summary(client: "XChatClient", conversation_id: str, keys: dict[
     }
 
 
+MEDIA_URL = "https://ton.x.com/i/ton/data/xchat_media/"
+MEDIA_TYPES = {1: "image", 2: "gif", 3: "video", 4: "audio", 5: "file", 6: "svg"}
+# dm-core's LibsodiumStreamConfig: 1024-byte plaintext chunks, each pushed with the 17-byte secretstream overhead.
+MEDIA_CHUNK = 1024 + 17
+
+
+def media_key(conversation_key: bytes, attachment_id: str | None) -> bytes:
+    """dm-core: the message key (the conversation key for contents version 0), then, when the attachment has an
+    id, HKDF-SHA256 with salt "xchat-attachment-key" and the attachment id as info."""
+    return hkdf_sha256(conversation_key, "xchat-attachment-key", 32, attachment_id.encode()) if attachment_id else conversation_key
+
+
+def decrypt_media(key: bytes, blob: bytes) -> bytes:
+    """crypto_secretstream_xchacha20poly1305: 24-byte header, then chunks of 1024 plaintext bytes + 17."""
+    from nacl.bindings import (
+        crypto_secretstream_xchacha20poly1305_init_pull,
+        crypto_secretstream_xchacha20poly1305_pull,
+        crypto_secretstream_xchacha20poly1305_state,
+        crypto_secretstream_xchacha20poly1305_TAG_FINAL,
+    )
+
+    state = crypto_secretstream_xchacha20poly1305_state()
+    crypto_secretstream_xchacha20poly1305_init_pull(state, blob[:24], key)
+    output, tag, offset = b"", None, 24
+    while offset < len(blob):
+        chunk, tag = crypto_secretstream_xchacha20poly1305_pull(state, blob[offset : offset + MEDIA_CHUNK])
+        output += chunk
+        offset += MEDIA_CHUNK
+    if tag != crypto_secretstream_xchacha20poly1305_TAG_FINAL:
+        raise ValueError(f"stream ended without the final tag (last tag {tag})")
+    return output
+
+
+def media_attachments(client: "XChatClient", item: dict[str, Any], keys: dict[str, Any], pages: int) -> list[dict[str, Any]]:
+    """Each media attachment in an inbox conversation's newest pages: parsed fields, never message text."""
+    conversation_id = item["conversation_detail"]["conversation_id"]
+    conversation_keys = client.conversation_keys(
+        [thrift(base64.b64decode(e)) for e in item.get("latest_conversation_key_change_events") or []], keys
+    )
+    found = []
+    min_sequence = NEWEST_SEQUENCE_ID
+    for _ in range(pages):
+        conversation = client.conversation_page(conversation_id, min_sequence)["data"]["get_conversation_page"]
+        events = [thrift(base64.b64decode(e)) for e in conversation.get("encoded_message_events") or []]
+        missing = [thrift(base64.b64decode(e)) for e in conversation.get("missing_conversation_key_change_events") or []]
+        conversation_keys.update(client.conversation_keys(missing + [e for e in events if 3 in e.get(7, {})], keys))
+        for event in events:
+            create = event.get(7, {}).get(1)
+            if not create:
+                continue
+            plain = 101 not in create
+            version = text(create.get(101))
+            key = conversation_keys.get(version or "")
+            if not plain and key is None:
+                continue
+            entry = thrift(create[100] if plain else open_sealed(key, create[100])).get(1)
+            message = entry.get(1) if isinstance(entry, dict) else None
+            if not isinstance(message, dict):
+                continue
+            for attachment in message.get(3) or []:
+                media = attachment.get(1)
+                if not media:
+                    continue
+                size = media.get(2) or {}
+                filename = text(media.get(6)) or ""
+                found.append({
+                    "conversation_id": conversation_id,
+                    "sequence_id": text(event.get(1)),
+                    "message_id": text(event.get(2)),
+                    "key_version": version,
+                    "conversation_key": key,
+                    "fields": sorted(media),
+                    "media_hash_key": text(media.get(1)),
+                    "type": MEDIA_TYPES.get(media.get(3), media.get(3)),
+                    "width": size.get(1),
+                    "height": size.get(2),
+                    "duration_millis": media.get(4),
+                    "filesize_bytes": media.get(5),
+                    "extension": os.path.splitext(filename)[1].lower(),
+                    "attachment_id": text(media.get(7)),
+                    "legacy_url": bool(media.get(8)),
+                    "legacy_preview_url": bool(media.get(9)),
+                    "plaintext_sha256": media.get(11),
+                })
+        if not conversation.get("has_more") or not events:
+            break
+        min_sequence = min((text(e.get(1)) for e in events), key=int)
+    return found
+
+
+def public_media_row(row: dict[str, Any]) -> dict[str, Any]:
+    """A media row without keys, ids or hashes."""
+    hidden = {"conversation_key", "conversation_id", "message_id", "media_hash_key", "attachment_id", "plaintext_sha256"}
+    return {
+        **{k: v for k, v in row.items() if k not in hidden},
+        "media_hash_key_length": len(row["media_hash_key"] or ""),
+        "has_attachment_id": row["attachment_id"] is not None,
+        "has_plaintext_sha256": row["plaintext_sha256"] is not None,
+    }
+
+
+def download_media(client: "XChatClient", row: dict[str, Any]) -> dict[str, Any]:
+    """Downloads one encrypted attachment from ton.x.com, decrypts it and writes it under logs/xchat-media/."""
+    import hashlib
+
+    url = MEDIA_URL + row["conversation_id"] + "/" + row["media_hash_key"]
+    request = urllib.request.Request(url, headers=client.x.headers())
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            blob = response.read()
+            content_type = response.headers.get("Content-Type")
+    except urllib.error.HTTPError as exc:
+        return {"http_status": exc.code, "body": exc.read()[:200].decode("utf-8", "replace")}
+    result: dict[str, Any] = {"http_status": 200, "content_type": content_type, "encrypted_bytes": len(blob)}
+    # Whether ton.x.com needs the X cookies for this media.
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": x_probe.APP_USER_AGENT}), timeout=60) as response:
+            result["without_cookies"] = response.status
+    except urllib.error.HTTPError as exc:
+        result["without_cookies"] = exc.code
+    attempts = [("attachment_key", row["attachment_id"]), ("conversation_key", None)] if row["attachment_id"] else [("conversation_key", None)]
+    for name, attachment_id in attempts:
+        try:
+            plaintext = decrypt_media(media_key(row["conversation_key"], attachment_id), blob)
+        except Exception as error:  # noqa: BLE001 - the failure kind is the finding
+            result[name] = type(error).__name__ + ": " + str(error)[:120]
+            continue
+        result["key"] = name
+        result["plaintext_bytes"] = len(plaintext)
+        result["matches_filesize"] = row["filesize_bytes"] in (None, len(plaintext))
+        if row["plaintext_sha256"] is not None:
+            result["matches_plaintext_sha256"] = hashlib.sha256(plaintext).digest() == row["plaintext_sha256"]
+        directory = os.path.join(ROOT, "logs", "xchat-media")
+        os.makedirs(directory, exist_ok=True)
+        path = os.path.join(directory, f"{row['sequence_id']}{row['extension'] or '.bin'}")
+        with open(path, "wb") as handle:
+            handle.write(plaintext)
+        result["file_type"] = subprocess.run(["file", "-b", path], capture_output=True, text=True).stdout.strip()
+        result["saved_to"] = os.path.relpath(path, ROOT)
+        break
+    return result
+
+
 def key_versions_summary(users: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
         {
@@ -795,6 +938,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     key_changes.add_argument("conversation_id")
     key_changes.add_argument("--pages", type=int, default=5, help="Older pages to read looking for key changes.")
+    media = subparsers.add_parser(
+        "media",
+        help="List media attachments' fields (no text, ids or keys) in one conversation, or every inbox conversation; "
+        "--download N decrypts the Nth to logs/xchat-media/.",
+    )
+    media.add_argument("conversation_id", nargs="?", help="Omit to scan every inbox conversation.")
+    media.add_argument("--pages", type=int, default=3)
+    media.add_argument("--download", type=int, action="append", default=[], help="Index of an attachment to download and decrypt.")
     send = subparsers.add_parser("send-message", help="Send an encrypted text message. Only to a conversation agreed for testing.")
     send.add_argument("conversation_id")
     send.add_argument("text")
@@ -849,6 +1000,14 @@ def main() -> None:
         }
     elif args.command == "key-changes":
         result = key_changes_summary(client, args.conversation_id, load_keys(), args.pages)
+    elif args.command == "media":
+        keys = load_keys()
+        items = [i for i in client.inbox_items() if args.conversation_id in (None, i["conversation_detail"]["conversation_id"])]
+        rows = [row for item in items for row in media_attachments(client, item, keys, args.pages)]
+        result = {
+            "attachments": [{"index": index, **public_media_row(row)} for index, row in enumerate(rows)],
+            "downloads": {str(index): download_media(client, rows[index]) for index in args.download},
+        }
     elif args.command == "send-message":
         result = client.send_message(args.conversation_id, args.expect_participant, args.text)
     elif args.command == "react":

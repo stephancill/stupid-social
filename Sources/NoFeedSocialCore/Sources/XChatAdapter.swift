@@ -201,7 +201,7 @@ public final class XChatAdapter: ChatAdapter, ChatReactionSending, ChatLiveUpdat
                     sender: person(event.senderId),
                     timestamp: event.createdAt,
                     text: deleted.contains(event.sequenceId) ? nil : edits[event.sequenceId] ?? contents.text,
-                    embeds: deleted.contains(event.sequenceId) ? [] : contents.attachments.map(embed),
+                    embeds: deleted.contains(event.sequenceId) ? [] : contents.attachments.map { embed($0, event: event) },
                     replyToId: contents.reply?.sequenceId,
                     isDeleted: deleted.contains(event.sequenceId),
                     isOwn: isOwn,
@@ -236,19 +236,50 @@ public final class XChatAdapter: ChatAdapter, ChatReactionSending, ChatLiveUpdat
         people[id] ?? ChatUser(id: id, name: nil, avatarURL: nil)
     }
 
-    private func embed(_ attachment: XChatMessageContents.Attachment) -> ChatEmbed {
+    private func embed(_ attachment: XChatMessageContents.Attachment, event: XChatEvent) -> ChatEmbed {
         switch attachment {
-        case let .media(filename, legacyURL, aspectRatio):
-            if let legacyURL {
-                return .image(url: legacyURL, aspectRatio: aspectRatio, alt: nil, link: nil, opensViewer: true)
+        case let .media(media):
+            if let legacyURL = media.legacyURL {
+                return .image(url: legacyURL, aspectRatio: media.aspectRatio, alt: nil, link: nil, opensViewer: true)
             }
-            // New media is encrypted with its own stream key, which the app doesn't decrypt yet.
-            return .card(title: filename ?? "Photo", subtitle: "Open in X", systemImage: "photo", imageURL: nil, link: chatURL)
+            return mediaEmbed(media, keyVersion: event.messageCreate?.string(101))
         case let .post(url):
             return .card(title: "Post", subtitle: url?.host(), systemImage: "text.bubble", imageURL: nil, link: url)
         case let .link(url, title):
             return .card(title: title ?? url?.absoluteString ?? "Link", subtitle: title == nil ? nil : url?.host(), systemImage: "link", imageURL: nil, link: url)
         }
+    }
+
+    /// Encrypted media loads through `XChatMediaURLProtocol`, which needs the key version of the message that
+    /// carries it. Without a hash key or key version (an unencrypted message's media) it is a card that opens X.
+    private func mediaEmbed(_ media: XChatMessageContents.Media, keyVersion: String?) -> ChatEmbed {
+        let filename = media.filename ?? "Attachment"
+        let fileExtension = (filename as NSString).pathExtension.lowercased()
+        guard let hashKey = media.hashKey, let keyVersion,
+              let url = XChatMediaURL.make(XChatMediaReference(conversationId: conversationId, hashKey: hashKey, keyVersion: keyVersion, fileExtension: fileExtension))
+        else {
+            return .card(title: filename, subtitle: "Open in X", systemImage: "paperclip", imageURL: nil, link: chatURL)
+        }
+        switch media.kind {
+        case .image, nil:
+            return .image(url: url, aspectRatio: media.aspectRatio, alt: nil, link: nil, opensViewer: true)
+        case .gif where fileExtension == "gif":
+            return .image(url: url, aspectRatio: media.aspectRatio, alt: nil, link: nil, opensViewer: true)
+        case .gif:
+            return .video(url: url, posterURL: nil, aspectRatio: media.aspectRatio, duration: nil, isGIF: true)
+        case .video:
+            return .video(url: url, posterURL: nil, aspectRatio: media.aspectRatio, duration: media.durationMillis.map(Self.duration), isGIF: false)
+        case .audio, .file, .svg:
+            let size = media.byteCount.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) }
+            return .file(url: url, filename: filename, subtitle: size, thumbnailURL: nil)
+        }
+    }
+
+    /// "1:05", or "1:02:05" past an hour.
+    private static func duration(_ millis: Int64) -> String {
+        let seconds = Int(millis / 1000)
+        let (hours, minutes, rest) = (seconds / 3600, seconds / 60 % 60, seconds % 60)
+        return hours > 0 ? String(format: "%d:%02d:%02d", hours, minutes, rest) : String(format: "%d:%02d", minutes, rest)
     }
 
     private var chatURL: URL? {

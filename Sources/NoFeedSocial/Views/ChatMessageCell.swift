@@ -171,6 +171,10 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
         var showProfile: () -> Void = {}
         /// An uploaded image was tapped: its URL, alt text, and the image if it has loaded.
         var showImage: (URL, String?, UIImage?) -> Void = { _, _, _ in }
+        /// A video was tapped: it plays full screen.
+        var playVideo: (URL) -> Void = { _ in }
+        /// A file was tapped: it loads, then opens in Quick Look; the card shows a spinner until this returns.
+        var openFile: (URL, String) async -> Void = { _, _ in }
         /// Plays `.audio` previews; the chat owns it so only one plays at a time.
         var audioPlayer: ChatAudioPreviewPlayer?
         var previewURL: (String) async -> URL? = { _ in nil }
@@ -264,6 +268,8 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
     /// The emoji each chip's long-press menu describes.
     private var chipEmojis: [ObjectIdentifier: (emoji: String, chip: UIView)] = [:]
     private var isOwn = false
+    /// The sender's color, which link and file embeds take on in incoming bubbles, as in Telegram.
+    private var accent = UIColor.systemBlue
     /// The message and reactions last shown, so a reconfigure can tell which chips are new.
     private var shownReactions: (messageId: String, emojis: Set<String>)?
     /// Copies of removed chips while they shrink out.
@@ -570,6 +576,7 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
         NSLayoutConstraint.activate(layout.isOwn ? ownConstraints : incomingConstraints)
         bubble.backgroundColor = layout.isOwn ? .systemBlue : .secondarySystemBackground
         let accent = ChatUserColor.color(for: message.sender.id)
+        self.accent = accent
 
         // Incoming messages keep the avatar column so a group's bubbles line up.
         avatarView.isHidden = layout.isOwn || !layout.showsAvatar
@@ -610,7 +617,8 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
         }
         // The time sits beside the text's last line when the text ends the bubble, and on a line of its own after
         // cards and reactions.
-        let otherEmbeds = embeds.count { if case .image(_, _, _, _, true) = $0 { false } else { true } }
+        let media = embeds.enumerated().filter { Self.isMedia($0.element) }
+        let otherEmbeds = embeds.count - media.count
         let endsWithText = otherEmbeds == 0 && reactions.isEmpty
         if let text {
             bodyLabel.isHidden = false
@@ -620,12 +628,13 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
             bodyLabel.attributedText = nil
         }
 
-        for (index, embed) in embeds.enumerated() {
-            if case .image(_, _, _, _, true) = embed {
-                mediaStack.addArrangedSubview(makeView(for: embed, index: index))
-            } else {
-                embedsStack.addArrangedSubview(makeView(for: embed, index: index))
-            }
+        if media.count > 1 {
+            mediaStack.addArrangedSubview(mediaGrid(media))
+        } else if let (index, embed) = media.first {
+            mediaStack.addArrangedSubview(makeView(for: embed, index: index))
+        }
+        for (index, embed) in embeds.enumerated() where !Self.isMedia(embed) {
+            embedsStack.addArrangedSubview(makeView(for: embed, index: index))
         }
         embedsStack.isHidden = otherEmbeds == 0
         configureReactions(reactions, messageId: message.id, canReact: actions.canReact)
@@ -634,7 +643,9 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
         let hasMedia = !mediaStack.arrangedSubviews.isEmpty
         let hasContent = text != nil || otherEmbeds > 0 || !reactions.isEmpty || !hasMedia
         // After cards the time needs its own line; reactions leave it room beside them, and on a lone image it sits on it.
-        timeSpacer.isHidden = (text != nil && endsWithText) || !reactions.isEmpty || !hasContent
+        // A lone voice message has room for the time beside its length, as in Telegram.
+        let isLoneVoice = text == nil && reactions.isEmpty && embeds.count == 1 && embeds.allSatisfy(Self.fitsContent)
+        timeSpacer.isHidden = (text != nil && endsWithText) || !reactions.isEmpty || !hasContent || isLoneVoice
         headerStack.isHidden = !hasHeader
         mediaStack.isHidden = !hasMedia
         contentStack.isHidden = !hasContent
@@ -649,6 +660,7 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
             if index == images.count - 1, !hasContent { corners.formUnion([.layerMinXMaxYCorner, .layerMaxXMaxYCorner]) }
             image.layer.cornerRadius = 16
             image.layer.maskedCorners = corners
+            image.clipsToBounds = true
         }
         // The views above are rebuilt on every configure and start with a zero frame. A reconfigure inside an
         // animation, such as a reaction arriving, would grow them from the corner, so they take their frames first.
@@ -676,7 +688,8 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
                 reminderLabel.isHidden ? nil : reminderLabel.intrinsicContentSize.width,
                 replyView.isHidden ? nil : replyView.naturalWidth,
                 bodyLabel.attributedText.map { Self.textWidth($0, max: Self.maxContentWidth(availableWidth: availableWidth, isOwn: layout.isOwn)) },
-                embedsStack.isHidden ? nil : Self.maxContentWidth(availableWidth: availableWidth, isOwn: layout.isOwn),
+                embedsStack.isHidden ? nil : embeds.allSatisfy(Self.fitsContent)
+                    ? Self.fittingWidth(embedsStack) : Self.maxContentWidth(availableWidth: availableWidth, isOwn: layout.isOwn),
                 reactionsContainer.isHidden ? nil : reactionsRowWidth + 40,
                 timeSpacer.isHidden ? nil : timeLabel.intrinsicContentSize.width,
             ].compactMap(\.self),
@@ -939,13 +952,7 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
             // Sizing from the server's `og` dimensions keeps the cell height stable while the image loads.
             let ratio = CGFloat(min(max(aspectRatio ?? 4 / 3, 0.5), 2))
             if opensViewer {
-                // Uploads fill the bubble, so they get Telegram's larger size. Portrait uploads are sized by
-                // height, like Telegram, so they don't squeeze a caption.
-                let width: CGFloat = ratio >= 1 ? 264 : max(200, min(264, 340 * ratio))
-                NSLayoutConstraint.activate([
-                    imageView.widthAnchor.constraint(equalToConstant: width),
-                    imageView.heightAnchor.constraint(equalTo: imageView.widthAnchor, multiplier: 1 / ratio),
-                ])
+                Self.sizeAsMedia(imageView, aspectRatio: aspectRatio)
             } else {
                 // A preview spans the bubble; a tall one is cropped so it doesn't take over the screen.
                 imageView.heightAnchor.constraint(equalTo: imageView.widthAnchor, multiplier: 1 / max(ratio, 0.75)).isActive = true
@@ -962,9 +969,9 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
             }
             return imageView
         case let .pending(title):
-            let spinner = UIActivityIndicatorView(style: .medium)
-            spinner.startAnimating()
-            return card(leading: spinner, title: "Uploading \(title)…", subtitle: nil, link: nil)
+            let row = fileRow(filename: title, subtitle: "Uploading…", thumbnailURL: nil)
+            row.isLoading = true
+            return row
         case let .audio(previewId, title, subtitle, detail, imageURL, link):
             let card = ChatAudioCardView(
                 previewId: previewId,
@@ -972,6 +979,8 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
                 subtitle: subtitle,
                 detail: detail,
                 link: link,
+                hasArtwork: imageURL != nil,
+                isOwn: isOwn,
                 player: actions.audioPlayer ?? ChatAudioPreviewPlayer(),
                 resolveURL: actions.previewURL,
             )
@@ -979,35 +988,112 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
                 loadImage(imageURL, into: card.artworkView)
             }
             return card
+        case let .voice(previewId, duration, waveform):
+            return ChatVoiceView(
+                previewId: previewId,
+                duration: duration,
+                waveform: waveform,
+                isOwn: isOwn,
+                player: actions.audioPlayer ?? ChatAudioPreviewPlayer(),
+                resolveURL: actions.previewURL,
+            )
         case let .card(title, subtitle, systemImage, imageURL, link):
-            let icon = UIImageView(image: UIImage(systemName: systemImage))
-            icon.tintColor = .secondaryLabel
-            icon.contentMode = .scaleAspectFit
-            icon.setContentHuggingPriority(.required, for: .horizontal)
-            // A long title truncates instead; without this it squeezed the symbol to a sliver.
-            icon.setContentCompressionResistancePriority(.required, for: .horizontal)
-            icon.translatesAutoresizingMaskIntoConstraints = false
-            if let imageURL {
-                // A thumbnail, such as album artwork, replaces the symbol once it loads.
-                icon.contentMode = .scaleAspectFill
-                icon.clipsToBounds = true
-                icon.layer.cornerRadius = 6
-                icon.layer.cornerCurve = .continuous
-                NSLayoutConstraint.activate([
-                    icon.widthAnchor.constraint(equalToConstant: 48),
-                    icon.heightAnchor.constraint(equalToConstant: 48),
-                ])
-                loadImage(imageURL, into: icon)
-            } else {
-                NSLayoutConstraint.activate([
-                    icon.widthAnchor.constraint(equalToConstant: 22),
-                    icon.heightAnchor.constraint(equalToConstant: 22),
-                ])
-            }
-            return card(leading: icon, title: title, subtitle: subtitle, link: link)
+            return linkCard(title: title, subtitle: subtitle, systemImage: systemImage, imageURL: imageURL, link: link)
         case let .message(title, text, link):
             return messageCard(title: title, text: text, link: link, index: index)
+        case let .video(url, posterURL, aspectRatio, duration, isGIF):
+            let video = ChatVideoView(url: url, duration: duration, isGIF: isGIF)
+            Self.sizeAsMedia(video, aspectRatio: aspectRatio)
+            if let posterURL {
+                loadImage(posterURL, into: video.posterView)
+            }
+            video.addGestureRecognizer(ChatActionTapGesture { [weak self] in self?.actions.playVideo(url) })
+            return video
+        case let .file(url, filename, subtitle, thumbnailURL):
+            let row = fileRow(filename: filename, subtitle: subtitle, thumbnailURL: thumbnailURL)
+            row.accessibilityTraits = .button
+            row.addGestureRecognizer(ChatActionTapGesture { [weak self, weak row] in
+                guard let self, let row, !row.isLoading else { return }
+                row.isLoading = true
+                Task {
+                    await self.actions.openFile(url, filename)
+                    row.isLoading = false
+                }
+            })
+            return row
         }
+    }
+
+    /// Embeds as wide as their content, such as a voice message; with only these, the bubble fits them rather than
+    /// taking the widest a bubble may be.
+    private static func fitsContent(_ embed: ChatEmbed) -> Bool {
+        if case .voice = embed { true } else { false }
+    }
+
+    /// Photos and videos fill the bubble's media area; other embeds sit under the text.
+    private static func isMedia(_ embed: ChatEmbed) -> Bool {
+        switch embed {
+        case .image(_, _, _, _, true), .video: true
+        default: false
+        }
+    }
+
+    /// Media that fills the bubble gets Telegram's larger size. Portrait media is sized by height, like Telegram, so
+    /// it doesn't squeeze a caption.
+    private static func sizeAsMedia(_ view: UIView, aspectRatio: Double?) {
+        let ratio = CGFloat(min(max(aspectRatio ?? 4 / 3, 0.5), 2))
+        let width: CGFloat = ratio >= 1 ? 264 : max(200, min(264, 340 * ratio))
+        view.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            view.widthAnchor.constraint(equalToConstant: width),
+            view.heightAnchor.constraint(equalTo: view.widthAnchor, multiplier: 1 / ratio),
+        ])
+    }
+
+    /// An album: an odd one out on a row of its own first, then pairs of square tiles, 2 points apart.
+    private func mediaGrid(_ media: [(offset: Int, element: ChatEmbed)]) -> UIView {
+        let width: CGFloat = 264
+        let spacing: CGFloat = 2
+        var rows: [[(offset: Int, element: ChatEmbed)]] = []
+        var rest = media[...]
+        if media.count % 2 == 1, let first = rest.popFirst() {
+            rows.append([first])
+        }
+        while !rest.isEmpty {
+            rows.append(Array(rest.prefix(2)))
+            rest = rest.dropFirst(2)
+        }
+        let grid = UIStackView(arrangedSubviews: rows.map { row in
+            let tiles = row.map { item in
+                let tile = makeView(for: item.element, index: item.offset)
+                // The tile's own size gives way to the grid's.
+                tile.constraints.filter { $0.firstItem === tile && [.width, .height].contains($0.firstAttribute) }.forEach { $0.isActive = false }
+                // Only the grid's outer corners are rounded.
+                tile.layer.cornerRadius = 0
+                return tile
+            }
+            let stack = UIStackView(arrangedSubviews: tiles)
+            stack.axis = .horizontal
+            stack.spacing = spacing
+            stack.distribution = .fillEqually
+            let height = row.count == 1 ? width / Self.tileRatio(row[0].element) : (width - spacing) / 2
+            stack.heightAnchor.constraint(equalToConstant: height).isActive = true
+            return stack
+        })
+        grid.axis = .vertical
+        grid.spacing = spacing
+        grid.clipsToBounds = true
+        grid.widthAnchor.constraint(equalToConstant: width).isActive = true
+        return grid
+    }
+
+    private static func tileRatio(_ embed: ChatEmbed) -> CGFloat {
+        let ratio: Double? = switch embed {
+        case let .image(_, aspectRatio, _, _, _): aspectRatio
+        case let .video(_, _, aspectRatio, _, _): aspectRatio
+        default: nil
+        }
+        return CGFloat(min(max(ratio ?? 4 / 3, 1), 2))
     }
 
     /// A message from elsewhere, drawn like a reply quote: who sent it where, then its text, three lines until
@@ -1043,32 +1129,92 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
         })
     }
 
-    private func card(leading: UIView, title: String, subtitle: String?, link: URL?) -> UIView {
+    /// A link preview or shared item, like Telegram's: a bar in the accent beside the site (or a symbol saying
+    /// what it is), a bold title and a few lines of description, with a thumbnail at the trailing edge, on a faint
+    /// wash of the accent. Tapping it opens the link.
+    private func linkCard(title: String, subtitle: String?, systemImage: String, imageURL: URL?, link: URL?) -> UIView {
+        let color = isOwn ? UIColor.white : accent
+        let site = link.flatMap { $0.host() }.map { $0.hasPrefix("www.") ? String($0.dropFirst(4)) : $0 }
+        let symbol = UIImageView(image: UIImage(systemName: systemImage, withConfiguration: UIImage.SymbolConfiguration(textStyle: .caption1, scale: .small)))
+        symbol.tintColor = color
+        symbol.setContentHuggingPriority(.required, for: .horizontal)
+        symbol.setContentCompressionResistancePriority(.required, for: .horizontal)
+        let siteLabel = UILabel()
+        siteLabel.text = site
+        siteLabel.font = UIFont.preferredFont(forTextStyle: .caption1).withWeight(.semibold)
+        siteLabel.textColor = color
+        siteLabel.isHidden = site == nil
+        let header = UIStackView(arrangedSubviews: [symbol, siteLabel])
+        header.spacing = 4
+        header.alignment = .center
+
         let titleLabel = UILabel()
         titleLabel.text = title
-        titleLabel.font = .preferredFont(forTextStyle: .subheadline)
-        titleLabel.textColor = link == nil ? .label : .tintColor
-        titleLabel.lineBreakMode = .byTruncatingMiddle
+        titleLabel.font = UIFont.preferredFont(forTextStyle: .subheadline).withWeight(.semibold)
+        titleLabel.textColor = isOwn ? .white : .label
+        titleLabel.numberOfLines = 2
         let subtitleLabel = UILabel()
         subtitleLabel.text = subtitle
-        subtitleLabel.font = .preferredFont(forTextStyle: .caption1)
-        subtitleLabel.textColor = .secondaryLabel
-        subtitleLabel.numberOfLines = 2
+        subtitleLabel.font = .preferredFont(forTextStyle: .footnote)
+        subtitleLabel.textColor = isOwn ? UIColor.white.withAlphaComponent(0.85) : .secondaryLabel
+        subtitleLabel.numberOfLines = 3
         subtitleLabel.isHidden = subtitle == nil
-        let text = UIStackView(arrangedSubviews: [titleLabel, subtitleLabel])
+        let text = UIStackView(arrangedSubviews: [header, titleLabel, subtitleLabel])
         text.axis = .vertical
         text.spacing = 2
-        let row = UIStackView(arrangedSubviews: [leading, text])
-        row.spacing = 10
-        row.alignment = .center
+        text.alignment = .leading
+        text.isLayoutMarginsRelativeArrangement = true
+        text.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0)
+
+        let bar = UIView()
+        bar.backgroundColor = color
+        bar.translatesAutoresizingMaskIntoConstraints = false
+        bar.widthAnchor.constraint(equalToConstant: 3).isActive = true
+        let row = UIStackView(arrangedSubviews: [bar, text])
+        row.spacing = 8
+        row.alignment = .fill
+        if let imageURL {
+            let thumbnail = UIImageView()
+            thumbnail.contentMode = .scaleAspectFill
+            thumbnail.clipsToBounds = true
+            thumbnail.layer.cornerRadius = 6
+            thumbnail.layer.cornerCurve = .continuous
+            thumbnail.backgroundColor = color.withAlphaComponent(0.15)
+            thumbnail.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                thumbnail.widthAnchor.constraint(equalToConstant: 56),
+                thumbnail.heightAnchor.constraint(equalToConstant: 56),
+            ])
+            loadImage(imageURL, into: thumbnail)
+            // Top-aligned beside the text, which may run longer.
+            let column = UIStackView(arrangedSubviews: [thumbnail, UIView()])
+            column.axis = .vertical
+            column.isLayoutMarginsRelativeArrangement = true
+            column.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0)
+            row.addArrangedSubview(column)
+        }
         row.isLayoutMarginsRelativeArrangement = true
-        row.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12)
-        row.backgroundColor = .systemBackground.withAlphaComponent(0.6)
-        row.layer.cornerRadius = 12
+        row.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 8)
+        row.backgroundColor = color.withAlphaComponent(isOwn ? 0.18 : 0.1)
+        row.layer.cornerRadius = 6
         row.layer.cornerCurve = .continuous
-        row.widthAnchor.constraint(lessThanOrEqualToConstant: 260).isActive = true
+        row.clipsToBounds = true
+        row.isAccessibilityElement = true
+        row.accessibilityLabel = [site, title, subtitle].compactMap(\.self).joined(separator: ", ")
         if let link {
+            row.accessibilityTraits = .link
             row.addGestureRecognizer(ChatLinkTapGesture(link: link))
+        }
+        return row
+    }
+
+    /// A file, like Telegram's and WhatsApp's: a tile in the type's color with its extension (or its thumbnail),
+    /// then the name and the size. The tile shows a spinner while the file loads.
+    private func fileRow(filename: String, subtitle: String?, thumbnailURL: URL?) -> ChatFileRow {
+        let row = ChatFileRow(filename: filename, subtitle: subtitle, isOwn: isOwn)
+        if let thumbnailURL {
+            row.showsThumbnail()
+            loadImage(thumbnailURL, into: row.tile)
         }
         return row
     }

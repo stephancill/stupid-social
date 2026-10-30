@@ -58,6 +58,10 @@ public struct TelegramMessage: Codable, Sendable, Hashable {
     public var spoilers: [NSRange]?
     /// Mentions in `caption`. Optional so chat snapshots saved before it existed still decode.
     public var mentions: [TelegramMention]?
+    /// Custom emoji entities in `caption`. Optional so chat snapshots saved before it existed still decode.
+    public var customEmojis: [TelegramCustomEmoji]?
+    /// Shared by the messages of one album, which Telegram sends as separate messages.
+    public var groupedId: Int64?
     public var embeds: [TelegramEmbed] = []
     public var reactions: [TelegramReaction] = []
     public var reactors: [TelegramReactor] = []
@@ -95,6 +99,36 @@ public struct TelegramMention: Codable, Sendable, Hashable {
 
     public var range: NSRange {
         NSRange(location: offset, length: length)
+    }
+}
+
+/// A custom emoji's picture, as `TelegramClient.customEmojiImages` finds it.
+public struct TelegramCustomEmojiImage: Sendable, Hashable {
+    public let url: URL
+    /// The emoji it stands for.
+    public let alt: String?
+    public let aspectRatio: Double
+}
+
+/// A custom emoji in a message's text (`messageEntityCustomEmoji`): its document drawn over the fallback emoji at
+/// the UTF-16 range.
+public struct TelegramCustomEmoji: Codable, Sendable, Hashable {
+    public let offset: Int
+    public let length: Int
+    public let documentId: Int64
+
+    public var range: NSRange {
+        NSRange(location: offset, length: length)
+    }
+
+    /// How reactions and the chat's emoji catalog name a custom emoji.
+    public static func key(documentId: Int64) -> String {
+        ":\(documentId):"
+    }
+
+    public static func documentId(fromKey key: String) -> Int64? {
+        guard key.hasPrefix(":"), key.hasSuffix(":"), key.count > 2 else { return nil }
+        return Int64(key.dropFirst().dropLast())
     }
 }
 
@@ -217,6 +251,7 @@ public actor TelegramClient: ChatListProvider {
     private var openingFileSessions: [Int: Task<MTProtoSession, Error>] = [:]
     /// Downloads in flight by cache key, so a file shown twice downloads once.
     private var downloads: [String: Task<Data, Error>] = [:]
+    private var customEmojiImages: [Int64: TelegramCustomEmojiImage] = [:]
     /// How to name each user seen in a history, member list or lookup to Telegram (`InputUser`), for profiles and
     /// name mentions: with their access hash, or through a message they sent when Telegram gave a "min" user.
     private var inputUsers: [Int64: TLObject] = [:]
@@ -417,7 +452,8 @@ public actor TelegramClient: ChatListProvider {
         if let running = downloads[file.key] {
             return try await running.value
         }
-        let task = Task { try await download(location: file.location, dc: file.dc) }
+        let maxSize = TelegramMediaURL.maxSize(of: url)
+        let task = Task { try await download(location: file.location, dc: file.dc, maxSize: maxSize) }
         downloads[file.key] = task
         defer { downloads[file.key] = nil }
         let data = try await task.value
@@ -426,8 +462,9 @@ public actor TelegramClient: ChatListProvider {
         return data
     }
 
-    /// `upload.getFile` in 512 KB parts until a short one, following `FILE_MIGRATE_X`.
-    private func download(location: TLObject, dc initialDC: Int) async throws -> Data {
+    /// `upload.getFile` in 512 KB parts until a short one or `maxSize`, following `FILE_MIGRATE_X`. Larger parts
+    /// aren't faster: a 3.4 MB video took 8 s in 512 KB parts and 10 s in 1 MB ones (observed 2026-10-30).
+    private func download(location: TLObject, dc initialDC: Int, maxSize: Int) async throws -> Data {
         let limit = 512 * 1024
         var dc = initialDC
         var data = Data()
@@ -449,7 +486,7 @@ public actor TelegramClient: ChatListProvider {
                 throw TelegramError.protocolViolation("unsupported file reply \(part?.name ?? "")")
             }
             data.append(bytes)
-            if bytes.count < limit || data.count >= TelegramMediaURL.maxDownloadSize {
+            if bytes.count < limit || data.count >= maxSize {
                 return data
             }
         }
@@ -1130,10 +1167,42 @@ public actor TelegramClient: ChatListProvider {
         return try await Self.sentMessageId(invoke(method).object, randomId: randomId)
     }
 
+    /// Custom emoji images by document id, from `messages.getCustomEmojiDocuments` (200 at most per call) and
+    /// remembered for the session. Static WebP emoji load whole; animated ones (TGS, WebM) show their largest
+    /// thumbnail, a WebP still (observed 2026-10-30; probe `custom-emoji`).
+    public func customEmojiImages(documentIds: [Int64]) async throws -> [Int64: TelegramCustomEmojiImage] {
+        try requireAccount()
+        let missing = Array(Set(documentIds).subtracting(customEmojiImages.keys))
+        for start in stride(from: 0, to: missing.count, by: 200) {
+            let ids = missing[start ..< min(start + 200, missing.count)].map { TLValue.long($0) }
+            let documents = try await invoke(TLObject("messages.getCustomEmojiDocuments", ["document_id": .vector(ids)])).vector ?? []
+            for document in documents.compactMap(\.object) where document.name == "document" {
+                guard let id = document["id"]?.long else { continue }
+                let attributes = document.objects("attributes")
+                let size = attributes.first { $0.name == "documentAttributeImageSize" || $0.name == "documentAttributeVideo" }
+                let aspect = size.flatMap { size in size["w"]?.int.flatMap { w in size["h"]?.int.map { Double(w) / Double(max($0, 1)) } } } ?? 1
+                let url = if document["mime_type"]?.string == "image/webp" {
+                    TelegramMediaParser.documentURL(document, thumbSize: "")
+                } else {
+                    TelegramMediaParser.bestSize(document.objects("thumbs"), maxSide: 320).flatMap { TelegramMediaParser.documentURL(document, thumbSize: $0.type) }
+                }
+                guard let url else { continue }
+                let alt = attributes.first { $0.name == "documentAttributeCustomEmoji" }?["alt"]?.string
+                customEmojiImages[id] = TelegramCustomEmojiImage(url: url, alt: alt, aspectRatio: aspect)
+            }
+        }
+        return customEmojiImages.filter { documentIds.contains($0.key) }
+    }
+
     /// Sets the user's reaction (nil removes it), returning the message's new totals when Telegram sends them.
     public func setReaction(peer: TelegramPeer, messageId: Int32, emoji: String?) async throws -> (totals: [TelegramReaction], reactors: [TelegramReactor])? {
         try requireAccount()
-        let reaction: [TLValue] = emoji.map { [.object(TLObject("reactionEmoji", ["emoticon": .string($0)]))] } ?? []
+        let reaction: [TLValue] = emoji.map { emoji in
+            if let documentId = TelegramCustomEmoji.documentId(fromKey: emoji) {
+                return [.object(TLObject("reactionCustomEmoji", ["document_id": .long(documentId)]))]
+            }
+            return [.object(TLObject("reactionEmoji", ["emoticon": .string(emoji)]))]
+        } ?? []
         let updates = try await invoke(TLObject("messages.sendReaction", ["peer": .object(peer.inputPeer), "msg_id": .int(messageId), "reaction": .vector(reaction)])).object
         guard let update = updates?.objects("updates").first(where: { $0.name == "updateMessageReactions" }), let reactions = update["reactions"] else { return nil }
         return TelegramMediaParser.reactions(of: TLObject("message", ["reactions": reactions]))
@@ -1261,6 +1330,12 @@ public actor TelegramClient: ChatListProvider {
                 return nil
             }
         }
+        let customEmojis: [TelegramCustomEmoji] = isService ? [] : message.objects("entities").compactMap { entity in
+            guard entity.name == "messageEntityCustomEmoji", let offset = entity["offset"]?.int, let length = entity["length"]?.int,
+                  let documentId = entity["document_id"]?.long
+            else { return nil }
+            return TelegramCustomEmoji(offset: Int(offset), length: Int(length), documentId: documentId)
+        }
         return TelegramMessage(
             id: message["id"]?.int ?? 0,
             date: Date(timeIntervalSince1970: TimeInterval(message["date"]?.int ?? 0)),
@@ -1268,6 +1343,8 @@ public actor TelegramClient: ChatListProvider {
             caption: isService ? "" : caption,
             spoilers: spoilers.isEmpty ? nil : spoilers,
             mentions: mentions.isEmpty ? nil : mentions,
+            customEmojis: customEmojis.isEmpty ? nil : customEmojis,
+            groupedId: message["grouped_id"]?.long,
             embeds: embeds,
             reactions: reactions.totals,
             reactors: reactions.reactors,

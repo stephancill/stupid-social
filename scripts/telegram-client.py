@@ -1209,6 +1209,10 @@ def main():
     members.add_argument("--json", action="store_true")
     peer_status = sub.add_parser("peer-status", help="a private chat's last-seen status, as messages.getPeerDialogs returns it")
     peer_status.add_argument("--peer", required=True)
+    custom_emoji = sub.add_parser("custom-emoji", help="a chat's custom emoji (text entities and reactions) and their documents, without message text")
+    custom_emoji.add_argument("--peer", required=True)
+    custom_emoji.add_argument("--limit", type=int, default=100)
+    custom_emoji.add_argument("-o", "--output", help="download the first emoji's image (the whole WebP, else its largest thumbnail) here")
     raw = sub.add_parser("raw")
     raw.add_argument("--method", required=True)
     raw.add_argument("--json", default="{}")
@@ -1316,6 +1320,31 @@ def main():
             statuses[status] = statuses.get(status, 0) + 1
         print("roles", roles)
         print("statuses", statuses)
+    elif args.command == "custom-emoji":
+        result = client.call({"_": "messages.getHistory", "peer": client.input_peer(args.peer), "offset_id": 0, "offset_date": 0, "add_offset": 0, "limit": args.limit, "max_id": 0, "min_id": 0, "hash": 0})
+        ids: list[int] = []
+        for message in result["messages"]:
+            found = [e["document_id"] for e in message.get("entities") or [] if e["_"] == "messageEntityCustomEmoji"]
+            found += [r["reaction"]["document_id"] for r in (message.get("reactions") or {}).get("results", []) if r["reaction"]["_"] == "reactionCustomEmoji"]
+            if found:
+                print(f"message {message['id']}: {len(found)} custom emoji")
+            ids += [i for i in found if i not in ids]
+        if not ids:
+            return
+        documents = client.call({"_": "messages.getCustomEmojiDocuments", "document_id": ids[:200]})
+        for doc in documents:
+            attrs = {a["_"]: a for a in doc.get("attributes", [])}
+            emoji = attrs.get("documentAttributeCustomEmoji", {})
+            thumbs = [f"{t['_']}:{t.get('type')}" for t in doc.get("thumbs") or []]
+            print(f"{doc['id']} {doc.get('mime_type')} {doc.get('size')}B alt={emoji.get('alt')!r} dc={doc.get('dc_id')} thumbs={thumbs}")
+        if args.output:
+            doc = documents[0]
+            sized = [t for t in doc.get("thumbs") or [] if t["_"] == "photoSize"]
+            thumb = "" if doc.get("mime_type") == "image/webp" else (sized[-1]["type"] if sized else "")
+            location = {"_": "inputDocumentFileLocation", "id": doc["id"], "access_hash": doc["access_hash"], "file_reference": doc["file_reference"], "thumb_size": thumb}
+            data = client.download(location, doc["dc_id"])
+            pathlib.Path(args.output).write_bytes(data)
+            print(f"{len(data)} bytes (thumb {thumb or 'full'}) -> {args.output}")
     elif args.command == "peer-status":
         result = client.call({"_": "messages.getPeerDialogs", "peers": [{"_": "inputDialogPeer", "peer": client.input_peer(args.peer)}]})
         user_id = int(args.peer.split(":")[1])

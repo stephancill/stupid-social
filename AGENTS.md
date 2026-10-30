@@ -50,6 +50,7 @@ Sources/
       ChatCustomEmojiImages.swift   # Custom emoji images (downsampled, cached) for text, chips, picker and the composer strip
       ChatAudioPreview.swift        # Inline audio preview player and track card for chat messages
       ChatImageViewer.swift         # Full-screen chat image viewer: zoom, swipe to dismiss, save to Photos
+      ChatMediaViews.swift          # Chat videos (poster, looping GIFs, full-screen player) and the Quick Look file source
       ApronChatView.swift           # Apron chat: the shared chat plus members and profiles
       ApronMembersView.swift        # Apron room member list, opened from the chat title
       ApronProfileView.swift        # Apron user profile and shared avatar with presence dot
@@ -113,12 +114,13 @@ Sources/
       TelegramCrypto.swift          # BigUInt, AES-IGE, RSA_PAD, factorization, SRP
       TelegramMTProto.swift         # MTProto transport, auth key exchange, encrypted session actor
       TelegramClient.swift          # Telegram account: DCs, sign-in, dialogs, history, send, read, files, push
-      TelegramMedia.swift           # tgfile: URLs and their URLProtocol, media/avatar/reaction parsing
-      TelegramChatAdapter.swift     # Telegram chat adapter: history, pushed updates, send, replies, media, reactions, typing, read cursor
+      TelegramMedia.swift           # tgfile: URLs and their URLProtocol, media/avatar/reaction parsing (whole videos, voice, files)
+      TelegramChatAdapter.swift     # Telegram chat adapter: history, pushed updates, send, replies, media, albums, custom emoji, reactions, typing, read cursor
       XChatThrift.swift             # Thrift binary protocol values and coder for X Chat events
       XChatCrypto.swift             # X Chat crypto: ECIES key unwrap, XSalsa20-Poly1305 secretbox, franking, signing
       XChatClient.swift             # X Chat (encrypted X DMs): GraphQL inbox/history/send/read, Juicebox key recovery
       XChatAdapter.swift            # X Chat adapter: decrypted history, live events, send, reactions, read marker
+      XChatMedia.swift              # X Chat media: xchatmedia: URLs, the URLProtocol that downloads, decrypts and caches them
     Resources/
       TelegramSchema.tl             # Telegram TL schema (scripts/telegram-schema.py); TelegramAPI.json is gitignored
     Storage/
@@ -135,6 +137,7 @@ Sources/
       ApronReactionStore.swift        # Which reactions to your Apron messages you've seen, per room (this device)
       ChatDraftStore.swift            # Unsent composer text per chat (by chatKey), every network
       ChatSnapshotCache.swift         # Last messages and metadata per adapter chat (by chatKey) for instant open
+      ChatMediaFiles.swift            # Chat videos, voice and files downloaded to local files for the player and Quick Look
       ChatReminderStore.swift         # Message reminders: local notifications and due items in the feed, synced through iCloud KVS
     ViewModels/
       FeedViewModel.swift

@@ -5,6 +5,12 @@ import NoFeedSocialPush
 public enum TelegramEmbed: Codable, Hashable, Sendable {
     case image(url: URL, aspectRatio: Double?)
     case card(title: String, subtitle: String?, systemImage: String, imageURL: URL?, link: URL?)
+    case video(url: URL, posterURL: URL?, aspectRatio: Double?, duration: String?, isGIF: Bool)
+    case file(url: URL, filename: String, subtitle: String?, thumbnailURL: URL?)
+    /// An audio file, which plays in the chat.
+    case audio(url: URL, title: String, subtitle: String?)
+    /// A voice message, with its waveform (levels from 0 to 1).
+    case voice(url: URL, duration: Double?, waveform: [Double]?)
 }
 
 /// One emoji's total on a message; `isMine` when the user chose it.
@@ -40,10 +46,14 @@ public struct TelegramReactor: Codable, Hashable, Sendable {
 /// `InputFileLocation` (base64url), so the URL needs no lookup table; `key` names the disk cache entry.
 enum TelegramMediaURL {
     static let scheme = "tgfile"
-    /// Thumbnails, photos, static stickers and avatars; whole videos and files aren't downloaded.
+    /// Thumbnails, photos, static stickers and avatars.
     static let maxDownloadSize = 20 * 1024 * 1024
+    /// Videos, voice messages and files, downloaded whole when the user plays or opens them. Larger ones stay cards:
+    /// a download is held in memory, and comes at a few hundred KB a second (observed 2026-10-30).
+    static let maxWholeDownloadSize = 200 * 1024 * 1024
 
-    static func make(key: String, dc: Int, location: TLObject) -> URL? {
+    /// `maxSize` is how much of the file the URL loads: more than `maxDownloadSize` only for whole documents.
+    static func make(key: String, dc: Int, location: TLObject, maxSize: Int = maxDownloadSize) -> URL? {
         var writer = TLWriter()
         guard (try? writer.object(location)) != nil else { return nil }
         var components = URLComponents()
@@ -54,7 +64,14 @@ enum TelegramMediaURL {
             URLQueryItem(name: "dc", value: String(dc)),
             URLQueryItem(name: "loc", value: writer.data.base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")),
         ]
+        if maxSize != maxDownloadSize {
+            components.queryItems?.append(URLQueryItem(name: "max", value: String(maxSize)))
+        }
         return components.url
+    }
+
+    static func maxSize(of url: URL) -> Int {
+        URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "max" }?.value.flatMap(Int.init) ?? maxDownloadSize
     }
 
     static func parse(_ url: URL) -> (key: String, dc: Int, location: TLObject)? {
@@ -193,6 +210,46 @@ enum TelegramMediaParser {
         return TelegramMediaURL.make(key: "document-\(id)-\(thumbSize.isEmpty ? "full" : thumbSize)", dc: Int(dc), location: location)
     }
 
+    /// The whole document, named `filename` (the URL's last path component), so the player and Quick Look know its
+    /// type; `nil` when it's larger than the app downloads.
+    static func wholeDocumentURL(_ document: TLObject, filename: String) -> URL? {
+        guard let id = document["id"]?.long, let accessHash = document["access_hash"]?.long,
+              let reference = document["file_reference"]?.bytes, let dc = document["dc_id"]?.int,
+              (document["size"]?.long ?? .max) <= Int64(TelegramMediaURL.maxWholeDownloadSize)
+        else { return nil }
+        let location = TLObject("inputDocumentFileLocation", ["id": .long(id), "access_hash": .long(accessHash), "file_reference": .bytes(reference), "thumb_size": .string("")])
+        let name = filename.replacingOccurrences(of: "/", with: "_")
+        return TelegramMediaURL.make(key: "document-\(id)/\(name)", dc: Int(dc), location: location, maxSize: TelegramMediaURL.maxWholeDownloadSize)
+    }
+
+    /// A voice message's waveform: 5-bit levels packed least significant bit first, usually 100 of them in 63 bytes
+    /// (observed 2026-10-30), scaled to 0...1.
+    static func waveform(_ data: Data) -> [Double] {
+        let bytes = [UInt8](data)
+        return (0 ..< bytes.count * 8 / 5).map { index in
+            let bit = index * 5
+            let pair = Int(bytes[bit / 8]) | (bit / 8 + 1 < bytes.count ? Int(bytes[bit / 8 + 1]) << 8 : 0)
+            return Double((pair >> (bit % 8)) & 31) / 31
+        }
+    }
+
+    /// A file name with the extension the MIME type implies, for documents sent without a name.
+    static func filename(of document: TLObject, fallback: String) -> String {
+        if let name = document.objects("attributes").first(where: { $0.name == "documentAttributeFilename" })?["file_name"]?.string, !name.isEmpty {
+            return name
+        }
+        let ext = switch document["mime_type"]?.string ?? "" {
+        case "video/mp4": "mp4"
+        case "video/quicktime": "mov"
+        case "audio/ogg": "ogg"
+        case "audio/mpeg": "mp3"
+        case "audio/mp4", "audio/x-m4a": "m4a"
+        case "image/gif": "gif"
+        default: "bin"
+        }
+        return "\(fallback).\(ext)"
+    }
+
     /// A user's or chat's small profile photo, through `inputPeer` (which may be `inputPeerUserFromMessage`).
     static func avatarURL(photo: TLObject?, inputPeer: TLObject, key: String) -> URL? {
         guard let photo, let photoId = photo["photo_id"]?.long, let dc = photo["dc_id"]?.int else { return nil }
@@ -275,23 +332,30 @@ enum TelegramMediaParser {
         if let video {
             let seconds = video["duration"].flatMap { if case let .double(v) = $0 { v } else { nil } }
             let label = isGIF ? "GIF" : video.flag("round_message") ? "Video message" : "Video"
+            let aspect = video["w"]?.int.flatMap { w in video["h"]?.int.map { Double(w) / Double(max($0, 1)) } }
+            if let url = wholeDocumentURL(document, filename: filename(of: document, fallback: isGIF ? "animation" : "video")) {
+                return (label, [.video(url: url, posterURL: thumbURL, aspectRatio: aspect, duration: isGIF ? nil : duration(seconds), isGIF: isGIF)])
+            }
             if isGIF, let thumbURL {
-                let aspect = video["w"]?.int.flatMap { w in video["h"]?.int.map { Double(w) / Double(max($0, 1)) } }
                 return (label, [.image(url: thumbURL, aspectRatio: aspect)])
             }
             return (label, [.card(title: label, subtitle: duration(seconds), systemImage: "play.rectangle", imageURL: thumbURL, link: nil)])
         }
         if let audio = attributes.first(where: { $0.name == "documentAttributeAudio" }) {
             let seconds = audio["duration"]?.int.map(Double.init)
-            if audio.flag("voice") {
-                return ("Voice message", [.card(title: "Voice message", subtitle: duration(seconds), systemImage: "waveform", imageURL: nil, link: nil)])
+            let isVoice = audio.flag("voice")
+            if isVoice, let url = wholeDocumentURL(document, filename: filename(of: document, fallback: "voice")) {
+                return ("Voice message", [.voice(url: url, duration: seconds, waveform: audio["waveform"]?.bytes.map(waveform))])
             }
-            let title = audio["title"]?.string ?? "Audio"
-            let subtitle = [audio["performer"]?.string, duration(seconds)].compactMap(\.self).joined(separator: " · ")
-            return (title, [.card(title: title, subtitle: subtitle.isEmpty ? nil : subtitle, systemImage: "music.note", imageURL: thumbURL, link: nil)])
+            let title = isVoice ? "Voice message" : audio["title"]?.string ?? "Audio"
+            let subtitle = [isVoice ? nil : audio["performer"]?.string, duration(seconds)].compactMap(\.self).joined(separator: " · ")
+            if let url = wholeDocumentURL(document, filename: filename(of: document, fallback: isVoice ? "voice" : "audio")) {
+                return (title, [.audio(url: url, title: title, subtitle: subtitle.isEmpty ? nil : subtitle)])
+            }
+            return (title, [.card(title: title, subtitle: subtitle.isEmpty ? nil : subtitle, systemImage: isVoice ? "waveform" : "music.note", imageURL: thumbURL, link: nil)])
         }
-        if isGIF, let thumbURL {
-            return ("GIF", [.image(url: thumbURL, aspectRatio: nil)])
+        if isGIF, let url = wholeDocumentURL(document, filename: filename(of: document, fallback: "animation")) {
+            return ("GIF", [.video(url: url, posterURL: thumbURL, aspectRatio: nil, duration: nil, isGIF: true)])
         }
         let name = attributes.first { $0.name == "documentAttributeFilename" }?["file_name"]?.string ?? "File"
         let size = document["size"]?.long.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) }
@@ -303,10 +367,14 @@ enum TelegramMediaParser {
             let aspect = imageSize.flatMap { size in size["w"]?.int.flatMap { w in size["h"]?.int.map { Double(w) / Double(max($0, 1)) } } }
             return ("Photo", [.image(url: url, aspectRatio: aspect)])
         }
+        if let url = wholeDocumentURL(document, filename: filename(of: document, fallback: "file")) {
+            return (name, [.file(url: url, filename: name, subtitle: size, thumbnailURL: thumbURL)])
+        }
         return (name, [.card(title: name, subtitle: size, systemImage: "doc", imageURL: thumbURL, link: nil)])
     }
 
-    /// Emoji reaction totals; custom-emoji and paid reactions show as ⭐️, since the app can't draw them.
+    /// Emoji reaction totals. Custom emoji are keyed `:<document id>:` for the chat's emoji catalog; paid reactions
+    /// are Telegram Stars, so they show as ⭐️.
     static func reactions(of message: TLObject) -> (totals: [TelegramReaction], reactors: [TelegramReactor]) {
         guard let reactions = message["reactions"]?.object else { return ([], []) }
         let totals = reactions.objects("results").compactMap { result -> TelegramReaction? in
@@ -322,6 +390,10 @@ enum TelegramMediaParser {
     }
 
     private static func emoji(_ reaction: TLObject) -> String {
-        reaction.name == "reactionEmoji" ? reaction["emoticon"]?.string ?? "⭐️" : "⭐️"
+        switch reaction.name {
+        case "reactionEmoji": reaction["emoticon"]?.string ?? "⭐️"
+        case "reactionCustomEmoji": reaction["document_id"]?.long.map(TelegramCustomEmoji.key(documentId:)) ?? "⭐️"
+        default: "⭐️"
+        }
     }
 }

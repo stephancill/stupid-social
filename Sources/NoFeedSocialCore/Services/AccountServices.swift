@@ -230,6 +230,7 @@ public final class AccountServices: ObservableObject {
         let changed = rebuilt.map(\.accountId) != components.map(\.accountId)
         components = rebuilt
         TelegramFileURLProtocol.register(clients: rebuilt.compactMap(\.telegramClient))
+        XChatMediaURLProtocol.register(clients: rebuilt.compactMap(\.xChatClient))
         if changed {
             onAccountsChange?()
         }

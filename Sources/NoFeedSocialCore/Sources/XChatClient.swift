@@ -92,9 +92,48 @@ public struct XChatMessageContents: Equatable, Sendable {
         let text: String?
     }
 
+    /// A `MediaAttachment`. Migrated legacy DM media still has an X CDN URL; new media is encrypted and stored on
+    /// ton.x.com under its hash key (see `XChatMediaURL`).
+    public struct Media: Equatable, Sendable {
+        public enum Kind: Int64, Sendable {
+            case image = 1, gif, video, audio, file, svg
+        }
+
+        let hashKey: String?
+        let kind: Kind?
+        let filename: String?
+        let legacyURL: URL?
+        let aspectRatio: Double?
+        let durationMillis: Int64?
+        /// The encrypted size X records.
+        let byteCount: Int64?
+
+        init(hashKey: String? = nil, kind: Kind? = nil, filename: String?, legacyURL: URL? = nil, aspectRatio: Double? = nil, durationMillis: Int64? = nil, byteCount: Int64? = nil) {
+            self.hashKey = hashKey
+            self.kind = kind
+            self.filename = filename
+            self.legacyURL = legacyURL
+            self.aspectRatio = aspectRatio
+            self.durationMillis = durationMillis
+            self.byteCount = byteCount
+        }
+
+        /// Fields: 1 media hash key, 2 dimensions {1 width, 2 height}, 3 type, 4 duration (ms), 5 size, 6 filename,
+        /// 7 attachment id, 8 legacy URL, 9 legacy preview URL, 11 plaintext SHA-256.
+        init(_ media: ThriftStruct) {
+            let size = media.structure(2)
+            hashKey = media.string(1)
+            kind = media.int(3).flatMap(Kind.init)
+            filename = media.string(6)
+            legacyURL = media.string(8).flatMap(URL.init)
+            aspectRatio = size.flatMap { size in size.int(1).flatMap { width in size.int(2).map { Double(width) / Double(max($0, 1)) } } }
+            durationMillis = media.int(4)
+            byteCount = media.int(5)
+        }
+    }
+
     public enum Attachment: Equatable, Sendable {
-        /// Migrated legacy DM media still has an X CDN URL; new media is encrypted.
-        case media(filename: String?, legacyURL: URL?, aspectRatio: Double?)
+        case media(Media)
         case post(url: URL?)
         case link(url: URL?, title: String?)
     }
@@ -114,9 +153,7 @@ public struct XChatMessageContents: Equatable, Sendable {
         reply = message.structure(4).map { Reply(sequenceId: $0.string(6), senderName: $0.string(5), text: $0.string(2)) }
         attachments = message.structures(3).compactMap { attachment in
             if let media = attachment.structure(1) {
-                let size = media.structure(2)
-                let aspectRatio = size.flatMap { size in size.int(1).flatMap { width in size.int(2).map { Double(width) / Double(max($0, 1)) } } }
-                return .media(filename: media.string(6), legacyURL: media.string(8).flatMap(URL.init), aspectRatio: aspectRatio)
+                return .media(Media(media))
             }
             if let post = attachment.structure(2) {
                 return .post(url: post.string(2).flatMap(URL.init))
@@ -132,7 +169,14 @@ public struct XChatMessageContents: Equatable, Sendable {
     var preview: String {
         if let text, !text.isEmpty { return text }
         switch attachments.first {
-        case .media: return "Photo"
+        case let .media(media):
+            switch media.kind {
+            case .image, .svg, nil: return "Photo"
+            case .gif: return "GIF"
+            case .video: return "Video"
+            case .audio: return "Audio"
+            case .file: return media.filename ?? "File"
+            }
         case .post: return "Shared a post"
         case let .link(url, title): return title ?? url?.absoluteString ?? "Link"
         case nil: return "Message"
@@ -222,6 +266,7 @@ public actor XChatClient: ChatListProvider {
         try credentialStore.deleteXChatKeys()
         conversations = [:]
         conversationKeys = [:]
+        XChatMediaCache.removeAll()
     }
 
     // MARK: Keys
@@ -631,6 +676,39 @@ public actor XChatClient: ChatListProvider {
         signature[4] = .string(keys.signingPublicKey)
         signature[5] = .structs([info])
         return signature
+    }
+
+    // MARK: Media
+
+    func hasKey(conversationId: String, version: String) -> Bool {
+        conversationKeys[conversationId]?[version] != nil
+    }
+
+    /// Downloads an encrypted attachment from ton.x.com (with the X cookies; it answers 401 without them) and
+    /// decrypts it into `destination`. Contents version 0 media is a secretstream under the conversation key;
+    /// version 1 derives a key per attachment (HKDF "xchat-attachment-key" over the attachment id from the per-
+    /// message key), which no account sends yet, and messages of that version already fail to decrypt.
+    func downloadMedia(_ reference: XChatMediaReference, to destination: URL) async throws {
+        if conversationKeys[reference.conversationId]?[reference.keyVersion] == nil {
+            _ = try await conversation(reference.conversationId)
+        }
+        guard let key = conversationKeys[reference.conversationId]?[reference.keyVersion] else {
+            throw SourceError.serviceError("Missing the key for this X chat's media.")
+        }
+        var request = URLRequest(url: XChatMediaURL.downloadURL(reference))
+        request.allHTTPHeaderFields = try XClient.apiHeaders(credentials: xCredentials())
+        let (encrypted, response) = try await session.download(for: request)
+        defer { try? FileManager.default.removeItem(at: encrypted) }
+        guard let http = response as? HTTPURLResponse else { throw SourceError.invalidResponse }
+        if http.statusCode == 401 || http.statusCode == 403 {
+            throw SourceError.notConfigured
+        }
+        guard (200 ..< 300).contains(http.statusCode) else { throw SourceError.serviceError("X returned HTTP \(http.statusCode) for media.") }
+        let partial = destination.appendingPathExtension("partial-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: partial) }
+        _ = try XChatCrypto.decryptMedia(from: encrypted, to: partial, key: key)
+        _ = try? FileManager.default.removeItem(at: destination)
+        try FileManager.default.moveItem(at: partial, to: destination)
     }
 
     // MARK: Transport

@@ -99,6 +99,203 @@ enum XChatCrypto {
     }
 }
 
+// MARK: Media
+
+extension XChatCrypto {
+    /// dm-core's `LibsodiumStreamConfig`: media is pushed in 1024-byte plaintext chunks, each 17 bytes longer
+    /// once encrypted.
+    static let mediaChunkSize = 1024 + SecretStream.overhead
+
+    /// Decrypts a whole attachment held in memory: the secretstream header, then its chunks, the last tagged final.
+    static func decryptMedia(_ blob: Data, key: Data) throws -> Data {
+        guard blob.count >= SecretStream.headerSize else { throw CryptoError.invalidCiphertext }
+        var stream = try SecretStream(key: key, header: blob.prefix(SecretStream.headerSize))
+        var output = Data()
+        var offset = blob.startIndex + SecretStream.headerSize
+        var tag: UInt8?
+        while offset < blob.endIndex {
+            let end = min(offset + mediaChunkSize, blob.endIndex)
+            let chunk = try stream.pull(blob[offset ..< end])
+            output.append(chunk.message)
+            tag = chunk.tag
+            offset = end
+        }
+        guard tag == SecretStream.tagFinal else { throw CryptoError.invalidCiphertext }
+        return output
+    }
+
+    /// Decrypts an attachment file into `output` a chunk at a time, so a long video never sits in memory, and
+    /// returns the plaintext's SHA-256.
+    static func decryptMedia(from input: URL, to output: URL, key: Data) throws -> Data {
+        let reader = try FileHandle(forReadingFrom: input)
+        defer { try? reader.close() }
+        FileManager.default.createFile(atPath: output.path, contents: nil)
+        let writer = try FileHandle(forWritingTo: output)
+        defer { try? writer.close() }
+        guard let header = try reader.read(upToCount: SecretStream.headerSize), header.count == SecretStream.headerSize else {
+            throw CryptoError.invalidCiphertext
+        }
+        var stream = try SecretStream(key: key, header: header)
+        var hash = SHA256()
+        var tag: UInt8?
+        // Reads a thousand chunks at a time.
+        while let block = try reader.read(upToCount: mediaChunkSize * 1024), !block.isEmpty {
+            var plaintext = Data()
+            var offset = block.startIndex
+            while offset < block.endIndex {
+                let end = min(offset + mediaChunkSize, block.endIndex)
+                let chunk = try stream.pull(block[offset ..< end])
+                plaintext.append(chunk.message)
+                tag = chunk.tag
+                offset = end
+            }
+            hash.update(data: plaintext)
+            try writer.write(contentsOf: plaintext)
+        }
+        // A stream that stops before its final chunk was cut short.
+        guard tag == SecretStream.tagFinal else { throw CryptoError.invalidCiphertext }
+        return Data(hash.finalize())
+    }
+}
+
+/// libsodium's `crypto_secretstream_xchacha20poly1305` (pull side). Each chunk is an encrypted tag byte, the
+/// ciphertext and a 16-byte MAC, where the MAC covers a 64-byte block holding the encrypted tag and the rest of
+/// that keystream block. For a message length that is a multiple of 16 (every 1024-byte chunk) that is exactly
+/// RFC 8439 ChaCha20-Poly1305 over (tag || 63 zero bytes || message), so CryptoKit's `ChaChaPoly` opens the chunk
+/// once the block's keystream is put back; other lengths pad differently (`openUnaligned`).
+struct SecretStream {
+    static let headerSize = 24
+    static let overhead = 17
+    static let tagFinal: UInt8 = 3
+    private static let tagRekey: UInt8 = 2
+
+    private var key: [UInt8]
+    /// 4-byte little-endian counter, then the 8-byte inner nonce.
+    private var nonce: [UInt8]
+
+    init(key: Data, header: Data) throws {
+        guard key.count == 32, header.count == Self.headerSize else { throw XChatCrypto.CryptoError.invalidKey }
+        let header = [UInt8](header)
+        self.key = ChaCha20.hchacha20(key: [UInt8](key), input: Array(header[0 ..< 16]))
+        nonce = [1, 0, 0, 0] + header[16 ..< 24]
+    }
+
+    mutating func pull(_ chunk: Data) throws -> (message: Data, tag: UInt8) {
+        guard chunk.count >= Self.overhead else { throw XChatCrypto.CryptoError.invalidCiphertext }
+        let bytes = [UInt8](chunk)
+        let symmetricKey = SymmetricKey(data: key)
+        let chachaNonce = try ChaChaPoly.Nonce(data: nonce)
+        let messageLength = bytes.count - Self.overhead
+        let mac = Data(bytes[(bytes.count - 16)...])
+        let opened: Data
+        if messageLength % 16 == 0 {
+            // Keystream block 1, as sealing 64 zero bytes yields it.
+            let keystream = try [UInt8](ChaChaPoly.seal(Data(count: 64), using: symmetricKey, nonce: chachaNonce).ciphertext)
+            var ciphertext = [bytes[0]] + keystream[1 ..< 64]
+            ciphertext += bytes[1 ..< bytes.count - 16]
+            do {
+                opened = try ChaChaPoly.open(ChaChaPoly.SealedBox(nonce: chachaNonce, ciphertext: ciphertext, tag: mac), using: symmetricKey)
+            } catch {
+                throw XChatCrypto.CryptoError.authenticationFailed
+            }
+        } else {
+            opened = try openUnaligned(bytes, mac: mac, symmetricKey: symmetricKey, nonce: chachaNonce)
+        }
+        let tag = opened[opened.startIndex]
+        // The inner nonce absorbs the MAC and the counter moves on, as libsodium does after every chunk.
+        for index in 0 ..< 8 {
+            nonce[4 + index] ^= mac[mac.startIndex + index]
+        }
+        var counter = UInt32(nonce[0]) | UInt32(nonce[1]) << 8 | UInt32(nonce[2]) << 16 | UInt32(nonce[3]) << 24
+        counter &+= 1
+        nonce.replaceSubrange(0 ..< 4, with: (0 ..< 4).map { UInt8(truncatingIfNeeded: counter >> (8 * UInt32($0))) })
+        if tag & Self.tagRekey != 0 || counter == 0 {
+            rekey()
+        }
+        return (Data(opened.dropFirst(64)), tag)
+    }
+
+    /// libsodium pads the ciphertext in the MAC by `length % 16` bytes where RFC 8439 pads to the next multiple
+    /// of 16, so a chunk whose length isn't a multiple of 16 (a stream's last) is checked with the native
+    /// Poly1305 and decrypted with keystream from `ChaChaPoly`. Returns tag || 63 bytes || message, like `open`.
+    private func openUnaligned(_ bytes: [UInt8], mac: Data, symmetricKey: SymmetricKey, nonce: ChaChaPoly.Nonce) throws -> Data {
+        let messageLength = bytes.count - Self.overhead
+        // Keystream from block 1 on: the tag's block, then the message's.
+        let keystream = try [UInt8](ChaChaPoly.seal(Data(count: 64 + messageLength), using: symmetricKey, nonce: nonce).ciphertext)
+        var authenticated = [bytes[0]] + keystream[1 ..< 64]
+        authenticated += bytes[1 ..< 1 + messageLength]
+        authenticated += [UInt8](repeating: 0, count: messageLength % 16)
+        authenticated += [UInt8](repeating: 0, count: 8)
+        withUnsafeBytes(of: UInt64(64 + messageLength).littleEndian) { authenticated += $0 }
+        let polyKey = Data(ChaCha20.block(key: key, counter: 0, nonce: self.nonce)[0 ..< 32])
+        let expected = Poly1305.tag(Data(authenticated), key: polyKey)
+        guard zip(expected, mac).reduce(UInt8(0), { $0 | ($1.0 ^ $1.1) }) == 0 else {
+            throw XChatCrypto.CryptoError.authenticationFailed
+        }
+        var opened = Data([bytes[0] ^ keystream[0]] + [UInt8](repeating: 0, count: 63))
+        opened.append(contentsOf: zip(bytes[1 ..< 1 + messageLength], keystream[64...]).map { $0 ^ $1 })
+        return opened
+    }
+
+    private mutating func rekey() {
+        let stream = ChaCha20.block(key: key, counter: 0, nonce: nonce)
+        let next = zip(key + nonce[4 ..< 12], stream).map { $0 ^ $1 }
+        key = Array(next[0 ..< 32])
+        nonce = [1, 0, 0, 0] + next[32 ..< 40]
+    }
+}
+
+enum ChaCha20 {
+    private static let sigma: [UInt32] = [0x6170_7865, 0x3320_646E, 0x7962_2D32, 0x6B20_6574]
+
+    static func hchacha20(key: [UInt8], input: [UInt8]) -> [UInt8] {
+        var x = sigma + words(key) + words(input)
+        doubleRounds(&x)
+        return bytes(Array(x[0 ..< 4] + x[12 ..< 16]))
+    }
+
+    /// One 64-byte IETF ChaCha20 keystream block (12-byte nonce).
+    static func block(key: [UInt8], counter: UInt32, nonce: [UInt8]) -> [UInt8] {
+        let input = sigma + words(key) + [counter] + words(nonce)
+        var x = input
+        doubleRounds(&x)
+        return bytes(zip(x, input).map { $0 &+ $1 })
+    }
+
+    private static func doubleRounds(_ x: inout [UInt32]) {
+        func quarter(_ a: Int, _ b: Int, _ c: Int, _ d: Int) {
+            x[a] &+= x[b]
+            x[d] = (x[d] ^ x[a]).rotatedLeft(16)
+            x[c] &+= x[d]
+            x[b] = (x[b] ^ x[c]).rotatedLeft(12)
+            x[a] &+= x[b]
+            x[d] = (x[d] ^ x[a]).rotatedLeft(8)
+            x[c] &+= x[d]
+            x[b] = (x[b] ^ x[c]).rotatedLeft(7)
+        }
+        for _ in 0 ..< 10 {
+            quarter(0, 4, 8, 12)
+            quarter(1, 5, 9, 13)
+            quarter(2, 6, 10, 14)
+            quarter(3, 7, 11, 15)
+            quarter(0, 5, 10, 15)
+            quarter(1, 6, 11, 12)
+            quarter(2, 7, 8, 13)
+            quarter(3, 4, 9, 14)
+        }
+    }
+
+    private static func words(_ bytes: [UInt8]) -> [UInt32] {
+        stride(from: 0, to: bytes.count, by: 4).map { i in
+            UInt32(bytes[i]) | UInt32(bytes[i + 1]) << 8 | UInt32(bytes[i + 2]) << 16 | UInt32(bytes[i + 3]) << 24
+        }
+    }
+
+    private static func bytes(_ words: [UInt32]) -> [UInt8] {
+        words.flatMap { word in (0 ..< 4).map { UInt8(truncatingIfNeeded: word >> (8 * UInt32($0))) } }
+    }
+}
+
 // MARK: Base64
 
 extension Data {

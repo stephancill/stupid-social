@@ -174,10 +174,101 @@ final class TelegramTests: XCTestCase {
             "results": .vector([
                 .object(TLObject("reactionCount", ["reaction": .object(TLObject("reactionEmoji", ["emoticon": .string("👍")])), "count": .int(3), "chosen_order": .int(0)])),
                 .object(TLObject("reactionCount", ["reaction": .object(TLObject("reactionCustomEmoji", ["document_id": .long(1)])), "count": .int(1)])),
+                .object(TLObject("reactionCount", ["reaction": .object(TLObject("reactionPaid")), "count": .int(5)])),
             ]),
         ]))])
         let parsed = TelegramMediaParser.reactions(of: message)
-        XCTAssertEqual(parsed.totals, [TelegramReaction(emoji: "👍", count: 3, isMine: true), TelegramReaction(emoji: "⭐️", count: 1, isMine: false)])
+        XCTAssertEqual(parsed.totals, [
+            TelegramReaction(emoji: "👍", count: 3, isMine: true),
+            TelegramReaction(emoji: ":1:", count: 1, isMine: false),
+            TelegramReaction(emoji: "⭐️", count: 5, isMine: false),
+        ])
+        XCTAssertEqual(TelegramCustomEmoji.documentId(fromKey: ":1:"), 1)
+        XCTAssertNil(TelegramCustomEmoji.documentId(fromKey: "👍"))
+    }
+
+    private func document(id: Int64, mime: String, size: Int64, attributes: [TLObject]) -> TLObject {
+        TLObject("messageMediaDocument", ["document": .object(TLObject("document", [
+            "id": .long(id), "access_hash": .long(7), "file_reference": .bytes(Data([1])), "dc_id": .int(4),
+            "mime_type": .string(mime), "size": .long(size), "attributes": .vector(attributes.map { .object($0) }),
+        ]))])
+    }
+
+    /// Attribute shapes from a video, a GIF, a voice message and a PDF read with the probe (`history --json`).
+    func testVideosVoiceAndFilesLoadWhole() throws {
+        let video = TelegramMediaParser.content(of: document(id: 1, mime: "video/mp4", size: 3_417_577, attributes: [
+            TLObject("documentAttributeVideo", ["duration": .double(65), "w": .int(1280), "h": .int(720)]),
+        ]))
+        guard case let .video(url, _, aspect, duration, isGIF) = try XCTUnwrap(video.embeds.first) else { return XCTFail("\(video)") }
+        XCTAssertEqual(url.lastPathComponent, "video.mp4")
+        XCTAssertEqual(TelegramMediaURL.maxSize(of: url), TelegramMediaURL.maxWholeDownloadSize)
+        XCTAssertEqual(try XCTUnwrap(TelegramMediaURL.parse(url)).location["thumb_size"]?.string, "")
+        XCTAssertEqual(aspect ?? 0, 16.0 / 9, accuracy: 0.001)
+        XCTAssertEqual(duration, "1:05")
+        XCTAssertFalse(isGIF)
+
+        let gif = TelegramMediaParser.content(of: document(id: 2, mime: "video/mp4", size: 72727, attributes: [
+            TLObject("documentAttributeVideo", ["duration": .double(2), "w": .int(320), "h": .int(320)]),
+            TLObject("documentAttributeAnimated"),
+            TLObject("documentAttributeFilename", ["file_name": .string("clip.mp4")]),
+        ]))
+        guard case let .video(gifURL, _, _, nil, true) = try XCTUnwrap(gif.embeds.first) else { return XCTFail("\(gif)") }
+        XCTAssertEqual(gifURL.lastPathComponent, "clip.mp4")
+        XCTAssertEqual(gif.label, "GIF")
+
+        let voice = TelegramMediaParser.content(of: document(id: 3, mime: "audio/ogg", size: 14440, attributes: [
+            TLObject("documentAttributeAudio", ["voice": .bool(true), "duration": .int(4)]),
+        ]))
+        XCTAssertEqual(voice.embeds.count, 1)
+        guard case let .voice(voiceURL, 4, nil) = try XCTUnwrap(voice.embeds.first) else { return XCTFail("\(voice)") }
+        XCTAssertEqual(voiceURL.lastPathComponent, "voice.ogg")
+
+        let pdf = TelegramMediaParser.content(of: document(id: 4, mime: "application/pdf", size: 156_547, attributes: [
+            TLObject("documentAttributeFilename", ["file_name": .string("deck.pdf")]),
+        ]))
+        guard case let .file(pdfURL, "deck.pdf", _, nil) = try XCTUnwrap(pdf.embeds.first) else { return XCTFail("\(pdf)") }
+        XCTAssertEqual(pdfURL.lastPathComponent, "deck.pdf")
+
+        // Larger than the app downloads: still a card.
+        let huge = TelegramMediaParser.content(of: document(id: 5, mime: "video/mp4", size: 900_000_000, attributes: [
+            TLObject("documentAttributeVideo", ["duration": .double(600), "w": .int(1920), "h": .int(1080)]),
+        ]))
+        guard case .card = try XCTUnwrap(huge.embeds.first) else { return XCTFail("\(huge)") }
+    }
+
+    /// 5-bit levels, least significant bit first, as the probe decodes a voice message's `waveform`.
+    func testDecodesVoiceWaveform() {
+        // 31, 0, 16 and 1 at bits 0, 5, 10 and 15: 0xC01F, little-endian.
+        let levels = TelegramMediaParser.waveform(Data([0x1F, 0xC0, 0x00]))
+        XCTAssertEqual(levels.map { Int(($0 * 31).rounded()) }, [31, 0, 16, 1])
+        XCTAssertEqual(TelegramMediaParser.waveform(Data(count: 63)).count, 100)
+    }
+
+    func testCustomEmojiEntitiesAndAlbumIdsParse() {
+        let message = TelegramClient.message(TLObject("message", [
+            "id": .int(9), "date": .int(0), "message": .string("hi 💙"), "grouped_id": .long(77),
+            "peer_id": .object(TLObject("peerUser", ["user_id": .long(9)])),
+            "entities": .vector([.object(TLObject("messageEntityCustomEmoji", ["offset": .int(3), "length": .int(2), "document_id": .long(5_449_759_615_346_548_186)]))]),
+        ]))
+        XCTAssertEqual(message.customEmojis, [TelegramCustomEmoji(offset: 3, length: 2, documentId: 5_449_759_615_346_548_186)])
+        XCTAssertEqual(message.groupedId, 77)
+    }
+
+    func testAlbumsShowAsOneMessageWithTheCaption() {
+        func item(_ id: Int32, group: Int64?, caption: String = "", sender: Int64 = 1) -> TelegramMessage {
+            var message = TelegramMessage(id: id, date: Date(), text: caption, caption: caption, groupedId: group, senderId: sender, isOutgoing: false, replyToId: nil, isService: false)
+            message.embeds = [.image(url: URL(string: "tgfile://file/\(id)")!, aspectRatio: 1)]
+            return message
+        }
+        let shown = TelegramChatAdapter.albums([
+            item(1, group: nil),
+            item(2, group: 5), item(3, group: 5, caption: "trip"), item(4, group: 5),
+            item(5, group: 6), item(6, group: 6, sender: 2),
+        ])
+        XCTAssertEqual(shown.messages.map(\.id), [1, 3, 5, 6])
+        XCTAssertEqual(shown.messages[1].embeds.count, 3)
+        XCTAssertEqual(shown.messages[1].caption, "trip")
+        XCTAssertEqual(shown.albumIds, [2: 3, 4: 3])
     }
 
     /// Shapes seen with `scripts/telegram-client.py listen`.

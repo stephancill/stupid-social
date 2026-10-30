@@ -2,6 +2,7 @@ import Combine
 import NoFeedSocialCore
 import NoFeedSocialPush
 import PhotosUI
+import QuickLook
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
@@ -114,6 +115,8 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     private var avatarPrefetches = Set<URL>()
     private let reactionHaptic = UISelectionFeedbackGenerator()
     private let audioPlayer = ChatAudioPreviewPlayer()
+    /// The open Quick Look preview's file, which its weak data source needs kept.
+    private var filePreviewSource: ChatFilePreviewSource?
 
     private let composer = UIStackView()
     private let mentionGlass = ChatGlass.make(cornerRadius: 18)
@@ -230,6 +233,8 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
                     showImage: { [weak self] url, alt, image in
                         self?.present(ChatImageViewerController(url: url, image: image, alt: alt), animated: true)
                     },
+                    playVideo: { [weak self] url in self?.playVideo(url) },
+                    openFile: { [weak self] url, filename in await self?.openFile(url, filename: filename) },
                     audioPlayer: audioPlayer,
                     previewURL: { [weak self] id in await self?.viewModel.audioPreviewURL(for: id) },
                     showMentionedUser: { [weak self] userId in
@@ -663,7 +668,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         var snapshot = dataSource.snapshot()
         let changed = items(in: .messages, of: snapshot).filter { item in
             guard case let .message(key) = item, case let id = messageId(forKey: key), let message = messagesById[id] else { return false }
-            return (message.text ?? "").contains(":") || (reactionTotals[id] ?? []).contains { $0.emoji.hasPrefix(":") }
+            return !message.customEmojis.isEmpty || (message.text ?? "").contains(":") || (reactionTotals[id] ?? []).contains { $0.emoji.hasPrefix(":") }
         }
         guard !changed.isEmpty else { return }
         snapshot.reconfigureItems(changed)
@@ -828,7 +833,9 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         guard !message.isDeleted, let text = message.text, !text.isEmpty else { return nil }
         let hidesSpoilers = !message.spoilers.isEmpty && !revealedSpoilers.contains(message.id)
         // Mentions are in the key: a Telegram `@username` gets its user id once the user loads.
-        let key = "\(message.id)|\(isOwn)|\(hidesSpoilers)|\(message.mentions.map(\.userId))|\(text)"
+        // Custom emoji are in it too: they draw once the adapter's catalog has them.
+        let emojis = message.customEmojis.compactMap { emoji in viewModel.customEmojis[emoji.key].map { (emoji.range, $0) } }
+        let key = "\(message.id)|\(isOwn)|\(hidesSpoilers)|\(message.mentions.map(\.userId))|\(emojis.map(\.1.key))|\(text)"
         if let cached = attributedCache[key] {
             return cached
         }
@@ -854,17 +861,23 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
             formatsQuotes: message.isMarkdown,
         )
         let marked = mentionsMarked(message.mentions, in: rendered, isOwn: isOwn)
-        guard hidesSpoilers else {
-            attributedCache[key] = marked
-            return marked
-        }
         let hidden = NSMutableAttributedString(attributedString: marked)
-        let color = isOwn ? UIColor.white : UIColor.label
-        for range in message.spoilers where NSMaxRange(range) <= hidden.length {
-            // A hidden link or mention reveals the spoiler instead of opening.
-            hidden.removeAttribute(.chatLink, range: range)
-            hidden.removeAttribute(.chatMention, range: range)
-            hidden.addAttributes([.foregroundColor: UIColor.clear, .chatSpoiler: color], range: range)
+        if hidesSpoilers {
+            let color = isOwn ? UIColor.white : UIColor.label
+            for range in message.spoilers where NSMaxRange(range) <= hidden.length {
+                // A hidden link or mention reveals the spoiler instead of opening.
+                hidden.removeAttribute(.chatLink, range: range)
+                hidden.removeAttribute(.chatMention, range: range)
+                hidden.addAttributes([.foregroundColor: UIColor.clear, .chatSpoiler: color], range: range)
+            }
+        }
+        // Last, back to front: each replaces its fallback emoji with one character, which moves the ranges after it.
+        for (range, emoji) in emojis.sorted(by: { $0.0.location > $1.0.location }) where NSMaxRange(range) <= hidden.length {
+            var attributes = hidden.attributes(at: range.location, effectiveRange: nil)
+            guard attributes[.chatSpoiler] == nil else { continue }
+            let font = attributes[.font] as? UIFont ?? .preferredFont(forTextStyle: .body)
+            attributes[.attachment] = ChatCustomEmojiImages.shared.attachment(for: emoji, font: font) { [weak self] in self?.customEmojiImagesDidLoad() }
+            hidden.replaceCharacters(in: range, with: NSAttributedString(string: "\u{FFFC}", attributes: attributes))
         }
         attributedCache[key] = hidden
         return hidden
@@ -1096,6 +1109,28 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
             )
         } catch {
             viewModel.errorMessage = error.localizedDescription
+        }
+    }
+
+    // MARK: Videos and files
+
+    private func playVideo(_ url: URL) {
+        audioPlayer.stop()
+        ChatVideoPlayer.present(url, from: self) { [weak self] error in
+            self?.viewModel.errorMessage = "Couldn't play the video: \(error.localizedDescription)"
+        }
+    }
+
+    private func openFile(_ url: URL, filename: String) async {
+        do {
+            let file = try await ChatMediaFiles.shared.file(for: url, filename: filename)
+            let source = ChatFilePreviewSource(file: file)
+            filePreviewSource = source
+            let preview = QLPreviewController()
+            preview.dataSource = source
+            present(preview, animated: true)
+        } catch {
+            viewModel.errorMessage = "Couldn't open \(filename): \(error.localizedDescription)"
         }
     }
 

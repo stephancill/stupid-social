@@ -641,8 +641,16 @@ private struct ChatControlMessage: Encodable {
             case let .card(title, subtitle, _, _, link): Embed(type: "card", title: title, text: subtitle, url: link)
             case let .audio(_, title, subtitle, _, _, link): Embed(type: "audio", title: title, text: subtitle, url: link)
             case let .message(title, text, link): Embed(type: "message", title: title, text: text, url: link)
+            case let .video(url, _, _, duration, isGIF): Embed(type: isGIF ? "gif" : "video", text: duration, url: Self.webURL(url))
+            case let .file(url, filename, subtitle, _): Embed(type: "file", title: filename, text: subtitle, url: Self.webURL(url))
+            case let .voice(_, duration, _): Embed(type: "voice", text: duration.map { Duration.seconds($0).formatted(.time(pattern: .minuteSecond)) })
             }
         }
         reactions = (viewModel.reactions[message.id] ?? []).map { Reaction(emoji: $0.emoji, count: $0.count, includesYou: $0.includesYou) }
+    }
+
+    /// Only web links leave the app; a network's own scheme (`tgfile:`) means nothing to the caller.
+    private static func webURL(_ url: URL) -> URL? {
+        ["http", "https"].contains(url.scheme) ? url : nil
     }
 }

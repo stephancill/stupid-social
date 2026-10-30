@@ -92,6 +92,66 @@ final class XChatCryptoTests: XCTestCase {
         XCTAssertEqual(decoded.int(10), 2_115_195_109_255_905_280)
     }
 
+    /// Encrypted media: a libsodium secretstream (XChaCha20-Poly1305) in 1024-byte chunks, the last tagged final,
+    /// as dm-core pushes it. Made with PyNaCl from a random key, 1100 bytes so the stream has two chunks.
+    private let mediaKey = Data(hex: "38b0c0c70a91994be4fd6292c3fb34fca38c5baad56de5202d87af5cb25e7070")
+    private let mediaBlob = Data(hex: [
+        "38f7e70b757b7765384ea094fc6e73ddb4c97a9bd5b9ee3433720e4e1690d7f560077b5ca5b0a9362631763cf99c9557bef79b6866e50809782d55b8",
+        "4812e6244a7babe8417f5bda7604632af6bf98c25d7ae9b2b6ad94de1459da1024c794ceeb10fb0ffecb5f6905c49ae6c4331d280dc06c9a4da57b4e",
+        "8c50fbfcc6829ece322b7ba2fd2e7f77eb5543520f32b07538ba8b0becf6d029484f6b8a2006717597d66a55679bb353f2dce41d12f1d231414a9bc5",
+        "8f1da0b48164a8922601ecc8f55002804202f669d8ed82fc17d9aa7e2f69ec9f2637bec88faeadf7e663b9b801472ccc25dd9ed367e7de10028057b3",
+        "826a547d9366c0ac3e9fa2b560d9e22bc254ab3e13c057cc15a4f12bd60aadd7e718dd6415f71e2a1a62f04b629987d06ce3698421eee220edacedf7",
+        "22dec92b3d636c6b47cd8c579b9c36f9fb6b7f25695002fa1cc8f0e69b1847057b07ac4f4ca40c766c852a456bc65af4d1e27f051881eb90f0c1767f",
+        "ad727b44adb42d3e73bf01e79b2fafd4e130d8911ec27d9571f3d96a7015567087d6cc42d0314f42954954b4d481cddb2c54d2e8df9d84fa53464222",
+        "1806027673a78121951f6b574ce4986637691922ac510246c5fae73916d7861f606bd92a14b7f078349e28784649dfe5b54c145fbb7db5d217d1978d",
+        "744b562ce0cc10ab76ee298d9b68d10fbbdf9594ffb1b2a5212c91da262079cc0b69f9d926eebb690252b1da99f898c94a8ce8abe759883f026fbab2",
+        "7938a5389f6f7d0bb17cabcdcf2f00656f653231880e3e468caff256396173ef3b984c6817222e1a8e3cbcb89e76f28fe49fadf483d68a0a09abf302",
+        "1af28acb14a6b1893b29060b58d51c85d7846e4f5d45c4620888208b72639e18bf0cb37a0d178bb65addbfe13e8ae0ca9811062b30822e695b1914eb",
+        "2da0ec50944835f0c90ef99d451c1a2edb8895a90615a46769bf8dffd32d2d181f29649cadc9f5d5277a6389c445c8042b1107aa5de7ba6cadaf67e1",
+        "bf04cdda2ec9bf10c915974100a6c3a4c27f8a54de370ee37540c5a0442d15b82b02a7b25d1470b5e15f8718c681807e27a36ab05ae8460b9ae52cd4",
+        "8788d6466abbb5348fcc6f5e44d18831c0ca2ce99dc37f15496f887a574972d559292d03900075d9cef41837f5f0f2b336acd935413b8cf088382e33",
+        "9b5e1460049a7aa5a9958961eb39d2fb7cf275807231cac013473e6e64b2aeb253a51c83fdbed9034de0f516edbcb2def54bea9d7de29763a2054ed8",
+        "16b1e721721a5895284837786beb1f3761f829207ad7b6c78038bfcc42aeab161252b9d7ab7fab394996a3919403aacc288677f0d725a7f0c96dca31",
+        "2d3bf477e6de2cd82ef15e9155752302738d58ebe4b9baa2ea21e2980515a5ad4562d730c0eeb3a6f7b5b0fec25a80177249dd8d9bde88bb3334f808",
+        "9fb7bf32d5500f5b17ea411bd8521b1f584fc974a7bc9eaa787b9df377b162e2d4be56dbad31a1bfca26d74b2d39de7fb86820c3506a28f0cd00b63f",
+        "0e47508e08ce85c24230f0a8cd3facb3f0b8fb67056f472688a84f3c29736d6e02bab4700ea7b8775c0473698fbe7c51ba94291b9e4f610f0decaf43",
+        "4961de7a6a582533dac986974ead5ab9119e",
+    ].joined())
+    private let mediaPlaintext = Data((0 ..< 1100).map { UInt8(($0 * 7 + 1100) % 256) })
+
+    func testDecryptsMediaStream() throws {
+        XCTAssertEqual(mediaBlob.count, 24 + 1024 + 17 + 76 + 17)
+        XCTAssertEqual(try XChatCrypto.decryptMedia(mediaBlob, key: mediaKey), mediaPlaintext)
+        XCTAssertEqual(Data(SHA256.hash(data: mediaPlaintext)), Data(hex: "24046e0bc9cdc7d1a46f54b1ae2c74db50454d799a5634f063c0a83a30577973"))
+
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let input = directory.appendingPathComponent("encrypted"), output = directory.appendingPathComponent("plain")
+        try mediaBlob.write(to: input)
+        let hash = try XChatCrypto.decryptMedia(from: input, to: output, key: mediaKey)
+        XCTAssertEqual(try Data(contentsOf: output), mediaPlaintext)
+        XCTAssertEqual(hash, Data(SHA256.hash(data: mediaPlaintext)))
+    }
+
+    func testMediaStreamRejectsTamperingAndTruncation() {
+        var tampered = mediaBlob
+        tampered[100] ^= 1
+        XCTAssertThrowsError(try XChatCrypto.decryptMedia(tampered, key: mediaKey))
+        // Without its final chunk the stream ends on a message tag.
+        XCTAssertThrowsError(try XChatCrypto.decryptMedia(mediaBlob.prefix(24 + 1024 + 17), key: mediaKey))
+        var wrongKey = mediaKey
+        wrongKey[0] ^= 1
+        XCTAssertThrowsError(try XChatCrypto.decryptMedia(mediaBlob, key: wrongKey))
+    }
+
+    func testMediaURLRoundTrip() throws {
+        let reference = XChatMediaReference(conversationId: "100:200", hashKey: "AbC123xYz0", keyVersion: "1792015370411", fileExtension: "mp4")
+        let url = try XCTUnwrap(XChatMediaURL.make(reference))
+        XCTAssertEqual(XChatMediaURL.parse(url), reference)
+        XCTAssertEqual(XChatMediaURL.downloadURL(reference).absoluteString, "https://ton.x.com/i/ton/data/xchat_media/100:200/AbC123xYz0")
+    }
+
     /// A message sent without encryption has no key version (101) and carries the plain `MessageEntryHolder`
     /// (observed 2026-10-29), so it reads without any conversation key.
     func testUnencryptedMessageReadsWithoutAConversationKey() async throws {

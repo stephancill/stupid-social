@@ -4,9 +4,10 @@ import Foundation
 /// slow poll as a fallback), sends text, replies, photos and files, reacts, and moves the read cursor as
 /// messages are read. Media, avatars and link previews load lazily through `tgfile:` URLs. In groups it offers
 /// members to mention: `@username`, or for someone without one a name mention. Shows who is typing and shares
-/// the user's own typing.
+/// the user's own typing. An album, which Telegram sends as one message per photo or video, shows as one message;
+/// custom emoji in text and reactions draw as their images, and voice messages play in the chat.
 @MainActor
-public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUnseenReactions, ChatLiveUpdating, ChatReferenceResolving, ChatMentioning, ChatTyping {
+public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUnseenReactions, ChatLiveUpdating, ChatReferenceResolving, ChatMentioning, ChatTyping, ChatCustomEmojis, ChatAudioPreviewing {
     public let network = SocialNetwork.telegram
     public let canReply = true
     public let acceptsAttachments = true
@@ -24,6 +25,8 @@ public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUn
     public private(set) var unavailableReferences: Set<String> = []
     public private(set) var unseenReactionMessageIds: [String] = []
     public private(set) var typingNames: [String] = []
+    /// Only the custom emoji the loaded messages use, hidden from the picker: Telegram's sets aren't loaded.
+    public private(set) var customEmojis: [String: ChatCustomEmoji] = [:]
 
     private let client: TelegramClient
     public let peer: TelegramPeer
@@ -59,6 +62,10 @@ public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUn
     private var hasLoadedHistory = false
     /// Reply targets being fetched, so a refresh doesn't ask for them again.
     private var pendingReferences: Set<Int32> = []
+    /// Custom emoji asked for, so a refresh doesn't ask again, even when one couldn't load (its fallback emoji shows).
+    private var requestedEmojiIds: Set<Int64> = []
+    /// An album's other messages → the message it shows as, so replies to any of them quote the album.
+    private var albumIds: [Int32: Int32] = [:]
 
     /// `avatarURL` is the chat's picture from its Chats row, shown beside a private chat's title.
     public init(client: TelegramClient, peer: TelegramPeer, title: String, userStatus: ChatPresence? = nil, avatarURL: URL? = nil) {
@@ -80,7 +87,12 @@ public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUn
 
     // MARK: Snapshot
 
+    /// Raised when messages are parsed differently, such as when media gained new embeds: an older snapshot's
+    /// messages are dropped, since only the newest page reloads on open and the rest would keep the old shapes.
+    private static let snapshotVersion = 2
+
     private struct Snapshot: Codable {
+        var version: Int?
         let messages: [TelegramMessage]
         let names: [Int64: String]
         let avatars: [Int64: URL]
@@ -94,7 +106,7 @@ public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUn
 
     public func restore(snapshot data: Data) {
         guard let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data) else { return }
-        for message in snapshot.messages {
+        for message in snapshot.messages where snapshot.version == Self.snapshotVersion {
             loaded[message.id] = message
         }
         names = snapshot.names
@@ -110,7 +122,7 @@ public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUn
     public func snapshot() -> Data? {
         let newest = loaded.values.sorted { $0.id < $1.id }.suffix(ChatSnapshotCache.messageLimit)
         return try? JSONEncoder().encode(Snapshot(
-            messages: Array(newest), names: names, avatars: avatars, readInboxMaxId: readInboxMaxId,
+            version: Self.snapshotVersion, messages: Array(newest), names: names, avatars: avatars, readInboxMaxId: readInboxMaxId,
             title: info.title, subtitle: info.subtitle, userStatus: userStatus, usernames: usernames,
         ))
     }
@@ -502,8 +514,60 @@ public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUn
         // Telegram's list, and loaded messages whose recent reactions say so, which arrive with a refresh.
         let flagged = sorted.filter { $0.isOutgoing && $0.reactors.contains(where: \.isUnread) }.map(\.id)
         unseenReactionMessageIds = unreadReactionIds.union(flagged).subtracting(seenReactionIds).sorted().map(String.init)
-        messages = sorted.map(chatMessage)
+        let shown = Self.albums(sorted)
+        albumIds = shown.albumIds
+        messages = shown.messages.map(chatMessage)
+        loadCustomEmojis(in: sorted)
         onChange?()
+    }
+
+    /// Runs of messages from one sender sharing a `groupedId` become one message: the one with the caption (else
+    /// the first), with every item's media. Reactions stay on that message's own.
+    /// `albumIds` maps each album's other messages to the one it shows as.
+    nonisolated static func albums(_ sorted: [TelegramMessage]) -> (messages: [TelegramMessage], albumIds: [Int32: Int32]) {
+        var groups: [[TelegramMessage]] = []
+        for message in sorted {
+            if let groupedId = message.groupedId, let last = groups.last?.last, last.groupedId == groupedId, last.senderId == message.senderId {
+                groups[groups.count - 1].append(message)
+            } else {
+                groups.append([message])
+            }
+        }
+        var albumIds: [Int32: Int32] = [:]
+        let messages = groups.map { group in
+            guard group.count > 1 else { return group[0] }
+            var shown = group.first { !$0.caption.isEmpty } ?? group[0]
+            for member in group where member.id != shown.id {
+                albumIds[member.id] = shown.id
+            }
+            shown.embeds = group.flatMap(\.embeds)
+            return shown
+        }
+        return (messages, albumIds)
+    }
+
+    /// Looks up the images of custom emoji in text and reactions that aren't in `customEmojis` yet.
+    private func loadCustomEmojis(in messages: [TelegramMessage]) {
+        let used = messages.flatMap { message in
+            (message.customEmojis ?? []).map(\.documentId) + message.reactions.compactMap { TelegramCustomEmoji.documentId(fromKey: $0.emoji) }
+        }
+        let missing = Set(used).subtracting(requestedEmojiIds)
+        guard !missing.isEmpty else { return }
+        requestedEmojiIds.formUnion(missing)
+        Task { [weak self, client] in
+            guard let images = try? await client.customEmojiImages(documentIds: Array(missing)), !images.isEmpty, let self else { return }
+            for (documentId, image) in images {
+                let key = TelegramCustomEmoji.key(documentId: documentId)
+                customEmojis[key] = ChatCustomEmoji(key: key, url: image.url, alt: image.alt, aspectRatio: image.aspectRatio, isHidden: true)
+            }
+            onChange?()
+        }
+    }
+
+    /// Voice messages and audio files play from a local copy: the player can't read `tgfile:` URLs.
+    public func audioPreviewURL(for previewId: String) async -> URL? {
+        guard let url = URL(string: previewId), url.scheme == TelegramMediaURL.scheme else { return nil }
+        return try? await ChatMediaFiles.shared.file(for: url)
     }
 
     private func chatMessage(_ message: TelegramMessage) -> ChatMessage {
@@ -532,6 +596,14 @@ public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUn
                 .image(url: url, aspectRatio: aspectRatio, alt: nil, link: nil, opensViewer: true)
             case let .card(title, subtitle, systemImage, imageURL, link):
                 .card(title: title, subtitle: subtitle, systemImage: systemImage, imageURL: imageURL, link: link)
+            case let .video(url, posterURL, aspectRatio, duration, isGIF):
+                .video(url: url, posterURL: posterURL, aspectRatio: aspectRatio, duration: duration, isGIF: isGIF)
+            case let .file(url, filename, subtitle, thumbnailURL):
+                .file(url: url, filename: filename, subtitle: subtitle, thumbnailURL: thumbnailURL)
+            case let .audio(url, title, subtitle):
+                .audio(previewId: url.absoluteString, title: title, subtitle: subtitle, detail: nil, imageURL: nil, link: nil)
+            case let .voice(url, duration, waveform):
+                .voice(previewId: url.absoluteString, duration: duration, waveform: waveform ?? [])
             }
         }
         // Media without a caption shows only the media; media the app can't draw shows its label.
@@ -548,10 +620,11 @@ public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUn
             timestamp: message.date,
             text: text,
             embeds: embeds,
-            replyToId: message.replyToId.map(String.init),
+            replyToId: message.replyToId.map { String(albumIds[$0] ?? $0) },
             isOwn: message.isOutgoing,
             spoilers: text == message.caption ? message.spoilers ?? [] : [],
             mentions: text == message.caption ? (message.mentions ?? []).map(chatMention) : [],
+            customEmojis: text == message.caption ? (message.customEmojis ?? []).map { ChatMessageCustomEmoji(range: $0.range, key: TelegramCustomEmoji.key(documentId: $0.documentId)) } : [],
         )
     }
 
