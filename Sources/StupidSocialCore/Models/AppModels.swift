@@ -11,6 +11,7 @@ public enum SocialNetwork: String, Codable, CaseIterable, Identifiable, Sendable
     case telegram
     case discord
     case linkedin
+    case whatsapp
     case debug
 
     public var id: String {
@@ -29,6 +30,7 @@ public enum SocialNetwork: String, Codable, CaseIterable, Identifiable, Sendable
         case .telegram: "Telegram"
         case .discord: "Discord"
         case .linkedin: "LinkedIn"
+        case .whatsapp: "WhatsApp"
         case .debug: "Debug"
         }
     }
@@ -311,7 +313,7 @@ public enum NotificationTargetURL {
             return target.url
         case .github, .linkedin:
             return target.url
-        case .apron, .telegram, .discord, .debug:
+        case .apron, .telegram, .discord, .whatsapp, .debug:
             return nil
         }
     }

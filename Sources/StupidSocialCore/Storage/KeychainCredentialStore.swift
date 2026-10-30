@@ -109,6 +109,25 @@ public final class KeychainCredentialStore: @unchecked Sendable {
         }
     }
 
+    /// WhatsApp device keys stay on this device: each device links as its own WhatsApp device.
+    func saveWhatsAppDevice(_ data: Data) throws {
+        do {
+            try save(data: data, account: key("whatsapp"), synchronizable: false)
+        } catch let error as KeychainCredentialStoreError {
+            guard allowsInsecureFallback else { throw error }
+            fallbackStore.set(data, forKey: fallbackKey(account: key("whatsapp")))
+        }
+    }
+
+    func loadWhatsAppDevice() -> Data? {
+        (try? load(account: key("whatsapp"), synchronizable: false))?.data ?? fallbackStore.data(forKey: fallbackKey(account: key("whatsapp")))
+    }
+
+    func deleteWhatsAppDevice() throws {
+        try deleteForAccount(key("whatsapp"))
+        fallbackStore.removeObject(forKey: fallbackKey(account: key("whatsapp")))
+    }
+
     /// Copies this account's Telegram sign-in to another account id on this device, such as when a new sign-in
     /// turns out to be an account already listed.
     func moveTelegramSession(to other: KeychainCredentialStore) {

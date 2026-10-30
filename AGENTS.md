@@ -62,6 +62,7 @@ Sources/
       TelegramConnectionView.swift  # Telegram sign-in: phone, code, 2FA password
       TelegramChatView.swift        # Telegram chat: the group's details and members, or the person's profile, from the title
       TelegramProfileView.swift     # Telegram user profile from mentions, avatars and members: bio, last seen, Message
+      WhatsAppConnectionView.swift  # WhatsApp linking: QR code or phone number and pairing code; linked status
   StupidSocialPush/                 # Shared with the notification extension: Web Push decryption, push store, notification content
     WebPushDecryptor.swift
     ApronPushStore.swift
@@ -97,6 +98,7 @@ Sources/
       ApronRoomNotifications.swift  # Per-room notification levels mapped to mute and wake scopes
       TelegramPushService.swift     # Telegram APNs registration (token type 1) after sign-in, at launch, on token change
       TelegramLiveRows.swift        # Reloads Telegram's Chats rows after message updates, so changed chats load ahead
+      WhatsAppLiveFeed.swift        # Foreground WhatsApp connection: login, reconnects, Chats list and open chat updates
     Sources/                        # Network clients + notification sources
       NotificationSource.swift      # Protocol definition
       InstagramClient.swift / InstagramSession.swift / Instagram*Models.swift / Instagram*Parser.swift / InstagramNotificationSource.swift
@@ -147,8 +149,17 @@ Sources/
       InstagramPost.swift           # Instagram posts in every chat: shortcode → media info → InstagramPost and its .post embed
       BlueskyPost.swift             # Bluesky posts in every chat, from the public AppView: BlueskyPost and its .post embed
       LinkedPosts.swift             # LinkedPostResolver (ChatKit.resolveLink) over each network's source, LinkedPostCache (on disk)
+      WhatsAppProtobuf.swift        # Protobuf wire format (ProtoMessage) for the hand-modelled WhatsApp messages
+      WhatsAppProto.swift           # WhatsApp protobuf models: handshake, client payload, ADV identity, Message, history sync, app state
+      WhatsAppBinary.swift          # WhatsApp binary XML: JIDs, nodes, token dictionaries (Resources/WhatsAppTokens.json), zlib frames
+      WhatsAppCrypto.swift          # Curve25519 keys, XEdDSA on a native Ed25519 field, HKDF, AES-CBC/CTR/GCM, PBKDF2
+      WhatsAppSignal.swift          # Signal protocol: X3DH sessions, double ratchet, prekey messages, sender keys, padding
+      WhatsAppSocket.swift          # WebSocket with the Noise XX handshake, certificate check and encrypted frames
+      WhatsAppClient.swift          # WhatsApp linked device: linking, login, decrypting, receipts, history sync, app state, groups, sending
+      WhatsAppChatAdapter.swift     # WhatsApp chat adapter: messages from the local store, live refresh, text sending, read receipts
     Resources/
       TelegramSchema.tl             # Telegram TL schema (scripts/telegram-schema.py); TelegramAPI.json is gitignored
+      WhatsAppTokens.json           # WhatsApp binary XML token dictionaries (scripts/whatsapp-tokens.py from whatsmeow)
     Storage/
       AccountStore.swift              # Accounts across devices (iCloud KVS, with removals); per-device status
       AccountMigration.swift          # One-time move of the single per-network accounts into AccountStore
@@ -162,6 +173,7 @@ Sources/
       ApronReadStore.swift            # Apron read cursors (server truth or iCloud KVS)
       ApronReactionStore.swift        # Which reactions to your newest 1000 Apron messages you've seen, synced through iCloud KVS
       ChatReminderStore.swift         # Message reminders: local notifications and due items in the feed, synced through iCloud KVS
+      WhatsAppStore.swift             # WhatsApp chats, messages and names on this device (Application Support/WhatsApp/<account id>)
     ViewModels/
       FeedViewModel.swift
       ProfileSearchViewModel.swift
@@ -176,6 +188,7 @@ Sources/
       TelegramConnectionViewModel.swift # Telegram sign-in steps
       XChatUnlockViewModel.swift     # X Chat PIN unlock and Forget Keys
       DiscordProfileViewModel.swift  # Discord profile and the DM its Message button opens or starts
+      WhatsAppConnectionViewModel.swift # WhatsApp linking steps: QR codes, pairing code, finishing
 ```
 
 Outside `Sources/`: `NotificationService/` holds the extension's Info.plist and entitlements, `workers/push-relay/` the Apron push relay Worker (`bun run push-relay:test`, `bun run push-relay:deploy`), and `Vendor/JuiceboxSdk/` the vendored Juicebox SDK (Swift wrapper and static-library XCFramework) that X Chat key recovery uses; regenerate it with `scripts/vendor-juicebox.sh`, never edit it by hand. The chat framework is the `StupidChatKit` package, a dependency from its own public repository (`https://github.com/stephancill/stupid-chatkit`, pinned in `Package.resolved`); see § Chat Framework. `cli/` is the `stupid-social` command line for chats on a Mac, its own macOS SwiftPM package (`swift build -c release` in `cli/`) that talks to `ChatControlServer`. `skills/stupid-social/SKILL.md` is the agent skill for using it; keep it in step with the CLI's commands and errors.
@@ -241,9 +254,10 @@ Chat is one framework with an adapter per network; `docs/TECHNICAL_DESIGN.md` §
 
 ## Network Integration
 
-- Always diagnose network behavior and validate the fix in the dependency-free Python client first, before implementing or changing the native Swift client. The probes (`scripts/x-web-client.py`, `scripts/instagram-web-client.py`, `scripts/github-web-client.py`, `scripts/spotify-web-client.py`, `scripts/bluesky-web-client.py`, `scripts/apron-web-client.py`, `scripts/telegram-client.py`, `scripts/xchat-client.py`, `scripts/discord-web-client.py`, `scripts/farcaster-client.py`, `scripts/linkedin-web-client.py`) are the source of truth for endpoint behavior, auth/session freshness, redirects, and response shape. Reproduce the issue live with the probe (using simulator credentials where applicable), add or update a probe command that demonstrates the diagnosis, then port the validated behavior into Swift. Do not guess endpoint/auth behavior from Swift alone.
+- Always diagnose network behavior and validate the fix in the dependency-free Python client first, before implementing or changing the native Swift client. The probes (`scripts/x-web-client.py`, `scripts/instagram-web-client.py`, `scripts/github-web-client.py`, `scripts/spotify-web-client.py`, `scripts/bluesky-web-client.py`, `scripts/apron-web-client.py`, `scripts/telegram-client.py`, `scripts/xchat-client.py`, `scripts/discord-web-client.py`, `scripts/farcaster-client.py`, `scripts/linkedin-web-client.py`, `scripts/whatsapp-client.py`) are the source of truth for endpoint behavior, auth/session freshness, redirects, and response shape. Reproduce the issue live with the probe (using simulator credentials where applicable), add or update a probe command that demonstrates the diagnosis, then port the validated behavior into Swift. Do not guess endpoint/auth behavior from Swift alone.
 - Sticker rendering is checked the same way, against references: after changing the kit's `Sources/StupidChatKit/Stickers/`, run its `scripts/lottie-compare.py` (Telegram's rlottie) and `scripts/webm-compare.sh` (ffmpeg) on the sticker corpus from `scripts/telegram-client.py sticker-corpus` here.
-- `scripts/xchat-client.py` is the one probe with dependencies: Python's standard library has no P-256 or libsodium, so it runs as a uv inline script (`uv run --script scripts/xchat-client.py --env-local …`, reading `DIAGNOSE_X_CREDS` from `.env.local`) and recovers keys through the official Juicebox JS SDK under bun (`scripts/xchat-juicebox-recover.ts`, PIN from `X_CHAT_PIN`). `recover-keys` uses a PIN guess when the PIN is wrong; it saves the keys to `logs/xchat-keys.json` (0600, gitignored) so decryption can be iterated without more guesses. Never print message text from other people (`--show-text` is for messages the agent sent), and send, react and mark read only in a conversation the user named for testing (`--expect-participant` guards the recipient).
+- `scripts/xchat-client.py` is a probe with dependencies: Python's standard library has no P-256 or libsodium, so it runs as a uv inline script (`uv run --script scripts/xchat-client.py --env-local …`, reading `DIAGNOSE_X_CREDS` from `.env.local`) and recovers keys through the official Juicebox JS SDK under bun (`scripts/xchat-juicebox-recover.ts`, PIN from `X_CHAT_PIN`). `recover-keys` uses a PIN guess when the PIN is wrong; it saves the keys to `logs/xchat-keys.json` (0600, gitignored) so decryption can be iterated without more guesses. Never print message text from other people (`--show-text` is for messages the agent sent), and send, react and mark read only in a conversation the user named for testing (`--expect-participant` guards the recipient).
+- `scripts/whatsapp-client.py` also runs as a uv inline script (cryptography, protobuf, grpcio-tools, websockets, qrcode). It links as a WhatsApp device (`link --open-qr` or `link --phone`) and keeps its keys and Signal state in `logs/whatsapp-session.json`; it is ported from whatsmeow and Baileys (clone them into `third-party/`), which settle protocol questions. Never print message text from other people, and send only to the self chat (`send --to self`) unless the user names another chat for testing.
 - Implement X as a native Swift client that sends what X's own web client sends. Take GraphQL query ids, variables and feature switches from the web client's `main.<hash>.js` bundle (`queryId:"…",operationName:"…",metadata:{featureSwitches:[…]}`, linked from the signed-in `https://x.com/home`) and the switch values from that page's `featureSwitch` config. Never use `twitter-cli` or other third-party clients as a reference for endpoints, ids or request shapes.
 - X background polling must use count-only behavior to avoid marking notifications read server-side.
 - X full notification fetch must be explicit manual refresh only.

@@ -59,6 +59,11 @@ public enum AppMetrics {
         StupidMetrics.track("refresh", properties: ["network": network.rawValue, "trigger": trigger, "outcome": "cancelled"], value: milliseconds(duration))
     }
 
+    /// A WhatsApp step that failed without failing a refresh, such as decrypting one message or a history sync.
+    static func whatsAppFailed(_ step: String, error: any Error) {
+        StupidMetrics.error("whatsapp_error", error: error, properties: ["step": step])
+    }
+
     static func storySourceFailed(network: SocialNetwork, error: any Error) {
         StupidMetrics.error("story_source_error", error: error, properties: ["network": network.rawValue])
     }

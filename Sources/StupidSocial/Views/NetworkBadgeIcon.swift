@@ -63,6 +63,8 @@ extension SocialNetwork {
             "DiscordBadge"
         case .linkedin:
             "LinkedInBadge"
+        case .whatsapp:
+            "WhatsAppBadge"
         case .debug:
             "DebugBadge"
         }
@@ -90,6 +92,8 @@ extension SocialNetwork {
             "D"
         case .linkedin:
             "in"
+        case .whatsapp:
+            "W"
         case .debug:
             "D"
         }
@@ -115,7 +119,7 @@ extension SocialNetwork {
             .white
         case .discord:
             .white
-        case .linkedin:
+        case .linkedin, .whatsapp:
             .white
         case .debug:
             .white
@@ -144,6 +148,8 @@ extension SocialNetwork {
             Color(red: 0.35, green: 0.40, blue: 0.95)
         case .linkedin:
             Color(red: 0.04, green: 0.40, blue: 0.76)
+        case .whatsapp:
+            Color(red: 0.15, green: 0.83, blue: 0.40)
         case .debug:
             .orange
         }

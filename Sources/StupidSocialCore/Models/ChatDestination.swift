@@ -19,6 +19,8 @@ public enum ChatDestination: Hashable, Codable, Sendable {
     case discord(channelId: String)
     /// A LinkedIn `urn:li:msg_conversation:(<mailbox>,<thread id>)`.
     case linkedin(conversationUrn: String)
+    /// A WhatsApp chat JID: a group, or the other person's phone number or LID.
+    case whatsapp(jid: String)
     /// A preview chat in demo mode (`DemoChats`).
     case demo(chatId: String)
 }
@@ -44,6 +46,7 @@ public extension ChatNetwork {
     static let telegram = SocialNetwork.telegram.chatNetwork
     static let discord = SocialNetwork.discord.chatNetwork
     static let linkedin = SocialNetwork.linkedin.chatNetwork
+    static let whatsapp = SocialNetwork.whatsapp.chatNetwork
     static let debug = SocialNetwork.debug.chatNetwork
 
     var displayName: String {

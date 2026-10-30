@@ -21,6 +21,7 @@ struct ChatsView: View {
     let discordChat: (_ accountId: String, _ channelId: String, _ title: String) -> (chat: () -> ChatViewModel, profile: (String) -> DiscordProfileViewModel, dmRecipient: String?, details: DiscordChannelDetails?)?
     /// The chat for a LinkedIn account's conversation and title; `nil` when the account is gone.
     let linkedinChat: (_ accountId: String, _ conversationUrn: String, _ title: String) -> (() -> ChatViewModel)?
+    let whatsAppChat: (_ accountId: String, _ jid: String, _ title: String) -> (() -> ChatViewModel)?
     /// An account's settings, opened from the connection errors; `nil` for a connection that isn't an account.
     let accountSettings: (_ accountId: String) -> AnyView?
     /// Whether a chat is pushed, so the home pager can stop paging.
@@ -303,6 +304,12 @@ struct ChatsView: View {
                 InfoChatView(viewModel: opened(makeChat(), chat: chat))
             } else {
                 ContentUnavailableView("LinkedIn Not Connected", systemImage: "bubble.left.and.bubble.right")
+            }
+        case let .whatsapp(jid):
+            if let makeChat = whatsAppChat(chat.accountId, jid, chat.title) {
+                InfoChatView(viewModel: opened(makeChat(), chat: chat, quickLook: quickLook))
+            } else {
+                ContentUnavailableView("WhatsApp Not Linked", systemImage: "bubble.left", description: Text("Link WhatsApp on this device in this account's settings."))
             }
         case let .demo(chatId):
             InfoChatView(viewModel: opened(AdapterChatViewModel(adapter: DemoChatAdapter(chatId: chatId), accountId: chat.accountId), chat: chat, quickLook: quickLook))

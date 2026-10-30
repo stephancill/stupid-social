@@ -48,6 +48,9 @@ resources:
   - Resources/LinkedInBadge.png
   - Resources/LinkedInBadge@2x.png
   - Resources/LinkedInBadge@3x.png
+  - Resources/WhatsAppBadge.png
+  - Resources/WhatsAppBadge@2x.png
+  - Resources/WhatsAppBadge@3x.png
   # Telegram push templates for loc-key alerts (scripts/telegram-push-strings.py).
   - Resources/en.lproj
 extensions:

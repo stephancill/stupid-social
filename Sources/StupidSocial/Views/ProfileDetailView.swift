@@ -514,7 +514,7 @@ struct ProfileDetailView: View {
             return URL(string: "https://github.com/\(username)")
         case .linkedin:
             return URL(string: "https://www.linkedin.com/in/\(username)/")
-        case .apron, .telegram, .discord, .debug:
+        case .apron, .telegram, .discord, .whatsapp, .debug:
             return nil
         }
     }
