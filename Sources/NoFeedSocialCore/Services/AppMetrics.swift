@@ -75,6 +75,24 @@ public enum AppMetrics {
         }
     }
 
+    // MARK: Chat reminders
+
+    /// A reminder was set: `delay` is the preset or `custom`, `delivery` whether it was pushed to other devices
+    /// (`pushed`), there were none (`local_only`) or scheduling the push failed (`push_failed`).
+    static func chatReminderSet(network: SocialNetwork, delay: String, delivery: String) {
+        StupidMetrics.track("chat_reminder_set", properties: ["network": network.rawValue, "delay": delay, "delivery": delivery])
+    }
+
+    /// A reminder was opened: from its notification, set here (`local`) or pushed by another device (`push`), or the feed.
+    public static func chatReminderOpened(source: String) {
+        StupidMetrics.track("chat_reminder_open", properties: ["source": source])
+    }
+
+    /// A reminder was cleared: Mark as Done in the chat (`chat`) or Remove Reminder in the feed (`feed`).
+    public static func chatReminderDone(via: String) {
+        StupidMetrics.track("chat_reminder_done", properties: ["via": via])
+    }
+
     /// Registering for, scheduling or cancelling reminder pushes to the user's other devices failed.
     static func chatReminderPushFailed(step: String, error: any Error) {
         StupidMetrics.error("chat_reminder_push_failed", error: error, properties: ["step": step])

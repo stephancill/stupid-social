@@ -72,6 +72,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
                     ChatReminderStore.adopt(pushed: pushed)
                 }
                 if opens {
+                    AppMetrics.chatReminderOpened(source: pushed == nil ? "local" : "push")
                     NotificationRouter.shared.openReminder(id: reminderId)
                 }
                 completion()

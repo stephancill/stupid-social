@@ -93,6 +93,16 @@ public enum ChatReminderStore {
     public enum Delay: CaseIterable, Sendable {
         case fiveMinutes, thirtyMinutes, oneHour, threeHours, tomorrow
 
+        var metricName: String {
+            switch self {
+            case .fiveMinutes: "5m"
+            case .thirtyMinutes: "30m"
+            case .oneHour: "1h"
+            case .threeHours: "3h"
+            case .tomorrow: "tomorrow"
+            }
+        }
+
         public var title: String {
             switch self {
             case .fiveMinutes: "In 5 Minutes"
@@ -181,8 +191,15 @@ public enum ChatReminderStore {
         all(defaults: defaults).filter { $0.dueDate <= now }
     }
 
-    /// Saves the reminder and schedules its notification, asking for permission the first time.
-    public static func schedule(_ message: ChatMessage, in target: ChatReminderTarget, dueDate: Date, defaults: UserDefaults = .standard) async throws -> ChatReminder {
+    /// Saves the reminder and schedules its notification, asking for permission the first time. `delay` is the preset
+    /// the due date came from, `nil` for a custom date.
+    public static func schedule(
+        _ message: ChatMessage,
+        in target: ChatReminderTarget,
+        dueDate: Date,
+        delay: Delay?,
+        defaults: UserDefaults = .standard,
+    ) async throws -> ChatReminder {
         var reminder = ChatReminder(
             id: UUID().uuidString,
             destination: target.destination,
@@ -198,11 +215,15 @@ public enum ChatReminderStore {
         )
         // Pushed before it syncs, so the devices it reaches know not to schedule a notification of their own. When the
         // push can't be scheduled, they schedule one once they sync it.
+        let delivery: String
         do {
             reminder = try await reminder.pushed(to: ChatReminderPush.schedule(reminder))
+            delivery = reminder.pushedTo == nil ? "local_only" : "pushed"
         } catch {
             AppMetrics.chatReminderPushFailed(step: "schedule", error: error)
+            delivery = "push_failed"
         }
+        AppMetrics.chatReminderSet(network: target.network, delay: delay?.metricName ?? "custom", delivery: delivery)
         var state = localState(defaults: defaults)
         state.reminders.append(reminder)
         save(state, defaults: defaults)

@@ -86,6 +86,7 @@ struct FeedView: View {
                     ForEach(Array(notificationItems.enumerated()), id: \.element.id) { index, displayItem in
                         Button {
                             if let reminderId = reminderId(of: displayItem) {
+                                AppMetrics.chatReminderOpened(source: "feed")
                                 NotificationRouter.shared.openReminder(id: reminderId)
                             } else {
                                 notificationDetailSelection = displayItem
@@ -234,6 +235,7 @@ struct FeedView: View {
     private func removeReminderButton(_ id: String) -> some View {
         Button(role: .destructive) {
             ChatReminderStore.remove(id: id)
+            AppMetrics.chatReminderDone(via: "feed")
         } label: {
             Label("Remove Reminder", systemImage: "trash")
         }

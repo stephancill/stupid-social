@@ -1399,10 +1399,11 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         if let target = viewModel.reminderTarget, reminderDates[id] != nil {
             menu.items.append(.action(ChatMessageMenu.Action(title: "Mark as Done", image: UIImage(systemName: "checkmark.circle")) {
                 ChatReminderStore.markDone(messageId: id, in: target)
+                AppMetrics.chatReminderDone(via: "chat")
             }))
         } else if let target = viewModel.reminderTarget, !message.isDeleted {
             var delays = ChatReminderStore.Delay.allCases.map { delay in
-                ChatMessageMenu.Action(title: delay.title) { [weak self] in self?.remind(of: message, in: target, at: delay.dueDate()) }
+                ChatMessageMenu.Action(title: delay.title) { [weak self] in self?.remind(of: message, in: target, at: delay.dueDate(), delay: delay) }
             }
             delays.append(ChatMessageMenu.Action(title: "Custom…", image: UIImage(systemName: "calendar")) { [weak self] in
                 self?.presentReminderDatePicker(for: message, in: target)
@@ -1787,7 +1788,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         let picker = UIHostingController(rootView: ChatReminderDatePicker(
             onSet: { [weak self] date in
                 self?.dismiss(animated: true)
-                self?.remind(of: message, in: target, at: date)
+                self?.remind(of: message, in: target, at: date, delay: nil)
             },
             onCancel: { [weak self] in self?.dismiss(animated: true) },
         ))
@@ -1795,10 +1796,10 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         present(picker, animated: true)
     }
 
-    private func remind(of message: ChatMessage, in target: ChatReminderTarget, at dueDate: Date) {
+    private func remind(of message: ChatMessage, in target: ChatReminderTarget, at dueDate: Date, delay: ChatReminderStore.Delay?) {
         Task {
             do {
-                _ = try await ChatReminderStore.schedule(message, in: target, dueDate: dueDate)
+                _ = try await ChatReminderStore.schedule(message, in: target, dueDate: dueDate, delay: delay)
             } catch {
                 let alert = UIAlertController(title: "Reminder Not Set", message: error.localizedDescription, preferredStyle: .alert)
                 alert.addAction(UIAlertAction(title: "OK", style: .default))
