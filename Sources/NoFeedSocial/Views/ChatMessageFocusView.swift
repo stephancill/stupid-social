@@ -68,6 +68,8 @@ final class ChatMessageFocusController: UIViewController, UITextViewDelegate {
     private let isOwn: Bool
     private let menu: ChatMessageMenu
     private let openLink: (URL) -> Void
+    /// The lifted bubble is on screen, so the chat can hide its own without a frame showing neither.
+    private let didLift: () -> Void
     private let didClose: () -> Void
 
     private let blur = UIVisualEffectView(effect: nil)
@@ -83,13 +85,14 @@ final class ChatMessageFocusController: UIViewController, UITextViewDelegate {
     /// The press shrinks the bubble to this, so the lift starts from it.
     private static let pressedScale: CGFloat = 0.96
 
-    init(snapshot: ChatFocusSnapshot, sourceFrame: CGRect, currentSourceFrame: @escaping () -> CGRect?, isOwn: Bool, menu: ChatMessageMenu, openLink: @escaping (URL) -> Void, didClose: @escaping () -> Void) {
+    init(snapshot: ChatFocusSnapshot, sourceFrame: CGRect, currentSourceFrame: @escaping () -> CGRect?, isOwn: Bool, menu: ChatMessageMenu, openLink: @escaping (URL) -> Void, didLift: @escaping () -> Void, didClose: @escaping () -> Void) {
         self.snapshot = snapshot
         self.sourceFrame = sourceFrame
         self.currentSourceFrame = currentSourceFrame
         self.isOwn = isOwn
         self.menu = menu
         self.openLink = openLink
+        self.didLift = didLift
         self.didClose = didClose
         super.init(nibName: nil, bundle: nil)
         modalPresentationStyle = .overFullScreen
@@ -117,6 +120,9 @@ final class ChatMessageFocusController: UIViewController, UITextViewDelegate {
 
         let image = UIImageView(image: snapshot.image)
         image.frame = CGRect(origin: .zero, size: sourceFrame.size)
+        image.layer.cornerRadius = snapshot.cornerRadius
+        image.layer.cornerCurve = .continuous
+        image.clipsToBounds = true
         lifted.addSubview(image)
         lifted.layer.cornerRadius = snapshot.cornerRadius
         lifted.layer.cornerCurve = .continuous
@@ -163,6 +169,7 @@ final class ChatMessageFocusController: UIViewController, UITextViewDelegate {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        didLift()
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         UIViewPropertyAnimator(duration: 0.5, dampingRatio: 0.78) { [self] in
             blur.effect = UIBlurEffect(style: .systemUltraThinMaterial)

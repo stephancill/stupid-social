@@ -1281,8 +1281,8 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         let bubble = target.cell.bubbleView
         let snapshot = target.cell.focusSnapshot()
         let sourceFrame = bubbleFrameInWindow(bubble)
+        // Set now, so the press ending as the overlay presents leaves the bubble pressed rather than springing back.
         focusedMessageId = id
-        bubble.alpha = 0
         let focus = ChatMessageFocusController(
             snapshot: snapshot,
             sourceFrame: sourceFrame,
@@ -1295,6 +1295,11 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
             isOwn: message.isOwn,
             menu: menu,
             openLink: { [weak self] in self?.openLink($0) },
+            didLift: {
+                // The overlay starts from the pressed size, so the bubble left behind can be reset as it hides.
+                bubble.transform = .identity
+                bubble.alpha = 0
+            },
             didClose: { [weak self] in
                 guard let self else { return }
                 focusedMessageId = nil

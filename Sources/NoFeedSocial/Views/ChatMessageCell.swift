@@ -123,10 +123,11 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
 
     /// The bubble as drawn, for the focus overlay to lift, with its text and where it sits so it can be selected.
     func focusSnapshot() -> ChatFocusSnapshot {
-        bubble.transform = .identity
-        // Drawn rather than snapshotted, so a bubble taller than the screen comes out whole.
-        let image = UIGraphicsImageRenderer(bounds: bubble.bounds).image { _ in
-            bubble.drawHierarchy(in: bubble.bounds, afterScreenUpdates: true)
+        // Rendered from the layer tree rather than snapshotted, so a bubble taller than the screen comes out whole.
+        // Unlike `drawHierarchy(afterScreenUpdates: true)` it needs no screen update, which stalled the lift, and it
+        // ignores the press's shrink.
+        let image = UIGraphicsImageRenderer(bounds: bubble.bounds).image { context in
+            bubble.layer.render(in: context.cgContext)
         }
         let hasText = !bodyLabel.isHidden && bodyLabel.attributedText != nil
         return ChatFocusSnapshot(
