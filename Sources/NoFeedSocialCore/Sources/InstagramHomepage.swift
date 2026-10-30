@@ -2,9 +2,12 @@ import Foundation
 
 func instagramHomepageViewer(html: String, accountID: String) throws -> InstagramDirectViewer {
     let objects = instagramPageObjects(html: html)
+    /// A suspended or checkpointed session gets the UFAC page in place of the feed: still signed in, with
+    /// `PolarisViewer`, but no tray, so it's treated as needing login rather than as a malformed homepage.
     func loggedOut(_ value: Any) -> Bool {
         if let dictionary = value as? [String: Any] {
             if dictionary["is_logged_out_user"] as? Bool == true || dictionary["is_logged_out_user_ssr"] as? Bool == true { return true }
+            if (dictionary["routePath"] as? String)?.hasPrefix("/accounts/suspended/") == true { return true }
             return dictionary.values.contains(where: loggedOut)
         }
         return (value as? [Any])?.contains(where: loggedOut) ?? false

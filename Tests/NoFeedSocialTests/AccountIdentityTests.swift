@@ -46,7 +46,7 @@ final class AccountIdentityTests: XCTestCase {
 
     func testInstagramHomepageRejectsOtherAccountsAndLogoutButAcceptsEmptyTray() throws {
         XCTAssertTrue(try instagramHomepageTray(html: instagramHomepage, accountID: "42").tray.isEmpty)
-        for html in [instagramHomepage.replacingOccurrences(of: #""id":"42""#, with: #""id":"99""#), instagramHomepage.replacingOccurrences(of: #""is_logged_out_user":false"#, with: #""is_logged_out_user":true"#)] {
+        for html in [instagramHomepage.replacingOccurrences(of: #""id":"42""#, with: #""id":"99""#), instagramHomepage.replacingOccurrences(of: #""is_logged_out_user":false"#, with: #""is_logged_out_user":true"#), instagramHomepage.replacingOccurrences(of: #""is_logged_out_user":false"#, with: #""initialRouteInfo":{"route":{"routePath":"\/accounts\/suspended\/"}}"#)] {
             XCTAssertThrowsError(try instagramHomepageViewer(html: html, accountID: "42")) { error in
                 guard case SourceError.notConfigured = error else { return XCTFail("Expected an authentication error") }
             }

@@ -488,6 +488,41 @@ class InstagramWebClient:
             body=urllib.parse.urlencode(fields).encode(),
         )
 
+    def homepage_tray(self) -> dict[str, Any]:
+        """The app's story tray path: the homepage's preloaded PolarisViewer and xdt_api__v1__feed__reels_tray,
+        checked the way instagramHomepageTray checks them. Reports which check fails instead of the tray contents."""
+        html = self.request_text("GET", BASE_URL + "/", headers=self._base_page_headers())
+        objects = page_objects(html)
+        viewer = next((v for v in map(find_polaris_viewer, objects) if v is not None), None)
+        tray = next((t for t in map(find_reels_tray, objects) if t is not None), None)
+        items = (tray or {}).get("tray") or []
+        invalid = [
+            {
+                "id_numeric": str(item.get("id", "")).isdigit(),
+                "user_pk": bool(int((item.get("user") or {}).get("pk") or 0)),
+                "username_valid": bool(re.fullmatch(r"[A-Za-z0-9._]+", (item.get("user") or {}).get("username") or "")),
+                "keys": sorted(item.keys())[:40],
+                "user_keys": sorted((item.get("user") or {}).keys()),
+            }
+            for item in items
+            if not (
+                str(item.get("id", "")).isdigit()
+                and int((item.get("user") or {}).get("pk") or 0) > 0
+                and re.fullmatch(r"[A-Za-z0-9._]+", (item.get("user") or {}).get("username") or "")
+            )
+        ]
+        return {
+            "html_bytes": len(html),
+            "sjs_objects": len(objects),
+            "logged_out": any(contains_logged_out(o) for o in objects),
+            "viewer_found": viewer is not None,
+            "viewer_matches_account": viewer is not None and str(viewer.get("pk") or viewer.get("id")) == str(self.credentials.get("dsUserId")),
+            "tray_found": tray is not None,
+            "tray_keys": sorted(tray.keys()) if tray else None,
+            "tray_items": len(items),
+            "invalid_items": invalid,
+        }
+
     def current_user(self) -> dict[str, Any]:
         response = self.rest_direct_inbox()
         viewer = response.get("viewer") or {}
@@ -973,6 +1008,48 @@ LOGIN_REQUIRED_MESSAGE = "Instagram requires login: the session hit a checkpoint
 LOGIN_REQUIRED_API_MESSAGES = {"checkpoint_required", "challenge_required", "login_required"}
 
 
+def page_objects(html: str) -> list[Any]:
+    objects = []
+    for match in re.finditer(r"<script\b[^>]*\bdata-sjs[^>]*>(.*?)</script>", html, re.S):
+        try:
+            objects.append(json.loads(match.group(1)))
+        except json.JSONDecodeError:
+            pass
+    return objects
+
+
+def find_polaris_viewer(value: Any) -> dict[str, Any] | None:
+    if isinstance(value, list):
+        if len(value) > 2 and value[0] == "PolarisViewer" and isinstance(value[2], dict):
+            return value[2].get("data")
+        return next((v for v in map(find_polaris_viewer, value) if v is not None), None)
+    if isinstance(value, dict):
+        return next((v for v in map(find_polaris_viewer, value.values()) if v is not None), None)
+    return None
+
+
+def find_reels_tray(value: Any) -> dict[str, Any] | None:
+    if isinstance(value, dict):
+        if isinstance(value.get("xdt_api__v1__feed__reels_tray"), dict):
+            return value["xdt_api__v1__feed__reels_tray"]
+        return next((v for v in map(find_reels_tray, value.values()) if v is not None), None)
+    if isinstance(value, list):
+        return next((v for v in map(find_reels_tray, value) if v is not None), None)
+    return None
+
+
+def contains_logged_out(value: Any) -> bool:
+    if isinstance(value, dict):
+        if value.get("is_logged_out_user") is True or value.get("is_logged_out_user_ssr") is True:
+            return True
+        if str(value.get("routePath") or "").startswith("/accounts/suspended/"):
+            return True
+        return any(contains_logged_out(v) for v in value.values())
+    if isinstance(value, list):
+        return any(contains_logged_out(v) for v in value)
+    return False
+
+
 def body_requires_login(body: str) -> bool:
     # A session under a security checkpoint answers API calls with `checkpoint_required` JSON (HTTP 400), and
     # some endpoints (such as direct_v2) with a 404 page rendered for a logged-out visitor.
@@ -1203,6 +1280,7 @@ def build_parser() -> argparse.ArgumentParser:
     docids.add_argument("--story-username", help="Also load /stories/<username>/ assets before scanning for doc IDs.")
     subparsers.add_parser("activity", help="Call PolarisActivityFeedStoriesViewQuery.")
     subparsers.add_parser("stories-tray", help="Call PolarisStoriesV3TrayContainerQuery.")
+    subparsers.add_parser("homepage-tray", help="Check the homepage's preloaded viewer and story tray the way the app parses them.")
     story_page = subparsers.add_parser("story-page", help="Fetch /stories/<username>/ and extract the preloaded Relay story payload.")
     story_page.add_argument("username", help="Instagram username with an active story.")
     subparsers.add_parser("current-user", help="Resolve signed-in username and avatar from Direct inbox viewer, without a profile lookup.")
@@ -1354,6 +1432,9 @@ def main() -> None:
         result = client.graphql_get(client.doc_id("activity"), DEFAULT_VARIABLES["activity"])
     elif args.command == "stories-tray":
         result = client.rest_stories_tray()
+    elif args.command == "homepage-tray":
+        print_json(client.homepage_tray(), raw=True)
+        return
     elif args.command == "story-page":
         result = client.story_page(args.username)
     elif args.command == "current-user":
