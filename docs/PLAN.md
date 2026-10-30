@@ -171,7 +171,7 @@ Reference behavior from `docs/CLI_DOCS.md`:
 ### Command Line
 
 - On a Mac (the iPad app on Apple silicon), and in the simulator, the `stupid-social` command in `cli/` reads and sends chats through the running app: list chats, read a chat's latest messages, send text (optionally as a reply), mark a chat read, and watch a chat's new messages or every chat's row changes. It works for every network the Chats list shows and behaves as the chat screen does (drafts kept, read markers, the Chats row kept current).
-- Off by default: the user turns it on in Settings → Command Line, which shows the token the command pairs with and resets it. Attachments and reactions aren't supported from the command line.
+- Off by default: the user turns it on in Settings → Advanced → Command-Line Access, which shows the token the command pairs with and resets it. Attachments and reactions aren't supported from the command line.
 
 ### Sending
 
@@ -268,7 +268,7 @@ Do not persist raw source payloads for the MVP unless needed during development 
 
 - The app reports anonymous usage and errors to stupid metrics (`metrics.stupidtech.net`, a separate Stupid Tech service): sessions, feed refreshes per network (duration, outcome), chat opens, message sends, notification opens and replies, account connects and removals, story opens and posts, connected-account counts per network, errors by type and case, and MetricKit crash, hang and exit reports.
 - Only networks, triggers and outcomes are sent, with the app version, OS version, device model and a random install id. Never account names, handles, message or notification text, URLs or ids.
-- On by default. Settings → Privacy → Share Usage Data turns it off, which also deletes anything queued and the install id.
+- On by default. Settings → Advanced → Share Usage Data turns it off, which also deletes anything queued and the install id.
 - The App Store privacy answers must declare Diagnostics and Usage Data, not linked to the user and not used for tracking, before a build with metrics is submitted.
 
 ## App Review Preview Access

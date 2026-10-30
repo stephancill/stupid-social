@@ -13,6 +13,7 @@ struct SettingsView: View {
     @AppStorage("redactionEnabled") private var redactionEnabled = false
     @State private var isAddingAccount = false
     @State private var sharesUsageData = AppMetrics.isEnabled
+    @State private var showsAdvanced = false
 
     var body: some View {
         Form {
@@ -77,21 +78,6 @@ struct SettingsView: View {
                 }
             }
 
-            if let chatControlServer {
-                ChatControlSection(server: chatControlServer)
-            }
-
-            Section {
-                Toggle("Share Usage Data", isOn: $sharesUsageData)
-                    .onChange(of: sharesUsageData) { _, enabled in
-                        AppMetrics.isEnabled = enabled
-                    }
-            } header: {
-                Text("Privacy")
-            } footer: {
-                Text("Sends anonymous usage counts, errors and crash reports to Stupid Tech to improve the app. Never includes your accounts, messages or notifications.")
-            }
-
             Section {
                 Button {
                     openURL(URL(string: "https://stupidtech.net")!)
@@ -122,6 +108,37 @@ struct SettingsView: View {
                         devModeEnabled.toggle()
                     }
             }
+
+            // Styled like the page's other section titles, with a Mail-style disclosure chevron.
+            Section {
+                if showsAdvanced {
+                    Toggle("Share Usage Data", isOn: $sharesUsageData)
+                        .onChange(of: sharesUsageData) { _, enabled in
+                            AppMetrics.isEnabled = enabled
+                        }
+                    Text("Sends anonymous usage counts, errors and crash reports to Stupid Tech to improve the app. Never includes your accounts, messages or notifications.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+
+                    if let chatControlServer {
+                        ChatControlRows(server: chatControlServer)
+                    }
+                }
+            } header: {
+                Button {
+                    withAnimation(.snappy) { showsAdvanced.toggle() }
+                } label: {
+                    HStack(spacing: 4) {
+                        Text("Advanced")
+                        Image(systemName: showsAdvanced ? "chevron.down" : "chevron.right")
+                            .font(.caption2.weight(.bold))
+                        Spacer()
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+            }
         }
         .navigationTitle("Settings")
         .onAppear {
@@ -144,43 +161,41 @@ struct SettingsView: View {
 }
 
 /// Turns on the `stupid-social` command line and shows the token it pairs with.
-private struct ChatControlSection: View {
+private struct ChatControlRows: View {
     @ObservedObject var server: ChatControlServer
     @State private var isConfirmingReset = false
 
     var body: some View {
-        Section {
-            Toggle("Command-Line Access", isOn: $server.isEnabled)
-            if server.isEnabled {
-                LabeledContent("Token") {
-                    Text(server.token)
-                        .textSelection(.enabled)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                Button("Copy Pairing Command") {
-                    UIPasteboard.general.string = "stupid-social pair \(server.token)"
-                }
+        Toggle("Command-Line Access", isOn: $server.isEnabled)
+        if server.isEnabled {
+            LabeledContent("Token") {
+                Text(server.token)
+                    .textSelection(.enabled)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Button("Copy Pairing Command") {
+                UIPasteboard.general.string = "stupid-social pair \(server.token)"
+            }
+            Button("Reset Token", role: .destructive) {
+                isConfirmingReset = true
+            }
+            .confirmationDialog("Reset the token?", isPresented: $isConfirmingReset, titleVisibility: .visible) {
                 Button("Reset Token", role: .destructive) {
-                    isConfirmingReset = true
+                    server.resetToken()
                 }
-                .confirmationDialog("Reset the token?", isPresented: $isConfirmingReset, titleVisibility: .visible) {
-                    Button("Reset Token", role: .destructive) {
-                        server.resetToken()
-                    }
-                } message: {
-                    Text("The command line stops working until you pair it again.")
-                }
+            } message: {
+                Text("The command line stops working until you pair it again.")
             }
-        } header: {
-            Text("Command Line")
-        } footer: {
-            if let error = server.error {
-                Text(error)
-                    .foregroundStyle(.red)
-            } else {
-                Text("Lets the stupid-social command read and send your chats while the app is open, on port \(String(ChatControlServer.port)) of this Mac. Anything with the token can act as you.")
-            }
+        }
+        if let error = server.error {
+            Text(error)
+                .font(.footnote)
+                .foregroundStyle(.red)
+        } else {
+            Text("Lets the stupid-social command read and send your chats while the app is open, on port \(String(ChatControlServer.port)) of this Mac. Anything with the token can act as you.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
         }
     }
 }
