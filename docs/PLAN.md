@@ -32,7 +32,7 @@ Build an iOS app with xtool that shows a combined social network notifications f
 
 ## Platform
 
-- iOS only. The previous macOS target was removed.
+- iOS only. The previous macOS target was removed. The iPad app also runs on Apple silicon Macs, where the chat command line is available (see Command Line).
 - Use xtool for project build and run workflows.
 
 ## Account Setup
@@ -167,6 +167,11 @@ Reference behavior from `docs/CLI_DOCS.md`:
 ### Chat Title
 
 - Every chat's title shows its network's icon before the subtitle.
+
+### Command Line
+
+- On a Mac (the iPad app on Apple silicon), and in the simulator, the `stupid-social` command in `cli/` reads and sends chats through the running app: list chats, read a chat's latest messages, send text (optionally as a reply), mark a chat read, and watch a chat's new messages or every chat's row changes. It works for every network the Chats list shows and behaves as the chat screen does (drafts kept, read markers, the Chats row kept current).
+- Off by default: the user turns it on in Settings → Command Line, which shows the token the command pairs with and resets it. Attachments and reactions aren't supported from the command line.
 
 ### Sending
 

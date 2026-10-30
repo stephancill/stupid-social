@@ -14,6 +14,10 @@ final class AppContainer {
     let apronLiveFeed: ApronLiveFeed
     let chatListViewModel: ChatListViewModel
     let telegramPushService: TelegramPushService
+    /// Command-line chat access on a Mac; created when first read, once Settings or launch asks for it.
+    lazy var chatControlServer = ChatControlServer(chatList: chatListViewModel) { [unowned self] chat in
+        try chatViewModel(for: chat)
+    }
 
     private let accountStore: AccountStore
     private let keychainStore: KeychainCredentialStore
@@ -155,6 +159,42 @@ final class AppContainer {
             chat: { AdapterChatViewModel(adapter: TelegramChatAdapter(client: client, peer: peer, title: title, userStatus: userStatus, avatarURL: avatarURL), accountId: accountId) },
             members: { TelegramMembersViewModel(client: client, peer: peer) },
         )
+    }
+
+    /// A chat for the command line (`ChatControlServer`), built from the same factories the Chats screen uses.
+    func chatViewModel(for chat: ChatSummary) throws -> ChatViewModel {
+        let viewModel: ChatViewModel? = switch chat.destination {
+        case let .apron(serverURL, roomId):
+            AdapterChatViewModel(
+                adapter: ApronChatAdapter(service: apronService, serverURL: serverURL, roomId: roomId, title: chat.title),
+                accountId: Account.apronId(serverURL: serverURL),
+                snapshotCache: apronService.snapshotCache,
+                draftStore: apronService.draftStore,
+            )
+        case let .apronDirect(serverURL, user):
+            AdapterChatViewModel(
+                adapter: ApronChatAdapter(service: apronService, serverURL: serverURL, directWith: user),
+                accountId: Account.apronId(serverURL: serverURL),
+                snapshotCache: apronService.snapshotCache,
+                draftStore: apronService.draftStore,
+            )
+        case let .spotify(chatId):
+            spotifyChatFactory(accountId: chat.accountId, chatId: chatId, title: chat.title)?()
+        case let .instagram(threadFbid):
+            instagramChatFactory(accountId: chat.accountId, threadFbid: threadFbid, title: chat.title)?()
+        case let .telegram(peer):
+            telegramChatFactory(accountId: chat.accountId, peer: peer, title: chat.title, userStatus: chat.presence, avatarURL: chat.avatarURL)?.chat()
+        case let .x(conversationId):
+            xChatFactory(accountId: chat.accountId, conversationId: conversationId, title: chat.title)?()
+        case let .bluesky(convoId):
+            blueskyChatFactory(accountId: chat.accountId, convoId: convoId, title: chat.title)?()
+        case let .demo(chatId):
+            AdapterChatViewModel(adapter: DemoChatAdapter(chatId: chatId), accountId: chat.accountId)
+        }
+        guard let viewModel else {
+            throw ChatControlError("\(chat.network.displayName) account isn't connected or is locked")
+        }
+        return chatListViewModel.follow(viewModel, chatId: chat.id)
     }
 
     func loadDemoData() {

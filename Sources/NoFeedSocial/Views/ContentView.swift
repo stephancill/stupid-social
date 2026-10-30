@@ -131,6 +131,7 @@ public struct ContentView: View {
                         apronServersViewModel: container.apronServersViewModel,
                         onLoadDemoData: { container.loadDemoData() },
                         onClearDemoData: { container.clearDemoData() },
+                        chatControlServer: ChatControlServer.isAvailable ? container.chatControlServer : nil,
                     )
                 }
             }
@@ -143,6 +144,9 @@ public struct ContentView: View {
         NotificationRouter.shared.apronService = appContainer.apronService
         NotificationRouter.shared.chatList = appContainer.chatListViewModel
         appContainer.startLiveFeeds()
+        if ChatControlServer.isAvailable {
+            _ = appContainer.chatControlServer
+        }
 
         Task {
             await foregroundRefreshFeedAndStories(container: appContainer)

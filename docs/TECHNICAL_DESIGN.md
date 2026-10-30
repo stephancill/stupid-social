@@ -465,6 +465,8 @@ Chat is one framework with an adapter per chat network (Apron, Telegram, Instagr
 - A list provider: the network's rows for the main list and the archive, and live row updates when the network pushes them. Optionally, it resolves a chat a notification or link names when no row has exactly that destination: matching its own rows on less than the full destination, or standing in for a chat the list doesn't have yet.
 - A destination (the network's id for a chat) that one switch in the Chats screen turns into an adapter and the chat, or into why it can't open (not connected, locked).
 
+**Command line:** on a Mac the app serves its chats to a local command (`ChatControlServer`, `cli/`). It drives the same chat view model without a screen (connect, page, send through the composer, mark read, follow new messages) and the same Chats list, so it gains every network and behavior the framework has; nothing in it is per network beyond the one destination switch in the composition root.
+
 **Rules:** shared code never names a network or casts to one; a network-specific need becomes an optional capability any network could use; every declared capability is implemented (no silent no-ops); adapters are tested against recorded pages without the UI.
 
 **Migration** (each step ships on its own; the current state is in IMPLEMENTATION.md § Chats & chat screen):

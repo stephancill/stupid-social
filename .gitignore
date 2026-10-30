@@ -26,3 +26,6 @@ __pycache__/
 
 # Claude Code worktrees and local settings
 /.claude/
+
+# The CLI package's build output
+/cli/.build

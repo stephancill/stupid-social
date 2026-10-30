@@ -7,6 +7,7 @@ Sources/
   NoFeedSocial/                     # App UI layer (SwiftUI views)
     AppContainer.swift              # App-layer composition root
     AppDelegate.swift               # APNs token, notification taps, inline replies and foreground presentation
+    ChatControlServer.swift         # Command-line chat access on a Mac: token-checked JSON lines on 127.0.0.1
     NoFeedSocialApp.swift           # iOS @main entry point
     Views/
       ContentView.swift             # Root view, container wiring
@@ -151,7 +152,7 @@ Sources/
       XChatUnlockViewModel.swift     # X Chat PIN unlock and Forget Keys
 ```
 
-Outside `Sources/`: `NotificationService/` holds the extension's Info.plist and entitlements, `workers/push-relay/` the Apron push relay Worker (`bun run push-relay:test`, `bun run push-relay:deploy`), and `Vendor/JuiceboxSdk/` the vendored Juicebox SDK (Swift wrapper and static-library XCFramework) that X Chat key recovery uses; regenerate it with `scripts/vendor-juicebox.sh`, never edit it by hand. `Vendor/StupidMetrics/` is the vendored StupidMetrics Swift package (usage metrics); update it with `scripts/vendor-stupid-metrics.sh <tag>`, never edit it by hand.
+Outside `Sources/`: `NotificationService/` holds the extension's Info.plist and entitlements, `workers/push-relay/` the Apron push relay Worker (`bun run push-relay:test`, `bun run push-relay:deploy`), and `Vendor/JuiceboxSdk/` the vendored Juicebox SDK (Swift wrapper and static-library XCFramework) that X Chat key recovery uses; regenerate it with `scripts/vendor-juicebox.sh`, never edit it by hand. `cli/` is the `stupid-social` command line for chats on a Mac, its own macOS SwiftPM package (`swift build -c release` in `cli/`) that talks to `ChatControlServer`. `skills/stupid-social/SKILL.md` is the agent skill for using it; keep it in step with the CLI's commands and errors. `Vendor/StupidMetrics/` is the vendored StupidMetrics Swift package (usage metrics); update it with `scripts/vendor-stupid-metrics.sh <tag>`, never edit it by hand.
 
 - Keep `## Project Structure` in sync when files are added, moved, or renamed.
 

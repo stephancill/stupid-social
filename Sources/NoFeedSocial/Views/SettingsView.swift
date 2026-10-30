@@ -6,6 +6,8 @@ struct SettingsView: View {
     @ObservedObject var apronServersViewModel: ApronServersViewModel
     var onLoadDemoData: (() -> Void)?
     var onClearDemoData: (() -> Void)?
+    /// Command-line chat access; only when the app runs on a Mac.
+    var chatControlServer: ChatControlServer?
     @Environment(\.openURL) private var openURL
     @AppStorage("devModeEnabled") private var devModeEnabled = false
     @AppStorage("redactionEnabled") private var redactionEnabled = false
@@ -75,6 +77,10 @@ struct SettingsView: View {
                 }
             }
 
+            if let chatControlServer {
+                ChatControlSection(server: chatControlServer)
+            }
+
             Section {
                 Toggle("Share Usage Data", isOn: $sharesUsageData)
                     .onChange(of: sharesUsageData) { _, enabled in
@@ -134,6 +140,48 @@ struct SettingsView: View {
     private func redacted(_ subtitle: String) -> String {
         guard redactionEnabled, subtitle.hasPrefix("@") else { return subtitle }
         return "Redacted"
+    }
+}
+
+/// Turns on the `stupid-social` command line and shows the token it pairs with.
+private struct ChatControlSection: View {
+    @ObservedObject var server: ChatControlServer
+    @State private var isConfirmingReset = false
+
+    var body: some View {
+        Section {
+            Toggle("Command-Line Access", isOn: $server.isEnabled)
+            if server.isEnabled {
+                LabeledContent("Token") {
+                    Text(server.token)
+                        .textSelection(.enabled)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Button("Copy Pairing Command") {
+                    UIPasteboard.general.string = "stupid-social pair \(server.token)"
+                }
+                Button("Reset Token", role: .destructive) {
+                    isConfirmingReset = true
+                }
+                .confirmationDialog("Reset the token?", isPresented: $isConfirmingReset, titleVisibility: .visible) {
+                    Button("Reset Token", role: .destructive) {
+                        server.resetToken()
+                    }
+                } message: {
+                    Text("The command line stops working until you pair it again.")
+                }
+            }
+        } header: {
+            Text("Command Line")
+        } footer: {
+            if let error = server.error {
+                Text(error)
+                    .foregroundStyle(.red)
+            } else {
+                Text("Lets the stupid-social command read and send your chats while the app is open, on port \(String(ChatControlServer.port)) of this Mac. Anything with the token can act as you.")
+            }
+        }
     }
 }
 

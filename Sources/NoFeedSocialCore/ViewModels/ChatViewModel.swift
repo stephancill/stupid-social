@@ -589,6 +589,11 @@ public class ChatViewModel: ObservableObject {
         }
     }
 
+    /// Waits for the read marker still waiting to go, such as before closing a chat that isn't on screen.
+    public func sendPendingReadMarker() async {
+        await readSendTask?.value
+    }
+
     /// Tells the network which reactions the user saw, shortly after, like `scheduleReadMarker`. Each send
     /// covers every message seen since the last one that went through, so replacing a waiting one loses nothing.
     func scheduleReactionsSeen(_ send: @escaping @MainActor () async throws -> Void) {
