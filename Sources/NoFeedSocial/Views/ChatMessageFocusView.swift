@@ -374,9 +374,13 @@ final class ChatMessageFocusController: UIViewController, UITextViewDelegate {
 /// that shrinks a bubble and the long press that lifts it both track one touch.
 @MainActor
 final class ChatGestureFilter: NSObject, UIGestureRecognizerDelegate {
+    private let isPassive: Bool
     private let shouldBegin: (UIGestureRecognizer) -> Bool
 
-    init(shouldBegin: @escaping (UIGestureRecognizer) -> Bool) {
+    /// A passive recognizer only shows feedback, so it recognizes alongside every other one: once begun it would
+    /// otherwise stop a slower tap on an image or link in the bubble.
+    init(isPassive: Bool = false, shouldBegin: @escaping (UIGestureRecognizer) -> Bool) {
+        self.isPassive = isPassive
         self.shouldBegin = shouldBegin
     }
 
@@ -386,7 +390,7 @@ final class ChatGestureFilter: NSObject, UIGestureRecognizerDelegate {
 
     /// With the list's scrolling too: a press that has begun would otherwise stop the list from scrolling.
     func gestureRecognizer(_: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
-        other.delegate === self || other is UIPanGestureRecognizer
+        isPassive || other.delegate is ChatGestureFilter || other is UIPanGestureRecognizer
     }
 }
 

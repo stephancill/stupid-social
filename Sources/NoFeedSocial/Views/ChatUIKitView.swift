@@ -1218,7 +1218,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         let press = UILongPressGestureRecognizer(target: self, action: #selector(pressMessage))
         press.minimumPressDuration = 0.1
         press.cancelsTouchesInView = false
-        press.delegate = messagePressFilter
+        press.delegate = messagePressFeedbackFilter
         return press
     }()
 
@@ -1230,7 +1230,15 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     }()
 
     private lazy var messagePressFilter = ChatGestureFilter { [weak self] gesture in
-        guard let self, presentedViewController == nil else { return false }
+        self?.canLiftMessage(at: gesture) ?? false
+    }
+
+    private lazy var messagePressFeedbackFilter = ChatGestureFilter(isPassive: true) { [weak self] gesture in
+        self?.canLiftMessage(at: gesture) ?? false
+    }
+
+    private func canLiftMessage(at gesture: UIGestureRecognizer) -> Bool {
+        guard presentedViewController == nil else { return false }
         return focusTarget(at: gesture.location(in: collectionView)) != nil
     }
 
