@@ -228,10 +228,26 @@ struct AddAccountView: View {
         case .spotify: SpotifyConnectionView(viewModel: viewModel, accountId: nil, onDone: done)
         case .bluesky: BlueskyConnectionView(viewModel: viewModel, accountId: nil, onDone: done)
         case .github: GitHubConnectionView(viewModel: viewModel, accountId: nil, onDone: done)
-        case .telegram: TelegramConnectionView(viewModel: viewModel.makeTelegramSignIn(), onDone: done)
+        case .telegram: TelegramAddAccountView(settings: viewModel, onDone: done)
         case .apron: ApronAddServerView(viewModel: apronServersViewModel, onDone: done)
         case .debug: EmptyView()
         }
+    }
+}
+
+/// Adding a Telegram account. The sign-in is a state object so the phone number, the step and the client
+/// waiting for its code survive the view updating, such as when the app goes to the background and back.
+private struct TelegramAddAccountView: View {
+    @StateObject private var connection: TelegramConnectionViewModel
+    let onDone: () -> Void
+
+    init(settings: SettingsViewModel, onDone: @escaping () -> Void) {
+        _connection = StateObject(wrappedValue: settings.makeTelegramSignIn())
+        self.onDone = onDone
+    }
+
+    var body: some View {
+        TelegramConnectionView(viewModel: connection, onDone: onDone)
     }
 }
 
