@@ -1241,6 +1241,9 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
             column.axis = .vertical
             column.isLayoutMarginsRelativeArrangement = true
             column.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0)
+            // A stack has no intrinsic width, so without this the row may widen the column and squeeze the text.
+            column.translatesAutoresizingMaskIntoConstraints = false
+            column.widthAnchor.constraint(equalToConstant: 56).isActive = true
             row.addArrangedSubview(column)
         }
         row.isLayoutMarginsRelativeArrangement = true
