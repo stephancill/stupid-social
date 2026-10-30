@@ -827,6 +827,7 @@ How the app works today, by topic: decisions and their reasons, endpoint and pro
 - `xcodebuild test` runs pass `-collect-test-diagnostics never`; otherwise any failure triggers `simctl diagnose --timeout=600` (up to 10 minutes)
 
 ### Release & TestFlight
+- Archive releases only from the main checkout. A git worktree or fresh clone lacks the gitignored `Sources/NoFeedSocialCore/Resources/TelegramAPI.json`, and the build then ships without Telegram ("Telegram isn't available in this build"). Before uploading, check the IPA has it: `unzip -l .release/NoFeedSocial.ipa | grep TelegramAPI.json`
 - External TestFlight via ASC API (`scripts/asc_external.py`: groups, get-build, add-to-group, submit): add the build with `POST /v1/builds/{id}/relationships/betaGroups` (`POST /v1/buildBetaGroups` 404s), then `POST /v1/betaAppReviewSubmissions`. `stupid-app release external-beta` does this
 - `release external-beta --whats-new` rejects a value starting with `-`; pass `--whats-new=<note>`
 - The CLI's external-review poll reads `submissionState`/`state`, but the response exposes `betaReviewState: APPROVED`, so it keeps polling after approval (observed 2026-10-10); verify with `release status --live` or submit with `--no-wait`
