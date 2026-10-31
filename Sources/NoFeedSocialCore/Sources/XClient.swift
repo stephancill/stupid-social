@@ -39,6 +39,60 @@ public struct XClient {
     private static let notificationsTimelineQueryId = "8kmedJD_u653xqEjZIS7yA"
     private nonisolated static let appUserAgent = "NoFeedSocial/1"
 
+    /// Query ids, variables and feature switches as X's web client sends them, from its `main.<hash>.js`
+    /// bundle and the `featureSwitch` config in the signed-in home page (see `scripts/x-web-client.py`).
+    private enum TweetQueryIds {
+        static let tweetResultByRestId = "U8lc5aomF5krJzZ9vJ9wxg"
+        static let favoriteTweet = "lI07N6Otwv1PhnEgXILM7A"
+        static let unfavoriteTweet = "ZYKSe-w7KEslx3JhSIk5LA"
+        static let deleteRetweet = "ZyZigVsNiFO6v1dEks1eWg"
+        static let createTweet = "l4hk8uVGvR-a8kzQ4nOhPA"
+        static let tweetDetail = "qpemjmVMoTWDvcRT43JIVQ"
+    }
+
+    private static let tweetFeatures: [String: Any] = [
+        "creator_subscriptions_tweet_preview_api_enabled": true,
+        "premium_content_api_read_enabled": false,
+        "communities_web_enable_tweet_community_results_fetch": true,
+        "c9s_tweet_anatomy_moderator_badge_enabled": true,
+        "responsive_web_grok_analyze_button_fetch_trends_enabled": false,
+        "responsive_web_grok_analyze_post_followups_enabled": false,
+        "rweb_cashtags_composer_attachment_enabled": true,
+        "responsive_web_jetfuel_frame": true,
+        "rweb_sports_post_context_enabled": true,
+        "x_elections_post_context_enabled": true,
+        "responsive_web_grok_share_attachment_enabled": true,
+        "responsive_web_grok_annotations_enabled": true,
+        "articles_preview_enabled": true,
+        "responsive_web_edit_tweet_api_enabled": true,
+        "rweb_conversational_replies_downvote_enabled": false,
+        "graphql_is_translatable_rweb_tweet_is_translatable_enabled": true,
+        "view_counts_everywhere_api_enabled": true,
+        "longform_notetweets_consumption_enabled": true,
+        "responsive_web_twitter_article_tweet_consumption_enabled": true,
+        "content_disclosure_indicator_enabled": true,
+        "content_disclosure_ai_generated_indicator_enabled": true,
+        "responsive_web_grok_show_grok_translated_post": true,
+        "responsive_web_grok_analysis_button_from_backend": true,
+        "post_ctas_fetch_enabled": false,
+        "rweb_cashtags_enabled": true,
+        "freedom_of_speech_not_reach_fetch_enabled": true,
+        "standardized_nudges_misinfo": true,
+        "tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled": true,
+        "longform_notetweets_rich_text_read_enabled": true,
+        "longform_notetweets_inline_media_enabled": false,
+        "profile_label_improvements_pcf_label_in_post_enabled": true,
+        "responsive_web_profile_redirect_enabled": true,
+        "rweb_tipjar_consumption_enabled": false,
+        "verified_phone_label_enabled": false,
+        "responsive_web_nested_quote_preview_enabled": true,
+        "responsive_web_grok_image_annotation_enabled": true,
+        "responsive_web_grok_imagine_annotation_enabled": true,
+        "responsive_web_made_on_x_label_enabled": false,
+        "responsive_web_grok_community_note_auto_translation_is_enabled": true,
+        "responsive_web_graphql_timeline_navigation_enabled": true,
+    ]
+
     public init(credentialStore: KeychainCredentialStore, session: URLSession = defaultSession) {
         self.credentialStore = credentialStore
         self.session = session
@@ -314,26 +368,157 @@ public struct XClient {
     }
 
     func tweetDetails(tweetId: String) async throws -> NotificationTargetDetails {
+        let engagement = try await tweetEngagement(tweetId: tweetId)
+        return NotificationTargetDetails(likeCount: engagement.likeCount, engagement: engagement)
+    }
+
+    /// The post's counts and whether the viewer liked or reposted it (`TweetResultByRestId`).
+    func tweetEngagement(tweetId: String) async throws -> PostEngagement {
         guard let credentials = try credentialStore.loadXCredentials() else {
             throw SourceError.notConfigured
         }
 
-        var components = URLComponents(string: "https://x.com/i/api/1.1/statuses/show.json")!
-        components.queryItems = [
-            URLQueryItem(name: "id", value: tweetId),
-            URLQueryItem(name: "tweet_mode", value: "extended"),
+        let variables: [String: Any] = [
+            "tweetId": tweetId,
+            "withCommunity": false,
+            "includePromotedContent": false,
+            "withVoice": false,
         ]
+        guard
+            let varsData = try? JSONSerialization.data(withJSONObject: variables),
+            let featData = try? JSONSerialization.data(withJSONObject: Self.tweetFeatures),
+            let varsJSON = String(data: varsData, encoding: .utf8),
+            let featJSON = String(data: featData, encoding: .utf8)
+        else {
+            throw SourceError.invalidResponse
+        }
 
-        var request = URLRequest(url: components.url!)
+        var components = URLComponents(string: "https://x.com/i/api/graphql/\(TweetQueryIds.tweetResultByRestId)/TweetResultByRestId")!
+        components.queryItems = [URLQueryItem(name: "variables", value: varsJSON), URLQueryItem(name: "features", value: featJSON)]
+        guard let url = components.url else { throw SourceError.invalidResponse }
+
+        var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.allHTTPHeaderFields = headers(credentials: credentials)
 
         let data = try await send(request)
-
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
-        let decoded = try decoder.decode(XTweetMetricsResponse.self, from: data)
-        return NotificationTargetDetails(likeCount: decoded.favoriteCount)
+        guard let tweet = try decoder.decode(XTweetResultResponse.self, from: data).data.tweetResult?.result?.post,
+              let legacy = tweet.legacy
+        else {
+            throw SourceError.invalidResponse
+        }
+        return PostEngagement(
+            replyCount: legacy.replyCount ?? 0,
+            repostCount: legacy.retweetCount ?? 0,
+            quoteCount: legacy.quoteCount ?? 0,
+            likeCount: legacy.favoriteCount ?? 0,
+            isLiked: legacy.favorited ?? false,
+            isReposted: legacy.retweeted ?? false,
+        )
+    }
+
+    /// The thread a post belongs to, up to the post (`TweetDetail`).
+    func conversation(tweetId: String) async throws -> PostThread {
+        guard let credentials = try credentialStore.loadXCredentials() else {
+            throw SourceError.notConfigured
+        }
+
+        let variables: [String: Any] = [
+            "focalTweetId": tweetId,
+            "referrer": "tweet",
+            "rankingMode": "Relevance",
+            "includePromotedContent": false,
+            "withCommunity": true,
+            "withQuickPromoteEligibilityTweetFields": false,
+            "withBirdwatchNotes": true,
+            "withVoice": true,
+        ]
+        var features = Self.tweetFeatures
+        features["rweb_video_screen_enabled"] = false
+        features["responsive_web_enhance_cards_enabled"] = false
+        guard
+            let varsData = try? JSONSerialization.data(withJSONObject: variables),
+            let featData = try? JSONSerialization.data(withJSONObject: features),
+            let varsJSON = String(data: varsData, encoding: .utf8),
+            let featJSON = String(data: featData, encoding: .utf8)
+        else {
+            throw SourceError.invalidResponse
+        }
+
+        var components = URLComponents(string: "https://x.com/i/api/graphql/\(TweetQueryIds.tweetDetail)/TweetDetail")!
+        components.queryItems = [URLQueryItem(name: "variables", value: varsJSON), URLQueryItem(name: "features", value: featJSON)]
+        guard let url = components.url else { throw SourceError.invalidResponse }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.allHTTPHeaderFields = headers(credentials: credentials)
+
+        let data = try await send(request)
+        return try XThreadParser.parse(data: data, focalId: tweetId)
+    }
+
+    func setLiked(tweetId: String, liked: Bool) async throws {
+        if liked {
+            try await tweetMutation(operation: "FavoriteTweet", queryId: TweetQueryIds.favoriteTweet, variables: ["tweet_id": tweetId])
+        } else {
+            try await tweetMutation(operation: "UnfavoriteTweet", queryId: TweetQueryIds.unfavoriteTweet, variables: ["tweet_id": tweetId])
+        }
+    }
+
+    /// Undoes the viewer's repost. Reposting itself isn't available to this client (see `docs/IMPLEMENTATION.md`).
+    func deleteRetweet(tweetId: String) async throws {
+        try await tweetMutation(operation: "DeleteRetweet", queryId: TweetQueryIds.deleteRetweet, variables: ["source_tweet_id": tweetId])
+    }
+
+    /// Posts `text`, as a reply to `replyTo` or quoting `quoting` (`CreateTweet`).
+    func createTweet(text: String, replyTo: String? = nil, quoting: String? = nil) async throws {
+        var variables: [String: Any] = [
+            "tweet_text": text,
+            "media": ["media_entities": [Any](), "possibly_sensitive": false],
+            "semantic_annotation_ids": [Any](),
+        ]
+        if let replyTo {
+            variables["reply"] = ["in_reply_to_tweet_id": replyTo, "exclude_reply_user_ids": [Any]()]
+        }
+        if let quoting {
+            variables["attachment_url"] = "https://x.com/i/status/\(quoting)"
+        }
+        var features = Self.tweetFeatures
+        features["creator_subscriptions_tweet_preview_api_enabled"] = nil
+        let data = try await tweetMutation(operation: "CreateTweet", queryId: TweetQueryIds.createTweet, variables: variables, features: features)
+        let decoded = try JSONDecoder().decode(XCreateTweetResponse.self, from: data)
+        guard decoded.data?.createTweet?.tweetResults?.result?.restId != nil else {
+            throw SourceError.serviceError(decoded.errors?.first?.message ?? "X didn't post it.")
+        }
+    }
+
+    @discardableResult
+    private func tweetMutation(operation: String, queryId: String, variables: [String: Any], features: [String: Any]? = nil) async throws -> Data {
+        guard let credentials = try credentialStore.loadXCredentials() else {
+            throw SourceError.notConfigured
+        }
+
+        var body: [String: Any] = ["variables": variables, "queryId": queryId]
+        if let features {
+            body["features"] = features
+        }
+
+        var request = URLRequest(url: URL(string: "https://x.com/i/api/graphql/\(queryId)/\(operation)")!)
+        request.httpMethod = "POST"
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        var headers = headers(credentials: credentials)
+        headers["Content-Type"] = "application/json"
+        request.allHTTPHeaderFields = headers
+
+        let data = try await send(request)
+        if let errors = try? JSONDecoder().decode(XGraphQLErrors.self, from: data).errors, let error = errors.first,
+           operation != "CreateTweet"
+        {
+            throw SourceError.serviceError(error.message)
+        }
+        return data
     }
 
     func deviceFollowTargets(for item: NotificationItem) async throws -> [NotificationTarget] {
@@ -679,8 +864,82 @@ private struct XUnreadCountResponse: Decodable {
     let unreadCount: Int
 }
 
-private struct XTweetMetricsResponse: Decodable {
-    let favoriteCount: Int?
+// MARK: - Post Models (TweetResultByRestId, CreateTweet)
+
+private struct XTweetResultResponse: Decodable {
+    let data: DataField
+
+    struct DataField: Decodable {
+        let tweetResult: TweetResult?
+    }
+
+    struct TweetResult: Decodable {
+        let result: Result?
+    }
+
+    /// A `Tweet`, or a `TweetWithVisibilityResults` wrapping one in `tweet`.
+    struct Result: Decodable {
+        let legacy: Legacy?
+        let tweet: Tweet?
+
+        var post: Tweet? {
+            legacy.map { Tweet(legacy: $0) } ?? tweet
+        }
+    }
+
+    struct Tweet: Decodable {
+        let legacy: Legacy?
+    }
+
+    struct Legacy: Decodable {
+        let favoriteCount: Int?
+        let retweetCount: Int?
+        let replyCount: Int?
+        let quoteCount: Int?
+        let favorited: Bool?
+        let retweeted: Bool?
+    }
+}
+
+private struct XCreateTweetResponse: Decodable {
+    let data: DataField?
+    let errors: [XGraphQLErrors.Error]?
+
+    struct DataField: Decodable {
+        let createTweet: CreateTweet?
+
+        private enum CodingKeys: String, CodingKey {
+            case createTweet = "create_tweet"
+        }
+    }
+
+    struct CreateTweet: Decodable {
+        let tweetResults: TweetResults?
+
+        private enum CodingKeys: String, CodingKey {
+            case tweetResults = "tweet_results"
+        }
+    }
+
+    struct TweetResults: Decodable {
+        let result: Result?
+    }
+
+    struct Result: Decodable {
+        let restId: String?
+
+        private enum CodingKeys: String, CodingKey {
+            case restId = "rest_id"
+        }
+    }
+}
+
+private struct XGraphQLErrors: Decodable {
+    let errors: [Error]?
+
+    struct Error: Decodable {
+        let message: String
+    }
 }
 
 // MARK: - Notification List Response Models
@@ -1482,5 +1741,205 @@ private enum XNotificationsTimelineParser {
             postedAt: tweet.legacy?.createdAt.flatMap(Date.twitter),
             likeCount: tweet.legacy?.favoriteCount,
         )
+    }
+}
+
+// MARK: - Conversation (TweetDetail)
+
+/// Maps a `TweetDetail` page: `tweet-<id>` entries before the focal post are its ancestors. Reply chains below it
+/// (`conversationthread-…` modules) aren't shown (`scripts/x-web-client.py thread`).
+enum XThreadParser {
+    static func parse(data: Data, focalId: String) throws -> PostThread {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let response = try decoder.decode(XThreadResponse.self, from: data)
+        guard let instructions = response.data?.threadedConversationWithInjectionsV2?.instructions else {
+            throw SourceError.invalidResponse
+        }
+
+        var thread = PostThread()
+        for entry in instructions.flatMap({ $0.entries ?? [] }) where entry.entryId.hasPrefix("tweet-") {
+            guard let post = entry.content.itemContent.flatMap(post(from:)) else { continue }
+            if post.target.id == focalId {
+                thread.focal = post
+                break
+            }
+            thread.ancestors.append(post)
+        }
+        return thread
+    }
+
+    private static func post(from itemContent: XThreadResponse.ItemContent) -> PostThread.Post? {
+        guard let result = itemContent.tweetResults?.result else { return nil }
+        let tweet = result.wrapped ?? result.direct
+        guard let id = tweet.restId, let legacy = tweet.legacy else { return nil }
+
+        let user = tweet.core?.userResults?.result
+        let author = user.flatMap { user -> NotificationActor? in
+            guard let id = user.restId else { return nil }
+            return NotificationActor(
+                id: id,
+                network: .x,
+                username: user.core?.screenName,
+                displayName: user.core?.name,
+                avatarURL: user.avatar?.imageUrl.flatMap { URL(string: $0.replacingOccurrences(of: "_normal", with: "")) },
+            )
+        }
+        let imageURLs = (legacy.extendedEntities?.media ?? []).compactMap { $0.mediaUrlHttps.flatMap(URL.init) }
+        let target = NotificationTarget(
+            id: id,
+            text: text(of: tweet),
+            url: nil,
+            imageURL: imageURLs.first,
+            imageURLs: imageURLs,
+            author: author,
+            postedAt: legacy.createdAt.flatMap(Date.twitter),
+            likeCount: legacy.favoriteCount,
+        )
+        let engagement = PostEngagement(
+            replyCount: legacy.replyCount ?? 0,
+            repostCount: legacy.retweetCount ?? 0,
+            quoteCount: legacy.quoteCount ?? 0,
+            likeCount: legacy.favoriteCount ?? 0,
+            isLiked: legacy.favorited ?? false,
+            isReposted: legacy.retweeted ?? false,
+        )
+        return PostThread.Post(target: target, engagement: engagement)
+    }
+
+    /// A long post's whole text, or the shown part of `full_text`: `display_text_range` (in Unicode scalars) leaves out
+    /// the leading @mentions of a reply and the trailing link to attached media, as X shows it.
+    static func text(of tweet: XThreadResponse.Tweet) -> String? {
+        if let note = tweet.noteTweet?.noteTweetResults?.result?.text {
+            return unescaped(note)
+        }
+        guard let fullText = tweet.legacy?.fullText else { return nil }
+        var text = fullText
+        if let range = tweet.legacy?.displayTextRange, range.count == 2 {
+            let scalars = Array(fullText.unicodeScalars)
+            let lower = min(max(range[0], 0), scalars.count)
+            let upper = min(max(range[1], lower), scalars.count)
+            var view = String.UnicodeScalarView()
+            view.append(contentsOf: scalars[lower ..< upper])
+            text = String(view)
+        }
+        return unescaped(text.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    private static func unescaped(_ text: String) -> String {
+        text.replacingOccurrences(of: "&lt;", with: "<")
+            .replacingOccurrences(of: "&gt;", with: ">")
+            .replacingOccurrences(of: "&amp;", with: "&")
+    }
+}
+
+struct XThreadResponse: Decodable {
+    let data: DataField?
+
+    struct DataField: Decodable {
+        let threadedConversationWithInjectionsV2: Conversation?
+    }
+
+    struct Conversation: Decodable {
+        let instructions: [Instruction]
+    }
+
+    struct Instruction: Decodable {
+        let entries: [Entry]?
+    }
+
+    struct Entry: Decodable {
+        let entryId: String
+        let content: Content
+    }
+
+    struct Content: Decodable {
+        let itemContent: ItemContent?
+    }
+
+    struct ItemContent: Decodable {
+        let tweetResults: TweetResults?
+    }
+
+    struct TweetResults: Decodable {
+        let result: Result?
+    }
+
+    /// A `Tweet`, or a `TweetWithVisibilityResults` wrapping one in `tweet`.
+    struct Result: Decodable {
+        let direct: Tweet
+        let wrapped: Tweet?
+
+        private enum CodingKeys: String, CodingKey {
+            case tweet
+        }
+
+        init(from decoder: any Decoder) throws {
+            direct = try Tweet(from: decoder)
+            wrapped = try decoder.container(keyedBy: CodingKeys.self).decodeIfPresent(Tweet.self, forKey: .tweet)
+        }
+    }
+
+    struct Tweet: Decodable {
+        let restId: String?
+        let core: Core?
+        let legacy: Legacy?
+        let noteTweet: NoteTweet?
+    }
+
+    struct Core: Decodable {
+        let userResults: UserResults?
+    }
+
+    struct UserResults: Decodable {
+        let result: User?
+    }
+
+    struct User: Decodable {
+        let restId: String?
+        let core: UserCore?
+        let avatar: Avatar?
+    }
+
+    struct UserCore: Decodable {
+        let screenName: String?
+        let name: String?
+    }
+
+    struct Avatar: Decodable {
+        let imageUrl: String?
+    }
+
+    struct Legacy: Decodable {
+        let fullText: String?
+        let displayTextRange: [Int]?
+        let createdAt: String?
+        let favoriteCount: Int?
+        let retweetCount: Int?
+        let replyCount: Int?
+        let quoteCount: Int?
+        let favorited: Bool?
+        let retweeted: Bool?
+        let extendedEntities: ExtendedEntities?
+    }
+
+    struct ExtendedEntities: Decodable {
+        let media: [Media]?
+    }
+
+    struct Media: Decodable {
+        let mediaUrlHttps: String?
+    }
+
+    struct NoteTweet: Decodable {
+        let noteTweetResults: NoteTweetResults?
+    }
+
+    struct NoteTweetResults: Decodable {
+        let result: NoteTweetResult?
+    }
+
+    struct NoteTweetResult: Decodable {
+        let text: String?
     }
 }

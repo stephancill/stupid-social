@@ -44,8 +44,7 @@ Build an iOS app with xtool that shows a combined social network notifications f
 - App discards the raw cookie header after extraction.
 - App stores only selected required cookie values in iCloud Keychain.
 - X integration should be implemented as a native Swift client.
-- The patched `twitter-cli` behavior and `docs/CLI_DOCS.md` are references for endpoint behavior, auth assumptions, and side effects.
-- Do not shell out to `twitter-cli` for the production app path.
+- X's own web client (its GraphQL operations, query ids and feature switches) is the reference for endpoint behavior, validated in `scripts/x-web-client.py`. Third-party clients such as `twitter-cli` are not references.
 
 ### Farcaster
 
@@ -86,10 +85,10 @@ Build an iOS app with xtool that shows a combined social network notifications f
 - Each foreground/manual refresh should make only one X full-notifications request.
 - Opening the feed first shows cached X items, then foreground activation refresh updates the cache when credentials are available.
 
-Reference behavior from `docs/CLI_DOCS.md`:
+Observed X behavior:
 
-- `notifications-count` reads unread count and should not mark notifications as read.
-- `notifications` fetches structured notification objects but does not itself clear X's unread badge.
+- The unread count endpoint reads the count and does not mark notifications read.
+- Fetching the notifications timeline does not itself clear X's unread badge.
 - After a successful foreground/manual full fetch, advance X's server-side last-seen cursor to the fetched timeline's opaque top cursor.
 
 ### Farcaster
@@ -220,6 +219,13 @@ The account detail should show:
 - For X, a post-notifications (bell) toggle. Turning it on/off is independent of follow state.
 
 The MVP should not attempt to merge or link X and Farcaster actors.
+
+## Post Engagement
+
+- On X, the post shown in a notification's detail (a new post from someone the user gets post notifications for, a mention, a like of the user's post, and so on; not the two-post reply thread) looks like a post on X: avatar, name, handle and age on one line, the text and media, then an action bar with reply, repost and like counts and Share.
+- The user can like and unlike, reply, quote, and undo a repost from the action bar. Replying and quoting open a composer sheet. Reposting opens X's own repost page, because X turns away reposts from this app; the counts refresh on return.
+- Tapping the post's content opens it on X.
+- On X, post details show the post's thread, loaded when the screen opens: every earlier post in the thread joined by a line, then the notification's post, whose row is tinted edge to edge when there are posts above it. Replies to the post aren't shown. Until the thread arrives, the post shows, with the post it replies to when the notification has it. New-post notifications, which list several posts, keep their list.
 
 ## Automatic And Refresh Behavior
 

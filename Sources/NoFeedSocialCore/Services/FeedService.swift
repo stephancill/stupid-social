@@ -9,6 +9,8 @@ public struct FeedAccountSources {
     public var profiles: (any ProfileFetching)?
     public var targetDetails: (any NotificationTargetDetailFetching)?
     public var relationships: (any RelationshipMutating)?
+    public var engagement: (any PostEngaging)?
+    public var threads: (any PostThreadLoading)?
 
     public init(
         accountId: String,
@@ -17,6 +19,8 @@ public struct FeedAccountSources {
         profiles: (any ProfileFetching)? = nil,
         targetDetails: (any NotificationTargetDetailFetching)? = nil,
         relationships: (any RelationshipMutating)? = nil,
+        engagement: (any PostEngaging)? = nil,
+        threads: (any PostThreadLoading)? = nil,
     ) {
         self.accountId = accountId
         self.network = network
@@ -24,6 +28,8 @@ public struct FeedAccountSources {
         self.profiles = profiles
         self.targetDetails = targetDetails
         self.relationships = relationships
+        self.engagement = engagement
+        self.threads = threads
     }
 }
 
@@ -285,6 +291,18 @@ public final class FeedService {
             throw SourceError.unsupported
         }
         try await source.setPostNotifications(profile: profile, enabled: enabled)
+    }
+
+    /// Liking, reposting, replying and quoting for the account's network, or nil when it doesn't support them here.
+    public func postEngagement(network: SocialNetwork, accountId: String) -> (any PostEngaging)? {
+        guard !DemoData.isDemoMode else { return nil }
+        return sources(network: network, accountId: accountId)?.engagement
+    }
+
+    /// Loading whole threads for the account's network, or nil when it doesn't support it.
+    public func postThreads(network: SocialNetwork, accountId: String) -> (any PostThreadLoading)? {
+        guard !DemoData.isDemoMode else { return nil }
+        return sources(network: network, accountId: accountId)?.threads
     }
 
     private func targetDetailsCacheKey(for item: NotificationItem) -> String {

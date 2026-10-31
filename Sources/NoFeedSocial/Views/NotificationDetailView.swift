@@ -25,7 +25,23 @@ struct NotificationDetailView: View {
             }
 
             if let parentTarget = displayItem.item.parentTarget,
-               let target = displayItem.item.target
+               let target = displayItem.item.target,
+               let threads
+            {
+                PostThreadSections(
+                    parent: parentTarget,
+                    parentDetails: parentTargetDetails,
+                    isLoadingParentDetails: isLoadingParentTargetDetails,
+                    focal: target,
+                    focalDetails: targetDetails,
+                    isLoadingFocalDetails: isLoadingTargetDetails,
+                    network: displayItem.item.network,
+                    fallbackActors: displayItem.item.actors,
+                    engaging: engaging,
+                    threads: threads,
+                )
+            } else if let parentTarget = displayItem.item.parentTarget,
+                      let target = displayItem.item.target
             {
                 Section("Thread") {
                     ReplyThreadView(
@@ -43,6 +59,21 @@ struct NotificationDetailView: View {
                         openURL(url)
                     }
                 }
+            } else if let target = displayItem.item.target, let threads,
+                      displayItem.item.type != .post, displayItem.item.type != .message
+            {
+                PostThreadSections(
+                    parent: nil,
+                    parentDetails: nil,
+                    isLoadingParentDetails: false,
+                    focal: target,
+                    focalDetails: targetDetails,
+                    isLoadingFocalDetails: isLoadingTargetDetails,
+                    network: displayItem.item.network,
+                    fallbackActors: displayItem.item.actors,
+                    engaging: engaging,
+                    threads: threads,
+                )
             } else if let target = displayItem.item.target {
                 Section(targetSectionTitle) {
                     if displayItem.item.network == .github {
@@ -62,20 +93,40 @@ struct NotificationDetailView: View {
                         }
                     } else if let targetDetails, !targetDetails.relatedTargets.isEmpty {
                         ForEach(targetDetails.relatedTargets, id: \.id) { relatedTarget in
-                            TargetPostView(
-                                target: relatedTarget,
-                                fallbackNetwork: displayItem.item.network,
-                                fallbackActors: displayItem.item.actors,
-                                details: nil,
-                                isLoadingDetails: false,
-                                targetURL: postURL(for: relatedTarget),
-                                hidesMediaFallbackText: false,
-                                showsFallbackWhileLoading: false,
-                                showsInlineLoadingRow: true,
-                            ) { url in
-                                openURL(url)
+                            if let engaging {
+                                PostCardView(
+                                    target: relatedTarget,
+                                    network: displayItem.item.network,
+                                    fallbackActors: displayItem.item.actors,
+                                    details: nil,
+                                    isLoadingDetails: false,
+                                    engaging: engaging,
+                                )
+                            } else {
+                                TargetPostView(
+                                    target: relatedTarget,
+                                    fallbackNetwork: displayItem.item.network,
+                                    fallbackActors: displayItem.item.actors,
+                                    details: nil,
+                                    isLoadingDetails: false,
+                                    targetURL: postURL(for: relatedTarget),
+                                    hidesMediaFallbackText: false,
+                                    showsFallbackWhileLoading: false,
+                                    showsInlineLoadingRow: true,
+                                ) { url in
+                                    openURL(url)
+                                }
                             }
                         }
+                    } else if let engaging {
+                        PostCardView(
+                            target: target,
+                            network: displayItem.item.network,
+                            fallbackActors: displayItem.item.actors,
+                            details: targetDetails,
+                            isLoadingDetails: isLoadingTargetDetails,
+                            engaging: engaging,
+                        )
                     } else {
                         TargetPostView(
                             target: target,
@@ -165,6 +216,16 @@ struct NotificationDetailView: View {
     private var targetSectionTitle: String {
         if displayItem.item.network == .github { return "Repository" }
         return displayItem.item.type == .message ? "Message" : "Post"
+    }
+
+    /// Liking, reposting, replying and quoting, where the notification's account supports them.
+    private var engaging: (any PostEngaging)? {
+        feedService.postEngagement(network: displayItem.item.network, accountId: displayItem.item.accountId)
+    }
+
+    /// Loading the whole conversation, where the notification's account supports it.
+    private var threads: (any PostThreadLoading)? {
+        feedService.postThreads(network: displayItem.item.network, accountId: displayItem.item.accountId)
     }
 
     private var targetURL: URL? {
@@ -594,7 +655,7 @@ private struct TargetPostView: View {
             if let likeCount = details?.likeCount ?? target.likeCount {
                 HStack(spacing: 2) {
                     Image(systemName: "heart")
-                    Text(likeCountText(likeCount))
+                    Text(PostCardView.compactCount(likeCount))
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -647,24 +708,6 @@ private struct TargetPostView: View {
             return target.imageURLs
         }
         return target.imageURL.map { [$0] } ?? []
-    }
-
-    private func likeCountText(_ count: Int) -> String {
-        let absoluteCount = abs(count)
-        let units: [(threshold: Double, suffix: String)] = [
-            (1_000_000_000, "B"),
-            (1_000_000, "M"),
-            (1000, "K"),
-        ]
-
-        guard let unit = units.first(where: { Double(absoluteCount) >= $0.threshold }) else {
-            return "\(count)"
-        }
-
-        let scaled = Double(count) / unit.threshold
-        let digitsBeforeDecimal = max(1, Int(floor(log10(abs(scaled)))) + 1)
-        let fractionDigits = max(0, 2 - digitsBeforeDecimal)
-        return String(format: "%.*f%@", fractionDigits, scaled, unit.suffix)
     }
 }
 
@@ -741,7 +784,7 @@ private struct GitHubRepoDetailView: View {
     }
 }
 
-private struct ImageCarousel: View {
+struct ImageCarousel: View {
     let imageURLs: [URL]
 
     var body: some View {

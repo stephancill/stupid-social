@@ -1,6 +1,6 @@
 import Foundation
 
-public struct XNotificationSource: NotificationFetching, ProfileFetching, NotificationTargetDetailFetching, RelationshipMutating {
+public struct XNotificationSource: NotificationFetching, ProfileFetching, NotificationTargetDetailFetching, RelationshipMutating, PostEngaging, PostThreadLoading {
     public let network: SocialNetwork = .x
 
     private let client: XClient
@@ -54,6 +54,38 @@ public struct XNotificationSource: NotificationFetching, ProfileFetching, Notifi
 
     public func setPostNotifications(profile: NetworkProfile, enabled: Bool) async throws {
         try await client.setPostNotifications(userId: profile.id, enabled: enabled)
+    }
+
+    public func fetchEngagement(postId: String) async throws -> PostEngagement {
+        try await client.tweetEngagement(tweetId: postId)
+    }
+
+    public func setLiked(postId: String, liked: Bool) async throws {
+        try await client.setLiked(tweetId: postId, liked: liked)
+    }
+
+    /// X turns away `CreateRetweet` from this client, so reposting opens X's repost page; undoing works here.
+    public func setReposted(postId: String, reposted: Bool) async throws {
+        guard !reposted else { throw SourceError.unsupported }
+        try await client.deleteRetweet(tweetId: postId)
+    }
+
+    public func repostPageURL(postId: String) -> URL? {
+        var components = URLComponents(string: "https://x.com/intent/retweet")!
+        components.queryItems = [URLQueryItem(name: "tweet_id", value: postId)]
+        return components.url
+    }
+
+    public func reply(to postId: String, text: String) async throws {
+        try await client.createTweet(text: text, replyTo: postId)
+    }
+
+    public func quote(postId: String, text: String) async throws {
+        try await client.createTweet(text: text, quoting: postId)
+    }
+
+    public func fetchThread(postId: String) async throws -> PostThread {
+        try await client.conversation(tweetId: postId)
     }
 
     private func networkProfile(from profile: XProfileResponse) -> NetworkProfile {

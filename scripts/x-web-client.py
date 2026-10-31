@@ -24,6 +24,61 @@ BASE_URL = "https://x.com"
 BEARER_TOKEN = "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
 SEARCH_TIMELINE_QUERY_ID = "hz_94eVAtrtQo_vO3my7Rw"
 NOTIFICATIONS_TIMELINE_QUERY_ID = "8kmedJD_u653xqEjZIS7yA"
+# Post reads and engagement, as X's web client sends them: query ids, variables and feature
+# switches come from its `main.<hash>.js` bundle (`queryId:"…",operationName:"…",metadata:{featureSwitches:[…]}`),
+# and the switch values from the `featureSwitch` config in the signed-in https://x.com/home page.
+TWEET_QUERY_IDS = {
+    "TweetResultByRestId": "U8lc5aomF5krJzZ9vJ9wxg",
+    "FavoriteTweet": "lI07N6Otwv1PhnEgXILM7A",
+    "UnfavoriteTweet": "ZYKSe-w7KEslx3JhSIk5LA",
+    "CreateRetweet": "mbRO74GrOvSfRcJnlMapnQ",
+    "DeleteRetweet": "ZyZigVsNiFO6v1dEks1eWg",
+    "CreateTweet": "l4hk8uVGvR-a8kzQ4nOhPA",
+    "DeleteTweet": "nxpZCY2K-I6QoFHAHeojFQ",
+    "TweetDetail": "qpemjmVMoTWDvcRT43JIVQ",
+}
+TWEET_FEATURES = {
+    "creator_subscriptions_tweet_preview_api_enabled": True,
+    "premium_content_api_read_enabled": False,
+    "communities_web_enable_tweet_community_results_fetch": True,
+    "c9s_tweet_anatomy_moderator_badge_enabled": True,
+    "responsive_web_grok_analyze_button_fetch_trends_enabled": False,
+    "responsive_web_grok_analyze_post_followups_enabled": False,
+    "rweb_cashtags_composer_attachment_enabled": True,
+    "responsive_web_jetfuel_frame": True,
+    "rweb_sports_post_context_enabled": True,
+    "x_elections_post_context_enabled": True,
+    "responsive_web_grok_share_attachment_enabled": True,
+    "responsive_web_grok_annotations_enabled": True,
+    "articles_preview_enabled": True,
+    "responsive_web_edit_tweet_api_enabled": True,
+    "rweb_conversational_replies_downvote_enabled": False,
+    "graphql_is_translatable_rweb_tweet_is_translatable_enabled": True,
+    "view_counts_everywhere_api_enabled": True,
+    "longform_notetweets_consumption_enabled": True,
+    "responsive_web_twitter_article_tweet_consumption_enabled": True,
+    "content_disclosure_indicator_enabled": True,
+    "content_disclosure_ai_generated_indicator_enabled": True,
+    "responsive_web_grok_show_grok_translated_post": True,
+    "responsive_web_grok_analysis_button_from_backend": True,
+    "post_ctas_fetch_enabled": False,
+    "rweb_cashtags_enabled": True,
+    "freedom_of_speech_not_reach_fetch_enabled": True,
+    "standardized_nudges_misinfo": True,
+    "tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled": True,
+    "longform_notetweets_rich_text_read_enabled": True,
+    "longform_notetweets_inline_media_enabled": False,
+    "profile_label_improvements_pcf_label_in_post_enabled": True,
+    "responsive_web_profile_redirect_enabled": True,
+    "rweb_tipjar_consumption_enabled": False,
+    "verified_phone_label_enabled": False,
+    "responsive_web_nested_quote_preview_enabled": True,
+    "responsive_web_grok_image_annotation_enabled": True,
+    "responsive_web_grok_imagine_annotation_enabled": True,
+    "responsive_web_made_on_x_label_enabled": False,
+    "responsive_web_grok_community_note_auto_translation_is_enabled": True,
+    "responsive_web_graphql_timeline_navigation_enabled": True,
+}
 APP_USER_AGENT = "NoFeedSocial/1"
 SIM_PREFS_SCRIPT = os.path.expanduser(
     "~/.config/opencode/skills/sim-prefs/sim-prefs/scripts/read_prefs.py"
@@ -169,8 +224,99 @@ class XWebClient:
             "raw": response,
         }
 
-    def request_json(self, method: str, url: str, body: bytes | None = None) -> Any:
-        request = urllib.request.Request(url, data=body, headers=self.headers(), method=method)
+    def tweet(self, tweet_id: str) -> dict[str, Any]:
+        """One post with the viewer's engagement state (favorited, retweeted) and its counts."""
+        variables = {"tweetId": tweet_id, "withCommunity": False, "includePromotedContent": False, "withVoice": False}
+        query = urllib.parse.urlencode(
+            {
+                "variables": json.dumps(variables, separators=(",", ":")),
+                "features": json.dumps(TWEET_FEATURES, separators=(",", ":")),
+            }
+        )
+        query_id = TWEET_QUERY_IDS["TweetResultByRestId"]
+        response = self.request_json("GET", BASE_URL + f"/i/api/graphql/{query_id}/TweetResultByRestId?{query}")
+        result = ((response.get("data") or {}).get("tweetResult") or {}).get("result") or {}
+        result = result.get("tweet") or result
+        legacy = result.get("legacy") or {}
+        fields = ["favorited", "retweeted", "favorite_count", "retweet_count", "reply_count", "quote_count"]
+        return {
+            "typename": result.get("__typename"),
+            "rest_id": result.get("rest_id"),
+            "state": {field: legacy.get(field) for field in fields},
+            "views": (result.get("views") or {}).get("count"),
+            "raw": response,
+        }
+
+    def thread(self, tweet_id: str, cursor: str | None = None) -> dict[str, Any]:
+        """The conversation around a post (`TweetDetail`): its ancestors, the post, and reply threads below it."""
+        variables: dict[str, Any] = {
+            "focalTweetId": tweet_id,
+            "referrer": "tweet",
+            "rankingMode": "Relevance",
+            "includePromotedContent": False,
+            "withCommunity": True,
+            "withQuickPromoteEligibilityTweetFields": False,
+            "withBirdwatchNotes": True,
+            "withVoice": True,
+        }
+        if cursor:
+            variables["cursor"] = cursor
+        features = {**TWEET_FEATURES, "rweb_video_screen_enabled": False, "responsive_web_enhance_cards_enabled": False}
+        query = urllib.parse.urlencode(
+            {
+                "variables": json.dumps(variables, separators=(",", ":")),
+                "features": json.dumps(features, separators=(",", ":")),
+            }
+        )
+        query_id = TWEET_QUERY_IDS["TweetDetail"]
+        response = self.request_json("GET", BASE_URL + f"/i/api/graphql/{query_id}/TweetDetail?{query}")
+        return {"entries": summarize_thread(response), "raw": response}
+
+    def tweet_mutation(self, operation: str, variables: dict[str, Any], features: dict[str, Any] | None = None) -> Any:
+        query_id = TWEET_QUERY_IDS[operation]
+        body: dict[str, Any] = {"variables": variables, "queryId": query_id}
+        if features is not None:
+            body["features"] = features
+        headers = {"Content-Type": "application/json"}
+        return self.request_json(
+            "POST",
+            BASE_URL + f"/i/api/graphql/{query_id}/{operation}",
+            body=json.dumps(body, separators=(",", ":")).encode(),
+            extra_headers=headers,
+        )
+
+    def set_liked(self, tweet_id: str, liked: bool) -> Any:
+        if liked:
+            return self.tweet_mutation("FavoriteTweet", {"tweet_id": tweet_id})
+        return self.tweet_mutation("UnfavoriteTweet", {"tweet_id": tweet_id})
+
+    def set_retweeted(self, tweet_id: str, retweeted: bool) -> Any:
+        if retweeted:
+            return self.tweet_mutation("CreateRetweet", {"tweet_id": tweet_id})
+        return self.tweet_mutation("DeleteRetweet", {"source_tweet_id": tweet_id})
+
+    def create_tweet(self, text: str, reply_to: str | None = None, quote: str | None = None) -> Any:
+        variables: dict[str, Any] = {
+            "tweet_text": text,
+            "media": {"media_entities": [], "possibly_sensitive": False},
+            "semantic_annotation_ids": [],
+        }
+        if reply_to:
+            variables["reply"] = {"in_reply_to_tweet_id": reply_to, "exclude_reply_user_ids": []}
+        if quote:
+            variables["attachment_url"] = f"https://x.com/i/status/{quote}"
+        features = {k: v for k, v in TWEET_FEATURES.items() if k != "creator_subscriptions_tweet_preview_api_enabled"}
+        response = self.tweet_mutation("CreateTweet", variables, features)
+        result = ((((response.get("data") or {}).get("create_tweet") or {}).get("tweet_results") or {}).get("result")) or {}
+        return {"rest_id": result.get("rest_id"), "errors": response.get("errors")}
+
+    def delete_tweet(self, tweet_id: str) -> Any:
+        return self.tweet_mutation("DeleteTweet", {"tweet_id": tweet_id})
+
+    def request_json(
+        self, method: str, url: str, body: bytes | None = None, extra_headers: dict[str, str] | None = None
+    ) -> Any:
+        request = urllib.request.Request(url, data=body, headers={**self.headers(), **(extra_headers or {})}, method=method)
         try:
             with self.opener.open(request, timeout=30) as response:
                 charset = response.headers.get_content_charset() or "utf-8"
@@ -443,6 +589,42 @@ def summarize_search_timeline_users(response: dict[str, Any]) -> list[dict[str, 
     return users
 
 
+def summarize_thread(response: dict[str, Any]) -> list[dict[str, Any]]:
+    """Each `TweetDetail` entry in order: its id, kind, and the posts in it (id, author, what it replies to)."""
+    instructions = ((response.get("data") or {}).get("threaded_conversation_with_injections_v2") or {}).get("instructions") or []
+
+    def post(item_content: dict[str, Any]) -> dict[str, Any] | None:
+        result = ((item_content.get("tweet_results") or {}).get("result")) or {}
+        result = result.get("tweet") or result
+        legacy = result.get("legacy") or {}
+        if not legacy:
+            return None
+        user = ((result.get("core") or {}).get("user_results") or {}).get("result") or {}
+        return {
+            "id": result.get("rest_id"),
+            "author": (user.get("core") or {}).get("screen_name"),
+            "in_reply_to": legacy.get("in_reply_to_status_id_str"),
+            "display_type": item_content.get("tweetDisplayType"),
+        }
+
+    summary = []
+    for instruction in instructions:
+        for entry in instruction.get("entries") or []:
+            content = entry.get("content") or {}
+            row: dict[str, Any] = {"entry_id": entry.get("entryId"), "type": content.get("entryType") or content.get("__typename")}
+            if content.get("itemContent"):
+                row["posts"] = [p for p in [post(content["itemContent"])] if p]
+                if content["itemContent"].get("cursorType"):
+                    row["cursor"] = content["itemContent"].get("cursorType")
+            elif content.get("items"):
+                row["posts"] = [p for item in content["items"] for p in [post(((item.get("item") or {}).get("itemContent")) or {})] if p]
+                row["more"] = [i.get("entryId") for i in content["items"] if "cursor" in (i.get("entryId") or "")]
+            elif content.get("cursorType"):
+                row["cursor"] = content.get("cursorType")
+            summary.append(row)
+    return summary
+
+
 def summarize_notifications(response: dict[str, Any]) -> dict[str, Any]:
     """Summarize grouped X notifications, focusing on actor ordering.
 
@@ -611,6 +793,25 @@ def build_parser() -> argparse.ArgumentParser:
     dm_updates = subparsers.add_parser("dm-updates", help="Fetch legacy DM events since an inbox cursor.")
     dm_updates.add_argument("cursor", help="The inbox's `cursor` value.")
     subparsers.add_parser("dm-unread-count", help="Fetch the DM unread badge count.")
+    tweet = subparsers.add_parser("tweet", help="Fetch one post with the viewer's like/repost state and counts.")
+    tweet.add_argument("tweet_id")
+    for name, help_text in [
+        ("like", "Like a post."),
+        ("unlike", "Remove your like from a post."),
+        ("retweet", "Repost a post."),
+        ("unretweet", "Undo your repost of a post."),
+        ("delete-tweet", "Delete one of your own posts."),
+    ]:
+        subparsers.add_parser(name, help=help_text).add_argument("tweet_id")
+    thread = subparsers.add_parser("thread", help="Fetch the conversation around a post (TweetDetail).")
+    thread.add_argument("tweet_id")
+    thread.add_argument("--cursor")
+    reply = subparsers.add_parser("reply", help="Reply to a post (publishes a post).")
+    reply.add_argument("tweet_id")
+    reply.add_argument("text")
+    quote = subparsers.add_parser("quote", help="Quote a post (publishes a post).")
+    quote.add_argument("tweet_id")
+    quote.add_argument("text")
     return parser
 
 
@@ -644,6 +845,20 @@ def main() -> None:
         result = client.dm_updates(args.cursor)
     elif args.command == "dm-unread-count":
         result = client.dm_unread_count()
+    elif args.command == "thread":
+        result = client.thread(args.tweet_id, cursor=args.cursor)
+    elif args.command == "tweet":
+        result = client.tweet(args.tweet_id)
+    elif args.command in ("like", "unlike"):
+        result = client.set_liked(args.tweet_id, args.command == "like")
+    elif args.command in ("retweet", "unretweet"):
+        result = client.set_retweeted(args.tweet_id, args.command == "retweet")
+    elif args.command == "delete-tweet":
+        result = client.delete_tweet(args.tweet_id)
+    elif args.command == "reply":
+        result = client.create_tweet(args.text, reply_to=args.tweet_id)
+    elif args.command == "quote":
+        result = client.create_tweet(args.text, quote=args.tweet_id)
     else:
         raise SystemExit(f"Unknown command: {args.command}")
 

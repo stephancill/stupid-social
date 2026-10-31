@@ -12,6 +12,8 @@ public final class AccountComponents {
     public private(set) var profileFetcher: (any ProfileFetching)?
     public private(set) var targetDetailFetcher: (any NotificationTargetDetailFetching)?
     public private(set) var relationshipMutator: (any RelationshipMutating)?
+    public private(set) var postEngager: (any PostEngaging)?
+    public private(set) var threadLoader: (any PostThreadLoading)?
 
     public private(set) var xClient: XClient?
     public private(set) var xChatClient: XChatClient?
@@ -42,6 +44,8 @@ public final class AccountComponents {
             profileFetcher = source
             targetDetailFetcher = source
             relationshipMutator = source
+            postEngager = source
+            threadLoader = source
             let chatClient = XChatClient(credentialStore: credentials)
             xChatClient = chatClient
             let unlock = XChatUnlockViewModel(client: chatClient, keychainStore: credentials)
@@ -122,6 +126,8 @@ public final class AccountComponents {
             profiles: profileFetcher,
             targetDetails: targetDetailFetcher,
             relationships: relationshipMutator,
+            engagement: postEngager,
+            threads: threadLoader,
         )
     }
 

@@ -80,6 +80,15 @@ public enum AppMetrics {
         }
     }
 
+    /// A post was liked, unliked, reposted (`repost` opens the network when it can't be done here), unreposted,
+    /// replied to or quoted from a notification.
+    public static func postEngaged(network: SocialNetwork, action: String, error: (any Error)?) {
+        StupidMetrics.track("post_engage", properties: ["network": network.rawValue, "action": action, "outcome": error == nil ? "ok" : "error"])
+        if let error {
+            StupidMetrics.error("post_engage_failed", error: error, properties: ["network": network.rawValue, "action": action])
+        }
+    }
+
     // MARK: Chat reminders
 
     /// A reminder was set: `delay` is the preset or `custom`, `delivery` whether it was pushed to other devices

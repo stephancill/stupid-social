@@ -171,9 +171,9 @@ Keep source-specific clients concrete behind adapters:
 
 ## X Integration
 
-X must use a native Swift client. Do not shell out to `twitter-cli` in the production app path.
+X must use a native Swift client that sends what X's own web client sends: GraphQL query ids, variables and feature switches come from the web client's `main.<hash>.js` bundle and the signed-in home page's `featureSwitch` config, validated in `scripts/x-web-client.py`. Third-party clients such as `twitter-cli` are not references.
 
-Known behavior from `docs/CLI_DOCS.md`:
+Known behavior:
 
 - Count-only polling should not mark X notifications read.
 - A full GraphQL notification timeline fetch does not itself advance X's server-side read cursor.
@@ -195,7 +195,6 @@ The spike should document:
 - Query ids or feature flags if applicable.
 - Response shapes for count and notifications.
 - Side effects observed during fetch.
-- Any endpoint behavior that differs from `docs/CLI_DOCS.md`.
 
 Record endpoint discoveries and side effects in `docs/IMPLEMENTATION.md` as work progresses.
 
