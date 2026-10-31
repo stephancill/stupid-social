@@ -96,6 +96,14 @@ public protocol ChatReactionSending: ChatAdapter {
     func toggleReaction(_ emoji: String, on messageId: String) async throws
 }
 
+/// A network that takes only some emoji as reactions, such as Telegram's fixed set: the picker offers just these,
+/// rather than every emoji.
+@MainActor
+public protocol ChatReactionChoices: ChatReactionSending {
+    /// In the network's order; nil until known.
+    var reactionChoices: [String]? { get }
+}
+
 /// Reactions others put on the user's messages since the user last saw them, which the chat badges and jumps
 /// between.
 @MainActor
@@ -534,6 +542,9 @@ public final class AdapterChatViewModel<Adapter: ChatAdapter>: ChatViewModel {
         }
         if let mentioning = adapter as? any ChatMentioning, mentionNames != mentioning.mentionNames {
             mentionNames = mentioning.mentionNames
+        }
+        if let choices = adapter as? any ChatReactionChoices, reactionChoices != choices.reactionChoices {
+            reactionChoices = choices.reactionChoices
         }
         if let emojis = adapter as? any ChatCustomEmojis, customEmojis != emojis.customEmojis {
             customEmojis = emojis.customEmojis

@@ -8,7 +8,7 @@ import Foundation
 /// custom emoji in text and reactions draw as their images, and voice messages play in the chat. The user's
 /// messages show as seen once Telegram's outbox read cursor passes them.
 @MainActor
-public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUnseenReactions, ChatReadReceipts, ChatLiveUpdating, ChatReferenceResolving, ChatMentioning, ChatTyping, ChatCustomEmojis, ChatAudioPreviewing {
+public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUnseenReactions, ChatReadReceipts, ChatLiveUpdating, ChatReferenceResolving, ChatMentioning, ChatTyping, ChatCustomEmojis, ChatAudioPreviewing, ChatReactionChoices {
     public let network = SocialNetwork.telegram
     public let canReply = true
     public let acceptsAttachments = true
@@ -17,7 +17,13 @@ public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUn
     public var onChange: (() -> Void)?
     public var onConnectionLost: ((Error?) -> Void)?
     public var onError: ((Error) -> Void)?
-    public let acceptsReactions = true
+    /// Not in Saved Messages without Premium, where reactions are tags.
+    public var acceptsReactions: Bool {
+        reactionChoices != []
+    }
+
+    /// Loaded once with the chat; Telegram refuses any other emoji.
+    public private(set) var reactionChoices: [String]?
     public private(set) var info: ChatInfo
     public private(set) var messages: [ChatMessage] = []
     public private(set) var reactions: [String: [ChatReaction]] = [:]
@@ -155,6 +161,9 @@ public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUn
             hasEarlierMessages = history.hasMore
         }
         merge(history)
+        if reactionChoices == nil {
+            reactionChoices = try? await client.reactionChoices(peer: peer, isSavedMessages: isSavedMessages)
+        }
         await loadMembersIfNeeded()
     }
 

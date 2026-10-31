@@ -257,6 +257,8 @@ public actor TelegramClient: ChatListProvider {
     /// How to name each user seen in a history, member list or lookup to Telegram (`InputUser`), for profiles and
     /// name mentions: with their access hash, or through a message they sent when Telegram gave a "min" user.
     private var inputUsers: [Int64: TLObject] = [:]
+    /// The emoji reactions the account may use in any chat, loaded once.
+    private var usableReactions: [String]?
     /// Names of people whose profile opened, so a private chat opened from it can be titled before it loads.
     private nonisolated let profileNames = Mutex<[Int64: String]>([:])
     private let mediaDirectory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appending(path: "telegram-media", directoryHint: .isDirectory)
@@ -903,6 +905,48 @@ public actor TelegramClient: ChatListProvider {
             isSavedMessages: isSavedMessages,
             unreadReactionsCount: Int(dialog["unread_reactions_count"]?.int ?? 0),
         )
+    }
+
+    /// The emoji the account may react with in a chat, in Telegram's order: `messages.getAvailableReactions` (active,
+    /// and not premium unless the account is), narrowed by a group's `available_reactions`. Anything else is refused
+    /// with `REACTION_INVALID`; in Saved Messages reactions are tags, which need Premium
+    /// (`scripts/telegram-client.py reactions --peer K`).
+    public func reactionChoices(peer: TelegramPeer, isSavedMessages: Bool) async throws -> [String] {
+        try requireAccount()
+        let isPremium = try await invoke(TLObject("users.getUsers", ["id": .vector([.object(TLObject("inputUserSelf"))])])).vector?
+            .first?.object?.flag("premium") == true
+        if isSavedMessages, !isPremium {
+            return []
+        }
+        let usable: [String]
+        if let usableReactions {
+            usable = usableReactions
+        } else {
+            guard let result = try await invoke(TLObject("messages.getAvailableReactions", ["hash": .int(0)])).object else {
+                throw TelegramError.protocolViolation("no available reactions")
+            }
+            usable = result.objects("reactions")
+                .filter { !$0.flag("inactive") && (isPremium || !$0.flag("premium")) }
+                .compactMap { $0["reaction"]?.string }
+            usableReactions = usable
+        }
+        let full: TLObject? = switch peer.kind {
+        case .user: nil
+        case .chat: try await invoke(TLObject("messages.getFullChat", ["chat_id": .long(peer.id)])).object
+        case .channel: try await invoke(TLObject("channels.getFullChannel", [
+                "channel": .object(TLObject("inputChannel", ["channel_id": .long(peer.id), "access_hash": .long(peer.accessHash)])),
+            ])).object
+        }
+        guard let available = full?["full_chat"]?.object?["available_reactions"]?.object else { return usable }
+        switch available.name {
+        case "chatReactionsNone":
+            return []
+        case "chatReactionsSome":
+            let listed = Set(available.objects("reactions").compactMap { $0["emoticon"]?.string })
+            return usable.filter(listed.contains)
+        default:
+            return usable
+        }
     }
 
     /// Messages older than `offsetId` (the newest when 0), newest first as Telegram returns them.

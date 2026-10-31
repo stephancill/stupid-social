@@ -47,7 +47,8 @@ Sources/
       ChatMessageCell.swift         # Chat message cell, unread divider, typing bubble, avatar and reply quote views
       ChatTextViews.swift           # Chat composer text view, link/mention label and tap gestures
       ChatAttributedText.swift      # Inline Markdown to UIKit attributes for chat messages
-      ChatReactionPicker.swift      # "More Reactions" emoji sheet, custom emoji by category first
+      ChatReactionPicker.swift      # "More Reactions" sheet for the right-click context menu (Mac)
+      ChatReactionGridView.swift    # The grid a lifted message's reaction row expands into: search, custom emoji, every emoji
       ChatMessageFocusView.swift    # Long-press menu model, the focus overlay that lifts a message, reminder date picker
       ChatCustomEmojiImages.swift   # Custom emoji images (downsampled, cached) for text, chips, picker and the composer strip
       ChatAudioPreview.swift        # Inline audio preview player and track card for chat messages
@@ -125,6 +126,7 @@ Sources/
       XChatMedia.swift              # X Chat media: xchatmedia: URLs, the URLProtocol that downloads, decrypts and caches them
     Resources/
       TelegramSchema.tl             # Telegram TL schema (scripts/telegram-schema.py); TelegramAPI.json is gitignored
+      Emoji.json                    # Every emoji by category with names and keywords (THIRD_PARTY_NOTICES.md)
     Storage/
       AccountStore.swift              # Accounts across devices (iCloud KVS, with removals); per-device status
       AccountMigration.swift          # One-time move of the single per-network accounts into AccountStore
@@ -150,6 +152,7 @@ Sources/
       ChatViewModel.swift            # Shared chat models (ChatMessage, ChatUser, ChatEmbed) and base view model: drafts, polling, unread, read markers, sending
       AdapterChatViewModel.swift     # ChatAdapter protocol and its optional abilities, and the view model that drives one (every network)
       ChatEmojiSearch.swift          # Emoji offered for a typed `:word`: custom emoji, then Unicode emoji by name
+      ChatReactionGrid.swift         # EmojiCatalog (Resources/Emoji.json, see THIRD_PARTY_NOTICES.md) and the reaction grid's sections and search
       ChatListViewModel.swift        # Chats list: ChatSummary, ChatListProvider (one per network), merged list, opening a destination
       ApronRoomViewModel.swift       # Apron room members, profiles and notification level, kept current by the room's adapter
       ApronLinkViewModel.swift       # What an opened Apron link offers: add server, sign in, join, open
@@ -212,7 +215,7 @@ Chat is one framework with an adapter per network; `docs/TECHNICAL_DESIGN.md` §
 - A network joins chat through a `ChatAdapter` (one conversation) and a `ChatListProvider` (its Chats rows). `AdapterChatViewModel` drives every adapter; don't subclass `ChatViewModel` for a network.
 - Adapters only translate between the network and the shared models (`ChatMessage`, `ChatEmbed`, `ChatReaction`, `ChatSummary`, `ChatInfo`). They hold no `@Published` state and do no UI work; they call `onChange` when what they show changes. State a network-specific screen needs (members, profiles) lives in that screen's own view model, which the adapter may keep current (`ApronRoomViewModel`).
 - Behavior users expect to match across chats belongs to the framework: connecting and reconnecting, polling, paging, unread counting and the divider, read-marker debouncing, snapshots, drafts, optimistic sending. An adapter supplies the network's part (`loadNewest`, `isAfterReadPosition`, `markRead` returning the send, `snapshot`); if the shared behavior doesn't fit, extend the framework.
-- An optional ability is its own protocol (`ChatReactionSending`, `ChatLiveUpdating`, `ChatWindowing`, `ChatTyping`, `ChatMentioning`, `ChatCustomEmojis`, `ChatCommanding`, `ChatLinking`, …), and the UI offers it exactly when the adapter conforms. A new network-specific need becomes such a protocol any network could adopt, never a special case in shared code or a flag that can disagree with the code.
+- An optional ability is its own protocol (`ChatReactionSending`, `ChatReactionChoices`, `ChatLiveUpdating`, `ChatWindowing`, `ChatTyping`, `ChatMentioning`, `ChatCustomEmojis`, `ChatCommanding`, `ChatLinking`, …), and the UI offers it exactly when the adapter conforms. A new network-specific need becomes such a protocol any network could adopt, never a special case in shared code or a flag that can disagree with the code.
 - Each account contributes its `ChatListProvider` through `AccountComponents.chatListProvider`, and the list scopes rows to that account. Live row changes use `updateChats(_:accountId:)` or `replaceChats(where:with:)`.
 - Adding a network takes its adapter, its `ChatListProvider` (and its line in `AccountComponents.chatListProvider`), a `Destination` case and its case in `ChatsView`'s switch. If it needs more, extend the framework first.
 - Every chat has a `chatKey` (`<account id>|<adapter key>`), used for drafts and snapshots; two accounts can share a chat, so keys always include the account.

@@ -1,3 +1,4 @@
+import NoFeedSocialCore
 import SwiftUI
 import UIKit
 
@@ -9,7 +10,18 @@ struct ChatMessageMenu {
         var title: String
         var image: UIImage?
         var isOn = false
+        /// More Reactions: on a lifted message it opens `reactionGrid` in place rather than running `handler`.
+        var expandsReactions = false
         var handler: @MainActor () -> Void
+    }
+
+    /// What More Reactions expands into on a lifted message.
+    struct ReactionGrid {
+        let customEmojis: [String: ChatCustomEmoji]
+        /// The only emoji the network takes; `nil` for any.
+        let choices: [String]?
+        let selected: Set<String>
+        let select: @MainActor (String) -> Void
     }
 
     enum Item {
@@ -19,6 +31,7 @@ struct ChatMessageMenu {
 
     /// Emoji, ending in More Reactions.
     var reactions: [Action] = []
+    var reactionGrid: ReactionGrid?
     var items: [Item] = []
 
     var isEmpty: Bool {
@@ -78,6 +91,9 @@ final class ChatMessageFocusController: UIViewController, UITextViewDelegate {
     private let textView = UITextView()
     private var reactions: UIView?
     private var actions: UIView?
+    /// The reaction row expanded into every emoji, once More Reactions is tapped.
+    private var grid: UIView?
+    private var keyboardObserver: NSObjectProtocol?
     private var hasLaidOut = false
     private var isClosing = false
 
@@ -237,10 +253,13 @@ final class ChatMessageFocusController: UIViewController, UITextViewDelegate {
         guard !isClosing else { return }
         isClosing = true
         textView.selectedTextRange = nil
+        view.endEditing(true)
+        keyboardObserver.map(NotificationCenter.default.removeObserver)
         let current = lifted.superview?.convert(lifted.frame, to: view) ?? .zero
         let target = currentSourceFrame()
         let animator = UIViewPropertyAnimator(duration: 0.4, dampingRatio: 0.9) { [self] in
             blur.effect = nil
+            grid?.alpha = 0
             for (panel, isAbove) in [(reactions, true), (actions, false)] {
                 guard let panel else { continue }
                 panel.alpha = 0
@@ -298,12 +317,74 @@ final class ChatMessageFocusController: UIViewController, UITextViewDelegate {
             configuration.background.backgroundColor = reaction.isOn ? .tertiarySystemFill : .clear
             configuration.background.cornerRadius = 20
             configuration.contentInsets = NSDirectionalEdgeInsets(top: 4, leading: 6, bottom: 4, trailing: 6)
-            let button = UIButton(configuration: configuration, primaryAction: UIAction { [weak self] _ in self?.perform(reaction) })
+            let button = UIButton(configuration: configuration, primaryAction: UIAction { [weak self] _ in
+                guard let self else { return }
+                if reaction.expandsReactions, menu.reactionGrid != nil {
+                    expandReactions()
+                } else {
+                    perform(reaction)
+                }
+            })
             button.accessibilityLabel = reaction.title
             return button
         })
         row.spacing = 4
         return panel(row, cornerRadius: 26, insets: NSDirectionalEdgeInsets(top: 4, leading: 6, bottom: 4, trailing: 6))
+    }
+
+    /// Grows the reaction row into the grid of every emoji, as Telegram does, with the actions making way; it
+    /// stays clear of the keyboard while searching.
+    private func expandReactions() {
+        guard grid == nil, let source = menu.reactionGrid, let reactions else { return }
+        let content = ChatReactionGridView(customEmojis: source.customEmojis, choices: source.choices, selected: source.selected) { [weak self] emoji in
+            self?.close { source.select(emoji) }
+        }
+        let panel = panel(content, cornerRadius: 26, insets: .zero)
+        panel.frame = reactions.frame
+        panel.alpha = 0
+        view.addSubview(panel)
+        panel.layoutIfNeeded()
+        grid = panel
+        UIViewPropertyAnimator(duration: 0.45, dampingRatio: 0.85) { [self] in
+            panel.frame = gridFrame(keyboardTop: view.bounds.maxY)
+            panel.alpha = 1
+            panel.layoutIfNeeded()
+            reactions.alpha = 0
+            actions?.alpha = 0
+        }.startAnimation()
+        keyboardObserver = NotificationCenter.default.addObserver(forName: UIResponder.keyboardWillChangeFrameNotification, object: nil, queue: .main) { [weak self] notification in
+            guard let end = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
+            MainActor.assumeIsolated {
+                guard let self, let grid = self.grid else { return }
+                let top = self.view.convert(end, from: nil).minY
+                UIViewPropertyAnimator(duration: 0.3, dampingRatio: 1) {
+                    grid.frame = self.gridFrame(keyboardTop: top)
+                    grid.layoutIfNeeded()
+                }.startAnimation()
+            }
+        }
+    }
+
+    /// Beside the message, where there is more room for it, so the message stays in view; over it when neither side
+    /// has room. Kept above the keyboard while searching.
+    private func gridFrame(keyboardTop: CGFloat) -> CGRect {
+        let safe = view.safeAreaLayoutGuide.layoutFrame.insetBy(dx: 0, dy: 8)
+        let bottom = min(safe.maxY, keyboardTop - 8)
+        let message = lifted.convert(lifted.bounds, to: view)
+        let width = min(safe.width - 24, 420)
+        let x = isOwn ? safe.maxX - 12 - width : safe.minX + 12
+        let preferred: CGFloat = 420
+        let above = message.minY - Self.gap - safe.minY
+        let below = bottom - message.maxY - Self.gap
+        if above >= min(preferred, 280) || (above >= below && above >= 200) {
+            let height = min(preferred, above, bottom - safe.minY)
+            return CGRect(x: x, y: min(message.minY - Self.gap, bottom) - height, width: width, height: height)
+        }
+        if below >= 200 {
+            return CGRect(x: x, y: message.maxY + Self.gap, width: width, height: min(preferred, below))
+        }
+        let height = min(preferred, bottom - safe.minY)
+        return CGRect(x: x, y: bottom - height, width: width, height: height)
     }
 
     private func actionsPanel() -> UIView {

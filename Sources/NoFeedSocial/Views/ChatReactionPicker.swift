@@ -1,10 +1,10 @@
 import NoFeedSocialCore
 import UIKit
 
-/// The "More Reactions" sheet: the chat's custom emoji, a section per category, then a grid of common emoji;
-/// picking one toggles it on the message.
+/// The "More Reactions" sheet: the chat's custom emoji, a section per category, then a grid of common emoji, or just
+/// the network's choices when it takes only some; picking one toggles it on the message.
 final class ChatReactionPickerViewController: UIViewController, UICollectionViewDelegate {
-    private static let emojis = [
+    static let commonEmojis = [
         "👍", "👎", "❤️", "🔥", "😂", "🤣", "😮", "😢", "😡", "🙏", "👏", "🎉",
         "🤔", "😍", "🥲", "😅", "😎", "🤯", "💯", "✅", "❌", "👀", "🚀", "🙌",
         "💪", "🤝", "🫡", "😴", "🤷", "🍕", "☕️", "🐛", "⚡️", "💀", "🥳", "😬",
@@ -17,7 +17,8 @@ final class ChatReactionPickerViewController: UIViewController, UICollectionView
     private let onSelect: (String) -> Void
     private var dataSource: UICollectionViewDiffableDataSource<Int, String>!
 
-    init(selected: Set<String>, customEmojis: [ChatCustomEmoji] = [], onSelect: @escaping (String) -> Void) {
+    /// `emojis` are the Unicode emoji offered, after the custom ones.
+    init(selected: Set<String>, emojis: [String] = commonEmojis, customEmojis: [ChatCustomEmoji] = [], onSelect: @escaping (String) -> Void) {
         self.selected = selected
         self.customEmojis = Dictionary(customEmojis.map { ($0.key, $0) }, uniquingKeysWith: { first, _ in first })
         self.onSelect = onSelect
@@ -32,7 +33,7 @@ final class ChatReactionPickerViewController: UIViewController, UICollectionView
                 items: (byCategory[category] ?? []).map(\.key).sorted { $0.localizedStandardCompare($1) == .orderedAscending },
             )
         }
-        sections = custom + [(title: custom.isEmpty ? nil : "Emoji", items: Self.emojis)]
+        sections = custom + [(title: custom.isEmpty ? nil : "Emoji", items: emojis)]
         super.init(nibName: nil, bundle: nil)
     }
 

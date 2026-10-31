@@ -1772,12 +1772,19 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         if viewModel.canReact, !message.isDeleted {
             let mine = Set(viewModel.yourEmojis(on: id))
             // A row of small elements holds four, so three reactions leave room for More Reactions.
-            menu.reactions = ChatViewModel.quickReactions.prefix(3).map { emoji in
+            menu.reactions = viewModel.menuReactions.prefix(3).map { emoji in
                 ChatMessageMenu.Action(title: emoji, isOn: mine.contains(emoji)) { [weak self] in self?.toggleReaction(emoji, on: id) }
             }
-            menu.reactions.append(ChatMessageMenu.Action(title: "More Reactions", image: UIImage(systemName: "face.smiling")) { [weak self] in
+            menu.reactions.append(ChatMessageMenu.Action(title: "More Reactions", image: UIImage(systemName: "face.smiling"), expandsReactions: true) { [weak self] in
                 self?.presentReactionPicker(for: id)
             })
+            menu.reactionGrid = ChatMessageMenu.ReactionGrid(
+                customEmojis: viewModel.customEmojis,
+                choices: viewModel.reactionChoices,
+                selected: mine,
+            ) { [weak self] emoji in
+                self?.toggleReaction(emoji, on: id)
+            }
         }
         if viewModel.canReply, !message.isDeleted {
             menu.items.append(.action(ChatMessageMenu.Action(title: "Reply", image: UIImage(systemName: "arrowshape.turn.up.left")) { [weak self] in
@@ -2267,6 +2274,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     private func presentReactionPicker(for id: String) {
         let picker = ChatReactionPickerViewController(
             selected: Set(viewModel.yourEmojis(on: id)),
+            emojis: viewModel.reactionChoices ?? ChatReactionPickerViewController.commonEmojis,
             customEmojis: viewModel.customEmojis.values.filter { !$0.isHidden },
         ) { [weak self] emoji in
             self?.toggleReaction(emoji, on: id)

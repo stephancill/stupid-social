@@ -26,6 +26,8 @@ Commands:
   avatar --peer K -o FILE     a user's or chat's profile photo (small)
   send-photo --peer K --file F [--caption T]   upload.saveFilePart + messages.sendMedia
   react --peer K --msg-id N [--emoji E]        messages.sendReaction; no emoji removes yours
+  reactions --peer K          the emoji the account may react with there: messages.getAvailableReactions (active,
+                              and not premium unless the account is), narrowed by the chat's available_reactions
   raw --method name --json '{...}'   any method, with peers like {"_": "inputPeerSelf"}
 """
 
@@ -1206,6 +1208,8 @@ def main():
     react.add_argument("--peer", required=True)
     react.add_argument("--msg-id", type=int, required=True)
     react.add_argument("--emoji", default="", help="empty removes your reaction")
+    reactions = sub.add_parser("reactions", help="the emoji the account may react with in a chat")
+    reactions.add_argument("--peer", required=True)
     members = sub.add_parser("members")
     members.add_argument("--peer", required=True)
     members.add_argument("--limit", type=int, default=200)
@@ -1467,6 +1471,30 @@ def main():
             if update["_"] == "updateMessageReactions":
                 counts = [(r["reaction"].get("emoticon"), r["count"], "chosen_order" in r) for r in update["reactions"]["results"]]
                 print("updateMessageReactions", counts)
+    elif args.command == "reactions":
+        # An emoji outside the list is refused with REACTION_INVALID (observed 2026-10-31); reactions in Saved
+        # Messages are tags, which need Premium (PREMIUM_ACCOUNT_REQUIRED for any emoji).
+        premium = bool(client.call({"_": "users.getUsers", "id": [{"_": "inputUserSelf"}]})[0].get("premium"))
+        available = client.call({"_": "messages.getAvailableReactions", "hash": 0})["reactions"]
+        usable = [r["reaction"] for r in available if not r.get("inactive") and (premium or not r.get("premium"))]
+        peer = client.input_peer(args.peer)
+        chat_reactions = None
+        if peer["_"] == "inputPeerChannel":
+            channel = {"_": "inputChannel", "channel_id": peer["channel_id"], "access_hash": peer["access_hash"]}
+            chat_reactions = client.call({"_": "channels.getFullChannel", "channel": channel})["full_chat"].get("available_reactions")
+        elif peer["_"] == "inputPeerChat":
+            chat_reactions = client.call({"_": "messages.getFullChat", "chat_id": peer["chat_id"]})["full_chat"].get("available_reactions")
+        kind = (chat_reactions or {}).get("_")
+        if peer["_"] == "inputPeerSelf" and not premium:
+            allowed = []
+        elif kind == "chatReactionsNone":
+            allowed = []
+        elif kind == "chatReactionsSome":
+            listed = {r.get("emoticon") for r in chat_reactions["reactions"]}
+            allowed = [e for e in usable if e in listed]
+        else:
+            allowed = usable
+        print(json.dumps({"premium": premium, "chat_reactions": kind, "count": len(allowed), "allowed": "".join(allowed)}, indent=1, ensure_ascii=False))
     elif args.command == "resolve":
         result = client.call({"_": "contacts.resolveUsername", "username": args.username.lstrip("@")})
         client.remember_peers(result["users"], result["chats"])

@@ -408,6 +408,8 @@ public class ChatViewModel: ObservableObject {
     @Published public internal(set) var isSending = false
     @Published public internal(set) var canAttach = false
     @Published public internal(set) var canReact = false
+    /// The only emoji the network takes as reactions; nil when it takes any.
+    @Published public internal(set) var reactionChoices: [String]?
     /// The user can read this chat but not post to it, such as a guest on a read-only server.
     @Published public internal(set) var isReadOnly = false
     /// Per-message reaction totals, keyed by message id.
@@ -488,6 +490,17 @@ public class ChatViewModel: ObservableObject {
     public var focusMessageId: String?
 
     public static let quickReactions = ["👍", "❤️", "😂", "🔥", "😮", "🙏"]
+
+    /// The quick reactions the network takes, written as it writes them (Telegram's ❤ has no variation selector),
+    /// then its own first choices; just the quick ones when it takes any emoji.
+    public var menuReactions: [String] {
+        guard let choices = reactionChoices else { return Self.quickReactions }
+        let bare = { (emoji: String) in emoji.replacingOccurrences(of: "\u{FE0F}", with: "") }
+        let quick = Self.quickReactions.compactMap { quick in choices.first { bare($0) == bare(quick) } }
+        var seen = Set<String>()
+        return (quick + choices).filter { seen.insert($0).inserted }
+    }
+
     public static let unreadBadgeCap = 50
 
     /// Messages the user sent that aren't in `history` yet, shown after it with a sending indicator.

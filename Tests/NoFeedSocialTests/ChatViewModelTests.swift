@@ -22,6 +22,18 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.messages.map(\.id), ["0", "1", "2"])
     }
 
+    func testMenuReactionsAreTheQuickOnesWhenAnyEmojiGoes() {
+        XCTAssertEqual(chat(restored: 0).menuReactions, ChatViewModel.quickReactions)
+    }
+
+    func testMenuReactionsKeepToTheNetworksChoices() {
+        let viewModel = chat(restored: 0)
+        // Telegram's heart has no variation selector, and 😂 isn't among its reactions.
+        viewModel.reactionChoices = ["❤", "👍", "👎", "🔥", "🥰"]
+        XCTAssertEqual(viewModel.menuReactions.prefix(3), ["👍", "❤", "🔥"])
+        XCTAssertEqual(viewModel.menuReactions, ["👍", "❤", "🔥", "👎", "🥰"])
+    }
+
     func testRestoredMessagesShowAfterAFailedConnection() {
         let viewModel = chat(restored: 2)
         viewModel.expectUnread()
