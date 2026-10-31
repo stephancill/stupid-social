@@ -39,6 +39,17 @@ public final class ApronLiveFeed {
         NotificationCenter.default.addObserver(forName: Self.serversDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.sync() }
         }
+        NotificationCenter.default.addObserver(forName: ApronReactionStore.remoteDidChangeNotification, object: nil, queue: .main) { [weak self] note in
+            guard let url = note.userInfo?["serverURL"] as? URL, let roomId = note.userInfo?["roomId"] as? String else { return }
+            MainActor.assumeIsolated { self?.reactionsSeenElsewhere(serverURL: url, roomId: roomId) }
+        }
+    }
+
+    /// Reactions seen on another device can only clear the row's unseen ones, and only history says which remain.
+    private func reactionsSeenElsewhere(serverURL: URL, roomId: String) {
+        let destination = ChatSummary.Destination.apron(serverURL: serverURL, roomId: roomId)
+        guard sessions[serverURL] != nil, chatList.chats.first(where: { $0.destination == destination })?.unseenReactionCount ?? 0 > 0 else { return }
+        scheduleRebuild(serverURL, roomId: roomId)
     }
 
     public func start() {

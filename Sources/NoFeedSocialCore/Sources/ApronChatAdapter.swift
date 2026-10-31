@@ -97,6 +97,8 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
     private var typingStopTask: Task<Void, Never>?
     /// Recomputes a DM's "last seen …" subtitle, which ages while the chat is open.
     private var subtitleTask: Task<Void, Never>?
+    /// Reactions seen on the user's other devices, while the chat is open.
+    private var seenReactionsObserver: NSObjectProtocol?
     /// The other person in a new direct chat, whose room is started only when the first message is sent, so
     /// opening a profile's Message and leaving doesn't leave an empty room behind.
     private var directUser: ApronUser?
@@ -338,6 +340,15 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
 
     /// Frames already arrive from `loadNewest`; this keeps a DM's "last seen" current.
     public func startFollowing() async {
+        if seenReactionsObserver == nil {
+            seenReactionsObserver = NotificationCenter.default.addObserver(forName: ApronReactionStore.remoteDidChangeNotification, object: nil, queue: .main) { [weak self] note in
+                let url = note.userInfo?["serverURL"] as? URL, room = note.userInfo?["roomId"] as? String
+                MainActor.assumeIsolated {
+                    guard let self, url == self.serverURL, room == self.roomId else { return }
+                    self.onChange?()
+                }
+            }
+        }
         subtitleTask?.cancel()
         subtitleTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -351,6 +362,10 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
 
     /// Leaves the room. The connection is shared with the feed, so only this chat's observer goes away.
     public func stopFollowing() {
+        if let seenReactionsObserver {
+            NotificationCenter.default.removeObserver(seenReactionsObserver)
+        }
+        seenReactionsObserver = nil
         subtitleTask?.cancel()
         subtitleTask = nil
         stopTyping()
