@@ -4,7 +4,7 @@
 
 The script is intentionally dependency-free so it can run with system Python.
 Credentials can come from a browser Cookie header, credentials JSON, or the
-simulator UserDefaults fallback used by this project during development.
+booted simulator's GitHub account (read from its keychain by scripts/sim_keychain.py).
 """
 
 from __future__ import annotations
@@ -13,7 +13,6 @@ import argparse
 import json
 import os
 import re
-import subprocess
 import sys
 import urllib.error
 import urllib.parse
@@ -23,16 +22,14 @@ from collections import Counter
 from html.parser import HTMLParser
 from typing import Any
 
+import sim_keychain
+
 
 BASE_URL = "https://github.com"
 FOR_YOU_FEED_URL = BASE_URL + "/conduit/for_you_feed"
 USER_LOGIN_META = re.compile(r'<meta name="user-login" content="([^"]*)"')
 APP_USER_AGENT = "NoFeedSocial/1"
 DEFAULT_ACCEPT_LANGUAGE = "en-US,en;q=0.9"
-SIM_PREFS_SCRIPT = os.path.expanduser(
-    "~/.config/opencode/skills/sim-prefs/sim-prefs/scripts/read_prefs.py"
-)
-SIM_GITHUB_FALLBACK_KEY = "tech.stupid.StupidSocial.credentials.github.localFallback"
 
 
 class GitHubHTTPError(Exception):
@@ -367,14 +364,7 @@ def load_credentials(args: argparse.Namespace) -> dict[str, Any]:
         with open(args.credentials_file, "r", encoding="utf-8") as handle:
             return json.load(handle)
     if args.simulator:
-        command = [
-            sys.executable,
-            SIM_PREFS_SCRIPT,
-            "--raw-key",
-            SIM_GITHUB_FALLBACK_KEY,
-        ]
-        result = subprocess.run(command, check=True, text=True, capture_output=True)
-        return json.loads(result.stdout)
+        return sim_keychain.load_credentials("github", args.account_id)
     raise SystemExit("Pass --cookie-header-file, --credentials-file, or --simulator")
 
 
@@ -762,7 +752,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--simulator",
         action="store_true",
-        help="Read GitHub credentials from the booted simulator fallback store.",
+        help="Read GitHub credentials from the booted simulator's keychain.",
+    )
+    parser.add_argument(
+        "--account-id",
+        help="With --simulator, the app's account id when several GitHub accounts exist.",
     )
     parser.add_argument(
         "--accept-language",
