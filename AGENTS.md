@@ -15,7 +15,7 @@ Sources/
       HomePager.swift               # UIPageViewController pager: Chats to the left of the feed
       ChatsView.swift               # Chats list across Apron rooms, Spotify chats and Instagram threads
       SearchView.swift              # Cross-network profile search
-      SearchBar.swift               # Shared search field modifiers: searchable (Search, chats, members), pinned field (Chats)
+      SearchBar.swift               # Shared search field modifier (Search, Chats)
       CompactListRow.swift          # Shared row insets for the feed and Chats lists
       StoryComposerView.swift       # Full-screen story composer scaffold
       NotificationDetailView.swift  # Standard form-based notification detail
