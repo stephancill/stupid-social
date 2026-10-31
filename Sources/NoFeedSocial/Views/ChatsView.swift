@@ -31,14 +31,11 @@ struct ChatsView: View {
     @State private var isShowingArchive = false
     @State private var settingsAccountId: String?
     @State private var query = ""
-    /// With the search bar in the navigation bar's drawer, rows present while the bar first lays out start the
-    /// list collapsed to the inline title, so saved chats are inserted just after the screen appears.
-    @State private var hasAppeared = false
 
     var body: some View {
         List {
             // Like Telegram, archived chats sit behind one row at the top, which search looks through.
-            if hasAppeared, query.isEmpty, !viewModel.archivedChats.isEmpty {
+            if query.isEmpty, !viewModel.archivedChats.isEmpty {
                 Button {
                     isShowingArchive = true
                 } label: {
@@ -75,11 +72,8 @@ struct ChatsView: View {
         .refreshable {
             await viewModel.load()
         }
-        .task {
-            try? await Task.sleep(for: .milliseconds(50))
-            hasAppeared = true
-        }
         .navigationTitle("Chats")
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if viewModel.connections.contains(where: { $0.error != nil }) {
                 ToolbarItem(placement: .primaryAction) {
@@ -87,7 +81,8 @@ struct ChatsView: View {
                 }
             }
         }
-        .searchBar(text: $query, placement: .navigationBarDrawer(displayMode: .always))
+        .pinnedSearchBar(text: $query)
+        .scrollDismissesKeyboard(.immediately)
         .onChange(of: selection == nil && !isShowingArchive && settingsAccountId == nil) { _, isOnList in
             isShowingChat = !isOnList
             if isOnList {
@@ -142,13 +137,12 @@ struct ChatsView: View {
     }
 
     private var showsArchiveRow: Bool {
-        hasAppeared && query.isEmpty && !viewModel.archivedChats.isEmpty
+        query.isEmpty && !viewModel.archivedChats.isEmpty
     }
 
     /// Chats whose name or latest message contains the query, archived ones included.
     private var filteredChats: [ChatSummary] {
         let query = query.trimmingCharacters(in: .whitespaces)
-        guard hasAppeared else { return [] }
         guard !query.isEmpty else { return viewModel.chats }
         return (viewModel.chats + viewModel.archivedChats).filter { chat in
             chat.title.localizedStandardContains(query) || (chat.titlePrefix ?? "").localizedStandardContains(query)
