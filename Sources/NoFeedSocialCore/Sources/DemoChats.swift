@@ -239,7 +239,7 @@ enum DemoChats {
 
 /// One preview chat. Sending and reacting only change what it shows.
 @MainActor
-public final class DemoChatAdapter: ChatReactionSending, ChatCustomEmojis, ChatAudioPreviewing {
+public final class DemoChatAdapter: ChatReactionSending, ChatCustomEmojis, ChatAudioPreviewing, ChatReadReceipts {
     public let network: SocialNetwork
     public let key: String
     public let canReply = true
@@ -254,6 +254,8 @@ public final class DemoChatAdapter: ChatReactionSending, ChatCustomEmojis, ChatA
     public let customEmojis: [String: ChatCustomEmoji]
     private let chat: DemoChats.Chat
     private let readCount: Int
+    /// Sent this visit; no one reads them.
+    private var sentIds: Set<String> = []
 
     public init(chatId: String) {
         let chat = DemoChats.chats.first { $0.id == chatId } ?? DemoChats.chats[0]
@@ -282,7 +284,14 @@ public final class DemoChatAdapter: ChatReactionSending, ChatCustomEmojis, ChatA
     public func send(_ message: ChatOutgoing) async throws -> String? {
         let id = UUID().uuidString
         messages.append(ChatMessage(id: id, sender: DemoChats.you, timestamp: Date(), text: message.text, replyToId: message.replyToId, isOwn: true))
+        sentIds.insert(id)
         return id
+    }
+
+    /// As the networks that report receipts show them: earlier messages seen, new ones sent.
+    public func receipt(for message: ChatMessage) -> ChatReceipt? {
+        guard [.telegram, .instagram, .x].contains(network) else { return nil }
+        return sentIds.contains(message.id) ? .sent : .seen
     }
 
     public func isAfterReadPosition(_ message: ChatMessage) -> Bool {

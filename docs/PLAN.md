@@ -176,6 +176,7 @@ Reference behavior from `docs/CLI_DOCS.md`:
 ### Sending
 
 - In every chat (Apron, Spotify, Instagram, Telegram, X, Bluesky), a sent message shows at once with a clock beside its time while it is sending, and the network's copy then takes its place without moving it. A photo shows from the picked image straight away. If sending fails, the message goes and its text and attachment return to the composer. Apron commands are the exception: they may not post a message, so the composer waits for them.
+- Where the network reports when others read the user's messages (Telegram, Instagram, X), the user's messages show one check after the time once sent and two once someone else has read them, as in Telegram. Chats on networks without read state (Apron, Bluesky, Spotify) show neither.
 
 ## Combined Feed
 

@@ -33,7 +33,7 @@ public struct ChatOutgoing {
 /// owns the screen's state and the behavior every chat shares: connecting, polling, paging, unread counting and
 /// the divider, read-marker debouncing, snapshots, drafts and optimistic sending.
 ///
-/// Optional abilities are separate protocols (reactions, unseen reactions, audio previews, live updates, quoted
+/// Optional abilities are separate protocols (reactions, unseen reactions, read receipts, audio previews, live updates, quoted
 /// messages, windows of older history, typing, mentions, custom emoji, commands, links), so a chat offers an action exactly when its adapter
 /// implements it.
 @MainActor
@@ -107,6 +107,14 @@ public protocol ChatUnseenReactions: ChatAdapter {
     /// tells the network, which the framework sends shortly after; `nil` when there is nothing to send. The send
     /// covers every message seen since the last send that went through.
     func markReactionsSeen(on messageIds: Set<String>) -> (@MainActor () async throws -> Void)?
+}
+
+/// Whether others have read the user's messages, which show as sent or seen.
+@MainActor
+public protocol ChatReadReceipts: ChatAdapter {
+    /// `.seen` once someone else in the chat has read the user's message (in a group, anyone), else `.sent`;
+    /// `nil` where the network shows none, such as a chat with yourself.
+    func receipt(for message: ChatMessage) -> ChatReceipt?
 }
 
 /// Inline previews for `.audio` embeds.
@@ -229,6 +237,7 @@ public final class AdapterChatViewModel<Adapter: ChatAdapter>: ChatViewModel {
             draftStore: draftStore,
         )
         tracksUnseenReactions = adapter is any ChatUnseenReactions
+        showsReadReceipts = adapter is any ChatReadReceipts
         adapter.onChange = { [weak self] in self?.adapterDidChange() }
         if let live = adapter as? any ChatLiveUpdating {
             live.onConnectionLost = { [weak self] error in self?.connectionLost(error) }
@@ -535,6 +544,15 @@ public final class AdapterChatViewModel<Adapter: ChatAdapter>: ChatViewModel {
             }
             if unavailableReferences != resolving.unavailableReferences {
                 unavailableReferences = resolving.unavailableReferences
+            }
+        }
+        if let reporting = adapter as? any ChatReadReceipts {
+            var latest: [String: ChatReceipt] = [:]
+            for message in adapter.messages where message.isOwn {
+                latest[message.id] = reporting.receipt(for: message)
+            }
+            if receipts != latest {
+                receipts = latest
             }
         }
         publish(history: adapter.messages, reactions: adapter.reactions)

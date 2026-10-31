@@ -210,6 +210,30 @@ final class AdapterChatViewModelTests: XCTestCase {
         chat.disconnect()
     }
 
+    func testReceiptsShowSentThenSeenOnTheUsersConfirmedMessages() async {
+        let adapter = FakeReceiptsAdapter()
+        adapter.pages = [[message(1, own: true), message(2), message(3, own: true)]]
+        adapter.seenUpTo = 1
+        let chat = makeChat(adapter)
+        await chat.connect()
+        XCTAssertEqual(chat.receipt(for: chat.messages[0]), .seen)
+        XCTAssertNil(chat.receipt(for: chat.messages[1]), "others' messages have none")
+        XCTAssertEqual(chat.receipt(for: chat.messages[2]), .sent)
+        adapter.seenUpTo = 3
+        adapter.onChange?()
+        XCTAssertEqual(chat.receipt(for: chat.messages[2]), .seen, "follows the adapter")
+        chat.disconnect()
+    }
+
+    func testChatsWithoutReceiptsShowNone() async {
+        let adapter = FakeAdapter()
+        adapter.pages = [[message(1, own: true)]]
+        let chat = makeChat(adapter)
+        await chat.connect()
+        XCTAssertNil(chat.receipt(for: chat.messages[0]))
+        chat.disconnect()
+    }
+
     func testJumpingToAnUnloadedMessageWithoutWindowsPagesBack() async {
         let adapter = FakeUnseenReactionsAdapter()
         adapter.pages = [[message(3, own: true)]]
@@ -456,6 +480,15 @@ private final class FakeReactingAdapter: FakeAdapter, ChatReactionSending {
 
     func toggleReaction(_ emoji: String, on messageId: String) async throws {
         reactions[messageId] = [ChatReaction(emoji: emoji, count: 1, includesYou: true)]
+    }
+}
+
+@MainActor
+private final class FakeReceiptsAdapter: FakeAdapter, ChatReadReceipts {
+    var seenUpTo = 0
+
+    func receipt(for message: ChatMessage) -> ChatReceipt? {
+        (Int(message.id) ?? 0) <= seenUpTo ? .seen : .sent
     }
 }
 

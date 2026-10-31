@@ -124,6 +124,8 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     /// bubble doesn't grow under the dismissal preview.
     private var isShowingContextMenu = false
     private var pendingReactionTotals: [String: [ChatReaction]]?
+    /// The receipts the cells last showed, so only messages whose receipt changed re-render.
+    private var shownReceipts: [String: ChatReceipt] = [:]
     private var avatarPrefetches = Set<URL>()
     private let reactionHaptic = UISelectionFeedbackGenerator()
     private let audioPlayer = ChatAudioPreviewPlayer()
@@ -241,7 +243,6 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
                 reactions: message.isDeleted ? [] : reactionTotals[id] ?? [],
                 actions: ChatMessageCell.Actions(
                     canReply: viewModel.canReply && message.isUserMessage && !message.isDeleted,
-                    canReact: viewModel.canReact && !message.isNotice && !message.isDeleted,
                     reply: { [weak self] in self?.beginReply(to: id) },
                     toggleReaction: { [weak self] emoji in self?.toggleReaction(emoji, on: id) },
                     showReplyTarget: { [weak self] in
@@ -269,6 +270,8 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
                     customEmoji: { [weak self] key in self?.viewModel.customEmojis[key] },
                     customEmojiImageDidLoad: { [weak self] in self?.customEmojiImagesDidLoad() },
                 ),
+                status: status(of: message),
+                statusKey: itemKey(for: id),
                 reminderDue: message.isDeleted ? nil : reminderDates[id],
                 availableWidth: collectionView.bounds.width > 0 ? collectionView.bounds.width : view.bounds.width,
             )
@@ -638,6 +641,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         viewModel.$errorMessage.sink { [weak self] _ in DispatchQueue.main.async { self?.refreshComposer() } }.store(in: &cancellables)
         viewModel.$replyingTo.sink { [weak self] in self?.replyingTo = $0; self?.refreshComposer() }.store(in: &cancellables)
         viewModel.$reactions.sink { [weak self] totals in self?.applyReactionTotals(totals) }.store(in: &cancellables)
+        viewModel.$receipts.sink { [weak self] receipts in self?.applyReceipts(receipts) }.store(in: &cancellables)
         // Emitted in willSet, so re-render once the view model holds the new names.
         viewModel.$mentionNames.dropFirst().removeDuplicates()
             .sink { [weak self] _ in DispatchQueue.main.async { self?.reconfigureMentions() } }
@@ -2099,7 +2103,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     }
 
     private func toggleReaction(_ emoji: String, on id: String) {
-        guard messagesById[id]?.isNotice == false else { return }
+        guard viewModel.canReact, let message = messagesById[id], !message.isNotice, !message.isDeleted else { return }
         reactionHaptic.selectionChanged()
         Task { await viewModel.toggleReaction(emoji, on: id) }
     }
@@ -2177,6 +2181,34 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     }
 
     /// Reconfigures only the messages whose totals changed.
+    /// In chats with receipts, the user's messages show sending, then sent, then seen.
+    private func status(of message: ChatMessage) -> ChatMessageStatus? {
+        guard viewModel.showsReadReceipts, message.isOwn, message.isUserMessage, !message.isDeleted else { return nil }
+        if message.isSending { return .sending }
+        return switch viewModel.receipt(for: message) {
+        case .sent: .sent
+        case .seen: .seen
+        case nil: nil
+        }
+    }
+
+    /// Re-renders the messages whose receipt changed; their size stays, since the time keeps room for the checks.
+    private func applyReceipts(_ receipts: [String: ChatReceipt]) {
+        let changedIds = Set(receipts.keys).union(shownReceipts.keys).filter { receipts[$0] != shownReceipts[$0] }
+        shownReceipts = receipts
+        guard !changedIds.isEmpty else { return }
+        // Emitted in willSet, so the cells read the view model's new receipts a turn later.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            var snapshot = dataSource.snapshot()
+            let present = Set(snapshot.itemIdentifiers)
+            let changed = changedIds.map { Item.message(self.itemKey(for: $0)) }.filter(present.contains)
+            guard !changed.isEmpty else { return }
+            snapshot.reconfigureItems(changed)
+            dataSource.apply(snapshot, animatingDifferences: false)
+        }
+    }
+
     private func applyReactionTotals(_ totals: [String: [ChatReaction]]) {
         if isShowingContextMenu {
             pendingReactionTotals = totals

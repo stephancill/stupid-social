@@ -209,10 +209,16 @@ struct ChatBubbleLayout: Hashable, CustomStringConvertible {
 
 /// Telegram-style message: a bubble with the sender's avatar beside the last message of a group,
 /// the name atop the first, the time inline at the bottom-right, and system notices as centered captions.
+/// What a bubble shows of the user's message's progress in a chat with receipts.
+enum ChatMessageStatus: Equatable {
+    case sending
+    case sent
+    case seen
+}
+
 final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelegate, UIContextMenuInteractionDelegate {
     struct Actions {
         var canReply = false
-        var canReact = false
         var reply: () -> Void = {}
         var toggleReaction: (String) -> Void = { _ in }
         var showReplyTarget: () -> Void = {}
@@ -305,6 +311,18 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
     private let timeBackground = UIView()
     private let timeSpacer = UIView()
     private let timeLabel = UILabel()
+    /// After the time in chats with receipts: the clock while sending, then one check, then two, each in place
+    /// so the time never moves.
+    private let statusSlot = UIView()
+    private let slotClock = UIImageView(image: ChatMessageCell.clockImage)
+    private let firstCheck = UIImageView(image: ChatMessageCell.checkImage)
+    private let secondCheck = UIImageView(image: ChatMessageCell.checkImage)
+    /// Before the time while sending in chats without receipts, where nothing follows the time.
+    private let leadingClock = UIImageView(image: ChatMessageCell.clockImage)
+    private var statusSlotWidth: NSLayoutConstraint!
+    private var statusSlotGap: NSLayoutConstraint!
+    private var timeBackgroundToLabel: NSLayoutConstraint!
+    private var timeBackgroundToClock: NSLayoutConstraint!
     private let systemLabel = UILabel()
     private let reactionsRow = UIStackView()
     private let reactionsContainer = UIView()
@@ -320,6 +338,9 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
     private var isOwn = false
     /// The sender's color, which link and file embeds take on in incoming bubbles, as in Telegram.
     private var accent = UIColor.systemBlue
+    /// The row and status last shown, so a reconfigure can animate the change. Keyed by the row rather than the
+    /// message, since a sending copy and the network's message have different ids.
+    private var shownStatus: (key: String, status: ChatMessageStatus?, leadingClock: Bool)?
     /// The message and reactions last shown, so a reconfigure can tell which chips are new.
     private var shownReactions: (messageId: String, emojis: Set<String>)?
     /// Copies of removed chips while they shrink out.
@@ -404,6 +425,17 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
         timeLabel.font = Self.timeFont
         timeLabel.translatesAutoresizingMaskIntoConstraints = false
         bubble.addSubview(timeLabel)
+        statusSlot.translatesAutoresizingMaskIntoConstraints = false
+        statusSlot.isUserInteractionEnabled = false
+        bubble.addSubview(statusSlot)
+        for view in [slotClock, firstCheck, secondCheck] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            view.alpha = 0
+            statusSlot.addSubview(view)
+        }
+        leadingClock.translatesAutoresizingMaskIntoConstraints = false
+        leadingClock.alpha = 0
+        bubble.addSubview(leadingClock)
 
         systemLabel.numberOfLines = 0
         systemLabel.textAlignment = .center
@@ -437,6 +469,10 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
         bubbleBottom.priority = .defaultHigh
         // The bubble's width is computed from its content in `configure`; Auto Layout alone kept newly
         // inserted cells at their estimated (maximum) width.
+        statusSlotWidth = statusSlot.widthAnchor.constraint(equalToConstant: 0)
+        statusSlotGap = statusSlot.leadingAnchor.constraint(equalTo: timeLabel.trailingAnchor)
+        timeBackgroundToLabel = timeBackground.leadingAnchor.constraint(equalTo: timeLabel.leadingAnchor, constant: -6)
+        timeBackgroundToClock = timeBackground.leadingAnchor.constraint(equalTo: leadingClock.leadingAnchor, constant: -6)
         bubbleWidth = bubble.widthAnchor.constraint(equalToConstant: 0)
         bubbleWidth.priority = UILayoutPriority(999)
         bubbleWidth.isActive = true
@@ -450,10 +486,22 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
             stack.trailingAnchor.constraint(equalTo: bubble.trailingAnchor),
             stack.bottomAnchor.constraint(equalTo: bubble.bottomAnchor),
 
-            timeLabel.trailingAnchor.constraint(equalTo: bubble.trailingAnchor, constant: -10),
+            statusSlot.trailingAnchor.constraint(equalTo: bubble.trailingAnchor, constant: -10),
+            statusSlot.topAnchor.constraint(equalTo: timeLabel.topAnchor),
+            statusSlot.bottomAnchor.constraint(equalTo: timeLabel.bottomAnchor),
+            statusSlotWidth,
+            statusSlotGap,
             timeLabel.bottomAnchor.constraint(equalTo: bubble.bottomAnchor, constant: -6),
-            timeBackground.leadingAnchor.constraint(equalTo: timeLabel.leadingAnchor, constant: -6),
-            timeBackground.trailingAnchor.constraint(equalTo: timeLabel.trailingAnchor, constant: 6),
+            slotClock.leadingAnchor.constraint(equalTo: statusSlot.leadingAnchor),
+            slotClock.centerYAnchor.constraint(equalTo: statusSlot.centerYAnchor),
+            firstCheck.leadingAnchor.constraint(equalTo: statusSlot.leadingAnchor),
+            firstCheck.centerYAnchor.constraint(equalTo: statusSlot.centerYAnchor),
+            secondCheck.leadingAnchor.constraint(equalTo: statusSlot.leadingAnchor, constant: Self.secondCheckOffset),
+            secondCheck.centerYAnchor.constraint(equalTo: statusSlot.centerYAnchor),
+            leadingClock.trailingAnchor.constraint(equalTo: timeLabel.leadingAnchor, constant: -Self.statusGap),
+            leadingClock.centerYAnchor.constraint(equalTo: timeLabel.centerYAnchor),
+            timeBackgroundToLabel,
+            timeBackground.trailingAnchor.constraint(equalTo: statusSlot.trailingAnchor, constant: 6),
             timeBackground.topAnchor.constraint(equalTo: timeLabel.topAnchor, constant: -2),
             timeBackground.bottomAnchor.constraint(equalTo: timeLabel.bottomAnchor, constant: 2),
 
@@ -487,6 +535,7 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
         imageTasks = []
         shownImages = [:]
         shownReactions = nil
+        shownStatus = nil
         outgoingChips.forEach { $0.removeFromSuperview() }
         outgoingChips = []
         avatarView.reset()
@@ -596,6 +645,8 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
         embeds: [ChatEmbed],
         reactions: [ChatReaction],
         actions: Actions,
+        status: ChatMessageStatus? = nil,
+        statusKey: String? = nil,
         reminderDue: Date? = nil,
         availableWidth: CGFloat,
     ) {
@@ -651,11 +702,19 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
             replyView.isHidden = true
         }
 
-        // The clock takes about the width of two digits, so the reserved space covers it.
-        let time = (message.isSending ? "00 " : "") + (message.timestamp.map(Self.timeFormatter.string(from:)) ?? "")
-        timeLabel.attributedText = Self.timeText(message.timestamp.map(Self.timeFormatter.string(from:)) ?? "", isSending: message.isSending)
+        let shownTime = message.timestamp.map(Self.timeFormatter.string(from:)) ?? ""
+        timeLabel.text = shownTime
         timeLabel.textColor = layout.isOwn ? UIColor.white.withAlphaComponent(0.75) : .secondaryLabel
-        timeLabel.accessibilityLabel = message.isSending ? "Sending" : nil
+        let showsLeadingClock = message.isSending && status == nil
+        configureStatus(status, leadingClock: showsLeadingClock, key: statusKey ?? message.id)
+        timeLabel.accessibilityLabel = switch status {
+        case .sending: "Sending"
+        case .sent: "\(shownTime), Sent"
+        case .seen: "\(shownTime), Seen"
+        case nil: showsLeadingClock ? "Sending" : nil
+        }
+        // The text keeps room for the time and what sits beside it.
+        let timeRowWidth = ceil(timeLabel.intrinsicContentSize.width) + Self.statusWidth(status: status, leadingClock: showsLeadingClock)
 
         let text: NSAttributedString? = if message.isDeleted {
             NSAttributedString(string: "Message deleted", attributes: [
@@ -672,7 +731,7 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
         let endsWithText = otherEmbeds == 0 && reactions.isEmpty
         if let text {
             bodyLabel.isHidden = false
-            bodyLabel.attributedText = endsWithText ? Self.reservingTimeSpace(in: text, time: time) : text
+            bodyLabel.attributedText = endsWithText ? Self.reservingTimeSpace(in: text, width: timeRowWidth) : text
         } else {
             bodyLabel.isHidden = true
             bodyLabel.attributedText = nil
@@ -687,7 +746,7 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
             embedsStack.addArrangedSubview(makeView(for: embed, index: index))
         }
         embedsStack.isHidden = otherEmbeds == 0
-        configureReactions(reactions, messageId: message.id, canReact: actions.canReact)
+        configureReactions(reactions, messageId: message.id)
 
         let hasHeader = layout.showsName || reply != nil || reminderDue != nil
         let hasMedia = !mediaStack.arrangedSubviews.isEmpty
@@ -724,6 +783,9 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
         if timeOnImage {
             timeLabel.textColor = .white
         }
+        for view in [slotClock, firstCheck, secondCheck, leadingClock] {
+            view.tintColor = timeLabel.textColor
+        }
 
         if hasMedia {
             // The images set the width, as in Telegram; a longer name or caption wraps or truncates.
@@ -741,7 +803,7 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
                 embedsStack.isHidden ? nil : embeds.allSatisfy(Self.fitsContent)
                     ? Self.fittingWidth(embedsStack) : Self.maxContentWidth(availableWidth: availableWidth, isOwn: layout.isOwn),
                 reactionsContainer.isHidden ? nil : reactionsRowWidth + 40,
-                timeSpacer.isHidden ? nil : timeLabel.intrinsicContentSize.width,
+                timeSpacer.isHidden ? nil : timeRowWidth,
             ].compactMap(\.self),
         )
     }
@@ -810,7 +872,7 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
         return "Due in " + (dueFormatter.string(from: max(60, (interval / 60).rounded(.up) * 60)) ?? "")
     }
 
-    private func configureReactions(_ reactions: [ChatReaction], messageId: String, canReact: Bool) {
+    private func configureReactions(_ reactions: [ChatReaction], messageId: String) {
         // Like Telegram, a reaction that arrives on a shown message pops in, one that goes shrinks out, and the
         // rest just move.
         let previous = shownReactions?.messageId == messageId ? shownReactions?.emojis : nil
@@ -858,11 +920,11 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
             chip.titleLabel?.numberOfLines = 1
             chip.setContentCompressionResistancePriority(.required, for: .horizontal)
             chip.accessibilityLabel = "\(custom?.label ?? reaction.emoji), \(reaction.count)\(reaction.includesYou ? ", including you" : "")"
-            // Interactive even where you can't react, so a long press or right-click still lists who reacted.
+            // Interactive even where you can't react, so a long press or right-click still lists who reacted. A
+            // tap asks whether you can react when it happens: cells shown from the snapshot are configured
+            // before the chat connects and says it accepts reactions, and aren't configured again for that.
             let emoji = reaction.emoji
-            if canReact {
-                chip.addAction(UIAction { [weak self] _ in self?.actions.toggleReaction(emoji) }, for: .primaryActionTriggered)
-            }
+            chip.addAction(UIAction { [weak self] _ in self?.actions.toggleReaction(emoji) }, for: .primaryActionTriggered)
             // Long press or right-click lists who reacted; it takes precedence over the bubble's own menu.
             let interaction = UIContextMenuInteraction(delegate: self)
             chip.addInteraction(interaction)
@@ -969,23 +1031,81 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
 
     /// Appends the time again in clear text, so the visible time label sits on the last line when it fits
     /// and the placeholder wraps to its own line when it doesn't, the way Telegram lays out bubbles.
-    /// The time, after a clock while the message is sending, as Telegram shows it. The clock is a template
-    /// symbol, so it takes the label's color, including white over an image.
-    private static func timeText(_ time: String, isSending: Bool) -> NSAttributedString {
-        let text = NSMutableAttributedString()
-        if isSending, let clock = UIImage(systemName: "clock", withConfiguration: UIImage.SymbolConfiguration(font: timeFont, scale: .small)) {
-            text.append(NSAttributedString(attachment: NSTextAttachment(image: clock)))
-            text.append(NSAttributedString(string: " "))
-        }
-        text.append(NSAttributedString(string: time))
-        text.addAttribute(.font, value: timeFont, range: NSRange(location: 0, length: text.length))
-        return text
+    /// Appends clear space as wide as the time row, so the visible time sits on the last line when it fits and
+    /// the space wraps to its own line when it doesn't, the way Telegram lays out bubbles.
+    private static func reservingTimeSpace(in text: NSAttributedString, width: CGFloat) -> NSAttributedString {
+        let result = NSMutableAttributedString(attributedString: text)
+        result.append(NSAttributedString(string: "   ", attributes: [.font: timeFont]))
+        // An attachment without an image draws a placeholder.
+        let space = NSTextAttachment(image: clearImage)
+        space.bounds = CGRect(x: 0, y: 0, width: width, height: 1)
+        result.append(NSAttributedString(attachment: space))
+        return result
     }
 
-    private static func reservingTimeSpace(in text: NSAttributedString, time: String) -> NSAttributedString {
-        let result = NSMutableAttributedString(attributedString: text)
-        result.append(NSAttributedString(string: "   \(time)", attributes: [.font: timeFont, .foregroundColor: UIColor.clear]))
-        return result
+    private static let clearImage = UIGraphicsImageRenderer(size: CGSize(width: 1, height: 1)).image { _ in }
+
+    // MARK: Status
+
+    private static let statusGap: CGFloat = 3
+    private static let symbolConfiguration = UIImage.SymbolConfiguration(font: timeFont, scale: .small)
+    private static let clockImage = UIImage(systemName: "clock", withConfiguration: symbolConfiguration)?.withRenderingMode(.alwaysTemplate)
+    private static let checkImage = UIImage(systemName: "checkmark", withConfiguration: symbolConfiguration)?.withRenderingMode(.alwaysTemplate)
+    /// The second check overlaps the first, as Telegram draws two.
+    private static let secondCheckOffset = ((checkImage?.size.width ?? 10) * 0.45).rounded()
+    /// One width for the clock and both checks, so a message keeps its size as its status changes.
+    private static let statusSlotContentWidth = ceil(max((checkImage?.size.width ?? 10) + secondCheckOffset, clockImage?.size.width ?? 10))
+
+    private static func statusWidth(status: ChatMessageStatus?, leadingClock: Bool) -> CGFloat {
+        if status != nil { return statusGap + statusSlotContentWidth }
+        if leadingClock { return ceil(clockImage?.size.width ?? 10) + statusGap }
+        return 0
+    }
+
+    /// Shows the status in place. On the same row, a change animates as Telegram's does: the clock fades, a check
+    /// pops in beside it, and the second check pops in beside the first. Layer animations, as for reaction chips,
+    /// since configure runs inside `apply`'s `performWithoutAnimation`.
+    private func configureStatus(_ status: ChatMessageStatus?, leadingClock showsLeadingClock: Bool, key: String) {
+        let previous = shownStatus?.key == key ? shownStatus : nil
+        shownStatus = (key, status, showsLeadingClock)
+
+        statusSlotWidth.constant = status == nil ? 0 : Self.statusSlotContentWidth
+        statusSlotGap.constant = status == nil ? 0 : Self.statusGap
+        timeBackgroundToLabel.isActive = !showsLeadingClock
+        timeBackgroundToClock.isActive = showsLeadingClock
+
+        let animates = previous != nil && window != nil
+        setVisible(slotClock, status == .sending, animated: animates)
+        setVisible(firstCheck, status == .sent || status == .seen, animated: animates)
+        setVisible(secondCheck, status == .seen, animated: animates)
+        setVisible(leadingClock, showsLeadingClock, animated: animates)
+
+        // A row that stops showing a status, such as a message to yourself, slides its time into the space.
+        if animates, let previous, previous.status != nil, status == nil {
+            let slide = CABasicAnimation(keyPath: "transform.translation.x")
+            slide.fromValue = -Self.statusWidth(status: previous.status, leadingClock: false)
+            slide.toValue = 0
+            slide.duration = 0.25
+            slide.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            for layer in [timeLabel.layer, statusSlot.layer] {
+                layer.add(slide, forKey: "status.slide")
+            }
+        }
+    }
+
+    private func setVisible(_ view: UIView, _ visible: Bool, animated: Bool) {
+        let wasVisible = view.alpha > 0
+        view.alpha = visible ? 1 : 0
+        guard animated, visible != wasVisible else { return }
+        if visible {
+            Self.popIn(view.layer)
+        } else {
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = 1
+            fade.toValue = 0
+            fade.duration = 0.2
+            view.layer.add(fade, forKey: "status.fade")
+        }
     }
 
     private func makeView(for embed: ChatEmbed, index: Int) -> UIView {

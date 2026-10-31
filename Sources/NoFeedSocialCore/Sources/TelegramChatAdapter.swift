@@ -5,9 +5,10 @@ import Foundation
 /// messages are read. Media, avatars and link previews load lazily through `tgfile:` URLs. In groups it offers
 /// members to mention: `@username`, or for someone without one a name mention. Shows who is typing and shares
 /// the user's own typing. An album, which Telegram sends as one message per photo or video, shows as one message;
-/// custom emoji in text and reactions draw as their images, and voice messages play in the chat.
+/// custom emoji in text and reactions draw as their images, and voice messages play in the chat. The user's
+/// messages show as seen once Telegram's outbox read cursor passes them.
 @MainActor
-public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUnseenReactions, ChatLiveUpdating, ChatReferenceResolving, ChatMentioning, ChatTyping, ChatCustomEmojis, ChatAudioPreviewing {
+public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUnseenReactions, ChatReadReceipts, ChatLiveUpdating, ChatReferenceResolving, ChatMentioning, ChatTyping, ChatCustomEmojis, ChatAudioPreviewing {
     public let network = SocialNetwork.telegram
     public let canReply = true
     public let acceptsAttachments = true
@@ -40,10 +41,15 @@ public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUn
     private var hasLoadedMembers = false
     /// Telegram's read cursor for incoming messages, locally ahead while a mark is pending.
     private var readInboxMaxId: Int32 = 0
+    /// How far others have read the user's messages.
+    private var readOutboxMaxId: Int32 = 0
+    /// Telegram shows no receipts in the chat with yourself.
+    private var isSavedMessages = false
     private var refreshTask: Task<Void, Never>?
     private var observer: UUID?
     private var statusObserver: UUID?
     private var reactionObserver: UUID?
+    private var readOutboxObserver: UUID?
     private var typingObserver: UUID?
     /// Who is typing, in the order they started, and when each indication lapses.
     private var typingUsers: [(userId: Int64, expires: Date)] = []
@@ -102,6 +108,8 @@ public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUn
         /// Saved so a private chat's "last seen" shows, freshly worded, as it opens.
         var userStatus: ChatPresence?
         var usernames: [String: Int64]?
+        var readOutboxMaxId: Int32?
+        var isSavedMessages: Bool?
     }
 
     public func restore(snapshot data: Data) {
@@ -113,6 +121,8 @@ public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUn
         avatars = snapshot.avatars
         usernames = snapshot.usernames ?? [:]
         readInboxMaxId = snapshot.readInboxMaxId
+        readOutboxMaxId = snapshot.readOutboxMaxId ?? 0
+        isSavedMessages = snapshot.isSavedMessages ?? false
         userStatus = listedStatus ?? snapshot.userStatus
         info.title = snapshot.title
         info.subtitle = userStatus?.text ?? snapshot.subtitle
@@ -124,6 +134,7 @@ public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUn
         return try? JSONEncoder().encode(Snapshot(
             version: Self.snapshotVersion, messages: Array(newest), names: names, avatars: avatars, readInboxMaxId: readInboxMaxId,
             title: info.title, subtitle: info.subtitle, userStatus: userStatus, usernames: usernames,
+            readOutboxMaxId: readOutboxMaxId, isSavedMessages: isSavedMessages,
         ))
     }
 
@@ -167,6 +178,8 @@ public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUn
         if dialog.readInboxMaxId > readInboxMaxId {
             readInboxMaxId = dialog.readInboxMaxId
         }
+        readOutboxMaxId = max(readOutboxMaxId, dialog.readOutboxMaxId)
+        isSavedMessages = dialog.isSavedMessages
         userStatus = dialog.userStatus
         info.subtitle = dialog.memberCount.map { "\($0) members" } ?? userStatus?.text ?? "Telegram"
     }
@@ -178,6 +191,9 @@ public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUn
         }
         reactionObserver = await client.addReactionObserver(peer: peer) { [weak self] in
             Task { @MainActor in await self?.refreshUnseenReactions() }
+        }
+        readOutboxObserver = await client.addReadOutboxObserver(peer: peer) { [weak self] maxId in
+            Task { @MainActor in self?.apply(readOutboxMaxId: maxId) }
         }
         typingObserver = await client.addTypingObserver(peer: peer) { [weak self] userId, isTyping in
             Task { @MainActor in self?.setTyping(userId: userId, isTyping: isTyping) }
@@ -191,12 +207,13 @@ public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUn
 
     public func stopFollowing() {
         refreshTask?.cancel()
-        for id in [observer, statusObserver, reactionObserver, typingObserver].compactMap(\.self) {
+        for id in [observer, statusObserver, reactionObserver, readOutboxObserver, typingObserver].compactMap(\.self) {
             Task { [client] in await client.removeUpdateObserver(id) }
         }
         observer = nil
         statusObserver = nil
         reactionObserver = nil
+        readOutboxObserver = nil
         typingObserver = nil
         typingUsers = []
         if updateTypingNames() {
@@ -386,6 +403,17 @@ public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUn
         else { return nil }
         readInboxMaxId = id
         return { [client, peer] in try await client.markRead(peer: peer, maxId: id) }
+    }
+
+    private func apply(readOutboxMaxId maxId: Int32) {
+        guard maxId > readOutboxMaxId else { return }
+        readOutboxMaxId = maxId
+        onChange?()
+    }
+
+    public func receipt(for message: ChatMessage) -> ChatReceipt? {
+        guard !isSavedMessages, let id = Int32(message.id) else { return nil }
+        return id <= readOutboxMaxId ? .seen : .sent
     }
 
     // MARK: Reactions

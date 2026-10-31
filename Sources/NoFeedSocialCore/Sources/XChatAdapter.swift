@@ -3,8 +3,9 @@ import Foundation
 /// One X Chat conversation: decrypts its events, pages its history, follows new events from X's chat WebSocket
 /// (`XChatLiveFeed`), sends text and reactions, and moves the viewer's read marker as messages are read.
 /// Reactions, edits and deletes are events of their own, applied to the messages they name by sequence id.
+/// The user's messages show as seen once someone else's read marker passes them.
 @MainActor
-public final class XChatAdapter: ChatAdapter, ChatReactionSending, ChatLiveUpdating, ChatReferenceResolving {
+public final class XChatAdapter: ChatAdapter, ChatReactionSending, ChatLiveUpdating, ChatReferenceResolving, ChatReadReceipts {
     public let network = SocialNetwork.x
     public let canReply = false
     public let acceptsAttachments = false
@@ -31,6 +32,8 @@ public final class XChatAdapter: ChatAdapter, ChatReactionSending, ChatLiveUpdat
     private var conversationToken: String?
     /// The viewer's read marker, locally ahead of X while a mark is pending.
     private var readUntil: Int64 = 0
+    /// The furthest anyone else has read, by their read markers; people who turned read receipts off send none.
+    private var othersReadUntil: Int64 = 0
     private var hasLoadedHistory = false
     private let liveFeed: XChatLiveFeed
     private var observation: UUID?
@@ -74,6 +77,7 @@ public final class XChatAdapter: ChatAdapter, ChatReactionSending, ChatLiveUpdat
         if let viewerId {
             people[viewerId] = ChatUser(id: viewerId, name: "You", avatarURL: nil)
             readUntil = max(readUntil, XChatClient.readUntil(conversation.readEvents, userId: viewerId))
+            othersReadUntil = max(othersReadUntil, conversation.readEvents.filter { $0.senderId != viewerId }.compactMap(\.readUntil).max() ?? 0)
         }
         info.showsSenderNames = conversation.isGroup
         if conversation.isGroup {
@@ -137,6 +141,11 @@ public final class XChatAdapter: ChatAdapter, ChatReactionSending, ChatLiveUpdat
         }
     }
 
+    public func receipt(for message: ChatMessage) -> ChatReceipt? {
+        guard let sequence = Int64(message.id) else { return nil }
+        return sequence <= othersReadUntil ? .seen : .sent
+    }
+
     // MARK: Display
 
     private func merge(_ page: [XChatEvent]) async {
@@ -150,8 +159,12 @@ public final class XChatAdapter: ChatAdapter, ChatReactionSending, ChatLiveUpdat
             if let token = event.conversationToken {
                 conversationToken = token
             }
-            if event.senderId == viewerId, let read = event.readUntil {
-                readUntil = max(readUntil, read)
+            if let read = event.readUntil {
+                if event.senderId == viewerId {
+                    readUntil = max(readUntil, read)
+                } else if viewerId != nil {
+                    othersReadUntil = max(othersReadUntil, read)
+                }
             }
         }
         publish()

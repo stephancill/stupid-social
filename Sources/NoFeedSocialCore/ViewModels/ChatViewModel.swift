@@ -309,6 +309,14 @@ public struct ChatAttachment: Equatable {
     }
 }
 
+/// How far one of the user's messages has got, for chats whose network reports it (`ChatReadReceipts`).
+public enum ChatReceipt: Equatable, Sendable {
+    /// The network has it; no one else has read it yet.
+    case sent
+    /// Someone else in the chat has read it.
+    case seen
+}
+
 public enum ChatConnectionState: Equatable {
     case connecting
     case connected
@@ -439,6 +447,13 @@ public class ChatViewModel: ObservableObject {
         didSet { reportSummary() }
     }
 
+    /// Sent or seen for the user's loaded messages, by message id, in chats whose network reports it
+    /// (`ChatReadReceipts`); empty otherwise.
+    @Published public internal(set) var receipts: [String: ChatReceipt] = [:]
+    /// Whether the network reports receipts, so the user's messages keep room after the time for the clock and
+    /// then the checks, and change state in place.
+    public internal(set) var showsReadReceipts = false
+
     /// Names of the other users typing, in the order they started.
     @Published public internal(set) var typingNames: [String] = []
     /// User id → name, for showing `@` mentions by name.
@@ -557,6 +572,12 @@ public class ChatViewModel: ObservableObject {
 
     /// The user saw these messages, and with them their reactions.
     public func reactionsSeen(on _: Set<String>) {}
+
+    /// Sent or seen for one of the user's confirmed messages, where the network reports it.
+    public func receipt(for message: ChatMessage) -> ChatReceipt? {
+        guard message.isOwn, message.isUserMessage, !message.isSending, !message.isDeleted else { return nil }
+        return receipts[message.id]
+    }
 
     /// Scrolls to the oldest message with reactions the user hasn't seen.
     public func jumpToNextUnseenReaction() async {

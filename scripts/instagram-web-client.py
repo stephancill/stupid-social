@@ -414,6 +414,27 @@ class InstagramWebClient:
             },
         )
 
+    def direct_receipts(self, thread_fbid: str) -> dict[str, Any]:
+        """Who has read how far: each participant's `slide_read_receipts` watermark, and whether the viewer's
+        newest messages are at or before someone else's. No ids or text, only times and flags."""
+        thread = self.direct_thread(thread_fbid)["data"]["get_slide_thread_nullable"]["as_ig_direct_thread"]
+        viewer = (thread.get("viewer") or {}).get("interop_messaging_user_fbid")
+        receipts = thread.get("slide_read_receipts") or []
+        others = [int(r.get("watermark_timestamp_ms") or 0) for r in receipts if r.get("participant_fbid") != viewer]
+        seen_until = max(others, default=0)
+        own = [m for m in (thread.get("slide_messages") or {}).get("edges", []) if m["node"].get("sender_fbid") == viewer]
+        return {
+            "is_group": thread.get("is_group"),
+            "receipts": [
+                {"is_viewer": r.get("participant_fbid") == viewer, "watermark_timestamp_ms": r.get("watermark_timestamp_ms")}
+                for r in receipts
+            ],
+            "own_messages": [
+                {"timestamp_ms": m["node"].get("timestamp_ms"), "seen": int(m["node"].get("timestamp_ms") or 0) <= seen_until}
+                for m in own[:5]
+            ],
+        }
+
     def direct_seen(self, thread_fbid: str, message_id: str) -> dict[str, Any]:
         """Marks the viewer's read receipt at `message_id`. The mutation takes the legacy `thread_id`
         (`340282366841710...`), so the thread is loaded first to find it."""
@@ -1291,6 +1312,8 @@ def build_parser() -> argparse.ArgumentParser:
     direct_thread = subparsers.add_parser("direct-thread", help="One Direct thread's newest messages (GraphQL IGDThreadDetailQuery).")
     direct_thread.add_argument("thread_fbid")
     direct_thread.add_argument("--cursor", help="Page older messages from slide_messages.page_info.end_cursor (IGDMessageListOffMsysQuery).")
+    direct_receipts = subparsers.add_parser("direct-receipts", help="Participants' read watermarks and whether the viewer's newest messages were read.")
+    direct_receipts.add_argument("thread_fbid")
     direct_seen = subparsers.add_parser("direct-seen", help="Mark a Direct thread read up to a message (useIGDMarkThreadAsReadMutation).")
     direct_seen.add_argument("thread_fbid")
     direct_seen.add_argument("message_id")
@@ -1447,6 +1470,8 @@ def main() -> None:
         result = client.session_check()
     elif args.command == "direct-thread":
         result = client.direct_thread(args.thread_fbid, args.cursor)
+    elif args.command == "direct-receipts":
+        result = client.direct_receipts(args.thread_fbid)
     elif args.command == "direct-seen":
         result = client.direct_seen(args.thread_fbid, args.message_id)
     elif args.command == "direct-react":

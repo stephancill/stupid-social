@@ -187,7 +187,9 @@ public struct TelegramDialogState: Sendable {
     /// The other person's last-seen status in a private chat; `nil` in groups, Saved Messages and with bots.
     public let userStatus: ChatPresence?
     public let readInboxMaxId: Int32
+    /// Others have read the user's messages up to this one: in a private chat the other person, in a group anyone.
     public let readOutboxMaxId: Int32
+    public let isSavedMessages: Bool
     /// The user's messages with reactions they haven't seen.
     public let unreadReactionsCount: Int
 }
@@ -533,6 +535,32 @@ public actor TelegramClient: ChatListProvider {
         }
     }
 
+    /// Calls `observer` with how far others have read the user's messages in `peer`, when Telegram pushes it.
+    public func addReadOutboxObserver(peer: TelegramPeer, _ observer: @escaping @Sendable (Int32) -> Void) -> UUID {
+        let id = UUID()
+        observers[id] = { update in
+            if let maxId = Self.readOutboxMaxId(in: update, peer: peer) {
+                observer(maxId)
+            }
+        }
+        return id
+    }
+
+    static func readOutboxMaxId(in update: TLObject, peer: TelegramPeer) -> Int32? {
+        switch update.name {
+        case "updateShort":
+            update["update"]?.object.flatMap { readOutboxMaxId(in: $0, peer: peer) }
+        case "updates", "updatesCombined":
+            update.objects("updates").compactMap { readOutboxMaxId(in: $0, peer: peer) }.max()
+        case "updateReadHistoryOutbox":
+            update["peer"]?.object.map(peerKey) == peer.key ? update["max_id"]?.int : nil
+        case "updateReadChannelOutbox":
+            peer.kind == .channel && update["channel_id"]?.long == peer.id ? update["max_id"]?.int : nil
+        default:
+            nil
+        }
+    }
+
     /// Calls `observer` when Telegram pushes a change to the reactions on one of `peer`'s messages.
     public func addReactionObserver(peer: TelegramPeer, _ observer: @escaping @Sendable () -> Void) -> UUID {
         let id = UUID()
@@ -854,9 +882,11 @@ public actor TelegramClient: ChatListProvider {
         let title: String
         var memberCount: Int?
         var userStatus: ChatPresence?
+        var isSavedMessages = false
         if peer.kind == .user {
             let user = result.objects("users").first { $0["id"]?.long == peer.id }
-            title = user?.flag("self") == true ? "Saved Messages" : user.map(Self.name(of:)) ?? "Telegram"
+            isSavedMessages = user?.flag("self") == true
+            title = isSavedMessages ? "Saved Messages" : user.map(Self.name(of:)) ?? "Telegram"
             userStatus = user.flatMap(Self.userStatus)
         } else {
             let chat = result.objects("chats").first { $0["id"]?.long == peer.id }
@@ -870,6 +900,7 @@ public actor TelegramClient: ChatListProvider {
             userStatus: userStatus,
             readInboxMaxId: dialog["read_inbox_max_id"]?.int ?? 0,
             readOutboxMaxId: dialog["read_outbox_max_id"]?.int ?? 0,
+            isSavedMessages: isSavedMessages,
             unreadReactionsCount: Int(dialog["unread_reactions_count"]?.int ?? 0),
         )
     }

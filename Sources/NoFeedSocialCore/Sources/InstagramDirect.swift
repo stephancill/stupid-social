@@ -73,6 +73,14 @@ struct InstagramDirectThread: Decodable {
         return instagramDirectDate(receipt.watermarkTimestampMs)
     }
 
+    /// The furthest anyone else has read the thread.
+    var othersReadAt: Date? {
+        (slideReadReceipts ?? [])
+            .filter { $0.participantFbid != viewerFbid }
+            .compactMap { instagramDirectDate($0.watermarkTimestampMs) }
+            .max()
+    }
+
     /// Others' messages newer than the viewer's read receipt, among the loaded ones.
     var unreadMessages: [InstagramDirectMessage] {
         let readAt = viewerReadAt ?? .distantPast

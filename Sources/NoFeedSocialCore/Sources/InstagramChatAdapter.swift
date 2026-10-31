@@ -2,8 +2,9 @@ import Foundation
 
 /// One Instagram Direct thread: pages its history, is polled for new messages (the web gets them over MQTT,
 /// which the app doesn't use), sends text and replies, reacts, and moves the read receipt as messages are read.
+/// The user's messages show as seen once someone else's read receipt passes them.
 @MainActor
-public final class InstagramChatAdapter: ChatAdapter, ChatReactionSending {
+public final class InstagramChatAdapter: ChatAdapter, ChatReactionSending, ChatReadReceipts {
     public let network = SocialNetwork.instagram
     public let canReply = true
     public let acceptsAttachments = false
@@ -26,6 +27,8 @@ public final class InstagramChatAdapter: ChatAdapter, ChatReactionSending {
     private var legacyThreadId: String?
     /// Where the viewer's read receipt is, locally ahead of Instagram while a mark is pending.
     private var readAt: Date?
+    /// The furthest anyone else has read.
+    private var othersReadAt: Date?
     /// Whether the thread came from Instagram this visit; until then the messages are the cached snapshot.
     private var hasLoadedHistory = false
 
@@ -51,6 +54,7 @@ public final class InstagramChatAdapter: ChatAdapter, ChatReactionSending {
         let title: String
         let subtitle: String
         let showsSenderNames: Bool
+        var othersReadAt: Date?
     }
 
     public func restore(snapshot data: Data) {
@@ -62,6 +66,7 @@ public final class InstagramChatAdapter: ChatAdapter, ChatReactionSending {
         viewerFbid = snapshot.viewerFbid
         legacyThreadId = snapshot.legacyThreadId
         readAt = snapshot.readAt
+        othersReadAt = snapshot.othersReadAt
         info = ChatInfo(title: snapshot.title, subtitle: snapshot.subtitle, showsSenderNames: snapshot.showsSenderNames)
         publish()
     }
@@ -70,7 +75,7 @@ public final class InstagramChatAdapter: ChatAdapter, ChatReactionSending {
         let newest = loaded.values.sorted { ($0.sentAt ?? .distantPast, $0.id) < ($1.sentAt ?? .distantPast, $1.id) }.suffix(ChatSnapshotCache.messageLimit)
         return try? JSONEncoder().encode(Snapshot(
             messages: Array(newest), people: people, viewerFbid: viewerFbid, legacyThreadId: legacyThreadId, readAt: readAt,
-            title: info.title, subtitle: info.subtitle, showsSenderNames: info.showsSenderNames,
+            title: info.title, subtitle: info.subtitle, showsSenderNames: info.showsSenderNames, othersReadAt: othersReadAt,
         ))
     }
 
@@ -92,6 +97,9 @@ public final class InstagramChatAdapter: ChatAdapter, ChatReactionSending {
         legacyThreadId = thread.threadId
         if let viewerReadAt = thread.viewerReadAt, viewerReadAt > (readAt ?? .distantPast) {
             readAt = viewerReadAt
+        }
+        if let othersRead = thread.othersReadAt, othersRead > (othersReadAt ?? .distantPast) {
+            othersReadAt = othersRead
         }
         for user in thread.users ?? [] {
             guard let fbid = user.interopMessagingUserFbid else { continue }
@@ -151,6 +159,11 @@ public final class InstagramChatAdapter: ChatAdapter, ChatReactionSending {
         return { [client, threadFbid, messageId = message.id] in
             try await client.markDirectRead(threadFbid: threadFbid, threadId: legacyThreadId, messageId: messageId)
         }
+    }
+
+    public func receipt(for message: ChatMessage) -> ChatReceipt? {
+        guard let sent = message.timestamp else { return nil }
+        return sent <= (othersReadAt ?? .distantPast) ? .seen : .sent
     }
 
     // MARK: Display

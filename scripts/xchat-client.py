@@ -636,6 +636,28 @@ def unread_count(item: dict[str, Any], keys: dict[str, Any]) -> int:
             count += 1
     return count
 
+def read_receipts(item: dict[str, Any], viewer_id: str) -> dict[str, Any]:
+    """How far others have read (their newest read markers) against the viewer's newest create event among the
+    inbox's latest events. No ids or contents."""
+    others_read = 0
+    for entry in item.get("latest_read_events_per_participant") or []:
+        event = thrift(base64.b64decode(entry["latest_mark_conversation_read_event"]))
+        marker = event.get(7, {}).get(12)
+        if marker and text(event.get(3)) != viewer_id:
+            others_read = max(others_read, int(text(marker.get(1)) or 0))
+    own = [
+        int(text(event.get(1)) or 0)
+        for event in (thrift(base64.b64decode(blob)) for blob in item.get("latest_message_events") or [])
+        if 1 in event.get(7, {}) and text(event.get(3)) == viewer_id
+    ]
+    newest = max(own, default=None)
+    return {
+        "read_markers": len(item.get("latest_read_events_per_participant") or []),
+        "others_read_set": others_read > 0,
+        "newest_own_seen": None if newest is None else newest <= others_read,
+    }
+
+
 def group_names_summary(items: list[dict[str, Any]], keys: dict[str, Any], show_names: bool) -> list[dict[str, Any]]:
     """Each group's `group_metadata.group_name`: sealed (version 0) under one of the conversation keys, which it
     doesn't name, so each is tried. Names only with --show-names."""
@@ -927,6 +949,7 @@ def build_parser() -> argparse.ArgumentParser:
         "recover-keys",
         help="Recover the viewer's private keys through Juicebox with X_CHAT_PIN. Uses a PIN guess if the PIN is wrong.",
     )
+    subparsers.add_parser("read-receipts", help="Per conversation: whether others' read markers cover the viewer's newest message.")
     names = subparsers.add_parser("group-names", help="Decrypt each group's sealed name (lengths; names with --show-names).")
     names.add_argument("--show-names", action="store_true")
     conversation = subparsers.add_parser("conversation", help="Decrypt the newest events of one conversation (shapes; text with --show-text).")
@@ -981,6 +1004,9 @@ def main() -> None:
         x_probe.write_output(args.output, items)
         keys = load_keys()
         result = {"conversations": len(items), "unread": [unread_count(item, keys) for item in items]}
+    elif args.command == "read-receipts":
+        keys = load_keys()
+        result = [read_receipts(item, keys["user_id"]) for item in client.inbox_items()]
     elif args.command == "recover-keys":
         result = client.recover_keys()
     elif args.command == "conversation":
