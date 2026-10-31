@@ -1332,7 +1332,10 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
         let text = UIStackView(arrangedSubviews: [header, titleLabel, subtitleLabel])
         text.axis = .vertical
         text.spacing = 2
-        text.alignment = .leading
+        // Fill, so the labels take the column's width by constraint. Leading let them keep the width they wrapped
+        // at, and the cell lays its embeds out once at a zero frame when it is configured, so a card configured
+        // before the cell had its width (a message arriving in an open chat) stayed one character wide.
+        text.alignment = .fill
         text.isLayoutMarginsRelativeArrangement = true
         text.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0)
 
