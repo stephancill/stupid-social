@@ -17,6 +17,7 @@ Examples:
   scripts/apron-web-client.py push-capture --port 8099   # local push endpoint that decrypts what it receives
   scripts/apron-web-client.py push-register ws://127.0.0.1:8080/ws --endpoint http://127.0.0.1:8099/p --wake mentions
   scripts/apron-web-client.py mute ws://127.0.0.1:8080/ws --room general
+  scripts/apron-web-client.py read-cursors ws://127.0.0.1:8090/ws --token-file logs/apron-local/tokens/bob --room general --read 1793116210787
   scripts/apron-web-client.py emoji wss://server.apron.chat/ --scan "12:30:apron::SideTable:" --images
 """
 
@@ -230,6 +231,35 @@ def cmd_rooms(session: Session, args: argparse.Namespace) -> None:
         output["room_list"] = session.request("room_list", params)
     session.drain(args.wait)
     output["notifications"] = session.notifications
+    print_json(output)
+
+
+def cmd_read_cursors(session: Session, args: argparse.Namespace) -> None:
+    """Read receipts (§4.6): the cursors the server sends after a joined `room_list`, per room and user, with
+    which are someone else's; --read moves this user's cursor in --room to that message, and the `activity`
+    frames that come back show whether the server relays it to the room or only to the user's own connections.
+    Run `listen` as another member at the same time to see what they receive."""
+    auth = authenticate(session, args)
+    you = auth.get("you", {}).get("user_id")
+    session.notifications.clear()
+    listing = session.request("room_list", {"filter": "joined"})
+    session.drain(args.wait)
+    cursors: dict[str, dict[str, str]] = {}
+    for frame in session.notifications:
+        params = frame.get("params", {})
+        if frame.get("method") == "activity" and "read_message_id" in params:
+            cursors.setdefault(params["room_id"], {})[params.get("from", {}).get("user_id")] = params["read_message_id"]
+    output: dict[str, Any] = {
+        "you": you,
+        "rooms": [room["room_id"] for room in listing.get("joined", [])],
+        "cursors_after_room_list": cursors,
+        "others_shared": any(user != you for users in cursors.values() for user in users),
+    }
+    if args.read:
+        session.notifications.clear()
+        session.ws.send_text(json.dumps({"method": "activity", "params": {"room_id": args.room, "read_message_id": args.read}}))
+        session.drain(args.wait)
+        output["after_read"] = [n for n in session.notifications if n.get("method") == "activity"]
     print_json(output)
 
 
@@ -921,6 +951,9 @@ def main() -> None:
     rate.add_argument("--seconds", type=int, default=8)
     rate.add_argument("--stops", action="store_true")
     add("listen", cmd_listen)
+    cursors = add("read-cursors", cmd_read_cursors)
+    cursors.add_argument("--room", default="general")
+    cursors.add_argument("--read", help="message_id to move this user's read cursor to in --room")
     signup = add("email-signup", cmd_email_signup)
     signup.add_argument("--email", required=True)
     signup.add_argument("--user-id")

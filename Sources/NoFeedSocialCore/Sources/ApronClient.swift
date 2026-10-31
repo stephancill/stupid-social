@@ -94,6 +94,10 @@ public final class ApronConnection {
     /// sign-in sends the ones in effect (§4.5.4).
     public private(set) var mutedRooms: Set<String> = []
     public private(set) var roomWakes: [String: [String]] = [:]
+    /// room id → user id → the furthest message they have read, from every `activity` read cursor this
+    /// connection received (§4.6). Servers that relay cursors to the room send each member's after `room_list`,
+    /// before any chat observes the connection, so they are kept here.
+    public private(set) var readCursors: [String: [String: Int64]] = [:]
 
     private let task: URLSessionWebSocketTask
     private let decoder = JSONDecoder()
@@ -266,6 +270,9 @@ public final class ApronConnection {
         if method == "status", let status = frame["params"] as? [String: Any] {
             applyStatus(status)
         }
+        if method == "activity", let activity = try? decoder.decode(ApronActivity.self, from: params) {
+            applyReadCursor(activity)
+        }
         for observer in notificationObservers.values {
             observer(method, params)
         }
@@ -284,6 +291,15 @@ public final class ApronConnection {
         if let wake = status["wake"] {
             roomWakes[roomId] = wake as? [String]
         }
+    }
+
+    /// Cursors only move forward (§4.6).
+    func applyReadCursor(_ activity: ApronActivity) {
+        guard let roomId = activity.roomId, let userId = activity.from?.userId,
+              let cursor = activity.readMessageId.flatMap(Int64.init),
+              cursor > readCursors[roomId]?[userId] ?? 0
+        else { return }
+        readCursors[roomId, default: [:]][userId] = cursor
     }
 
     /// Pings at the server's interval, and closes the connection when a ping got nothing back by the next one:
