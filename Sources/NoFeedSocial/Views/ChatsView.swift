@@ -88,6 +88,7 @@ struct ChatsView: View {
             }
         }
         .searchBar(text: $query, placement: .navigationBarDrawer(displayMode: .always))
+        .searchBarKeepsFill()
         .onChange(of: selection == nil && !isShowingArchive && settingsAccountId == nil) { _, isOnList in
             isShowingChat = !isOnList
             if isOnList {

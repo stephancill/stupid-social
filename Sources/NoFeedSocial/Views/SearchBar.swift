@@ -11,4 +11,49 @@ extension View {
     func searchBar(text: Binding<String>, isPresented: Binding<Bool>, prompt: String = "Search", placement: SearchFieldPlacement = .automatic) -> some View {
         searchable(text: text, isPresented: isPresented, placement: placement, prompt: prompt)
     }
+
+    /// Keeps the navigation-bar drawer's search field on its plain fill when content scrolls under the bar. There
+    /// iOS swaps the fill for glass, and an interactive swipe back to the screen shows the bar through a portal
+    /// that doesn't draw glass, so the field lost its capsule until the pop finished.
+    func searchBarKeepsFill() -> some View {
+        background(SearchFieldFillKeeper().frame(width: 0, height: 0))
+    }
+}
+
+private struct SearchFieldFillKeeper: UIViewControllerRepresentable {
+    func makeUIViewController(context _: Context) -> Controller {
+        Controller()
+    }
+
+    func updateUIViewController(_: Controller, context _: Context) {}
+
+    final class Controller: UIViewController {
+        private var observation: NSKeyValueObservation?
+
+        override func viewWillAppear(_ animated: Bool) {
+            super.viewWillAppear(animated)
+            observeField()
+        }
+
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            observeField()
+        }
+
+        private func observeField() {
+            var controller: UIViewController? = parent
+            while let current = controller, current.navigationItem.searchController == nil {
+                controller = current.parent
+            }
+            guard let field = controller?.navigationItem.searchController?.searchBar.searchTextField,
+                  observation == nil
+            else { return }
+            observation = field.observe(\.backgroundColor, options: [.initial, .new]) { field, _ in
+                MainActor.assumeIsolated {
+                    guard field.backgroundColor != .secondarySystemBackground else { return }
+                    field.backgroundColor = .secondarySystemBackground
+                }
+            }
+        }
+    }
 }
