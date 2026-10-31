@@ -82,6 +82,7 @@ public final class GitHubNotificationSource: NotificationFetching, ProfileFetchi
         guard let loaded = try await feedLoader.load(credentials: credentials) else {
             return GitHubFeedParseResult(storyGroups: [], notificationItems: [])
         }
+        metadataStore.status = .valid
         persistRefreshedSession(from: loaded.response, original: credentials)
         return loaded.parsed
     }

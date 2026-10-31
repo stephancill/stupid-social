@@ -26,6 +26,7 @@ public final class GitHubActivitySource: GitHubActivityFetching {
 
     private func fetch(credentials: GitHubCredentials) async throws -> [GitHubActivityGroup] {
         guard let loaded = try await feedLoader.load(credentials: credentials) else { return [] }
+        metadataStore.status = .valid
         persistRefreshedSession(from: loaded.response, original: credentials)
         return loaded.parsed.storyGroups
     }
