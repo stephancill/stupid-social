@@ -104,9 +104,11 @@ final class ChatReactionGridView: UIView, UICollectionViewDelegate, UISearchText
             addSubview(subview)
         }
         NSLayoutConstraint.activate([
+            // The size of the emoji keyboard's search field: 40 pt tall, 9 pt in from each side.
             searchField.topAnchor.constraint(equalTo: topAnchor, constant: 12),
-            searchField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            searchField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            searchField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 9),
+            searchField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -9),
+            searchField.heightAnchor.constraint(equalToConstant: 40),
             collectionView.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 4),
             collectionView.leadingAnchor.constraint(equalTo: leadingAnchor),
             collectionView.trailingAnchor.constraint(equalTo: trailingAnchor),
