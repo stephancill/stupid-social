@@ -25,7 +25,7 @@ struct ChatUIKitView: UIViewControllerRepresentable {
 }
 
 final class ChatViewController: UIViewController, UICollectionViewDelegate, UITextViewDelegate,
-    PHPickerViewControllerDelegate, UIDocumentPickerDelegate
+    PHPickerViewControllerDelegate, UIDocumentPickerDelegate, UIDropInteractionDelegate, UICollectionViewDropDelegate
 {
     /// One section per calendar day, headed by its date (`ChatDateHeaderView`).
     private enum Section: Hashable {
@@ -144,6 +144,8 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     private let attachButton = UIButton(type: .system)
     private let inputPill = ChatGlass.make(cornerRadius: 22)
     private let attachmentPreview = UIStackView()
+    /// Shown over the chat while something it can take is dragged over it.
+    private let dropHighlight = UIView()
     private let replyPreview = UIStackView()
     private let replyPreviewName = UILabel()
     private let replyPreviewText = UILabel()
@@ -356,6 +358,8 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         attachmentThumbnail.layer.cornerRadius = 8
         attachmentThumbnail.layer.cornerCurve = .continuous
         attachmentThumbnail.tintColor = .secondaryLabel
+        attachmentThumbnail.isUserInteractionEnabled = true
+        attachmentThumbnail.addGestureRecognizer(ChatActionTapGesture { [weak self] in self?.showStagedImage() })
         NSLayoutConstraint.activate([
             attachmentThumbnail.widthAnchor.constraint(equalToConstant: 48),
             attachmentThumbnail.heightAnchor.constraint(equalToConstant: 48),
@@ -397,10 +401,10 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
 
         var sendConfiguration = UIButton.Configuration.plain()
         sendConfiguration.image = UIImage(systemName: "arrow.up.circle.fill")
+        // A white arrow on the outgoing bubble color rather than the app's monochrome tint, in both appearances.
         sendConfiguration.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: 28)
+            .applying(UIImage.SymbolConfiguration(paletteColors: [.white, .systemBlue]))
         sendConfiguration.contentInsets = .zero
-        // Match the outgoing bubble color rather than the app's monochrome tint.
-        sendConfiguration.baseForegroundColor = .systemBlue
         sendButton.configuration = sendConfiguration
         sendButton.accessibilityLabel = "Send"
         sendButton.addAction(UIAction { [weak self] _ in self?.send() }, for: .primaryActionTriggered)
@@ -431,6 +435,14 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         composer.addArrangedSubview(configureSearchBar())
         composer.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(composer)
+        // One drop target for the whole chat: the composer's own text drop would otherwise take drops over it, and
+        // the message list has a drop interaction of its own that takes drops over the messages.
+        for interaction in textView.interactions where interaction is UIDropInteraction {
+            textView.removeInteraction(interaction)
+        }
+        view.addInteraction(UIDropInteraction(delegate: self))
+        collectionView.dropDelegate = self
+        configureDropHighlight()
         if #available(iOS 26.0, *) {
             // The same soft edge as under the navigation bar, extended up behind the floating composer.
             collectionView.bottomEdgeEffect.style = .soft
@@ -926,13 +938,19 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
 
         if let attachment {
             attachmentPreview.isHidden = false
-            attachmentName.text = attachment.filename
             if attachment.isImage, let image = UIImage(data: attachment.data) {
+                // The image speaks for itself; tapping it shows it full screen.
+                attachmentName.text = nil
                 attachmentThumbnail.image = image
                 attachmentThumbnail.contentMode = .scaleAspectFill
+                attachmentThumbnail.isAccessibilityElement = true
+                attachmentThumbnail.accessibilityLabel = "Attached Image"
+                attachmentThumbnail.accessibilityTraits = [.image, .button]
             } else {
+                attachmentName.text = attachment.filename
                 attachmentThumbnail.image = UIImage(systemName: "doc.fill")
                 attachmentThumbnail.contentMode = .center
+                attachmentThumbnail.isAccessibilityElement = false
             }
         } else {
             attachmentPreview.isHidden = true
@@ -1249,7 +1267,11 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
         picker.dismiss(animated: true)
         guard let provider = results.first?.itemProvider else { return }
-        let baseName = provider.suggestedName ?? "photo"
+        stageImage(from: provider)
+    }
+
+    private func stageImage(from provider: NSItemProvider) {
+        let baseName = provider.suggestedName.map { ($0 as NSString).deletingPathExtension } ?? "photo"
         if provider.hasItemConformingToTypeIdentifier(UTType.gif.identifier) {
             // Keep GIFs as is so they stay animated.
             provider.loadDataRepresentation(forTypeIdentifier: UTType.gif.identifier) { [weak self] data, _ in
@@ -1268,6 +1290,19 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         }
     }
 
+    /// Shows the staged image full screen, from a temporary copy since the viewer reads (and saves) a file.
+    private func showStagedImage() {
+        guard let attachment, attachment.isImage, let image = attachmentThumbnail.image else { return }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(attachment.filename)
+        do {
+            try attachment.data.write(to: url)
+        } catch {
+            viewModel.errorMessage = error.localizedDescription
+            return
+        }
+        present(ChatImageViewerController(url: url, image: image, alt: attachment.filename), animated: true)
+    }
+
     func documentPicker(_: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
         guard let url = urls.first else { return }
         do {
@@ -1281,6 +1316,127 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
             )
         } catch {
             viewModel.errorMessage = error.localizedDescription
+        }
+    }
+
+    // MARK: Drop
+
+    private func configureDropHighlight() {
+        dropHighlight.backgroundColor = UIColor.systemBlue.withAlphaComponent(0.12)
+        dropHighlight.layer.borderColor = UIColor.systemBlue.cgColor
+        dropHighlight.layer.borderWidth = 2
+        dropHighlight.layer.cornerRadius = 16
+        dropHighlight.layer.cornerCurve = .continuous
+        dropHighlight.isUserInteractionEnabled = false
+        dropHighlight.alpha = 0
+        dropHighlight.translatesAutoresizingMaskIntoConstraints = false
+        let label = UILabel()
+        label.text = "Drop to Attach"
+        label.font = .preferredFont(forTextStyle: .headline)
+        label.textColor = .systemBlue
+        label.translatesAutoresizingMaskIntoConstraints = false
+        dropHighlight.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.centerXAnchor.constraint(equalTo: dropHighlight.centerXAnchor),
+            label.centerYAnchor.constraint(equalTo: dropHighlight.centerYAnchor),
+        ])
+    }
+
+    /// The highlight goes on the window so it covers the navigation bar too, and leaves it once faded out.
+    private func setDropHighlighted(_ highlighted: Bool) {
+        if highlighted, let window = view.window, dropHighlight.superview !== window {
+            window.addSubview(dropHighlight)
+            NSLayoutConstraint.activate([
+                dropHighlight.topAnchor.constraint(equalTo: window.topAnchor),
+                dropHighlight.bottomAnchor.constraint(equalTo: window.bottomAnchor),
+                dropHighlight.leadingAnchor.constraint(equalTo: window.leadingAnchor),
+                dropHighlight.trailingAnchor.constraint(equalTo: window.trailingAnchor),
+            ])
+        }
+        dropHighlight.superview?.bringSubviewToFront(dropHighlight)
+        UIView.animate(withDuration: 0.15) {
+            self.dropHighlight.alpha = highlighted ? 1 : 0
+        } completion: { _ in
+            if self.dropHighlight.alpha == 0 {
+                self.dropHighlight.removeFromSuperview()
+            }
+        }
+    }
+
+    private func dropsImage(_ session: UIDropSession) -> Bool {
+        viewModel.canAttach && session.items.count == 1 && session.hasItemsConforming(toTypeIdentifiers: [UTType.image.identifier])
+    }
+
+    /// An image dropped anywhere on the chat is staged like one picked from Photos; text goes into the composer,
+    /// which no longer takes drops itself.
+    func dropInteraction(_: UIDropInteraction, canHandle session: UIDropSession) -> Bool {
+        canDrop(session)
+    }
+
+    func dropInteraction(_: UIDropInteraction, sessionDidEnter session: UIDropSession) {
+        setDropHighlighted(dropsImage(session))
+    }
+
+    func dropInteraction(_: UIDropInteraction, sessionDidUpdate _: UIDropSession) -> UIDropProposal {
+        UIDropProposal(operation: .copy)
+    }
+
+    func dropInteraction(_: UIDropInteraction, sessionDidExit _: UIDropSession) {
+        setDropHighlighted(false)
+    }
+
+    func dropInteraction(_: UIDropInteraction, sessionDidEnd _: UIDropSession) {
+        setDropHighlighted(false)
+    }
+
+    func dropInteraction(_: UIDropInteraction, performDrop session: UIDropSession) {
+        performDrop(session)
+    }
+
+    // The message list takes drops over the messages, so it hands them to the same handling as the chat's.
+
+    func collectionView(_: UICollectionView, canHandle session: UIDropSession) -> Bool {
+        canDrop(session)
+    }
+
+    func collectionView(_: UICollectionView, dropSessionDidEnter session: UIDropSession) {
+        setDropHighlighted(dropsImage(session))
+    }
+
+    func collectionView(_: UICollectionView, dropSessionDidUpdate _: UIDropSession, withDestinationIndexPath _: IndexPath?)
+        -> UICollectionViewDropProposal
+    {
+        UICollectionViewDropProposal(operation: .copy, intent: .unspecified)
+    }
+
+    func collectionView(_: UICollectionView, dropSessionDidExit _: UIDropSession) {
+        setDropHighlighted(false)
+    }
+
+    func collectionView(_: UICollectionView, dropSessionDidEnd _: UIDropSession) {
+        setDropHighlighted(false)
+    }
+
+    func collectionView(_: UICollectionView, performDropWith coordinator: UICollectionViewDropCoordinator) {
+        performDrop(coordinator.session)
+    }
+
+    private func canDrop(_ session: UIDropSession) -> Bool {
+        dropsImage(session) || (textView.isEditable && session.canLoadObjects(ofClass: String.self))
+    }
+
+    private func performDrop(_ session: UIDropSession) {
+        setDropHighlighted(false)
+        if dropsImage(session), let provider = session.items.first?.itemProvider {
+            stageImage(from: provider)
+            return
+        }
+        _ = session.loadObjects(ofClass: String.self) { [weak self] strings in
+            guard let self, let text = strings.first,
+                  let range = textView.selectedTextRange ?? textView.textRange(from: textView.endOfDocument, to: textView.endOfDocument)
+            else { return }
+            textView.becomeFirstResponder()
+            textView.replace(range, withText: text)
         }
     }
 
