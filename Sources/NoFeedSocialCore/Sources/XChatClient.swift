@@ -141,6 +141,8 @@ public struct XChatMessageContents: Equatable, Sendable {
     let text: String?
     let reply: Reply?
     let attachments: [Attachment]
+    /// Forwarded from another conversation (`forwarded_message`).
+    var isForwarded = false
 
     init(text: String?, reply: Reply? = nil, attachments: [Attachment] = []) {
         self.text = text
@@ -150,6 +152,7 @@ public struct XChatMessageContents: Equatable, Sendable {
 
     init(_ message: ThriftStruct) {
         text = message.string(1)
+        isForwarded = message.structure(6) != nil
         reply = message.structure(4).map { Reply(sequenceId: $0.string(6), senderName: $0.string(5), text: $0.string(2)) }
         attachments = message.structures(3).compactMap { attachment in
             if let media = attachment.structure(1) {
@@ -595,6 +598,17 @@ public actor XChatClient: ChatListProvider {
         message[3] = .structs([])
         message[7] = .i32(Self.sentFromComposer)
         return try await send(entry: [1: .structure(message)], conversationId: conversationId, token: token)
+    }
+
+    /// A `MessageEdit` as X's web client builds it: the target's sequence id, the new text, entities (none, as
+    /// the app sends none) and the target's client message id (probe `edit-message`).
+    func sendEdit(_ text: String, of sequenceId: String, messageId: String?, conversationId: String, token: String?) async throws -> XChatEvent {
+        var edit = ThriftStruct()
+        edit[1] = .string(sequenceId)
+        edit[2] = .string(text)
+        edit[3] = .structs([])
+        edit[4] = messageId.map(ThriftValue.string)
+        return try await send(entry: [4: .structure(edit)], conversationId: conversationId, token: token)
     }
 
     func sendReaction(_ emoji: String, on sequenceId: String, remove: Bool, conversationId: String, token: String?) async throws -> XChatEvent {

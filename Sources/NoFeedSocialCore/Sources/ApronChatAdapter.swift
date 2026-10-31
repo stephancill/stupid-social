@@ -3,7 +3,7 @@ import Foundation
 /// One Apron room: loads recent history, applies live snapshots, posts messages and commands, and keeps the
 /// room's members, typing indications and read cursor.
 @MainActor
-public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatReactionSending, ChatUnseenReactions, ChatLiveUpdating, ChatReferenceResolving, ChatWindowing, ChatTyping, ChatMentioning, ChatCustomEmojis, ChatCommanding, ChatLinking, ChatReadReceipts {
+public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditing, ChatReactionSending, ChatUnseenReactions, ChatLiveUpdating, ChatReferenceResolving, ChatWindowing, ChatTyping, ChatMentioning, ChatCustomEmojis, ChatCommanding, ChatLinking, ChatReadReceipts {
     public let network = SocialNetwork.apron
     public let canReply = true
     public let pollInterval: Duration? = nil
@@ -902,6 +902,40 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatReacti
         return result.messageId
     }
 
+    // MARK: Editing
+
+    /// The user's messages, on servers with `edit` (§4.4).
+    public func editableText(of message: ChatMessage) -> String? {
+        guard session?.server.has("edit") == true, let snapshot = snapshots[message.id], snapshot.messageId != nil, !snapshot.isDeleted,
+              isOwn(snapshot)
+        else { return nil }
+        return snapshot.body?.text ?? ""
+    }
+
+    /// A save replaces every client field, so it sends the message as it is with the new text, as apron-web does:
+    /// the other body keys, its room and its reply (§4.4, probe `edit`). Mentions follow the new text. The
+    /// server broadcasts the new snapshot before it answers.
+    public func edit(_ messageId: String, text: String) async throws {
+        guard let session else { throw SourceError.serviceError("Not connected to the server.") }
+        guard let snapshot = snapshots[messageId] else { return }
+        if text.utf8.count > ApronConnection.maxTextBytes {
+            throw SourceError.serviceError("This message is too long; Apron messages can be at most \(ApronConnection.maxTextBytes) bytes.")
+        }
+        let mentions = mentionedUserIds(in: text)
+        _ = try await session.connection.post(
+            method: "message",
+            messageId: messageId,
+            roomId: snapshot.roomId ?? roomId,
+            body: ApronMessageBody(
+                text: text,
+                format: snapshot.body?.format,
+                mentions: mentions.isEmpty ? nil : mentions,
+                embeds: snapshot.body?.embeds,
+            ),
+            replyTo: snapshot.replyTo?.messageId,
+        )
+    }
+
     // MARK: Reactions
 
     public func yourEmojis(on messageId: String) -> [String] {
@@ -1274,7 +1308,8 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatReacti
         return ChatMessage(
             id: message.id,
             sender: ChatUser(id: from.userId, name: from.displayName, avatarURL: users[from.userId]?.avatarURL ?? from.avatarURL, isSystem: from.isSystem),
-            timestamp: message.timestamp,
+            // When it was sent: the creation's `log_id` (§2.2), which edits and finished uploads don't change.
+            timestamp: ApronLogId.date(message.messageId) ?? message.timestamp,
             text: message.body?.text,
             isMarkdown: message.isMarkdown,
             embeds: message.isDeleted ? [] : (message.body?.embeds ?? []).map(chatEmbed)

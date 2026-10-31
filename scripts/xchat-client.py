@@ -205,6 +205,12 @@ class XChatClient:
     def react(self, conversation_id: str, expect_participant: str, sequence_id: str, emoji: str, remove: bool) -> dict[str, Any]:
         return self.send_entry(conversation_id, expect_participant, [(3 if remove else 2, 12, [(1, 11, sequence_id), (2, 11, emoji)])])
 
+    def edit_message(self, conversation_id: str, expect_participant: str, sequence_id: str, message_id: str, updated_text: str) -> dict[str, Any]:
+        """A `MessageEdit` entry, as X's web client builds it: the target's sequence id, the new text, its entities
+        (none here) and the target's client message id."""
+        edit = [(1, 11, sequence_id), (2, 11, updated_text), (3, 15, (12, [])), (4, 11, message_id)]
+        return self.send_entry(conversation_id, expect_participant, [(4, 12, edit)])
+
     def mark_read(self, conversation_id: str, sequence_id: str) -> dict[str, Any]:
         import time
         import uuid
@@ -564,7 +570,7 @@ def summarize_events(events: list[dict[int, Any]], keys_by_version: dict[str, by
     rows = []
     for event in sorted(events, key=lambda e: int(text(e.get(1)) or 0)):
         detail = event.get(7, {})
-        row: dict[str, Any] = {"sequence_id": text(event.get(1)), "own": text(event.get(3)) == viewer_id, "detail": sorted(detail)}
+        row: dict[str, Any] = {"sequence_id": text(event.get(1)), "message_id": text(event.get(2)), "own": text(event.get(3)) == viewer_id, "detail": sorted(detail)}
         create = detail.get(1)
         if create:
             # Without a key version (101) the message was sent unencrypted (109 true): contents are the plain
@@ -583,6 +589,12 @@ def summarize_events(events: list[dict[int, Any]], keys_by_version: dict[str, by
                     row["text"] = text(message.get(1))
                 elif message:
                     row["text_length"] = len(message.get(1) or b"")
+                edit = contents.get(4)
+                if edit:
+                    row["edit_of"] = text(edit.get(1))
+                    row["edit_fields"] = sorted(edit)
+                    if show_text:
+                        row["text"] = text(edit.get(2))
                 reaction = contents.get(2) or contents.get(3)
                 if reaction:
                     row["reaction_on"] = text(reaction.get(1))
@@ -973,6 +985,12 @@ def build_parser() -> argparse.ArgumentParser:
     send.add_argument("conversation_id")
     send.add_argument("text")
     send.add_argument("--expect-participant", required=True, help="Screen name the conversation must be with.")
+    edit = subparsers.add_parser("edit-message", help="Edit one of your messages by sequence id. Only in a conversation agreed for testing.")
+    edit.add_argument("conversation_id")
+    edit.add_argument("sequence_id")
+    edit.add_argument("text")
+    edit.add_argument("--message-id", required=True, help="The edited message's client message id (event field 2, `conversation` lists it).")
+    edit.add_argument("--expect-participant", required=True)
     react = subparsers.add_parser("react", help="Add (or with --remove, remove) a reaction to a message by sequence id.")
     react.add_argument("conversation_id")
     react.add_argument("sequence_id")
@@ -1036,6 +1054,8 @@ def main() -> None:
         }
     elif args.command == "send-message":
         result = client.send_message(args.conversation_id, args.expect_participant, args.text)
+    elif args.command == "edit-message":
+        result = client.edit_message(args.conversation_id, args.expect_participant, args.sequence_id, args.message_id, args.text)
     elif args.command == "react":
         result = client.react(args.conversation_id, args.expect_participant, args.sequence_id, args.emoji, args.remove)
     elif args.command == "listen":

@@ -99,6 +99,9 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     private var draft = ""
     private var attachment: ChatAttachment?
     private var replyingTo: ChatMessage?
+    private var editingMessage: ChatMessage?
+    private var canAttach = false
+    private let replyPreviewCancel = UIButton(type: .system)
     private var hasLater = false
     private var hasEarlier = false
     private let historySpinner = UIActivityIndicatorView(style: .medium)
@@ -652,6 +655,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         viewModel.$attachment.sink { [weak self] in self?.attachment = $0; self?.refreshComposer() }.store(in: &cancellables)
         viewModel.$errorMessage.sink { [weak self] _ in DispatchQueue.main.async { self?.refreshComposer() } }.store(in: &cancellables)
         viewModel.$replyingTo.sink { [weak self] in self?.replyingTo = $0; self?.refreshComposer() }.store(in: &cancellables)
+        viewModel.$editingMessage.sink { [weak self] in self?.editingMessage = $0; self?.refreshComposer() }.store(in: &cancellables)
         viewModel.$reactions.sink { [weak self] totals in self?.applyReactionTotals(totals) }.store(in: &cancellables)
         viewModel.$receipts.sink { [weak self] receipts in self?.applyReceipts(receipts) }.store(in: &cancellables)
         // Emitted in willSet, so re-render once the view model holds the new names.
@@ -685,10 +689,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
                 self?.view.setNeedsLayout()
             }
         }.store(in: &cancellables)
-        viewModel.$canAttach.sink { [weak self] canAttach in
-            self?.attachButton.isEnabled = canAttach
-            self?.attachButton.alpha = canAttach ? 1 : 0.35
-        }.store(in: &cancellables)
+        viewModel.$canAttach.sink { [weak self] in self?.canAttach = $0; self?.refreshComposer() }.store(in: &cancellables)
     }
 
     private func applySnapshot(messages: [ChatMessage], hasEarlier _: Bool, hasLater: Bool) {
@@ -928,12 +929,27 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         }
         placeholderLabel.isHidden = !draft.isEmpty
 
-        if let replyingTo {
+        if let editingMessage {
+            replyPreview.isHidden = false
+            replyPreviewName.text = "Edit Message"
+            replyPreviewText.text = mentionText(editingMessage.previewText).replacingOccurrences(of: "\n", with: " ")
+            replyPreviewCancel.accessibilityLabel = "Cancel Editing"
+        } else if let replyingTo {
             replyPreview.isHidden = false
             replyPreviewName.text = "Reply to \(DebugRedaction.name(replyingTo.sender.name))"
             replyPreviewText.text = mentionText(replyingTo.previewText).replacingOccurrences(of: "\n", with: " ")
+            replyPreviewCancel.accessibilityLabel = "Cancel Reply"
         } else {
             replyPreview.isHidden = true
+        }
+        // An edit changes only the text.
+        let attaches = canAttach && editingMessage == nil
+        attachButton.isEnabled = attaches
+        attachButton.alpha = attaches ? 1 : 0.35
+        let sendImage = editingMessage == nil ? "arrow.up.circle.fill" : "checkmark.circle.fill"
+        if sendButton.configuration?.image != UIImage(systemName: sendImage) {
+            sendButton.configuration?.image = UIImage(systemName: sendImage)
+            sendButton.accessibilityLabel = editingMessage == nil ? "Send" : "Save"
         }
 
         if let attachment {
@@ -1364,7 +1380,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     }
 
     private func dropsImage(_ session: UIDropSession) -> Bool {
-        viewModel.canAttach && session.items.count == 1 && session.hasItemsConforming(toTypeIdentifiers: [UTType.image.identifier])
+        viewModel.canAttach && editingMessage == nil && session.items.count == 1 && session.hasItemsConforming(toTypeIdentifiers: [UTType.image.identifier])
     }
 
     /// An image dropped anywhere on the chat is staged like one picked from Photos; text goes into the composer,
@@ -1791,6 +1807,11 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
                 self?.beginReply(to: id)
             }))
         }
+        if viewModel.canEdit(message) {
+            menu.items.append(.action(ChatMessageMenu.Action(title: "Edit", image: UIImage(systemName: "pencil")) { [weak self] in
+                self?.beginEditing(id)
+            }))
+        }
         if !text.isEmpty {
             menu.items.append(.action(ChatMessageMenu.Action(title: "Copy", image: UIImage(systemName: "doc.on.doc")) {
                 UIPasteboard.general.string = text
@@ -2174,12 +2195,19 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         let labels = UIStackView(arrangedSubviews: [replyPreviewName, replyPreviewText])
         labels.axis = .vertical
         labels.spacing = 1
-        let cancel = UIButton(type: .system)
+        let cancel = replyPreviewCancel
         cancel.setImage(UIImage(systemName: "xmark.circle.fill"), for: .normal)
         cancel.tintColor = .secondaryLabel
         cancel.accessibilityLabel = "Cancel Reply"
         cancel.setContentHuggingPriority(.required, for: .horizontal)
-        cancel.addAction(UIAction { [weak self] _ in self?.viewModel.cancelReply() }, for: .primaryActionTriggered)
+        cancel.addAction(UIAction { [weak self] _ in
+            guard let self else { return }
+            if editingMessage != nil {
+                viewModel.cancelEditing()
+            } else {
+                viewModel.cancelReply()
+            }
+        }, for: .primaryActionTriggered)
         replyPreview.addArrangedSubview(bar)
         replyPreview.addArrangedSubview(labels)
         replyPreview.addArrangedSubview(cancel)
@@ -2217,6 +2245,12 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     private func beginReply(to id: String) {
         guard let message = messagesById[id] else { return }
         viewModel.startReply(to: message)
+        textView.becomeFirstResponder()
+    }
+
+    private func beginEditing(_ id: String) {
+        guard let message = messagesById[id] else { return }
+        viewModel.startEditing(message)
         textView.becomeFirstResponder()
     }
 

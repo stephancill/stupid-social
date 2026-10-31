@@ -702,7 +702,9 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
             replyView.isHidden = true
         }
 
-        let shownTime = message.timestamp.map(Self.timeFormatter.string(from:)) ?? ""
+        let time = message.timestamp.map(Self.timeFormatter.string(from:)) ?? ""
+        // "edited" leads the time, as in Telegram.
+        let shownTime = message.isEdited && !message.isDeleted ? "edited \(time)" : time
         timeLabel.text = shownTime
         timeLabel.textColor = layout.isOwn ? UIColor.white.withAlphaComponent(0.75) : .secondaryLabel
         let showsLeadingClock = message.isSending && status == nil

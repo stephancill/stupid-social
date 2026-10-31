@@ -1167,6 +1167,10 @@ def main():
     send.add_argument("--reply-to", type=int)
     send.add_argument("--mention-user", type=int, help="a user id to mention by name over --mention-range (inputMessageEntityMentionName)")
     send.add_argument("--mention-range", help="OFFSET:LENGTH of the name in --text, in UTF-16 units")
+    edit = sub.add_parser("edit", help="messages.editMessage: replace the text (or caption) of one of your messages")
+    edit.add_argument("--peer", required=True)
+    edit.add_argument("--msg-id", type=int, required=True)
+    edit.add_argument("--text", required=True)
     resolve = sub.add_parser("resolve", help="contacts.resolveUsername: the user or chat an @username names")
     resolve.add_argument("--username", required=True)
     profile = sub.add_parser("profile", help="users.getFullUser: a user's profile, bio and status")
@@ -1381,6 +1385,16 @@ def main():
             method["entities"] = [{"_": "inputMessageEntityMentionName", "offset": offset, "length": length, "user_id": user}]
         result = client.call(method)
         print(json.dumps(to_json(result), indent=1, ensure_ascii=False)[:2000])
+    elif args.command == "edit":
+        result = client.call({"_": "messages.editMessage", "peer": client.input_peer(args.peer), "id": args.msg_id, "message": args.text})
+        # The edited message comes back in an updateEditMessage (updateEditChannelMessage in supergroups), with edit_date.
+        for update in result.get("updates", []):
+            message = update.get("message") or {}
+            if message.get("id") == args.msg_id:
+                print(json.dumps({"update": update["_"], "edit_date": message.get("edit_date"), "edit_hide": bool(message.get("edit_hide")), "text_matches": message.get("message") == args.text}, indent=1))
+                break
+        else:
+            print(result.get("_"))
     elif args.command == "read":
         if args.peer.startswith("channel:"):
             kind, peer_id = args.peer.split(":")

@@ -404,9 +404,10 @@ public extension ApronConnection {
         return roomId
     }
 
-    /// Sends a `message` or `command` (§4.1); the result lists write URLs for new upload embeds.
-    internal func post(method: String, roomId: String, body: ApronMessageBody, replyTo: String? = nil) async throws -> ApronSendResult {
-        let params = ApronSendParams(roomId: roomId, body: body, replyTo: replyTo.map(ApronMessageReference.init(messageId:)))
+    /// Sends a `message` or `command` (§4.1), or with `messageId` saves that message (§4.4); the result lists write
+    /// URLs for new upload embeds.
+    internal func post(method: String, messageId: String? = nil, roomId: String, body: ApronMessageBody, replyTo: String? = nil) async throws -> ApronSendResult {
+        let params = ApronSendParams(messageId: messageId, roomId: roomId, body: body, replyTo: replyTo.map(ApronMessageReference.init(messageId:)))
         return try await request(method, params: params, as: ApronSendResult.self)
     }
 

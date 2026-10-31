@@ -33,8 +33,8 @@ public struct ChatOutgoing {
 /// owns the screen's state and the behavior every chat shares: connecting, polling, paging, unread counting and
 /// the divider, read-marker debouncing, snapshots, drafts and optimistic sending.
 ///
-/// Optional abilities are separate protocols (reactions, unseen reactions, read receipts, audio previews, live updates, quoted
-/// messages, windows of older history, typing, mentions, custom emoji, commands, links), so a chat offers an action exactly when its adapter
+/// Optional abilities are separate protocols (editing, reactions, unseen reactions, read receipts, audio previews, live updates,
+/// quoted messages, windows of older history, typing, mentions, custom emoji, commands, links), so a chat offers an action exactly when its adapter
 /// implements it.
 @MainActor
 public protocol ChatAdapter: AnyObject {
@@ -76,6 +76,16 @@ public protocol ChatAdapter: AnyObject {
     /// What the chat showed, for opening with it next time; `nil` when there is nothing to keep.
     func snapshot() -> Data?
     func restore(snapshot: Data)
+}
+
+/// Changing the text of the user's sent messages.
+@MainActor
+public protocol ChatEditing: ChatAdapter {
+    /// The text to edit the message from, such as a photo's caption, or `nil` when the network doesn't let this
+    /// one be edited (someone else's, too old, or with formatting an edit would lose).
+    func editableText(of message: ChatMessage) -> String?
+    /// Saves the new text. When it returns, `messages` shows the edit or the network's copy of it.
+    func edit(_ messageId: String, text: String) async throws
 }
 
 /// Chats the user may only be allowed to read, such as a guest on a server that lets guests only read.
@@ -389,10 +399,18 @@ public final class AdapterChatViewModel<Adapter: ChatAdapter>: ChatViewModel {
 
     // MARK: Composing
 
-    /// Sends optimistically (see `sendOptimistically`); a command waits for the network instead, since it may
-    /// post nothing.
+    /// Sends optimistically (see `sendOptimistically`), or saves the edit being made (`editOptimistically`); a
+    /// command waits for the network instead, since it may post nothing.
     override public func send() async {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if editingMessage != nil {
+            guard !text.isEmpty, state == .connected, let editing = adapter as? any ChatEditing else { return }
+            await editOptimistically(text: text) { [weak self] id, text in
+                try await editing.edit(id, text: text)
+                self?.adapterDidChange()
+            }
+            return
+        }
         let attachment = adapter.acceptsAttachments ? attachment : nil
         guard !text.isEmpty || attachment != nil, state == .connected else { return }
         let replyToId = canReply ? replyingTo?.id : nil
@@ -417,8 +435,14 @@ public final class AdapterChatViewModel<Adapter: ChatAdapter>: ChatViewModel {
         }
     }
 
+    /// Editing a message isn't typing a new one.
     override public func draftDidChange() {
+        guard editingMessage == nil else { return }
         (adapter as? any ChatTyping)?.draftDidChange(draft)
+    }
+
+    override public func editableText(of message: ChatMessage) -> String? {
+        (adapter as? any ChatEditing)?.editableText(of: message)
     }
 
     override public func mentionSuggestions(for query: String) -> [ChatUser] {

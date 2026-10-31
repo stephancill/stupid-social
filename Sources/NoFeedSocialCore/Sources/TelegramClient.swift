@@ -50,7 +50,7 @@ public struct TelegramMessage: Codable, Sendable, Hashable {
     public let id: Int32
     public let date: Date
     /// One line for previews: the text, with what was sent before it, such as "Photo · caption".
-    public let text: String
+    public var text: String
     /// The message's own text, empty for media without a caption.
     public var caption: String = ""
     /// Hidden parts of `caption` (UTF-16 ranges): spoiler entities, and the login code in messages from Telegram's
@@ -70,6 +70,11 @@ public struct TelegramMessage: Codable, Sendable, Hashable {
     public let replyToId: Int32?
     /// A service message such as "joined the group", shown as a caption.
     public let isService: Bool
+    /// When it was last edited, unless Telegram hides that (`edit_hide`).
+    public var editDate: Date?
+    /// Whether an edit can change its text (or caption) and keep everything else, apart from Telegram's time
+    /// limit. Optional so chat snapshots saved before it existed still decode.
+    public var isEditable: Bool?
 
     /// `text` with its spoilers masked, for the Chats list.
     public var previewText: String {
@@ -1168,6 +1173,18 @@ public actor TelegramClient: ChatListProvider {
         }
     }
 
+    /// Replaces the text or caption of one of the user's messages. Telegram keeps only the entities sent with it,
+    /// so `mentions` go again; links, hashtags and `@username`s it marks by itself (validated with the probe's
+    /// `edit`). Unchanged text fails with `MESSAGE_NOT_MODIFIED`.
+    public func edit(peer: TelegramPeer, messageId: Int32, text: String, mentions: [TelegramMention] = []) async throws {
+        try requireAccount()
+        var method = TLObject("messages.editMessage", ["peer": .object(peer.inputPeer), "id": .int(messageId), "message": .string(text)])
+        if let entities = mentionEntities(mentions) {
+            method["entities"] = entities
+        }
+        _ = try await invoke(method)
+    }
+
     /// Sends text, returning the new message's id. `mentions` are name mentions of users this device can name;
     /// Telegram marks `@username`s in the text by itself (both validated with the probe's `send`).
     public func send(peer: TelegramPeer, text: String, mentions: [TelegramMention] = [], replyTo: Int32?) async throws -> Int32? {
@@ -1427,7 +1444,34 @@ public actor TelegramClient: ChatListProvider {
             isOutgoing: message.flag("out") || (selfId != nil && senderId == selfId),
             replyToId: message["reply_to"]?.object?["reply_to_msg_id"]?.int,
             isService: isService,
+            editDate: message.flag("edit_hide") ? nil : message["edit_date"]?.int.map { Date(timeIntervalSince1970: TimeInterval($0)) },
+            isEditable: !isService && isEditable(message),
         )
+    }
+
+    /// Entities an edit keeps: those Telegram marks by itself in the text it's sent, and name mentions, which an
+    /// edit sends again (probe `edit`).
+    private static let entitiesKeptByEdits: Set<String> = [
+        "messageEntityMention", "messageEntityHashtag", "messageEntityCashtag", "messageEntityBotCommand", "messageEntityUrl",
+        "messageEntityEmail", "messageEntityPhone", "messageEntityBankCard", "messageEntityMentionName",
+    ]
+
+    /// Text, link previews, photos and files (not stickers or video messages) whose formatting an edit keeps, and
+    /// that weren't forwarded or sent through a bot, as Telegram's own apps allow.
+    private static func isEditable(_ message: TLObject) -> Bool {
+        guard message["fwd_from"] == nil, message["via_bot_id"] == nil,
+              message.objects("entities").allSatisfy({ entitiesKeptByEdits.contains($0.name) })
+        else { return false }
+        guard let media = message["media"]?.object else { return true }
+        switch media.name {
+        case "messageMediaWebPage", "messageMediaPhoto":
+            return true
+        case "messageMediaDocument":
+            let attributes = media["document"]?.object?.objects("attributes") ?? []
+            return !attributes.contains { $0.name == "documentAttributeSticker" || ($0.name == "documentAttributeVideo" && $0.flag("round_message")) }
+        default:
+            return false
+        }
     }
 
     /// Worded like Telegram's own service messages, with `actor` the sender and `name` for other users.

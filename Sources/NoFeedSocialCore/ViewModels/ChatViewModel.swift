@@ -116,6 +116,8 @@ public struct ChatMessage: Hashable, Identifiable, Sendable {
     public let mentions: [ChatMessageMention]
     /// Custom emoji in `text` by position, drawn over the fallback emoji they cover; plain text only.
     public let customEmojis: [ChatMessageCustomEmoji]
+    /// Changed since it was sent, where the network says so; shown as "edited" by the time.
+    public let isEdited: Bool
 
     public init(
         id: String,
@@ -132,6 +134,7 @@ public struct ChatMessage: Hashable, Identifiable, Sendable {
         spoilers: [NSRange] = [],
         mentions: [ChatMessageMention] = [],
         customEmojis: [ChatMessageCustomEmoji] = [],
+        isEdited: Bool = false,
     ) {
         self.id = id
         self.sender = sender
@@ -147,6 +150,7 @@ public struct ChatMessage: Hashable, Identifiable, Sendable {
         self.spoilers = spoilers
         self.mentions = mentions
         self.customEmojis = customEmojis
+        self.isEdited = isEdited
     }
 
     /// The message with `image` in place of its first image or pending upload, such as the picked file for a
@@ -166,7 +170,16 @@ public struct ChatMessage: Hashable, Identifiable, Sendable {
         return ChatMessage(
             id: id, sender: sender, timestamp: timestamp, text: text, isMarkdown: isMarkdown, embeds: embeds,
             replyToId: replyToId, isDeleted: isDeleted, isOwn: isOwn, isNotice: isNotice, isSending: isSending,
-            spoilers: spoilers, mentions: mentions, customEmojis: customEmojis,
+            spoilers: spoilers, mentions: mentions, customEmojis: customEmojis, isEdited: isEdited,
+        )
+    }
+
+    /// The message with the text of an edit that is still saving. Ranges into the old text no longer apply.
+    func editing(to text: String) -> ChatMessage {
+        ChatMessage(
+            id: id, sender: sender, timestamp: timestamp, text: text, isMarkdown: isMarkdown, embeds: embeds,
+            replyToId: replyToId, isDeleted: isDeleted, isOwn: isOwn, isNotice: isNotice, isSending: isSending,
+            isEdited: true,
         )
     }
 
@@ -414,13 +427,19 @@ public class ChatViewModel: ObservableObject {
     @Published public internal(set) var isReadOnly = false
     /// Per-message reaction totals, keyed by message id.
     @Published public internal(set) var reactions: [String: [ChatReaction]] = [:]
-    /// Kept per chat across visits.
+    /// Kept per chat across visits; an edit's text isn't kept.
     @Published public var draft = "" {
-        didSet { draftStore.setDraft(draft, key: chatKey) }
+        didSet {
+            if editingMessage == nil {
+                draftStore.setDraft(draft, key: chatKey)
+            }
+        }
     }
 
     @Published public var attachment: ChatAttachment?
     @Published public internal(set) var replyingTo: ChatMessage?
+    /// The user's message being edited (`startEditing(_:)`): the composer holds its text, and sending saves it.
+    @Published public internal(set) var editingMessage: ChatMessage?
     /// A message the view should scroll to and highlight, set by `jump(to:)`.
     @Published public internal(set) var jumpTarget: String?
     /// While set, the user is searching the chat (`beginSearch()`), and the composer gives way to the results.
@@ -515,6 +534,15 @@ public class ChatViewModel: ObservableObject {
     /// Confirmed message id → the image the user picked. The message keeps showing it, so the swap from the
     /// sending copy doesn't reload the image or change its size.
     private var pickedImages: [String: ChatEmbed] = [:]
+    /// What the composer held when an edit began, back once the edit is saved or cancelled.
+    private var composerBeforeEdit: (draft: String, attachment: ChatAttachment?, replyingTo: ChatMessage?)?
+    /// Message id → the text of an edit that is saving, shown in place of the message's own until `history`
+    /// changes the message from `editBases` (or the save fails).
+    private var pendingEdits: [String: String] = [:]
+    /// Message id → the message in `history` when its edit began.
+    private var editBases: [String: ChatMessage] = [:]
+    /// Edits the network accepted, still shown until `history` brings the new version.
+    private var confirmedEdits: Set<String> = []
 
     /// Whether the network reports which reactions the user hasn't seen.
     var tracksUnseenReactions = false
@@ -737,6 +765,78 @@ public class ChatViewModel: ObservableObject {
         composeMessages()
     }
 
+    // MARK: Editing
+
+    /// The text the user's message can be edited from, or `nil` where the network doesn't allow editing it;
+    /// networks that edit override this.
+    public func editableText(of _: ChatMessage) -> String? {
+        nil
+    }
+
+    /// Whether the Edit action is offered for the message.
+    public func canEdit(_ message: ChatMessage) -> Bool {
+        message.isOwn && message.isUserMessage && !message.isSending && !message.isDeleted && !isReadOnly
+            && pendingEdits[message.id] == nil && editableText(of: message) != nil
+    }
+
+    /// Puts the message's text in the composer to edit. What was being written, and the reply, wait until the edit
+    /// is saved or cancelled.
+    public func startEditing(_ message: ChatMessage) {
+        guard canEdit(message), let text = editableText(of: message) else { return }
+        if editingMessage == nil {
+            composerBeforeEdit = (draft, attachment, replyingTo)
+        }
+        editingMessage = message
+        attachment = nil
+        replyingTo = nil
+        draft = text
+    }
+
+    public func cancelEditing() {
+        guard editingMessage != nil else { return }
+        let before = composerBeforeEdit
+        composerBeforeEdit = nil
+        editingMessage = nil
+        draft = before?.draft ?? ""
+        attachment = before?.attachment
+        replyingTo = before?.replyingTo
+    }
+
+    /// The optimistic edit every network shares, like `sendOptimistically`: the message shows the new text at once
+    /// and the composer goes back to what was being written, while `deliver` saves it. Unchanged text saves
+    /// nothing. A failure shows the message as it was and puts the edit back in the composer, if the user hasn't
+    /// started another message.
+    func editOptimistically(text: String, deliver: (_ messageId: String, _ text: String) async throws -> Void) async {
+        guard let editing = editingMessage else { return }
+        let id = editing.id
+        let current = message(withId: id) ?? editing
+        guard text != editableText(of: current)?.trimmingCharacters(in: .whitespacesAndNewlines) else {
+            cancelEditing()
+            return
+        }
+        errorMessage = nil
+        pendingEdits[id] = text
+        editBases[id] = history.first { $0.id == id }
+        cancelEditing()
+        composeMessages()
+        do {
+            try await deliver(id, text)
+            confirmedEdits.insert(id)
+            AppMetrics.messageEdited(network: network, error: nil)
+        } catch {
+            AppMetrics.messageEdited(network: network, error: error)
+            pendingEdits[id] = nil
+            editBases[id] = nil
+            composeMessages()
+            errorMessage = error.localizedDescription
+            if editingMessage == nil, draft.isEmpty, attachment == nil, replyingTo == nil, let message = message(withId: id) {
+                startEditing(message)
+                draft = text
+            }
+        }
+        composeMessages()
+    }
+
     /// Sets reactions before the messages they belong to, so new bubbles render with their reactions instead of
     /// growing a moment later.
     func publish(history newHistory: [ChatMessage], reactions newReactions: [String: [ChatReaction]]) {
@@ -795,7 +895,16 @@ public class ChatViewModel: ObservableObject {
             historyAtSend[localId] = nil
             outgoing.removeAll { $0.id == localId }
         }
-        let shown = holdsRestoredMessages ? [] : history.map { message in pickedImages[message.id].map(message.showing) ?? message } + outgoing
+        // A saved edit shows until history has the new version, which may read differently, such as with mentions.
+        for id in confirmedEdits where history.first(where: { $0.id == id }) != editBases[id] {
+            confirmedEdits.remove(id)
+            pendingEdits[id] = nil
+            editBases[id] = nil
+        }
+        let shown = holdsRestoredMessages ? [] : history.map { message in
+            let message = pickedImages[message.id].map(message.showing) ?? message
+            return pendingEdits[message.id].map(message.editing(to:)) ?? message
+        } + outgoing
         if messages != shown {
             messages = shown
         }
@@ -821,6 +930,7 @@ public class ChatViewModel: ObservableObject {
 
     public func startReply(to message: ChatMessage) {
         guard canReply, message.isUserMessage, !message.isDeleted, !message.isSending else { return }
+        cancelEditing()
         replyingTo = message
     }
 

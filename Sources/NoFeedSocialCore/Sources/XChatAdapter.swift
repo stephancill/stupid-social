@@ -1,11 +1,11 @@
 import Foundation
 
 /// One X Chat conversation: decrypts its events, pages its history, follows new events from X's chat WebSocket
-/// (`XChatLiveFeed`), sends text and reactions, and moves the viewer's read marker as messages are read.
+/// (`XChatLiveFeed`), sends text, edits and reactions, and moves the viewer's read marker as messages are read.
 /// Reactions, edits and deletes are events of their own, applied to the messages they name by sequence id.
 /// The user's messages show as seen once someone else's read marker passes them.
 @MainActor
-public final class XChatAdapter: ChatAdapter, ChatReactionSending, ChatLiveUpdating, ChatReferenceResolving, ChatReadReceipts {
+public final class XChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, ChatLiveUpdating, ChatReferenceResolving, ChatReadReceipts {
     public let network = SocialNetwork.x
     public let canReply = false
     public let acceptsAttachments = false
@@ -28,6 +28,9 @@ public final class XChatAdapter: ChatAdapter, ChatReactionSending, ChatLiveUpdat
     private var events: [String: XChatEvent] = [:]
     private var entries: [String: XChatEntry?] = [:]
     private var people: [String: ChatUser] = [:]
+    /// Sequence id → the text of its latest edit.
+    private var editedTexts: [String: String] = [:]
+    private var deletedIds: Set<String> = []
     private var viewerId: String?
     private var conversationToken: String?
     /// The viewer's read marker, locally ahead of X while a mark is pending.
@@ -121,6 +124,25 @@ public final class XChatAdapter: ChatAdapter, ChatReactionSending, ChatLiveUpdat
         let event = try await client.sendText(message.text, conversationId: conversationId, token: conversationToken)
         await merge([event])
         return event.sequenceId
+    }
+
+    // MARK: Editing
+
+    /// The user's encrypted messages, as X's web client allows: not legacy DMs sent unencrypted, and not forwards
+    /// without text of their own. X sets no time limit.
+    public func editableText(of message: ChatMessage) -> String? {
+        guard let event = events[message.id], event.senderId == viewerId, event.messageCreate?[101] != nil,
+              !deletedIds.contains(message.id), case let .some(.some(.message(contents))) = entries[message.id],
+              !contents.isForwarded || contents.text?.isEmpty == false
+        else { return nil }
+        return editedTexts[message.id] ?? contents.text ?? ""
+    }
+
+    /// X answers with the stored edit event, which applies to the message like any other.
+    public func edit(_ messageId: String, text: String) async throws {
+        guard let event = events[messageId] else { return }
+        let edit = try await client.sendEdit(text, of: messageId, messageId: event.messageId, conversationId: conversationId, token: conversationToken)
+        await merge([edit])
     }
 
     // MARK: Read position
@@ -218,6 +240,7 @@ public final class XChatAdapter: ChatAdapter, ChatReactionSending, ChatLiveUpdat
                     replyToId: contents.reply?.sequenceId,
                     isDeleted: deleted.contains(event.sequenceId),
                     isOwn: isOwn,
+                    isEdited: edits[event.sequenceId] != nil,
                 ))
             case .some(.none):
                 // Shown rather than hidden, so a message is never silently missing.
@@ -233,6 +256,8 @@ public final class XChatAdapter: ChatAdapter, ChatReactionSending, ChatLiveUpdat
             }
         }
         referencedMessages = references
+        editedTexts = edits
+        deletedIds = deleted
 
         var totals: [String: [ChatReaction]] = [:]
         for (target, reactions) in reactionsByTarget where !reactions.isEmpty {

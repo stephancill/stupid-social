@@ -8,7 +8,7 @@ import Foundation
 /// custom emoji in text and reactions draw as their images, and voice messages play in the chat. The user's
 /// messages show as seen once Telegram's outbox read cursor passes them.
 @MainActor
-public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUnseenReactions, ChatReadReceipts, ChatLiveUpdating, ChatReferenceResolving, ChatMentioning, ChatTyping, ChatCustomEmojis, ChatAudioPreviewing, ChatReactionChoices {
+public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, ChatUnseenReactions, ChatReadReceipts, ChatLiveUpdating, ChatReferenceResolving, ChatMentioning, ChatTyping, ChatCustomEmojis, ChatAudioPreviewing, ChatReactionChoices {
     public let network = SocialNetwork.telegram
     public let canReply = true
     public let acceptsAttachments = true
@@ -310,6 +310,49 @@ public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUn
     }
 
     private nonisolated static let idMentionPattern = try! NSRegularExpression(pattern: #"(?<![\w@])@([0-9]+)(?!\w)"#)
+
+    // MARK: Editing
+
+    /// Telegram's `edit_time_limit` (observed 2026-10-31); messages in Saved Messages can be edited at any time.
+    private static let editTimeLimit: TimeInterval = 48 * 60 * 60
+
+    /// The caption, with each name mention written as `@<user id>`, as the composer writes one, so the edit
+    /// sends it again.
+    public func editableText(of message: ChatMessage) -> String? {
+        guard let id = Int32(message.id), let original = loaded[id], original.isOutgoing, original.isEditable == true,
+              isSavedMessages || Date().timeIntervalSince(original.date) < Self.editTimeLimit
+        else { return nil }
+        let text = NSMutableString(string: original.caption)
+        for mention in (original.mentions ?? []).sorted(by: { $0.offset > $1.offset }) {
+            guard let userId = mention.userId, NSMaxRange(mention.range) <= text.length else { continue }
+            text.replaceCharacters(in: mention.range, with: "@\(userId)")
+        }
+        return text as String
+    }
+
+    /// Shown at once; Telegram's copy follows with the refresh.
+    public func edit(_ messageId: String, text: String) async throws {
+        guard let id = Int32(messageId), let original = loaded[id] else { return }
+        // People the message mentions by name keep the names it showed, as do members the composer offered.
+        var names = Dictionary(members.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
+        let caption = original.caption as NSString
+        for mention in original.mentions ?? [] {
+            guard let userId = mention.userId, NSMaxRange(mention.range) <= caption.length else { continue }
+            names[userId] = caption.substring(with: mention.range)
+        }
+        let (resolved, mentions) = Self.resolvingMentions(in: text, names: names)
+        try await client.edit(peer: peer, messageId: id, text: resolved, mentions: mentions)
+        var edited = original
+        if original.text == original.caption {
+            edited.text = resolved
+        }
+        edited.caption = resolved
+        edited.mentions = mentions.isEmpty ? nil : mentions
+        edited.editDate = Date()
+        loaded[id] = edited
+        publish()
+        scheduleRefresh()
+    }
 
     // MARK: Mentions
 
@@ -662,6 +705,7 @@ public final class TelegramChatAdapter: ChatAdapter, ChatReactionSending, ChatUn
             spoilers: text == message.caption ? message.spoilers ?? [] : [],
             mentions: text == message.caption ? (message.mentions ?? []).map(chatMention) : [],
             customEmojis: text == message.caption ? (message.customEmojis ?? []).map { ChatMessageCustomEmoji(range: $0.range, key: TelegramCustomEmoji.key(documentId: $0.documentId)) } : [],
+            isEdited: message.editDate != nil,
         )
     }
 

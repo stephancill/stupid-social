@@ -11,6 +11,7 @@ Examples:
   scripts/apron-web-client.py rooms wss://server.apron.chat/ --name probe
   scripts/apron-web-client.py history wss://server.apron.chat/ --room general --limit 20
   scripts/apron-web-client.py send wss://server.apron.chat/ --room general --text "hi"
+  scripts/apron-web-client.py edit wss://server.apron.chat/ --room general --message 1724803200042 --text "hi again"
   scripts/apron-web-client.py seed ws://127.0.0.1:8765/ --count 999   # local load-test data
   scripts/apron-web-client.py upload ws://127.0.0.1:8080/ws --file photo.jpg   # needs embed:upload
   scripts/apron-web-client.py email-signup ws://127.0.0.1:8090/ws --email alice@example.com --user-id alice --name Alice --token-file logs/apron-local/tokens/alice
@@ -366,6 +367,33 @@ def cmd_send(session: Session, args: argparse.Namespace) -> None:
         embeds.append({"kind": "link", "url": args.link_url, "og": {k: v for k, v in og.items() if v}})
     print_json(session.request("message", params))
     print_json({"notifications": session.notifications})
+
+
+def cmd_edit(session: Session, args: argparse.Namespace) -> None:
+    """Saves one of your messages with new text (§4.4): every client field is sent again, since a save drops what
+    it omits, so the current snapshot is read first and only `body.text` changes."""
+    authenticate(session, args)
+    page = session.request("history", {"room_id": args.room, "after": args.message, "before": args.message, "limit": 1})
+    current = next((m for m in page.get("messages", []) if m.get("message_id") == args.message), None)
+    if current is None:
+        raise SystemExit(f"message {args.message} not in {args.room}")
+    body = dict(current.get("body") or {})
+    body["text"] = args.text
+    params: dict[str, Any] = {"message_id": args.message, "room_id": args.room, "body": body}
+    if current.get("reply_to"):
+        params["reply_to"] = {"message_id": current["reply_to"]["message_id"]}
+    print_json(session.request("message", params))
+    session.drain(args.wait)
+    for frame in session.notifications:
+        snapshot = frame.get("params") or {}
+        if frame.get("method") == "message" and snapshot.get("message_id") == args.message:
+            print_json({
+                "log_id_after_message_id": int(snapshot.get("log_id", 0)) > int(args.message),
+                "prev_log_id": snapshot.get("prev_log_id"),
+                "kind": live_message_kind(frame),
+                "text_matches": (snapshot.get("body") or {}).get("text") == args.text,
+                "body_keys": sorted((snapshot.get("body") or {}).keys()),
+            })
 
 
 SEED_WORDS = (
@@ -928,6 +956,10 @@ def main() -> None:
     send.add_argument("--link-title")
     send.add_argument("--link-description")
     send.add_argument("--link-image", help="og.image URL of the link preview")
+    edit = add("edit", cmd_edit)
+    edit.add_argument("--room", required=True)
+    edit.add_argument("--message", required=True)
+    edit.add_argument("--text", required=True)
     react = add("react", cmd_react)
     react.add_argument("--message", required=True)
     react.add_argument("--emoji", action="append", default=[])

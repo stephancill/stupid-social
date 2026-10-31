@@ -631,12 +631,15 @@ public struct ApronHistoryResult: Decodable, Sendable {
 }
 
 struct ApronSendParams: Encodable {
+    /// Set to save an existing message (§4.4).
+    var messageId: String?
     let roomId: String
     let body: ApronMessageBody
     /// Sent bare, with only `message_id` (§3.5.4).
     let replyTo: ApronMessageReference?
 
     enum CodingKeys: String, CodingKey {
+        case messageId = "message_id"
         case roomId = "room_id"
         case body
         case replyTo = "reply_to"

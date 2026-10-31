@@ -145,6 +145,30 @@ final class TelegramTests: XCTestCase {
         XCTAssertEqual(service.text, "Someone changed the group name to “Friends”")
     }
 
+    func testEditsAndWhatAnEditKeepsParse() {
+        func message(_ fields: [String: TLValue]) -> TelegramMessage {
+            TelegramClient.message(TLObject("message", [
+                "id": .int(5), "date": .int(0), "message": .string("hi @ada https://example.com"), "out": .bool(true),
+                "peer_id": .object(TLObject("peerUser", ["user_id": .long(9)])),
+            ].merging(fields) { _, new in new }))
+        }
+        func entity(_ name: String) -> TLValue {
+            .object(TLObject(name, ["offset": .int(0), "length": .int(2), "user_id": .long(3)]))
+        }
+        let edited = message(["edit_date": .int(1_700_000_000), "entities": .vector([entity("messageEntityMention"), entity("messageEntityUrl"), entity("messageEntityMentionName")])])
+        XCTAssertEqual(edited.editDate, Date(timeIntervalSince1970: 1_700_000_000))
+        XCTAssertEqual(edited.isEditable, true, "Telegram marks these again, and name mentions are sent again")
+        XCTAssertNil(message(["edit_date": .int(1), "edit_hide": .bool(true)]).editDate)
+        XCTAssertEqual(message(["entities": .vector([entity("messageEntityBold")])]).isEditable, false, "an edit would drop the bold")
+        XCTAssertEqual(message(["fwd_from": .object(TLObject("messageFwdHeader"))]).isEditable, false)
+        XCTAssertEqual(message(["media": .object(TLObject("messageMediaPhoto"))]).isEditable, true, "captions can be edited")
+        let sticker = TLObject("messageMediaDocument", ["document": .object(TLObject("document", [
+            "attributes": .vector([.object(TLObject("documentAttributeSticker"))]),
+        ]))])
+        XCTAssertEqual(message(["media": .object(sticker)]).isEditable, false)
+        XCTAssertEqual(message(["media": .object(TLObject("messageMediaPoll"))]).isEditable, false)
+    }
+
     func testMediaURLRoundTripsItsLocation() throws {
         let location = TLObject("inputPhotoFileLocation", [
             "id": .long(42), "access_hash": .long(-7), "file_reference": .bytes(Data([1, 2, 3, 255])), "thumb_size": .string("y"),

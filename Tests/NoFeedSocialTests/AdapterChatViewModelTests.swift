@@ -317,6 +317,91 @@ final class AdapterChatViewModelTests: XCTestCase {
         chat.disconnect()
     }
 
+    func testEditingSavesTheTextAndGivesBackWhatWasBeingWritten() async {
+        let adapter = FakeEditingAdapter()
+        adapter.pages = [[message(1), message(2, own: true)]]
+        let chat = makeChat(adapter)
+        await chat.connect()
+        XCTAssertFalse(chat.canEdit(message(1)), "someone else's message")
+        XCTAssertTrue(chat.canEdit(message(2, own: true)))
+        chat.draft = "Half written"
+        chat.startReply(to: message(1))
+        chat.startEditing(message(2, own: true))
+        XCTAssertEqual(chat.draft, "Message 2")
+        XCTAssertNil(chat.replyingTo)
+        chat.draft = "Changed "
+        await chat.send()
+        XCTAssertEqual(adapter.edits.map(\.text), ["Changed"])
+        XCTAssertEqual(chat.messages.last?.text, "Changed")
+        XCTAssertEqual(chat.messages.last?.isEdited, true)
+        XCTAssertNil(chat.editingMessage)
+        XCTAssertEqual(chat.draft, "Half written")
+        XCTAssertEqual(chat.replyingTo?.id, "1")
+        chat.disconnect()
+    }
+
+    func testCancellingOrKeepingTheTextSavesNothing() async {
+        let adapter = FakeEditingAdapter()
+        adapter.pages = [[message(2, own: true)]]
+        let chat = makeChat(adapter)
+        await chat.connect()
+        chat.draft = "Half written"
+        chat.startEditing(message(2, own: true))
+        chat.cancelEditing()
+        XCTAssertEqual(chat.draft, "Half written")
+        chat.startEditing(message(2, own: true))
+        await chat.send()
+        XCTAssertTrue(adapter.edits.isEmpty)
+        XCTAssertNil(chat.editingMessage)
+        XCTAssertEqual(chat.draft, "Half written")
+        chat.disconnect()
+    }
+
+    func testAFailedEditShowsTheMessageAsItWasAndReturnsTheEdit() async {
+        let adapter = FakeEditingAdapter()
+        adapter.pages = [[message(2, own: true)]]
+        adapter.editError = URLError(.notConnectedToInternet)
+        let chat = makeChat(adapter)
+        await chat.connect()
+        chat.startEditing(message(2, own: true))
+        chat.draft = "Changed"
+        await chat.send()
+        XCTAssertEqual(chat.messages.last?.text, "Message 2")
+        XCTAssertEqual(chat.editingMessage?.id, "2")
+        XCTAssertEqual(chat.draft, "Changed")
+        XCTAssertNotNil(chat.errorMessage)
+        chat.disconnect()
+    }
+
+    func testASavedEditShowsUntilTheNetworksCopyArrives() async {
+        let adapter = FakeEditingAdapter()
+        adapter.pages = [[message(2, own: true)]]
+        adapter.appliesEdits = false
+        let chat = makeChat(adapter)
+        await chat.connect()
+        chat.startEditing(message(2, own: true))
+        chat.draft = "Changed"
+        await chat.send()
+        XCTAssertEqual(chat.messages.last?.text, "Changed")
+        XCTAssertFalse(chat.canEdit(message(2, own: true)), "not while the edit is still showing")
+        adapter.replace(with: [ChatMessage(id: "2", sender: ChatUser(id: "you", name: "You", avatarURL: nil), timestamp: nil, text: "Changed, as the network wrote it", isOwn: true, isEdited: true)])
+        adapter.onChange?()
+        XCTAssertEqual(chat.messages.last?.text, "Changed, as the network wrote it")
+        XCTAssertTrue(chat.canEdit(message(2, own: true)))
+        chat.disconnect()
+    }
+
+    func testChatsWithoutEditingOfferNone() async {
+        let adapter = FakeAdapter()
+        adapter.pages = [[message(2, own: true)]]
+        let chat = makeChat(adapter)
+        await chat.connect()
+        XCTAssertFalse(chat.canEdit(message(2, own: true)))
+        chat.startEditing(message(2, own: true))
+        XCTAssertNil(chat.editingMessage)
+        chat.disconnect()
+    }
+
     private func makeChat(_ adapter: FakeAdapter) -> AdapterChatViewModel<FakeAdapter> {
         let suite = "AdapterChatViewModelTests-\(UUID().uuidString)"
         return AdapterChatViewModel(
@@ -467,6 +552,27 @@ private final class FakeWindowingAdapter: FakeAdapter, ChatWindowing, ChatComman
 
     func sendCommand(_ text: String, replyToId _: String?) async throws {
         commands.append(text)
+    }
+}
+
+@MainActor
+private final class FakeEditingAdapter: FakeAdapter, ChatEditing {
+    var editError: Error?
+    /// Off for a network whose copy of the edit arrives later.
+    var appliesEdits = true
+    private(set) var edits: [(id: String, text: String)] = []
+
+    func editableText(of message: ChatMessage) -> String? {
+        messages.first { $0.id == message.id && $0.isOwn }?.text
+    }
+
+    func edit(_ messageId: String, text: String) async throws {
+        if let editError {
+            throw editError
+        }
+        edits.append((messageId, text))
+        guard appliesEdits else { return }
+        replace(with: messages.map { $0.id == messageId ? ChatMessage(id: $0.id, sender: $0.sender, timestamp: $0.timestamp, text: text, isOwn: true, isEdited: true) : $0 })
     }
 }
 
