@@ -388,11 +388,20 @@ final class ChatMessageFocusController: UIViewController, UITextViewDelegate {
     }
 
     private func actionsPanel() -> UIView {
-        let rows = UIStackView(arrangedSubviews: menu.items.map { item in
+        // Every icon gets the widest one's width, so the titles line up as in a system menu.
+        let images = menu.items.map { item -> UIImage? in
+            switch item {
+            case let .action(action): action.image
+            case let .submenu(_, image, _): image
+            }
+        }.map { $0?.applyingSymbolConfiguration(Self.rowSymbolConfiguration) }
+        let iconWidth = ceil(images.compactMap { $0?.size.width }.max() ?? 0)
+        let rows = UIStackView(arrangedSubviews: zip(menu.items, images).map { item, image in
+            let image = image.map { Self.centered($0, width: iconWidth) }
             switch item {
             case let .action(action):
-                return row(title: action.title, image: action.image, primaryAction: UIAction { [weak self] _ in self?.perform(action) })
-            case let .submenu(title, image, children):
+                return row(title: action.title, image: image, primaryAction: UIAction { [weak self] _ in self?.perform(action) })
+            case let .submenu(title, _, children):
                 let button = row(title: title, image: image, chevron: true)
                 button.menu = UIMenu(children: children.map { child in
                     UIAction(title: child.title, image: child.image) { [weak self] _ in self?.perform(child) }
@@ -405,6 +414,16 @@ final class ChatMessageFocusController: UIViewController, UITextViewDelegate {
         })
         rows.axis = .vertical
         return panel(rows, cornerRadius: 18, insets: NSDirectionalEdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
+    }
+
+    private static let rowSymbolConfiguration = UIImage.SymbolConfiguration(textStyle: .body)
+
+    /// The icon drawn in the middle of a box `width` wide, tinted like the original.
+    private static func centered(_ image: UIImage, width: CGFloat) -> UIImage {
+        let size = CGSize(width: max(width, image.size.width), height: image.size.height)
+        return UIGraphicsImageRenderer(size: size).image { _ in
+            image.draw(at: CGPoint(x: (size.width - image.size.width) / 2, y: 0))
+        }.withRenderingMode(.alwaysTemplate)
     }
 
     private func row(title: String, image: UIImage?, chevron: Bool = false, primaryAction: UIAction? = nil) -> UIButton {
