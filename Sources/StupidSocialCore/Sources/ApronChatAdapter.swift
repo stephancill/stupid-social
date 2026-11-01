@@ -818,7 +818,7 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
         info.avatarUserId = other?.userId
         info.avatarURL = other?.avatarURL
         let status = other.flatMap { user in
-            user.lastSeen.map { "last seen \($0.formatted(.relative(presentation: .named)))" } ?? presence(of: user)?.text
+            user.lastSeen.map { "last seen \(ChatPresence.lastSeenTime($0))" } ?? presence(of: user)?.text
         }
         info.subtitle = status ?? service.server(for: serverURL)?.displayTitle ?? ApronServerInfo.displayTitle(nil, serverURL: serverURL)
     }

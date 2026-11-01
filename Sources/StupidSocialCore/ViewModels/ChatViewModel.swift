@@ -31,12 +31,17 @@ public enum ChatPresence: Codable, Hashable, Sendable {
     public var text: String {
         switch self {
         case .online: "online"
-        case let .lastSeen(date): "last seen \(date.formatted(.relative(presentation: .named)))"
+        case let .lastSeen(date): "last seen \(Self.lastSeenTime(date))"
         case .recently: "last seen recently"
         case .lastWeek: "last seen within a week"
         case .lastMonth: "last seen within a month"
         case .unknown: "last seen a long time ago"
         }
+    }
+
+    /// "just now" within a minute (and for a time just ahead of this device's clock), else "5 minutes ago".
+    public static func lastSeenTime(_ date: Date, now: Date = .now) -> String {
+        now.timeIntervalSince(date) < 60 ? "just now" : date.formatted(.relative(presentation: .named))
     }
 }
 

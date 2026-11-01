@@ -129,7 +129,7 @@ private struct ApronMemberRow: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 } else if presence == .offline, !isYou, let lastSeen = user.lastSeen {
-                    Text("Last seen \(lastSeen, format: .relative(presentation: .named))")
+                    Text("Last seen \(ChatPresence.lastSeenTime(lastSeen))")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)

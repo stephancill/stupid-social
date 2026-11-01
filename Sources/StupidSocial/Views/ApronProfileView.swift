@@ -39,7 +39,7 @@ struct ApronProfileView: View {
                             .foregroundStyle(.secondary)
                     }
                     if presence == .offline, !isYou, let lastSeen = user.lastSeen {
-                        Text("Last seen \(lastSeen, format: .relative(presentation: .named))")
+                        Text("Last seen \(ChatPresence.lastSeenTime(lastSeen))")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }

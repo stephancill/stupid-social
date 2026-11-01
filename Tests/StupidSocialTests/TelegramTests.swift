@@ -368,6 +368,13 @@ final class TelegramTests: XCTestCase {
         XCTAssertEqual(ChatPresence.recently.text, "last seen recently")
     }
 
+    func testLastSeenWithinAMinuteIsJustNow() {
+        let now = Date(timeIntervalSince1970: 1_793_170_332)
+        XCTAssertEqual(ChatPresence.lastSeenTime(now.addingTimeInterval(-59), now: now), "just now")
+        XCTAssertEqual(ChatPresence.lastSeenTime(now.addingTimeInterval(5), now: now), "just now")
+        XCTAssertNotEqual(ChatPresence.lastSeenTime(now.addingTimeInterval(-60), now: now), "just now")
+    }
+
     // MARK: Spoilers
 
     func testSpoilerEntitiesAndMaskedPreview() {
