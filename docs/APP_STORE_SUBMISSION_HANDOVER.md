@@ -14,10 +14,11 @@ involved, and the precise remaining steps.
 | Bundle ID | `tech.stupid.StupidSocial` |
 | App Store app Apple ID | **6764539627** |
 | Team | Stephan Cilliers (User team) |
-| Target version | iOS App Version **1.0** (marketing version string `1.0`) |
-| Current build attached | **117** (build id `e793a6a5-cbcc-4b54-9f4a-5ef3c5ff59f6`) — VALID |
+| Live version | iOS **1.0** (`READY_FOR_SALE`, version id `55dfe68e-f3fb-4289-acc3-45b41dce46f2`) |
+| Target version | iOS **1.0.1** (`PREPARE_FOR_SUBMISSION`, version id `3d6e9911-91a0-4f50-87e2-2ba2741f19e1`) |
+| Current build attached | **182** (build id `eecff0c5-7938-4092-a775-b024679d578e`) — VALID |
 | Primary language | en-GB |
-| ASC API identities | app=6764539627 · iOS version=**55dfe68e-f3fb-4289-acc3-45b41dce46f2** · en-GB localization=**3e4507c0-6ecf-4461-8e78-a1f43066f004** |
+| ASC API identities | app=6764539627 · 1.0.1 en-GB localization=**8a5de7e9-e261-4a52-8f5e-fceb2ac771a4** (1.0: `3e4507c0-6ecf-4461-8e78-a1f43066f004`) |
 
 ### ASC credentials / API
 - ASC API key used by automation: `~/.stupid-app/credentials/` (`asc.key-id`,
@@ -31,6 +32,15 @@ involved, and the precise remaining steps.
 ---
 
 ## 2. Current submission state in App Store Connect
+
+### 1.0.1 (in preparation)
+Created via API with build 182 attached; description, keywords, promotional text and
+What's New (settable via API on a fresh version) from `docs/app-store-copy.md`; new
+screenshots (table below); App Review notes rewritten for the Preview content toggle and
+demo chats. Not yet added for review. Before adding it, update App Privacy for the usage
+metrics (§6) in the web UI.
+
+The sections below record the 1.0 submission.
 
 ### Done (persisted in ASC)
 - **Primary category** → **Social Networking** (`SOCIAL_NETWORKING` via API on `appInfos`,
@@ -52,9 +62,10 @@ involved, and the precise remaining steps.
 
 | Display set | Size | Files |
 |---|---|---|
-| `APP_IPHONE_61` (set `28f8f642-…`) | 1170×2532 / 1206×2622 | feed, detail, settings, story-instagram, story-spotify, story-github |
-| `APP_IPHONE_65` (set `6755677d-…`) | 1242×2688 | feed |
-| `APP_IPAD_PRO_3GEN_129` (set `93999b53-…`) | 2048×2732 | feed, detail |
+| `APP_IPHONE_67` (1.0.1 set `36fd406c-…`) | 1320×2868 (iPhone 16 Pro Max) | feed, chats, chat-apron, chat-photos, story, detail |
+| `APP_IPAD_PRO_3GEN_129` (1.0.1 set `4780b72f-…`) | 2048×2732 (iPad Pro 12.9" 6th gen) | feed, chats, chat-apron, chat-photos, story |
+
+For 1.0.1 the 6.1" and 6.5" sets copied from 1.0 were deleted, so smaller iPhones use the scaled 6.9" set.
 
 - **Description / keywords / promotional text** — set (from `docs/app-store-copy.md`).
 - **Support URL** = `https://stupidtech.net`, **Marketing URL** = `https://stupidtech.net`.
@@ -102,16 +113,19 @@ The screenshots come from a **demo-data mode** baked into the app (Debug-only):
 
 - `DemoData` (`Sources/StupidSocialCore/Sources/DemoData.swift`) seeds a realistic fake
   feed/story bar (Debug-only `#if DEBUG`; never compiled into release).
-- Enable: launch with `-demoData` OR env `DEMO_DATA=1`, OR Settings → enable the hidden
-  Debug toggle (4-tap "About") → auto-loads; then "Load preview / Redact names /
-  Unload" in the Demo Data section.
+- Enable: launch with `-demoData` (`xcrun simctl launch <udid> tech.stupid.StupidSocial -demoData`),
+  or Settings → tap the About heading four times → Demo Data → **Preview content** toggle.
+  Demo mode works in release builds and persists, so capture on a temporary simulator.
+- Chats: swipe right from the feed. On the iPad simulator the pager only takes a slow drag
+  (`stupidsim swipe … --steps 20 --step-milliseconds 15`), and after backing out of a
+  notification detail its page dots disappeared and it stopped paging until relaunch
+  (observed 2026-11-01).
 - Capturing: boot a simulator, install the Debug build, launch with demo, screenshot with
-  `xcrun simctl io <udid> screenshot`, then caption with
-  `python3 ~/.config/opencode/skills/app-store-submission/scripts/ratioize.py <raw.png>`
-  (native canvas, caption band) and upload with
-  `upload_screenshots.py <loc> <set> <file>`.
-- Watch which devices map to which set: 6.1"=`APP_IPHONE_61` (1206×2622), 6.5"=
-  `APP_IPHONE_65` (1242×2688), iPad Pro 13"→resize to 2048×2732 → `APP_IPAD_PRO_3GEN_129`.
+  `xcrun simctl io <udid> screenshot` (status bar override `--time 9:41`), then caption with
+  the skill's `ratioize.make` (caption above a framed screenshot on the native canvas) and
+  upload with `upload_screenshots.py <loc> <set> <file>`.
+- Device → set: iPhone 16 Pro Max (1320×2868) → `APP_IPHONE_67`; iPad Pro 12.9" 6th gen
+  (2048×2732, no resize needed) → `APP_IPAD_PRO_3GEN_129`.
 - Alternated captures for avatar/no feed (jules/maya/torres use `randomuser.me`),
   stories IG/Spotify/GitHub.
 

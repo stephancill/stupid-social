@@ -18,39 +18,37 @@ only the best parts of social
 ## Promotional text (≤170 chars)
 
 ```
-The best parts of social — the notifications, stories and profiles that matter — without the feed.
+Notifications, stories and messages from all your socials in one calm app. No algorithmic feed.
 ```
 
 ## Description
 
 ```
-stupid social aggregates notifications and stories across your favourite social apps.
+stupid social brings the direct parts of your social apps together — notifications, stories and messages — without the algorithmic feed.
 
 FEATURES
-• All your notifications in one calm list — mentions, replies, likes and follows across X, Farcaster, Instagram, Bluesky and GitHub.
+• All your notifications in one calm list: mentions, replies, likes and follows across X, Farcaster, Instagram, Bluesky and GitHub.
+• One inbox for your chats on Telegram, X, Instagram, Bluesky, Spotify and Apron, with replies, reactions, photos, voice notes and files.
 • A story bar for Instagram stories, Spotify listening activity and GitHub activity.
-• Deep-links into the profile behind every notification and story.
+• Reply, like and repost from the post behind a notification.
+• Set reminders on messages and get back to them later.
 • Cross-network profile search.
-• Publish stories to Instagram right from the app.
-• Credentials synced securely via iCloud Keychain.
+• Accounts synced securely via iCloud Keychain.
 ```
 
 ## Keywords (≤100 chars, comma-separated, no spaces)
 
 ```
-social,notifications,x,farcaster,instagram,spotify,bluesky,github,mentions,replies,follow
+social,notifications,chat,inbox,messages,dm,telegram,x,farcaster,instagram,bluesky,github,spotify
 ```
 
 ## What's New (this release)
 
 ```
-- X and Farcaster: mentions, replies, likes and follows in one calm list.
-- Instagram stories and direct messages.
-- Spotify listening activity.
-- GitHub activity and "starred your repository" updates.
-- Bluesky notifications.
-- Publish stories to Instagram.
-- Notification-based profile details and follow controls.
+- Chats: Telegram, X, Instagram, Bluesky, Spotify and Apron messages in one inbox, swipe right from the feed.
+- Replies, reactions, photos, voice notes, files and message reminders.
+- Reply, like and repost from a notification's post.
+- Multiple accounts per network.
 ```
 
 ## Support URL
