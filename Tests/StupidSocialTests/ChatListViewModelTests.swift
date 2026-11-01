@@ -179,6 +179,34 @@ final class ChatListViewModelTests: XCTestCase {
         XCTAssertNil(list.chat(for: .telegram(peer: TelegramPeer(kind: .chat, id: 7, accessHash: 0))))
     }
 
+    /// At launch from a notification, the first load can finish after the opened chat was read; its counts,
+    /// fetched before reading, mustn't put the unread count back.
+    func testALoadThatStartedBeforeAnOpenChatUpdatedItKeepsTheChatsState() async throws {
+        var unread = row("t", .telegram, minutesAgo: 1)
+        unread.unreadCount = 3
+        let provider = FakeProvider(network: .telegram, page: .init(chats: [unread], archived: []))
+        let list = makeList([(provider, "telegram")])
+        await list.load()
+        XCTAssertEqual(list.chats.first?.unreadCount, 3)
+
+        provider.isHeld = true
+        let loading = Task { await list.load() }
+        while !provider.isWaiting {
+            await Task.yield()
+        }
+        let chat = try ChatViewModel(network: .telegram, chatKey: "telegram|t", title: "t", subtitle: "", canReply: true, draftStore: ChatDraftStore(defaults: XCTUnwrap(UserDefaults(suiteName: "ChatListViewModelTests-\(UUID().uuidString)"))))
+        _ = list.follow(chat, chatId: "telegram|t")
+        chat.summaryDidChange?(nil, nil, 0, nil)
+        XCTAssertEqual(list.chats.first?.unreadCount, 0)
+
+        provider.release()
+        await loading.value
+        XCTAssertEqual(list.chats.first?.unreadCount, 0, "the load's stale count overwrote the read chat")
+
+        await list.load()
+        XCTAssertEqual(list.chats.first?.unreadCount, 3, "a load started after the update is the network's latest")
+    }
+
     private func makeList(_ providers: [(FakeProvider, String?)]) -> ChatListViewModel {
         ChatListViewModel(sources: {
             providers.map { ChatListSource(provider: $0.0, accountId: $0.1, label: $0.0.network.displayName) }
@@ -210,11 +238,26 @@ private final class FakeProvider: ChatListProvider {
         self.page = page
     }
 
+    /// While set, `chatList` waits for `release()`, as a slow network does.
+    var isHeld = false
+    private(set) var isWaiting = false
+    private var waiter: CheckedContinuation<Void, Never>?
+
     func chatList() async throws -> ChatListPage {
+        if isHeld {
+            await withCheckedContinuation { waiter = $0; isWaiting = true }
+        }
         if let error {
             throw error
         }
         return page
+    }
+
+    func release() {
+        isHeld = false
+        isWaiting = false
+        waiter?.resume()
+        waiter = nil
     }
 }
 

@@ -202,6 +202,20 @@ public final class ChatListViewModel: ObservableObject {
     /// Accounts that aren't connected aren't listed.
     @Published public private(set) var connections: [ChatConnectionStatus] = []
 
+    /// Each open chat's latest row state, numbered by `followedUpdateCount` when it came. A load that began
+    /// before an update keeps it, rather than putting back what it fetched earlier: at launch from a notification,
+    /// the first load can finish after the opened chat was read.
+    private var followedRows: [String: FollowedRow] = [:]
+    private var followedUpdateCount = 0
+
+    private struct FollowedRow {
+        let update: Int
+        let latest: ChatMessage?
+        let body: String?
+        let unreadCount: Int
+        let unseenReactionCount: Int?
+    }
+
     /// The accounts' providers as of each load, since accounts come and go.
     private let sources: () -> [ChatListSource]
     /// The last loaded list, shown at launch while it refreshes, so only the very first load waits.
@@ -240,6 +254,7 @@ public final class ChatListViewModel: ObservableObject {
         guard !isLoading else { return }
         isLoading = true
         defer { isLoading = false }
+        let startedAfter = followedUpdateCount
         let sources = sources()
         let providers = sources.map(\.provider)
         let results = await withTaskGroup(of: (Int, Result<ChatListPage, Error>).self) { group in
@@ -294,15 +309,25 @@ public final class ChatListViewModel: ObservableObject {
             }
         }
         connections = statuses
-        setChats(merged)
-        setArchivedChats(archived)
+        followedRows = followedRows.filter { $0.value.update > startedAfter }
+        setChats(merged.map(keepingFollowedState))
+        setArchivedChats(archived.map(keepingFollowedState))
+    }
+
+    /// The row as its open chat last reported it, for updates the finishing load doesn't include.
+    private func keepingFollowedState(_ chat: ChatSummary) -> ChatSummary {
+        guard let row = followedRows[chat.id] else { return chat }
+        return Self.updated(chat, latest: row.latest, body: row.body, unreadCount: row.unreadCount, unseenReactionCount: row.unseenReactionCount)
     }
 
     /// Keeps the chat's row current while it is open, so returning to the list shows its latest message and
     /// read state without waiting for the reload.
     public func follow<ViewModel: ChatViewModel>(_ viewModel: ViewModel, chatId: String) -> ViewModel {
         viewModel.summaryDidChange = { [weak self] latest, body, unreadCount, unseenReactionCount in
-            self?.updateChat(id: chatId, latest: latest, body: body, unreadCount: unreadCount, unseenReactionCount: unseenReactionCount)
+            guard let self else { return }
+            followedUpdateCount += 1
+            followedRows[chatId] = FollowedRow(update: followedUpdateCount, latest: latest, body: body, unreadCount: unreadCount, unseenReactionCount: unseenReactionCount)
+            updateChat(id: chatId, latest: latest, body: body, unreadCount: unreadCount, unseenReactionCount: unseenReactionCount)
         }
         return viewModel
     }
