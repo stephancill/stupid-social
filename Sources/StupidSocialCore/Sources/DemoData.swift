@@ -31,7 +31,8 @@ public enum DemoData {
         }
 
         // The same people as the demo chats, with their faces, on each network's kind of handle.
-        let you = NotificationActor(id: "x-sam", network: .x, username: "sam", displayName: "Sam", avatarURL: nil)
+        let samAvatar = URL(string: "https://randomuser.me/api/portraits/men/22.jpg")
+        let you = NotificationActor(id: "x-sam", network: .x, username: "sam", displayName: "Sam", avatarURL: samAvatar)
         let xMaya = person("maya_chen", "Maya Chen", .x, DemoChats.maya)
         let xTheo = person("theo_builds", "Theo", .x, DemoChats.theo)
         let xJules = person("julesmakes", "Jules", .x, DemoChats.jules)
@@ -72,7 +73,7 @@ public enum DemoData {
             text: "Sunday trail 🥾",
             url: nil,
             imageURL: media("cabin-view"),
-            author: NotificationActor(id: "instagram-sam", network: .instagram, username: "sam", displayName: "Sam", avatarURL: nil),
+            author: NotificationActor(id: "instagram-sam", network: .instagram, username: "sam", displayName: "Sam", avatarURL: samAvatar),
             postedAt: mins(90),
         )
         let repo = NotificationTarget(id: "5501", text: "sam/trailmap", url: URL(string: "https://github.com/sam/trailmap")!)
