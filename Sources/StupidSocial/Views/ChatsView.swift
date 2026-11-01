@@ -31,6 +31,7 @@ struct ChatsView: View {
     @State private var isShowingArchive = false
     @State private var settingsAccountId: String?
     @State private var query = ""
+    @State private var isSearchPresented = false
     /// With the search bar in the navigation bar's drawer, rows present while the bar first lays out start the
     /// list collapsed to the inline title, so saved chats are inserted just after the screen appears.
     @State private var hasAppeared = false
@@ -87,8 +88,17 @@ struct ChatsView: View {
                 }
             }
         }
-        .searchBar(text: $query, placement: .navigationBarDrawer(displayMode: .always))
+        .searchBar(text: $query, isPresented: $isSearchPresented, placement: .navigationBarDrawer(displayMode: .always))
         .searchBarKeepsFill()
+        .background {
+            // Command-K and Command-F search the list with a hardware keyboard (a Mac, an iPad).
+            ForEach(["k", "f"] as [KeyEquivalent], id: \.character) { key in
+                Button { isSearchPresented = true } label: { EmptyView() }
+                    .keyboardShortcut(key, modifiers: .command)
+                    .accessibilityHidden(true)
+            }
+            .hidden()
+        }
         .onChange(of: selection == nil && !isShowingArchive && settingsAccountId == nil) { _, isOnList in
             isShowingChat = !isOnList
             if isOnList {

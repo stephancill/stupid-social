@@ -13,6 +13,7 @@ struct ChatView: View {
     var keepsConnection = false
 
     @AppStorage("redactionEnabled") private var redactionEnabled = false
+    @Environment(\.dismiss) private var dismiss
 
     /// Like the feed, "Redact names" hides people's names: the title of a chat named for people, and an
     /// `@username` subtitle.
@@ -41,8 +42,25 @@ struct ChatView: View {
             .hoverEffectDisabled()
     }
 
+    /// Escape with a hardware keyboard (a Mac, an iPad) ends a search, else goes back to Chats. The composer takes
+    /// Escape before this does, so it goes back through `goBack` while typing.
+    private var backShortcut: some View {
+        Button {
+            if isSearching {
+                viewModel.endSearch()
+            } else {
+                dismiss()
+            }
+        } label: {
+            EmptyView()
+        }
+        .keyboardShortcut(.escape, modifiers: [])
+        .accessibilityHidden(true)
+        .hidden()
+    }
+
     var body: some View {
-        ChatUIKitView(viewModel: viewModel, showProfile: showProfile)
+        ChatUIKitView(viewModel: viewModel, showProfile: showProfile, goBack: { dismiss() })
             .ignoresSafeArea(.keyboard)
             // Full-bleed under the bar and home indicator; the list insets itself from the safe area.
             .ignoresSafeArea(edges: [.top, .bottom])
@@ -62,6 +80,7 @@ struct ChatView: View {
                     ChatSearchField(viewModel: viewModel)
                 }
             }
+            .background { backShortcut }
             .task {
                 AppMetrics.chatOpened(network: viewModel.network)
                 await viewModel.connect()

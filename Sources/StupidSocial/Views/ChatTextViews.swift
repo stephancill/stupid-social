@@ -33,15 +33,30 @@ final class ChatLinkTapGesture: UITapGestureRecognizer {
 /// The composer. Return on a hardware keyboard sends and Shift-Return adds a line; the on-screen keyboard's
 /// Return still adds a line. While an input method is composing, Return confirms the composition instead.
 /// On a Mac, keys reach the text view as inserted text rather than presses, so Return arrives as a newline.
+/// Escape runs `onEscape` (leaving the chat), ahead of the text view's own handling, unless it is cancelling a
+/// composition.
 final class ChatComposerTextView: UITextView {
     var onReturn: () -> Void = {}
+    var onEscape: () -> Void = {}
     private let isOnMac = ProcessInfo.processInfo.isiOSAppOnMac
 
     override var keyCommands: [UIKeyCommand]? {
-        guard isOnMac else { return super.keyCommands }
-        return [UIKeyModifierFlags.shift, .alternate].map {
-            UIKeyCommand(input: "\r", modifierFlags: $0, action: #selector(insertLineBreak))
+        var commands = super.keyCommands ?? []
+        if markedTextRange == nil {
+            let escape = UIKeyCommand(input: UIKeyCommand.inputEscape, modifierFlags: [], action: #selector(escapePressed))
+            escape.wantsPriorityOverSystemBehavior = true
+            commands.append(escape)
         }
+        if isOnMac {
+            commands += [UIKeyModifierFlags.shift, .alternate].map {
+                UIKeyCommand(input: "\r", modifierFlags: $0, action: #selector(insertLineBreak))
+            }
+        }
+        return commands
+    }
+
+    @objc private func escapePressed() {
+        onEscape()
     }
 
     override func insertText(_ text: String) {

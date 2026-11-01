@@ -12,15 +12,19 @@ struct ChatUIKitView: UIViewControllerRepresentable {
     let viewModel: ChatViewModel
     /// A sender's avatar or a mention was tapped.
     var showProfile: (ChatUser) -> Void = { _ in }
+    /// Escape was pressed in the composer.
+    var goBack: () -> Void = {}
 
     func makeUIViewController(context _: Context) -> ChatViewController {
         let controller = ChatViewController(viewModel: viewModel)
         controller.showProfile = showProfile
+        controller.goBack = goBack
         return controller
     }
 
     func updateUIViewController(_ controller: ChatViewController, context _: Context) {
         controller.showProfile = showProfile
+        controller.goBack = goBack
     }
 }
 
@@ -42,6 +46,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
 
     private let viewModel: ChatViewModel
     var showProfile: (ChatUser) -> Void = { _ in }
+    var goBack: () -> Void = {}
     private var cancellables = Set<AnyCancellable>()
     private var collectionView: UICollectionView!
     private var contentSizeObservation: NSKeyValueObservation?
@@ -392,6 +397,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
             guard let self, sendButton.isEnabled else { return }
             send()
         }
+        textView.onEscape = { [weak self] in self?.goBack() }
         textView.accessibilityLabel = "Message"
         textViewHeight = textView.heightAnchor.constraint(equalToConstant: minimumTextHeight)
         textViewHeight.isActive = true
