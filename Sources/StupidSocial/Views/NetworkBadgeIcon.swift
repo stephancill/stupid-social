@@ -5,13 +5,17 @@ import UIKit
 struct NetworkBadgeIcon: View {
     let network: SocialNetwork
     var size: CGFloat = 16
+    /// Draws the badge's shape in one color, for a glyph badge on a colored background.
+    var tint: Color?
 
     var body: some View {
         Group {
             if let image = networkBadgeImage(named: network.badgeAssetName) {
                 image
                     .resizable()
+                    .renderingMode(tint == nil ? .original : .template)
                     .interpolation(.high)
+                    .foregroundStyle(tint ?? .primary)
             } else {
                 Text(network.badgeFallbackText)
                     .font(.caption2.weight(.bold))

@@ -73,10 +73,18 @@ public final class SettingsViewModel: ObservableObject {
         if status == .invalidCredentials {
             return status.label
         }
+        if account.network == .apron, account.serverURL != nil {
+            return name(for: account)
+        }
+        return account.label ?? status.label
+    }
+
+    /// "@handle", the account's name or the Apron server's title, falling back to the network's name.
+    public func name(for account: Account) -> String {
         if account.network == .apron, let serverURL = account.serverURL {
             return ApronServerInfo.displayTitle(store.apronInfo(id: account.id)?.title, serverURL: serverURL)
         }
-        return account.label ?? status.label
+        return account.label ?? account.network.displayName
     }
 
     /// The picture beside the account's row: an Apron account shows its server's icon, others their own.

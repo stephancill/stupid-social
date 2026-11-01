@@ -199,6 +199,7 @@ Observed X behavior:
 - Spotify listening story tiles show the album/track artwork as the thumbnail with the listener's avatar overlaid in the bottom-right corner.
 - Tapping a Spotify listening story opens the Listening detail screen.
 - Each item shows a network badge.
+- A row of pills above the notifications filters the feed: a Reminders pill for every chat reminder, then one per account with notifications (network icon and account name), ordered by its number of notifications. Any number can be selected and the feed shows what any of them match; a clear button at the row's right edge removes the filter.
 - The feed shows newly discovered notification items plus known recent cached items.
 - Successful refreshes insert fetched notifications directly into the visible chronological feed.
 - Recent notification cache retention is 24 hours.
