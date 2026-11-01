@@ -1,5 +1,5 @@
 version: 1
-product: NoFeedSocial
+product: StupidSocial
 bundleID: tech.stupid.StupidSocial
 deploymentTarget: "18.0"
 infoPath: Info.plist
@@ -45,7 +45,7 @@ resources:
   # Telegram push templates for loc-key alerts (scripts/telegram-push-strings.py).
   - Resources/en.lproj
 extensions:
-  - product: NoFeedSocialNotificationService
+  - product: StupidSocialNotificationService
     bundleID: tech.stupid.StupidSocial.NotificationService
     infoPath: NotificationService/Info.plist
     entitlementsPath: NotificationService/NotificationService.entitlements

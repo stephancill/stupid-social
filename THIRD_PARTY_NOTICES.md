@@ -1,6 +1,6 @@
 # Third-party notices
 
-## Emoji data (`Sources/NoFeedSocialCore/Resources/Emoji.json`)
+## Emoji data (`Sources/StupidSocialCore/Resources/Emoji.json`)
 
 Emoji, names, categories and keywords from [Elegant Emoji Picker](https://github.com/Finalet/Elegant-Emoji-Picker) (`Emoji Unicode 17.0.json` at commit `ceff7eb`), reduced to the fields the app uses.
 

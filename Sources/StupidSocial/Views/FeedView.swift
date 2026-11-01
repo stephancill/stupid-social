@@ -1,0 +1,1222 @@
+import StupidSocialCore
+import SwiftUI
+import UIKit
+
+struct FeedView: View {
+    @ObservedObject var viewModel: FeedViewModel
+    @ObservedObject var storyViewModel: StoryBarViewModel
+    let spotifyClient: SpotifyClient
+    let settingsViewModel: SettingsViewModel
+    let onOpenSettings: () -> Void
+    let onRefresh: () async -> Void
+    /// Whether a notification's detail is pushed, so the home pager can stop paging.
+    @Binding var isShowingDetail: Bool
+    @State private var notificationDetailSelection: DisplayNotificationItem?
+    @State private var storyViewerSelection: StoryViewerSelection?
+    @State private var showingStoryComposer = false
+    @State private var isPullRefreshing = false
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        List {
+            if showsStoryBarSkeleton {
+                StoriesBarSkeleton()
+            }
+
+            if hasVisibleStoriesBar {
+                StoriesBar(
+                    items: storyViewModel.storyBarItems,
+                    ownInstagramActor: storyViewModel.ownInstagramStoryActor,
+                    ownInstagramReel: storyViewModel.ownInstagramStoryReel,
+                    onComposeTap: {
+                        showingStoryComposer = true
+                    },
+                    onOwnStoryTap: {
+                        if let ownInstagramStoryReel = storyViewModel.ownInstagramStoryReel {
+                            AppMetrics.storyOpened(network: .instagram)
+                            storyViewerSelection = StoryViewerSelection(
+                                items: [.instagram(ownInstagramStoryReel)],
+                                startIndex: 0,
+                                startSlideIndex: 0,
+                            )
+                        } else {
+                            showingStoryComposer = true
+                        }
+                    },
+                    onItemTap: { selectedItem, visibleItems in
+                        AppMetrics.storyOpened(network: selectedItem.network)
+                        let items = storyViewModel.storyViewerItems(for: selectedItem, in: visibleItems)
+                        storyViewerSelection = StoryViewerSelection(
+                            items: items,
+                            startIndex: storyViewModel.storyViewerStartIndex(for: selectedItem, in: items),
+                            startSlideIndex: storyViewModel.storyViewerStartSlideIndex(for: selectedItem, in: items),
+                        )
+                    },
+                    onItemAppear: { item in
+                        Task {
+                            await storyViewModel.loadNextStoryBarPageIfNeeded(currentItem: item)
+                        }
+                    },
+                )
+            }
+
+            if notificationItems.isEmpty, !hasVisibleStoriesBar, !storyViewModel.storyBarLoading {
+                VStack {
+                    Spacer(minLength: 0)
+                    VStack(spacing: 8) {
+                        ContentUnavailableView(
+                            "No Notifications",
+                            systemImage: "bell.slash",
+                            description: Text("Connect social accounts to get started."),
+                        )
+                        .fixedSize(horizontal: false, vertical: true)
+
+                        Button("Open Settings", action: onOpenSettings)
+                            .buttonStyle(.borderless)
+                            .fixedSize()
+                            .frame(maxWidth: .infinity, alignment: .center)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .frame(minHeight: 600)
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
+            } else {
+                Section {
+                    ForEach(Array(notificationItems.enumerated()), id: \.element.id) { index, displayItem in
+                        Button {
+                            if let reminderId = reminderId(of: displayItem) {
+                                AppMetrics.chatReminderOpened(source: "feed")
+                                NotificationRouter.shared.openReminder(id: reminderId)
+                            } else {
+                                notificationDetailSelection = displayItem
+                            }
+                        } label: {
+                            NotificationRow(displayItem: displayItem)
+                                // A plain button only hit-tests drawn content; make the whole row tappable.
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .contextMenu {
+                            // The home pager can take a row's horizontal swipe, so Remove is on long press too.
+                            if let reminderId = reminderId(of: displayItem) {
+                                removeReminderButton(reminderId)
+                            }
+                        }
+                        .compactListRowInsets()
+                        .listRowSeparator(index == 0 ? .hidden : .visible, edges: .top)
+                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                            if let reminderId = reminderId(of: displayItem) {
+                                removeReminderButton(reminderId)
+                            }
+                            if let url = targetPostURL(for: displayItem) {
+                                Button {
+                                    openURL(url)
+                                } label: {
+                                    Label("Open Post", systemImage: "arrow.up.right.square")
+                                }
+                                .tint(.blue)
+                            }
+                        }
+                    }
+                }
+                .listSectionSeparator(.hidden)
+            }
+        }
+        #if os(iOS)
+        .listStyle(.plain)
+        .listSectionSpacing(0)
+        .scrollContentBackground(.hidden)
+        .softScrollEdge()
+        #endif
+        .refreshable {
+            isPullRefreshing = true
+            defer { isPullRefreshing = false }
+            await onRefresh()
+        }
+        .onChange(of: notificationDetailSelection == nil) { _, isNil in
+            isShowingDetail = !isNil
+        }
+        .navigationDestination(item: $notificationDetailSelection) { displayItem in
+            NotificationDetailView(displayItem: displayItem, feedService: viewModel.service, spotifyClient: spotifyClient)
+        }
+        .navigationTitle("Social")
+        .toolbar {
+            if !isPullRefreshing, viewModel.isRefreshing || viewModel.isForegroundRefreshing {
+                ToolbarItem(placement: .navigation) {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+            }
+
+            ToolbarItemGroup(placement: .primaryAction) {
+                NavigationLink(value: HomeDestination.search) {
+                    Image(systemName: "magnifyingglass")
+                }
+                .accessibilityLabel("Search")
+
+                NavigationLink(value: HomeDestination.settings) {
+                    SettingsToolbarIcon(viewModel: settingsViewModel)
+                }
+                .accessibilityLabel("Settings")
+            }
+        }
+        .alert("Refresh Issue", isPresented: errorBinding) {
+            Button("OK", role: .cancel) {
+                viewModel.errorMessage = nil
+                storyViewModel.errorMessage = nil
+            }
+        } message: {
+            Text(alertMessage)
+        }
+        .fullScreenCover(item: $storyViewerSelection) { selection in
+            UnifiedStoryViewer(
+                items: selection.items,
+                startIndex: selection.startIndex,
+                startSlideIndex: selection.startSlideIndex,
+                spotifyClient: spotifyClient,
+                feedService: viewModel.service,
+                ownInstagramAccountId: storyViewModel.ownInstagramStoryActor?.id,
+                onInstagramReelSeen: { reelId in
+                    storyViewModel.markInstagramReelAsSeen(reelId: reelId)
+                },
+                onSpotifyItemSeen: { userURI in
+                    storyViewModel.markSpotifyActivityAsSeen(userURI: userURI)
+                },
+                onGitHubItemSeen: { actorId in
+                    storyViewModel.markGitHubActivityAsSeen(actorId: actorId)
+                },
+                onInstagramStoryDelete: { mediaId, isVideo in
+                    try await storyViewModel.deleteInstagramStory(mediaId: mediaId, isVideo: isVideo)
+                },
+                onInstagramStoryLike: { mediaId, liked in
+                    try await storyViewModel.setInstagramStoryLiked(mediaId: mediaId, liked: liked)
+                },
+            )
+        }
+        .fullScreenCover(isPresented: $showingStoryComposer) {
+            StoryComposerView(onMentionSearch: { query in
+                await viewModel.service.searchProfiles(query: query).filter { $0.network == .instagram }
+            }) { imageData, width, height, mimeType, mentions, closeFriends in
+                try await storyViewModel.postInstagramStory(imageData: imageData, width: width, height: height, mimeType: mimeType, mentions: mentions, closeFriends: closeFriends)
+            }
+        }
+    }
+
+    private var notificationItems: [DisplayNotificationItem] {
+        viewModel.items
+    }
+
+    private var hasVisibleStoriesBar: Bool {
+        storyViewModel.storyBarContentLoaded && (storyViewModel.ownInstagramStoryActor != nil || !storyViewModel.storyBarItems.isEmpty)
+    }
+
+    private var showsStoryBarSkeleton: Bool {
+        storyViewModel.storyBarLoading && !storyViewModel.storyBarContentLoaded
+    }
+
+    private var errorBinding: Binding<Bool> {
+        Binding(
+            get: { viewModel.errorMessage != nil || storyViewModel.errorMessage != nil },
+            set: {
+                if !$0 {
+                    viewModel.errorMessage = nil
+                    storyViewModel.errorMessage = nil
+                }
+            },
+        )
+    }
+
+    private var alertMessage: String {
+        viewModel.errorMessage ?? storyViewModel.errorMessage ?? "Refresh failed."
+    }
+
+    private func removeReminderButton(_ id: String) -> some View {
+        Button(role: .destructive) {
+            ChatReminderStore.remove(id: id)
+            AppMetrics.chatReminderDone(via: "feed")
+        } label: {
+            Label("Remove Reminder", systemImage: "trash")
+        }
+    }
+
+    private func reminderId(of displayItem: DisplayNotificationItem) -> String? {
+        guard displayItem.id.hasPrefix(ChatReminder.itemIdPrefix) else { return nil }
+        return String(displayItem.id.dropFirst(ChatReminder.itemIdPrefix.count))
+    }
+
+    private func targetPostURL(for displayItem: DisplayNotificationItem) -> URL? {
+        guard reminderId(of: displayItem) == nil else { return nil }
+        guard let target = displayItem.item.target else { return nil }
+        return NotificationTargetURL.resolve(network: displayItem.item.network, target: target)
+    }
+
+    private func foregroundRefreshFeedAndStories() async {
+        async let feedRefresh = viewModel.refreshOnForegroundActivation()
+        async let storyRefresh: Void = storyViewModel.fetchStoryBarContent()
+        _ = await (feedRefresh, storyRefresh)
+    }
+}
+
+private struct StoryViewerSelection: Identifiable {
+    let id = UUID()
+    let items: [StoryBarItem]
+    let startIndex: Int
+    let startSlideIndex: Int
+}
+
+private struct StoriesBarSkeleton: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @ScaledMetric(relativeTo: .caption2) private var rowHeight: CGFloat = 112
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1 / 30)) { timeline in
+            skeletonContent(fillOpacity: fillOpacity(at: timeline.date))
+        }
+        .frame(height: rowHeight, alignment: .top)
+        .padding(.vertical, 8)
+        .listRowInsets(EdgeInsets())
+        .listRowSeparator(.hidden)
+        .accessibilityLabel("Loading stories")
+    }
+
+    private func skeletonContent(fillOpacity: Double) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                .fill(Color.storySkeletonPulseFill.opacity(fillOpacity))
+                .frame(width: 72, height: 10)
+                .padding(.horizontal, 16)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: 12) {
+                    ForEach(0 ..< 6, id: \.self) { _ in
+                        StoryBubbleSkeleton(fillOpacity: fillOpacity)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .padding(.bottom, 4)
+            }
+        }
+    }
+
+    private func fillOpacity(at date: Date) -> Double {
+        guard !reduceMotion else { return 0.28 }
+        let cycle = date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 2.4) / 2.4
+        let wave = (sin((cycle * 2 * .pi) - (.pi / 2)) + 1) / 2
+        return 0.22 + (0.10 * wave)
+    }
+}
+
+private struct StoryBubbleSkeleton: View {
+    let fillOpacity: Double
+
+    var body: some View {
+        VStack(spacing: 6) {
+            Circle()
+                .fill(Color.storySkeletonPulseFill.opacity(fillOpacity))
+                .frame(width: 70, height: 70)
+                .overlay {
+                    Circle()
+                        .stroke(Color.storySkeletonStroke, lineWidth: 1)
+                }
+
+            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                .fill(Color.storySkeletonPulseFill.opacity(fillOpacity))
+                .frame(width: 52, height: 8)
+        }
+        .frame(width: 70)
+        .accessibilityHidden(true)
+    }
+}
+
+private struct StoriesBar: View {
+    let items: [StoryBarItem]
+    let ownInstagramActor: NotificationActor?
+    let ownInstagramReel: InstagramStoryReel?
+    let onComposeTap: () -> Void
+    let onOwnStoryTap: () -> Void
+    let onItemTap: (StoryBarItem, [StoryBarItem]) -> Void
+    let onItemAppear: (StoryBarItem) -> Void
+    @State private var pageIndex: Int?
+    @State private var pagerOffset = StoryPagerOffset()
+    @ScaledMetric(relativeTo: .caption2) private var rowHeight: CGFloat = 112
+
+    /// The modes repeat this many times and the pager starts in the middle, so
+    /// wrapping around is plain scrolling and never reaches an edge.
+    private static let cycles = 200
+
+    var body: some View {
+        let modes = availableFeedModes
+        let rows = modes.map { StoryRowContent(mode: $0, items: filteredItems(for: $0)) }
+        let pageCount = modes.count > 1 ? modes.count * Self.cycles : modes.count
+
+        ScrollView(.vertical, showsIndicators: false) {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(0 ..< pageCount, id: \.self) { index in
+                    storyRow(rows[index % rows.count])
+                        .frame(height: rowHeight, alignment: .top)
+                }
+            }
+            .scrollTargetLayout()
+        }
+        .scrollPosition(id: $pageIndex, anchor: .top)
+        .scrollTargetBehavior(.paging)
+        .scrollBounceBehavior(.basedOnSize)
+        .onScrollGeometryChange(for: CGFloat.self) { geometry in
+            geometry.contentOffset.y
+        } action: { _, newValue in
+            pagerOffset.value = newValue
+        }
+        .frame(height: rowHeight)
+        .clipped()
+        .overlay(alignment: .leading) {
+            if modes.count > 1 {
+                StoryPagerDots(modeCount: modes.count, rowHeight: rowHeight, offset: pagerOffset)
+            }
+        }
+        .onAppear {
+            pageIndex = startPageIndex(modeIndex: 0, modeCount: modes.count)
+        }
+        .onChange(of: modes) { oldModes, newModes in
+            let currentMode = pageIndex.flatMap { oldModes.isEmpty ? nil : oldModes[$0 % oldModes.count] }
+            let modeIndex = currentMode.flatMap(newModes.firstIndex(of:)) ?? 0
+            pageIndex = startPageIndex(modeIndex: modeIndex, modeCount: newModes.count)
+        }
+        .padding(.vertical, 8)
+        .listRowInsets(EdgeInsets())
+        .listRowSeparator(.hidden)
+    }
+
+    private func storyRow(_ row: StoryRowContent) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(row.mode.label)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 16)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(alignment: .top, spacing: 12) {
+                    if showsOwnInstagramBubble(in: row.mode) {
+                        StoryComposerBubble(actor: ownInstagramActor, reel: ownInstagramReel)
+                            .contentShape(Rectangle())
+                            .onTapGesture { onOwnStoryTap() }
+                            .overlay(alignment: .topLeading) {
+                                CreateStoryDestinationButton(mode: row.mode, onComposeTap: onComposeTap)
+                                    .offset(x: 49, y: 49)
+                            }
+                    }
+
+                    ForEach(row.items) { item in
+                        storyBubble(for: item)
+                            .contentShape(Rectangle())
+                            .onAppear {
+                                onItemAppear(item)
+                            }
+                            .onTapGesture {
+                                let viewerItems = row.items.filter { $0.isSeen == item.isSeen }
+                                onItemTap(item, viewerItems)
+                            }
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .padding(.bottom, 4)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func storyBubble(for item: StoryBarItem) -> some View {
+        switch item {
+        case let .instagram(reel):
+            InstagramStoryBubble(reel: reel)
+        case let .spotify(spotifyItem):
+            SpotifyStoryBubble(item: spotifyItem)
+        case let .github(group):
+            GitHubStoryBubble(group: group)
+        }
+    }
+
+    private var availableFeedModes: [StoryBarFeedMode] {
+        var specific: [StoryBarFeedMode] = []
+        if ownInstagramActor != nil || items.contains(where: StoryBarFeedMode.instagram.includes) { specific.append(.instagram) }
+        if items.contains(where: StoryBarFeedMode.spotify.includes) { specific.append(.spotify) }
+        if items.contains(where: StoryBarFeedMode.github.includes) { specific.append(.github) }
+        return specific.count > 1 ? [.general] + specific : specific
+    }
+
+    private func filteredItems(for mode: StoryBarFeedMode) -> [StoryBarItem] {
+        items.filter(mode.includes).sorted { lhs, rhs in
+            if lhs.isSeen != rhs.isSeen {
+                return !lhs.isSeen && rhs.isSeen
+            }
+            return lhs.timestamp > rhs.timestamp
+        }
+    }
+
+    private func showsOwnInstagramBubble(in mode: StoryBarFeedMode) -> Bool {
+        ownInstagramActor != nil && (mode == .general || mode == .instagram)
+    }
+
+    private func startPageIndex(modeIndex: Int, modeCount: Int) -> Int? {
+        guard modeCount > 0 else { return nil }
+        guard modeCount > 1 else { return 0 }
+        return (Self.cycles / 2) * modeCount + modeIndex
+    }
+}
+
+private struct StoryRowContent {
+    let mode: StoryBarFeedMode
+    let items: [StoryBarItem]
+}
+
+/// Holds the pager's scroll offset outside `StoriesBar`'s state, so per-frame
+/// updates only re-render the dots rather than every story row.
+@Observable
+private final class StoryPagerOffset {
+    var value: CGFloat = 0
+}
+
+private struct StoryPagerDots: View {
+    let modeCount: Int
+    let rowHeight: CGFloat
+    let offset: StoryPagerOffset
+
+    var body: some View {
+        let progress = pagerProgress
+        VStack(spacing: 5) {
+            ForEach(0 ..< modeCount, id: \.self) { index in
+                let intensity = dotIntensity(index: index, progress: progress)
+                Circle()
+                    .fill(Color.secondary.opacity(0.25 + (0.75 * intensity)))
+                    .frame(width: 5 + (2 * intensity), height: 5 + (2 * intensity))
+            }
+        }
+        .padding(.leading, 6)
+        .allowsHitTesting(false)
+    }
+
+    private var pagerProgress: CGFloat {
+        let count = CGFloat(modeCount)
+        let position = (offset.value / rowHeight).truncatingRemainder(dividingBy: count)
+        return position < 0 ? position + count : position
+    }
+
+    private func dotIntensity(index: Int, progress: CGFloat) -> CGFloat {
+        let distance = abs(progress - CGFloat(index))
+        let wrappedDistance = min(distance, CGFloat(modeCount) - distance)
+        return max(0, 1 - wrappedDistance)
+    }
+}
+
+private struct CreateStoryDestinationButton: View {
+    let mode: StoryBarFeedMode
+    let onComposeTap: () -> Void
+
+    var body: some View {
+        if mode == .general {
+            Menu {
+                Button {
+                    onComposeTap()
+                } label: {
+                    Label("Instagram", systemImage: "camera")
+                }
+            } label: {
+                plusBadge
+            }
+            .accessibilityLabel("Choose story destination")
+        } else {
+            Button {
+                onComposeTap()
+            } label: {
+                plusBadge
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Create Instagram story")
+        }
+    }
+
+    private var plusBadge: some View {
+        Image(systemName: "plus")
+            .font(.caption.weight(.bold))
+            .foregroundStyle(.white)
+            .frame(width: 24, height: 24)
+            .background(Color.blue, in: Circle())
+            .overlay {
+                Circle()
+                    .stroke(.background, lineWidth: 2)
+            }
+    }
+}
+
+private enum StoryBarFeedMode: CaseIterable {
+    case general
+    case instagram
+    case spotify
+    case github
+
+    var label: String {
+        switch self {
+        case .general: "All Stories"
+        case .instagram: "Instagram"
+        case .spotify: "Spotify"
+        case .github: "GitHub"
+        }
+    }
+
+    func includes(_ item: StoryBarItem) -> Bool {
+        switch self {
+        case .general:
+            true
+        case .instagram:
+            item.network == .instagram
+        case .spotify:
+            item.network == .spotify
+        case .github:
+            item.network == .github
+        }
+    }
+}
+
+private struct StoryComposerBubble: View {
+    let actor: NotificationActor?
+    let reel: InstagramStoryReel?
+    @AppStorage("redactionEnabled") private var redactionEnabled = false
+
+    var body: some View {
+        VStack(spacing: 6) {
+            ZStack {
+                CachedAsyncImage(url: actor?.avatarURL, cacheKey: actor.map { "instagram-avatar-\($0.id)" }) {
+                    avatarPlaceholder
+                } failure: {
+                    avatarPlaceholder
+                }
+                .frame(width: 70, height: 70)
+                .clipShape(Circle())
+                .overlay {
+                    Circle()
+                        .stroke(baseStoryBorderColor, lineWidth: reel == nil ? 1 : 3)
+                        .overlay {
+                            if reel?.isSeen == false {
+                                Circle()
+                                    .stroke(
+                                        LinearGradient(
+                                            colors: [.purple, .pink, .orange],
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing,
+                                        ),
+                                        lineWidth: 3,
+                                    )
+                            }
+                        }
+                }
+            }
+
+            Text(label)
+                .font(.caption2)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(width: 70)
+        }
+        .accessibilityLabel(reel == nil ? "Create story" : "Your Instagram story")
+    }
+
+    private var baseStoryBorderColor: Color {
+        if let reel {
+            return reel.isSeen ? Color.gray.opacity(0.4) : Color.clear
+        }
+        return Color.secondary.opacity(0.25)
+    }
+
+    private var label: String {
+        if let actor {
+            return DebugRedaction.actorName(actor, enabled: redactionEnabled)
+        }
+        return "Create"
+    }
+
+    private var initial: String {
+        label.first.map { String($0).uppercased() } ?? "+"
+    }
+
+    private var avatarPlaceholder: some View {
+        ZStack {
+            Color.secondary.opacity(0.18)
+            Text(initial)
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct InstagramStoryBubble: View {
+    let reel: InstagramStoryReel
+    @AppStorage("redactionEnabled") private var redactionEnabled = false
+
+    var body: some View {
+        VStack(spacing: 6) {
+            ZStack(alignment: .bottomTrailing) {
+                CachedAsyncImage(url: reel.user.avatarURL, cacheKey: "instagram-avatar-\(reel.user.id)") {
+                    ZStack {
+                        Color.secondary.opacity(0.18)
+                        Text(initial)
+                            .font(.title3.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                } failure: {
+                    ZStack {
+                        Color.secondary.opacity(0.18)
+                        Text(initial)
+                            .font(.title3.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(width: 70, height: 70)
+                .clipShape(Circle())
+                .overlay {
+                    Circle()
+                        .stroke(
+                            reel.isSeen
+                                ? Color.gray.opacity(0.4)
+                                : Color.clear,
+                            lineWidth: reel.isSeen ? 3 : 0,
+                        )
+                        .overlay {
+                            if !reel.isSeen {
+                                Circle()
+                                    .stroke(
+                                        LinearGradient(
+                                            colors: [.purple, .pink, .orange],
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing,
+                                        ),
+                                        lineWidth: 3,
+                                    )
+                            }
+                        }
+                }
+
+                if reel.hasCloseFriendsMedia {
+                    Image(systemName: "star.fill")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 22, height: 22)
+                        .background(Color.green, in: Circle())
+                        .overlay {
+                            Circle()
+                                .stroke(.background, lineWidth: 2)
+                        }
+                        .offset(x: 3, y: 3)
+                        .accessibilityLabel("Close Friends")
+                }
+            }
+
+            Text(label)
+                .font(.caption2)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(width: 70)
+        }
+        .accessibilityLabel("Instagram stories from \(label)")
+    }
+
+    private var label: String {
+        DebugRedaction.actorName(reel.user, enabled: redactionEnabled)
+    }
+
+    private var initial: String {
+        label.first.map { String($0).uppercased() } ?? "?"
+    }
+}
+
+private struct SpotifyStoryBubble: View {
+    let item: SpotifyActivityItem
+    @AppStorage("redactionEnabled") private var redactionEnabled = false
+
+    var body: some View {
+        VStack(spacing: 6) {
+            ZStack(alignment: .bottomTrailing) {
+                SpotifyAnimatedStoryThumbnail(
+                    url: item.imageURL,
+                    musicAnimation: item.musicAnimation,
+                )
+                .overlay {
+                    Circle()
+                        .stroke(item.isSeen ? Color.gray.opacity(0.4) : Color.spotifyActivityBorder, lineWidth: 3)
+                }
+
+                CachedAsyncImage(url: item.userAvatarURL, cacheKey: "spotify-avatar-\(item.userURI)") {
+                    Circle().fill(Color.secondary.opacity(0.18))
+                } failure: {
+                    Circle().fill(Color.secondary.opacity(0.18))
+                }
+                .frame(width: 28, height: 28)
+                .clipShape(Circle())
+                .overlay {
+                    Circle()
+                        .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+                }
+                .offset(x: 3, y: 3)
+            }
+
+            Text(displayUserName)
+                .font(.caption2)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(width: 70)
+        }
+        .accessibilityLabel("Listening activity from \(displayUserName)")
+    }
+
+    private var displayUserName: String {
+        DebugRedaction.username(item.userName, enabled: redactionEnabled)
+    }
+}
+
+private struct GitHubStoryBubble: View {
+    let group: GitHubActivityGroup
+    @AppStorage("redactionEnabled") private var redactionEnabled = false
+
+    var body: some View {
+        VStack(spacing: 6) {
+            CachedAsyncImage(url: group.actor.avatarURL, cacheKey: "github-avatar-\(group.actor.id)") {
+                avatarPlaceholder
+            } failure: {
+                avatarPlaceholder
+            }
+            .frame(width: 70, height: 70)
+            .clipShape(Circle())
+            .overlay {
+                Circle()
+                    .stroke(group.isSeen ? Color.gray.opacity(0.4) : Color.primary, lineWidth: 3)
+            }
+
+            Text(displayName)
+                .font(.caption2)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(width: 70)
+        }
+        .accessibilityLabel("GitHub activity from \(displayName)")
+    }
+
+    private var displayName: String {
+        DebugRedaction.actorName(group.actor, enabled: redactionEnabled)
+    }
+
+    private var avatarPlaceholder: some View {
+        ZStack {
+            Color.secondary.opacity(0.18)
+            Text(displayName.first.map { String($0).uppercased() } ?? "?")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct SpotifyAnimatedStoryThumbnail: View {
+    let url: URL?
+    let musicAnimation: MusicAnimationMetadata?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isAnimating = false
+
+    var body: some View {
+        ZStack {
+            albumArt
+                .frame(width: 70, height: 70)
+                .clipShape(Circle())
+                .rotationEffect(.degrees(reduceMotion || !isAnimating ? 0 : 360))
+                .animation(
+                    reduceMotion ? nil : .linear(duration: rotationDuration).repeatForever(autoreverses: false),
+                    value: isAnimating,
+                )
+        }
+        .frame(width: 70, height: 70)
+        .onAppear { isAnimating = true }
+    }
+
+    private var albumArt: some View {
+        AsyncImage(url: url) { phase in
+            switch phase {
+            case let .success(image):
+                image
+                    .resizable()
+                    .scaledToFill()
+            case .failure, .empty:
+                ZStack {
+                    Color.spotifyActivityBorder.opacity(0.18)
+                    Image(systemName: "music.note")
+                        .font(.title2)
+                        .foregroundStyle(Color.spotifyActivityBorder)
+                }
+            @unknown default:
+                Color.clear
+            }
+        }
+    }
+
+    private var tempo: Double {
+        guard let tempo = musicAnimation?.tempo, tempo > 0 else { return 108 }
+        return min(max(tempo, 60), 190)
+    }
+
+    private var rotationDuration: TimeInterval {
+        (60 / tempo) * 16
+    }
+}
+
+private struct NotificationRow: View {
+    let displayItem: DisplayNotificationItem
+    @AppStorage("redactionEnabled") private var redactionEnabled = false
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            NotificationTypeIcon(type: displayItem.item.type, isReminder: displayItem.id.hasPrefix(ChatReminder.itemIdPrefix))
+                .padding(.top, 2)
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .center) {
+                    if !displayItem.item.actors.isEmpty {
+                        AvatarStrip(actors: displayItem.item.actors)
+                    }
+
+                    Spacer()
+
+                    Text(displayItem.item.timestamp.compactRelativeTime)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+
+                summaryView
+                    .padding(.trailing, 24)
+
+                previewContent
+                    .padding(.trailing, 24)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .overlay(alignment: hasPreviewContent ? .trailing : .bottomTrailing) {
+            Image(systemName: "chevron.forward")
+                .font(.body.weight(.semibold))
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    @ViewBuilder
+    private var previewContent: some View {
+        if displayItem.item.type == .follow {
+            EmptyView()
+        } else if displayItem.item.type == .message,
+                  shouldShowMessageImagePreview,
+                  let imageUrl = displayItem.item.target?.imageURL
+        {
+            messageImagePreview(url: imageUrl)
+        } else if let targetText = displayItem.item.target?.text, !targetText.isEmpty,
+                  displayItem.item.type == .reaction || displayItem.item.type == .reply || displayItem.item.type == .mention || displayItem.item.type == .message || displayItem.item.type == .music
+        {
+            Text(DebugRedaction.text(targetText, actors: displayItem.item.actors, enabled: redactionEnabled))
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+        } else if let imageUrl = displayItem.item.target?.imageURL {
+            messageImagePreview(url: imageUrl)
+        } else if displayItem.item.network != .bluesky, let actor = displayItem.item.actors.first {
+            Text(DebugRedaction.actorName(actor, enabled: redactionEnabled))
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+        }
+    }
+
+    private var shouldShowMessageImagePreview: Bool {
+        guard let target = displayItem.item.target, target.imageURL != nil else { return false }
+        let text = target.text?.lowercased() ?? ""
+        return text.hasPrefix("sent a reel") || text.hasPrefix("sent a post") || text.hasPrefix("sent media")
+    }
+
+    private var hasPreviewContent: Bool {
+        if displayItem.item.type == .follow {
+            return false
+        }
+        if displayItem.item.type == .message, shouldShowMessageImagePreview {
+            return true
+        }
+        if let targetText = displayItem.item.target?.text, !targetText.isEmpty,
+           displayItem.item.type == .reaction || displayItem.item.type == .reply || displayItem.item.type == .mention || displayItem.item.type == .message || displayItem.item.type == .music
+        {
+            return true
+        }
+        if displayItem.item.target?.imageURL != nil {
+            return true
+        }
+        return displayItem.item.network != .bluesky && displayItem.item.actors.first != nil
+    }
+
+    private func messageImagePreview(url: URL) -> some View {
+        AsyncImage(url: url) { phase in
+            switch phase {
+            case let .success(image):
+                image
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 48, height: 48)
+                    .clipped()
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            case .failure, .empty:
+                Color.clear.frame(width: 48, height: 48)
+            @unknown default:
+                Color.clear.frame(width: 48, height: 48)
+            }
+        }
+    }
+
+    private var summaryText: String {
+        switch displayItem.item.type {
+        case .mention:
+            "\(actorSummary) mentioned you"
+        case .reply:
+            "\(actorSummary) replied to you"
+        case .reaction:
+            sanitizedItemText
+        case .follow:
+            "\(actorSummary) followed you"
+        case .post:
+            sanitizedItemText
+        case .message:
+            sanitizedItemText
+        case .music:
+            sanitizedItemText
+        case .unknown:
+            sanitizedItemText
+        }
+    }
+
+    @ViewBuilder
+    private var summaryView: some View {
+        if displayItem.item.actors.first != nil, summaryText.hasPrefix(actorSummary) {
+            summaryInlineText
+                .font(.body)
+                .lineLimit(2)
+        } else {
+            Text(summaryText)
+                .font(.body)
+                .lineLimit(2)
+        }
+    }
+
+    private var summaryInlineText: Text {
+        let remainder = String(summaryText.dropFirst(actorSummary.count))
+        if let image = networkBadgeImage(named: displayItem.item.network.badgeAssetName) {
+            return Text("\(Text(image).baselineOffset(-1)) \(Text(actorSummary).bold())\(Text(remainder))")
+        }
+        return Text("\(Text(displayItem.item.network.badgeFallbackText).bold()) \(Text(actorSummary).bold())\(Text(remainder))")
+    }
+
+    private var previewText: String? {
+        if displayItem.item.type == .reaction
+            || displayItem.item.type == .reply
+            || displayItem.item.type == .mention
+            || displayItem.item.type == .post
+            || displayItem.item.type == .message
+            || displayItem.item.type == .music,
+            let targetText = displayItem.item.target?.text, !targetText.isEmpty
+        {
+            return targetText
+        }
+
+        if let actor = displayItem.item.actors.first {
+            return actor.username ?? actor.id
+        }
+
+        return nil
+    }
+
+    private var sanitizedItemText: String {
+        let sanitized = displayItem.item.actors.reduce(displayItem.item.text) { text, actor in
+            guard let username = actor.username else { return text }
+            return text.replacingOccurrences(of: "@\(username)", with: username)
+        }
+        return DebugRedaction.text(sanitized, actors: displayItem.item.actors, enabled: redactionEnabled)
+    }
+
+    private var actorSummary: String {
+        guard let first = displayItem.item.actors.first else { return "Someone" }
+        let firstName = DebugRedaction.actorName(first, enabled: redactionEnabled)
+        let remainingCount = displayItem.item.actors.count - 1
+        guard remainingCount > 0 else { return firstName }
+        return "\(firstName) and \(remainingCount) other\(remainingCount == 1 ? "" : "s")"
+    }
+}
+
+private extension Color {
+    static var spotifyActivityBorder: Color {
+        Color(red: 0.12, green: 0.73, blue: 0.26)
+    }
+
+    static var storySkeletonPulseFill: Color {
+        Color(.label)
+    }
+
+    static var storySkeletonStroke: Color {
+        Color(.separator)
+    }
+}
+
+private struct NotificationTypeIcon: View {
+    let type: NotificationType
+    /// A chat message the user asked to be reminded of, shown as a bookmark rather than by its type.
+    var isReminder = false
+
+    var body: some View {
+        Image(systemName: systemName)
+            .font(.title2.weight(.semibold))
+            .foregroundStyle(color)
+            .frame(width: 28, height: 32)
+            .accessibilityLabel(accessibilityLabel)
+    }
+
+    private var systemName: String {
+        if isReminder {
+            return "bookmark.fill"
+        }
+        return switch type {
+        case .reaction:
+            "heart.fill"
+        case .reply:
+            "arrowshape.turn.up.left.fill"
+        case .mention:
+            "at"
+        case .follow:
+            "person.fill.badge.plus"
+        case .post:
+            "bubble.left.and.bubble.right.fill"
+        case .message:
+            "message.fill"
+        case .music:
+            "music.note"
+        case .unknown:
+            "bell.fill"
+        }
+    }
+
+    private var color: Color {
+        if isReminder {
+            return .orange
+        }
+        return switch type {
+        case .reaction:
+            .pink
+        case .reply:
+            .blue
+        case .mention:
+            .purple
+        case .follow:
+            .green
+        case .post:
+            .primary
+        case .message:
+            .blue
+        case .music:
+            Color(red: 0.12, green: 0.73, blue: 0.26)
+        case .unknown:
+            .secondary
+        }
+    }
+
+    private var accessibilityLabel: String {
+        if isReminder {
+            return "Reminder"
+        }
+        return switch type {
+        case .reaction:
+            "Reaction"
+        case .reply:
+            "Reply"
+        case .mention:
+            "Mention"
+        case .follow:
+            "Follow"
+        case .post:
+            "Tweet"
+        case .message:
+            "Message"
+        case .music:
+            "Music"
+        case .unknown:
+            "Notification"
+        }
+    }
+}
+
+private struct AvatarStrip: View {
+    let actors: [NotificationActor]
+    @AppStorage("redactionEnabled") private var redactionEnabled = false
+
+    var body: some View {
+        HStack(spacing: -6) {
+            ForEach(Array(actors.prefix(5).enumerated()), id: \.element.id) { index, actor in
+                // Opaque, as the avatars overlap.
+                ActorAvatar(actor: actor, size: 32)
+                    .background(.background, in: Circle())
+                    .zIndex(Double(5 - index))
+            }
+
+            if actors.count > 5 {
+                Text("+\(actors.count - 5)")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 32, height: 32)
+                    .background(.background, in: Circle())
+                    .overlay {
+                        Circle()
+                            .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
+                    }
+                    .padding(.leading, 4)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(avatarAccessibilityLabel)
+    }
+
+    private var avatarAccessibilityLabel: String {
+        let visibleNames = actors.prefix(5).map { actor in
+            DebugRedaction.actorName(actor, enabled: redactionEnabled)
+        }
+        let suffix = actors.count > 5 ? ", and \(actors.count - 5) more" : ""
+        return "Actors: \(visibleNames.joined(separator: ", "))\(suffix)"
+    }
+}
+
+private struct SettingsToolbarIcon: View {
+    @ObservedObject var viewModel: SettingsViewModel
+
+    var body: some View {
+        Image(systemName: "gear")
+            .overlay(alignment: .topTrailing) {
+                if viewModel.hasInvalidCredentials {
+                    Circle()
+                        .fill(.red)
+                        .frame(width: 8, height: 8)
+                        .offset(x: 2, y: -2)
+                }
+            }
+    }
+}
+
+private extension View {
+    /// Content fades under the bar as on Chats; the feed's list otherwise gets a hard edge.
+    @ViewBuilder
+    func softScrollEdge() -> some View {
+        if #available(iOS 26.0, *) {
+            scrollEdgeEffectStyle(.soft, for: .top)
+        } else {
+            self
+        }
+    }
+}

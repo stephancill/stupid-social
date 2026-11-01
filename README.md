@@ -59,7 +59,7 @@ xtool dev run --network -u <udid>
 
 ```bash
 xtool dev run --simulator --no-attach --no-logs
-open xtool/NoFeedSocial.xcworkspace
+open xtool/StupidSocial.xcworkspace
 ```
 
 ## Release
@@ -81,11 +81,11 @@ open xtool/NoFeedSocial.xcworkspace
 
 3. **Open the workspace in Xcode:**
    ```bash
-   open xtool/NoFeedSocial.xcworkspace
+   open xtool/StupidSocial.xcworkspace
    ```
 
 4. **Archive:**
-   - Select the `NoFeedSocial` scheme
+   - Select the `StupidSocial` scheme
    - Destination: **Any iOS Device (arm64)**
    - **Product → Archive**
 

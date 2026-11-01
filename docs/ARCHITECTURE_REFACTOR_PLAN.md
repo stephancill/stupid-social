@@ -10,14 +10,14 @@ The intent is not a rewrite. Each step should be small, behavior-preserving, and
 
 ## Current Pressure Points
 
-- `Sources/NoFeedSocial/Views/ContentView.swift:35-87` constructs stores, clients, sources, services, view models, and passes `SpotifyClient` directly into UI.
-- `Sources/NoFeedSocialCore/ViewModels/FeedViewModel.swift:5-24` owns feed state, story bar state, Instagram own-story state, Spotify seen state, loading state, and errors.
-- `Sources/NoFeedSocialCore/Sources/NotificationSource.swift:3-12` requires every source to implement validation, unread count, notification fetch, profile fetch, and target enrichment, even when those capabilities do not apply.
-- `Sources/NoFeedSocialCore/Sources/SpotifyActivitySource.swift:40-46` conforms to `NotificationSource` only to return no unread count and no notifications.
-- `Sources/NoFeedSocialCore/Sources/InstagramNotificationSource.swift:18-54` exposes story and posting capabilities outside the shared source protocol.
-- `Sources/NoFeedSocialCore/Sources/InstagramClient.swift` is a large mixed-responsibility client containing session/bootstrap state, request construction, DTOs, story APIs, upload/delete/like behavior, and parsers.
-- `Sources/NoFeedSocialCore/Services/FeedService.swift:14-15` tracks pending/revealed notification IDs in memory while `Sources/NoFeedSocialCore/Models/CachedNotification.swift:17-18` also has persisted `isNew` and `isPending` fields that are not wired through `NotificationCacheStore` snapshots.
-- `Sources/NoFeedSocialCore/Storage/ReadWatermarkStore.swift:75-81` still defines timestamp-based unread evaluation for explicit read-state, while feed presentation uses cache-diff new/known state.
+- `Sources/StupidSocial/Views/ContentView.swift:35-87` constructs stores, clients, sources, services, view models, and passes `SpotifyClient` directly into UI.
+- `Sources/StupidSocialCore/ViewModels/FeedViewModel.swift:5-24` owns feed state, story bar state, Instagram own-story state, Spotify seen state, loading state, and errors.
+- `Sources/StupidSocialCore/Sources/NotificationSource.swift:3-12` requires every source to implement validation, unread count, notification fetch, profile fetch, and target enrichment, even when those capabilities do not apply.
+- `Sources/StupidSocialCore/Sources/SpotifyActivitySource.swift:40-46` conforms to `NotificationSource` only to return no unread count and no notifications.
+- `Sources/StupidSocialCore/Sources/InstagramNotificationSource.swift:18-54` exposes story and posting capabilities outside the shared source protocol.
+- `Sources/StupidSocialCore/Sources/InstagramClient.swift` is a large mixed-responsibility client containing session/bootstrap state, request construction, DTOs, story APIs, upload/delete/like behavior, and parsers.
+- `Sources/StupidSocialCore/Services/FeedService.swift:14-15` tracks pending/revealed notification IDs in memory while `Sources/StupidSocialCore/Models/CachedNotification.swift:17-18` also has persisted `isNew` and `isPending` fields that are not wired through `NotificationCacheStore` snapshots.
+- `Sources/StupidSocialCore/Storage/ReadWatermarkStore.swift:75-81` still defines timestamp-based unread evaluation for explicit read-state, while feed presentation uses cache-diff new/known state.
 
 ## Step 1: Add `AppContainer`
 
@@ -61,7 +61,7 @@ The container should own shared instances of:
 
 ### Migration Instructions
 
-1. Add `Sources/NoFeedSocial/AppContainer.swift` or `Sources/NoFeedSocial/Support/AppContainer.swift`.
+1. Add `Sources/StupidSocial/AppContainer.swift` or `Sources/StupidSocial/Support/AppContainer.swift`.
 2. Move the body of `ContentView.configureDependencies()` into `AppContainer.init(modelContext:)`.
 3. Keep the initial behavior identical: call `feed.loadCachedFeed()` during construction and fetch story bar content after the container is created.
 4. Update `ContentView` to initialize the container once from `modelContext` and pass `container.feedViewModel`, `container.settingsViewModel`, and `container.spotifyClient` into `FeedView`.
@@ -83,7 +83,7 @@ Separate notification-feed state from story bar state and story actions.
 
 `FeedViewModel` currently coordinates unrelated domains:
 
-- feed load/refresh/reveal at `Sources/NoFeedSocialCore/ViewModels/FeedViewModel.swift:36-91`
+- feed load/refresh/reveal at `Sources/StupidSocialCore/ViewModels/FeedViewModel.swift:36-91`
 - story bar fetching and pagination at `FeedViewModel.swift:101-167`
 - Instagram story post/delete/like actions at `FeedViewModel.swift:169-221`
 - Spotify seen persistence at `FeedViewModel.swift:255-292`
@@ -248,7 +248,7 @@ Split `InstagramClient.swift` into files organized by reason to change.
 
 ### Justification
 
-`Sources/NoFeedSocialCore/Sources/InstagramClient.swift` is currently 2,177 lines and combines independent concerns:
+`Sources/StupidSocialCore/Sources/InstagramClient.swift` is currently 2,177 lines and combines independent concerns:
 
 - category definitions and client state at `InstagramClient.swift:4-56`
 - notification and DM request paths at `InstagramClient.swift:104-153`
@@ -271,7 +271,7 @@ Prefer file-level extraction before introducing new abstractions:
 - `InstagramDirectMessageParser.swift`: direct inbox normalization
 - `InstagramStoryParser.swift`: story-page payload extraction and slide mapping, if this becomes large enough
 
-Keep public app models in `Sources/NoFeedSocialCore/Models/` and source-specific response DTOs in `Sources/NoFeedSocialCore/Sources/Instagram...` files.
+Keep public app models in `Sources/StupidSocialCore/Models/` and source-specific response DTOs in `Sources/StupidSocialCore/Sources/Instagram...` files.
 
 ### Migration Instructions
 
@@ -298,10 +298,10 @@ Make feed presentation state explicit and remove contradictory read/new terminol
 
 The product requirements say read state is explicit and app-local read watermarks exist, but current feed presentation uses cache-diff identity state for the `New` boundary. The code currently mixes terms:
 
-- `DisplayNotificationItem.isUnread` in `Sources/NoFeedSocialCore/Models/AppModels.swift:196-207`
-- in-memory `pendingIds` and `revealedIds` in `Sources/NoFeedSocialCore/Services/FeedService.swift:11-12`
-- persisted `CachedNotification.isNew` and `CachedNotification.isPending` in `Sources/NoFeedSocialCore/Models/CachedNotification.swift:17-18`
-- timestamp watermark unread logic in `Sources/NoFeedSocialCore/Storage/ReadWatermarkStore.swift:75-81`
+- `DisplayNotificationItem.isUnread` in `Sources/StupidSocialCore/Models/AppModels.swift:196-207`
+- in-memory `pendingIds` and `revealedIds` in `Sources/StupidSocialCore/Services/FeedService.swift:11-12`
+- persisted `CachedNotification.isNew` and `CachedNotification.isPending` in `Sources/StupidSocialCore/Models/CachedNotification.swift:17-18`
+- timestamp watermark unread logic in `Sources/StupidSocialCore/Storage/ReadWatermarkStore.swift:75-81`
 
 The architecture should make it obvious whether a row is:
 

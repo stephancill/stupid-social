@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Builds Sources/NoFeedSocialCore/Resources/TelegramSchema.tl from Telegram's published JSON schema.
+"""Builds Sources/StupidSocialCore/Resources/TelegramSchema.tl from Telegram's published JSON schema.
 
 Usage:
   python3 scripts/telegram-schema.py            # downloads https://core.telegram.org/schema/json and /mtproto-json
@@ -16,7 +16,7 @@ import sys
 import urllib.request
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-OUTPUT = ROOT / "Sources/NoFeedSocialCore/Resources/TelegramSchema.tl"
+OUTPUT = ROOT / "Sources/StupidSocialCore/Resources/TelegramSchema.tl"
 
 
 def load(source: str) -> dict:

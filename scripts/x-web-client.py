@@ -79,7 +79,7 @@ TWEET_FEATURES = {
     "responsive_web_grok_community_note_auto_translation_is_enabled": True,
     "responsive_web_graphql_timeline_navigation_enabled": True,
 }
-APP_USER_AGENT = "NoFeedSocial/1"
+APP_USER_AGENT = "StupidSocial/1"
 SIM_PREFS_SCRIPT = os.path.expanduser(
     "~/.config/opencode/skills/sim-prefs/sim-prefs/scripts/read_prefs.py"
 )

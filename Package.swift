@@ -3,30 +3,30 @@
 import PackageDescription
 
 let package = Package(
-    name: "NoFeedSocial",
+    name: "StupidSocial",
     platforms: [
         .iOS(.v18),
     ],
     products: [
         // A stupid-app project contains one library product per app/extension bundle.
         .library(
-            name: "NoFeedSocial",
-            targets: ["NoFeedSocial"]
+            name: "StupidSocial",
+            targets: ["StupidSocial"]
         ),
         .library(
-            name: "NoFeedSocialNotificationService",
-            targets: ["NoFeedSocialNotificationService"]
+            name: "StupidSocialNotificationService",
+            targets: ["StupidSocialNotificationService"]
         ),
     ],
     targets: [
         .target(
-            name: "NoFeedSocial",
-            dependencies: ["NoFeedSocialCore", "NoFeedSocialPush"]
+            name: "StupidSocial",
+            dependencies: ["StupidSocialCore", "StupidSocialPush"]
         ),
         .target(
-            name: "NoFeedSocialCore",
+            name: "StupidSocialCore",
             dependencies: [
-                "NoFeedSocialPush",
+                "StupidSocialPush",
                 "JuiceboxSdk",
                 "StupidMetrics",
             ],
@@ -34,7 +34,7 @@ let package = Package(
             resources: [.process("Resources")]
         ),
         .target(
-            name: "NoFeedSocialPush"
+            name: "StupidSocialPush"
         ),
         // XChat key recovery. Vendored by scripts/vendor-juicebox.sh; don't edit these by hand.
         .target(
@@ -53,12 +53,12 @@ let package = Package(
             path: "Vendor/JuiceboxSdk/JuiceboxSdkFfi.xcframework"
         ),
         .target(
-            name: "NoFeedSocialNotificationService",
-            dependencies: ["NoFeedSocialPush"]
+            name: "StupidSocialNotificationService",
+            dependencies: ["StupidSocialPush"]
         ),
         .testTarget(
-            name: "NoFeedSocialTests",
-            dependencies: ["NoFeedSocialCore", "NoFeedSocialPush"]
+            name: "StupidSocialTests",
+            dependencies: ["StupidSocialCore", "StupidSocialPush"]
         ),
     ]
 )

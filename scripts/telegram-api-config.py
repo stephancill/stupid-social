@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Writes Sources/NoFeedSocialCore/Resources/TelegramAPI.json (gitignored) from TELEGRAM_APP_ID and
+"""Writes Sources/StupidSocialCore/Resources/TelegramAPI.json (gitignored) from TELEGRAM_APP_ID and
 TELEGRAM_APP_API_HASH in the environment or .env.local, so the build can sign in to Telegram.
 
 Get both from https://my.telegram.org → API development tools. Builds without the file show Telegram as
@@ -11,7 +11,7 @@ import os
 import pathlib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-OUTPUT = ROOT / "Sources/NoFeedSocialCore/Resources/TelegramAPI.json"
+OUTPUT = ROOT / "Sources/StupidSocialCore/Resources/TelegramAPI.json"
 
 env = dict(os.environ)
 local = ROOT / ".env.local"

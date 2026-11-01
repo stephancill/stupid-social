@@ -1,0 +1,1516 @@
+import ImageIO
+import Photos
+import PhotosUI
+import StupidSocialCore
+import SwiftUI
+import UIKit
+import UniformTypeIdentifiers
+
+private enum StoryDestination: CaseIterable, Identifiable {
+    case yourStory
+    case closeFriends
+
+    var id: Self {
+        self
+    }
+
+    var title: String {
+        switch self {
+        case .yourStory: "Your Story"
+        case .closeFriends: "Close Friends"
+        }
+    }
+
+    @ViewBuilder
+    var icon: some View {
+        switch self {
+        case .yourStory:
+            Image(systemName: "plus.circle.fill")
+                .font(.title3)
+        case .closeFriends:
+            Image(systemName: "star.fill")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.white)
+                .frame(width: 22, height: 22)
+                .background(.green, in: Circle())
+        }
+    }
+}
+
+struct StoryComposerView: View {
+    @Environment(\.dismiss) private var dismiss
+    let onPost: (Data, Int, Int, String, [InstagramStoryMentionPlacement], Bool) async throws -> Void
+    let onMentionSearch: (String) async -> [NetworkProfile]
+    @State private var selectedPhoto: PhotosPickerItem?
+    @State private var selectedImageData: Data?
+    @State private var canvasSize = CGSize(width: 390, height: 844)
+    @State private var background = StoryComposerBackground.default
+    @State private var captions: [StoryCaption] = []
+    @State private var focusedCaptionID: UUID?
+    @State private var selectionError: String?
+    @State private var saveSucceeded = false
+    @State private var postingDestination: StoryDestination?
+    @State private var composerMessage: String?
+    @State private var captionTrashVisible = false
+    @State private var mentionQuery: MentionQuery?
+    @State private var mentionResults: [NetworkProfile] = []
+    @State private var isSearchingMentions = false
+    @State private var mentionSearchTask: Task<Void, Never>?
+    @State private var keyboardHeight: CGFloat = 0
+
+    init(
+        onMentionSearch: @escaping (String) async -> [NetworkProfile] = { _ in [] },
+        onPost: @escaping (Data, Int, Int, String, [InstagramStoryMentionPlacement], Bool) async throws -> Void = { _, _, _, _, _, _ in },
+    ) {
+        self.onMentionSearch = onMentionSearch
+        self.onPost = onPost
+    }
+
+    var body: some View {
+        ZStack {
+            background.view.ignoresSafeArea()
+
+            GeometryReader { proxy in
+                ZStack {
+                    Rectangle()
+                        .fill(.clear)
+                        .frame(width: proxy.size.width, height: proxy.size.height)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            clearFocusedCaption()
+                        }
+
+                    if let selectedImage {
+                        selectedImage
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: proxy.size.width, height: proxy.size.height)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                clearFocusedCaption()
+                            }
+                    } else if !hasComposerElements {
+                        emptyCanvas
+                            .frame(width: proxy.size.width, height: proxy.size.height)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                clearFocusedCaption()
+                            }
+                    }
+
+                    if focusedCaptionID != nil {
+                        Color.black.opacity(0.46)
+                            .frame(width: proxy.size.width, height: proxy.size.height)
+                            .ignoresSafeArea()
+                            .allowsHitTesting(false)
+                            .zIndex(1)
+                    }
+
+                    ForEach($captions) { $caption in
+                        SmoothDraggableTextOverlay(
+                            id: caption.id,
+                            text: $caption.text,
+                            isFocused: captionFocusBinding(caption.id),
+                            offset: $caption.offset,
+                            scale: $caption.scale,
+                            textBackground: $caption.textBackground,
+                            fontStyle: $caption.fontStyle,
+                            textColor: $caption.textColor,
+                            selectAllOnFocus: $caption.selectAllOnFocus,
+                            maxTextWidth: min(proxy.size.width - 88, 420),
+                            onDragEnded: { id, shouldDelete in
+                                if shouldDelete {
+                                    removeCaption(id)
+                                }
+                            },
+                            onTrashVisibilityChange: { visible in
+                                captionTrashVisible = visible
+                            },
+                            onTextChange: { id, text in
+                                guard let index = captions.firstIndex(where: { $0.id == id }) else { return }
+                                captions[index].text = text
+                                updateMentionQuery(for: captions[index])
+                            },
+                            onSelectionChange: { id, cursorOffset in
+                                guard let index = captions.firstIndex(where: { $0.id == id }) else { return }
+                                captions[index].cursorOffset = cursorOffset
+                                updateMentionQuery(for: captions[index])
+                            },
+                        )
+                        .frame(width: proxy.size.width, height: proxy.size.height)
+                        .zIndex(focusedCaptionID == caption.id ? 2 : 0)
+                        .transaction { transaction in
+                            transaction.animation = nil
+                        }
+                    }
+                }
+                .onAppear {
+                    canvasSize = proxy.size
+                }
+                .onChange(of: proxy.size) { _, newSize in
+                    canvasSize = newSize
+                }
+            }
+
+            if let mentionQuery, focusedCaptionID == mentionQuery.captionID {
+                VStack {
+                    Spacer()
+                    mentionSuggestions(query: mentionQuery.text)
+                        .frame(height: mentionResults.isEmpty ? 44 : 112)
+                        .padding(.horizontal, 18)
+                        .padding(.bottom, keyboardHeight + 10)
+                }
+                .allowsHitTesting(true)
+                .zIndex(5)
+            }
+
+            VStack {
+                HStack(alignment: .top) {
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.headline)
+                            .foregroundStyle(.white)
+                            .frame(width: 44, height: 44)
+                            .background(.black.opacity(0.45), in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Close composer")
+
+                    Spacer()
+
+                    VStack(spacing: 12) {
+                        PhotosPicker(selection: $selectedPhoto, matching: .images) {
+                            ComposerToolbarIcon(systemName: "photo")
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Select image")
+
+                        Button {
+                            addText()
+                        } label: {
+                            ComposerToolbarIcon(systemName: "textformat")
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Add text")
+
+                        Button {
+                            cycleBackground()
+                        } label: {
+                            BackgroundToolbarIcon(background: background)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Change background color")
+
+                        if hasComposerElements {
+                            Button {
+                                saveComposedStoryImage()
+                            } label: {
+                                ComposerToolbarIcon(systemName: saveSucceeded ? "checkmark" : "square.and.arrow.down")
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Save story image")
+                        }
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 16)
+
+                Spacer()
+
+                if hasComposerElements, !captionTrashVisible {
+                    HStack(spacing: 12) {
+                        ForEach(StoryDestination.allCases) { destination in
+                            postButton(destination: destination)
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 28)
+                }
+            }
+        }
+        .task(id: selectedPhoto) {
+            await loadSelectedPhoto()
+        }
+        .alert("Image Selection Failed", isPresented: errorBinding) {
+            Button("OK", role: .cancel) {
+                selectionError = nil
+            }
+        } message: {
+            Text(selectionError ?? "Could not load the selected image.")
+        }
+        .alert("Story Image", isPresented: composerMessageBinding) {
+            Button("OK", role: .cancel) {
+                composerMessage = nil
+            }
+        } message: {
+            Text(composerMessage ?? "")
+        }
+        .ignoresSafeArea(.keyboard)
+        #if os(iOS)
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { notification in
+                updateKeyboardHeight(from: notification)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+                keyboardHeight = 0
+            }
+        #endif
+    }
+
+    private var emptyCanvas: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "photo.on.rectangle.angled")
+                .font(.system(size: 46, weight: .regular))
+                .foregroundStyle(.white.opacity(0.52))
+            Text("Select an image or add text to start")
+                .font(.headline)
+                .foregroundStyle(.white)
+        }
+        .padding(.horizontal, 32)
+    }
+
+    private var selectedImage: Image? {
+        guard let selectedImageData else { return nil }
+        guard let image = UIImage(data: selectedImageData) else { return nil }
+        return Image(uiImage: image)
+    }
+
+    private var hasComposerElements: Bool {
+        selectedImageData != nil || !captions.isEmpty || background != .default
+    }
+
+    private var errorBinding: Binding<Bool> {
+        Binding(
+            get: { selectionError != nil },
+            set: { if !$0 { selectionError = nil } },
+        )
+    }
+
+    private var composerMessageBinding: Binding<Bool> {
+        Binding(
+            get: { composerMessage != nil },
+            set: { if !$0 { composerMessage = nil } },
+        )
+    }
+
+    private func captionFocusBinding(_ id: UUID) -> Binding<Bool> {
+        Binding(
+            get: { focusedCaptionID == id },
+            set: { isFocused in
+                if isFocused {
+                    focusedCaptionID = id
+                } else if focusedCaptionID == id {
+                    focusedCaptionID = nil
+                }
+            },
+        )
+    }
+
+    private func textDisplay(_ caption: StoryCaption) -> String {
+        caption.text.isEmpty ? "Text" : caption.text
+    }
+
+    private func loadSelectedPhoto() async {
+        guard let selectedPhoto else { return }
+        do {
+            selectedImageData = try await selectedPhoto.loadTransferable(type: Data.self)
+        } catch {
+            selectionError = "Could not load the selected image."
+        }
+    }
+
+    private func addText() {
+        let caption = StoryCaption(text: "Text")
+        captions.append(caption)
+        focusedCaptionID = caption.id
+    }
+
+    private func cycleBackground() {
+        background = background.next
+    }
+
+    private func removeCaption(_ id: UUID) {
+        captions.removeAll { $0.id == id }
+        captionTrashVisible = false
+        if mentionQuery?.captionID == id {
+            clearMentionSearch()
+        }
+        if focusedCaptionID == id {
+            focusedCaptionID = nil
+        }
+    }
+
+    private func clearFocusedCaption() {
+        focusedCaptionID = nil
+        captionTrashVisible = false
+        clearMentionSearch()
+    }
+
+    private func saveComposedStoryImage() {
+        guard let image = renderedStoryImage() else {
+            composerMessage = "Add an image or text before saving."
+            return
+        }
+
+        PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
+            guard status == .authorized || status == .limited else {
+                DispatchQueue.main.async {
+                    composerMessage = "Allow photo library access to save the story image."
+                }
+                return
+            }
+
+            PHPhotoLibrary.shared().performChanges {
+                PHAssetChangeRequest.creationRequestForAsset(from: image)
+            } completionHandler: { success, _ in
+                DispatchQueue.main.async {
+                    if success {
+                        showTemporarySaveSuccess()
+                    } else {
+                        composerMessage = "Could not save the story image."
+                    }
+                }
+            }
+        }
+    }
+
+    private func postButton(destination: StoryDestination) -> some View {
+        Button {
+            postComposedStoryImage(destination: destination)
+        } label: {
+            HStack(spacing: 8) {
+                if postingDestination == destination {
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                        .tint(.white)
+                } else {
+                    destination.icon
+                }
+                Text(destination.title)
+                    .font(.subheadline.weight(.medium))
+            }
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity)
+            .frame(height: 44)
+            .background(.black.opacity(0.45), in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .disabled(postingDestination != nil)
+        .accessibilityLabel("Post to \(destination.title)")
+    }
+
+    private func postComposedStoryImage(destination: StoryDestination) {
+        guard let image = renderedStoryImage() else {
+            composerMessage = "Add an image or text before posting."
+            return
+        }
+
+        guard let encodedStory = image.storyUploadData() else {
+            composerMessage = "Could not prepare the story image."
+            return
+        }
+
+        postingDestination = destination
+        Task {
+            do {
+                try await onPost(encodedStory.data, Int(image.size.width), Int(image.size.height), encodedStory.mimeType, mentionPlacements(), destination == .closeFriends)
+                await MainActor.run {
+                    postingDestination = nil
+                    dismiss()
+                }
+            } catch {
+                await MainActor.run {
+                    postingDestination = nil
+                    composerMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func updateMentionQuery(for caption: StoryCaption) {
+        guard focusedCaptionID == caption.id, let token = activeMentionToken(in: caption.text, cursorOffset: caption.cursorOffset) else {
+            if mentionQuery?.captionID == caption.id {
+                clearMentionSearch()
+            }
+            return
+        }
+
+        mentionQuery = MentionQuery(captionID: caption.id, text: token.text, startOffset: token.startOffset, endOffset: token.endOffset)
+        mentionSearchTask?.cancel()
+        guard token.text.count >= 1 else {
+            mentionResults = []
+            isSearchingMentions = false
+            return
+        }
+
+        mentionSearchTask = Task { [tokenText = token.text] in
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
+            let results = await onMentionSearch(tokenText)
+            await MainActor.run {
+                guard mentionQuery?.text == tokenText else { return }
+                mentionResults = results
+                isSearchingMentions = false
+            }
+        }
+        isSearchingMentions = true
+    }
+
+    private func clearMentionSearch() {
+        mentionSearchTask?.cancel()
+        mentionQuery = nil
+        mentionResults = []
+        isSearchingMentions = false
+    }
+
+    private func activeMentionToken(in text: String, cursorOffset: Int? = nil) -> (text: String, startOffset: Int, endOffset: Int)? {
+        let boundedOffset = min(max(cursorOffset ?? text.count, 0), text.count)
+        guard let cursorIndex = text.index(text.startIndex, offsetBy: boundedOffset, limitedBy: text.endIndex) else { return nil }
+        let prefix = text[..<cursorIndex]
+        guard let atIndex = prefix.lastIndex(of: "@") else { return nil }
+        if atIndex > text.startIndex {
+            let previousIndex = text.index(before: atIndex)
+            guard text[previousIndex].isWhitespace else { return nil }
+        }
+        let tokenStart = text.index(after: atIndex)
+        let suffix = text[cursorIndex...]
+        let tokenEnd = suffix.firstIndex(where: { $0.isWhitespace }) ?? cursorIndex
+        let token = String(text[tokenStart ..< tokenEnd])
+        guard token.rangeOfCharacter(from: .whitespacesAndNewlines) == nil else { return nil }
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._"))
+        guard token.unicodeScalars.allSatisfy({ allowed.contains($0) }) else { return nil }
+        return (
+            text: token,
+            startOffset: text.distance(from: text.startIndex, to: atIndex),
+            endOffset: text.distance(from: text.startIndex, to: tokenEnd),
+        )
+    }
+
+    private func selectMention(_ profile: NetworkProfile) {
+        guard let query = mentionQuery,
+              let index = captions.firstIndex(where: { $0.id == query.captionID }),
+              let username = profile.username, !username.isEmpty
+        else { return }
+
+        var caption = captions[index]
+        guard let startIndex = caption.text.index(caption.text.startIndex, offsetBy: query.startOffset, limitedBy: caption.text.endIndex),
+              let endIndex = caption.text.index(caption.text.startIndex, offsetBy: query.endOffset, limitedBy: caption.text.endIndex)
+        else { return }
+        let replacement = query.endOffset >= caption.text.count ? "@\(username) " : "@\(username)"
+        caption.text.replaceSubrange(startIndex ..< endIndex, with: replacement)
+        caption.cursorOffset = query.startOffset + replacement.count
+        caption.mentions.removeAll { $0.userId == profile.id || $0.username == username }
+        caption.mentions.append(StoryCaptionMention(userId: profile.id, username: username))
+        captions[index] = caption
+        clearMentionSearch()
+    }
+
+    private func mentionSuggestions(query: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if query.isEmpty {
+                Text("Type a username")
+                    .font(.footnote)
+                    .foregroundStyle(.white.opacity(0.72))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+            } else if isSearchingMentions, mentionResults.isEmpty {
+                HStack(spacing: 10) {
+                    ProgressView()
+                        .tint(.white)
+                    Text("Searching")
+                        .font(.footnote)
+                        .foregroundStyle(.white.opacity(0.72))
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+            } else if mentionResults.isEmpty {
+                Text("No matching Instagram users")
+                    .font(.footnote)
+                    .foregroundStyle(.white.opacity(0.72))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(spacing: 10) {
+                        ForEach(mentionResults.prefix(8), id: \.self) { profile in
+                            Button {
+                                selectMention(profile)
+                            } label: {
+                                MentionSuggestionRow(profile: profile)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 10)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .background(.black.opacity(0.78), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(.white.opacity(0.14), lineWidth: 1)
+        }
+    }
+
+    private func mentionPlacements() -> [InstagramStoryMentionPlacement] {
+        captions.flatMap { caption in
+            caption.mentions.compactMap { mention in
+                guard caption.text.localizedCaseInsensitiveContains("@\(mention.username)") else { return nil }
+                let x = Double((canvasSize.width / 2 + caption.offset.width) / max(canvasSize.width, 1))
+                let y = Double((canvasSize.height / 2 + caption.offset.height) / max(canvasSize.height, 1))
+                let width = min(max(Double(caption.text.count) * 0.028 * Double(caption.scale), 0.18), 0.82)
+                let height = min(max(0.08 * Double(caption.scale), 0.06), 0.18)
+                return InstagramStoryMentionPlacement(
+                    userId: mention.userId,
+                    username: mention.username,
+                    x: min(max(x, 0), 1),
+                    y: min(max(y, 0), 1),
+                    width: width,
+                    height: height,
+                )
+            }
+        }
+    }
+
+    private func showTemporarySaveSuccess() {
+        saveSucceeded = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
+            saveSucceeded = false
+        }
+    }
+}
+
+#if os(iOS)
+    private extension StoryComposerView {
+        func updateKeyboardHeight(from notification: Notification) {
+            guard let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
+            keyboardHeight = max(0, UIScreen.main.bounds.height - frame.minY)
+        }
+
+        func renderedStoryImage() -> UIImage? {
+            guard hasComposerElements else { return nil }
+            let image = selectedImageData.flatMap(UIImage.init(data:))
+
+            let outputSize = CGSize(width: 1080, height: 1920)
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = 1
+
+            return UIGraphicsImageRenderer(size: outputSize, format: format).image { context in
+                UIColor.black.setFill()
+                context.fill(CGRect(origin: .zero, size: outputSize))
+                background.draw(in: CGRect(origin: .zero, size: outputSize))
+
+                image?.drawAspectFit(in: CGRect(origin: .zero, size: outputSize))
+
+                let xScale = outputSize.width / max(canvasSize.width, 1)
+                let yScale = outputSize.height / max(canvasSize.height, 1)
+                let textScale = min(xScale, yScale)
+                let maxTextWidth = min(canvasSize.width - 88, 420) * xScale
+
+                for caption in captions {
+                    drawCaption(caption, in: outputSize, maxTextWidth: maxTextWidth, textScale: textScale, xScale: xScale, yScale: yScale)
+                }
+            }
+        }
+
+        func drawCaption(_ caption: StoryCaption, in outputSize: CGSize, maxTextWidth: CGFloat, textScale: CGFloat, xScale: CGFloat, yScale: CGFloat) {
+            let displayText = textDisplay(caption)
+            let scaledText = textScale * caption.scale
+            let font = caption.fontStyle.uiFont(size: 34 * scaledText)
+            let horizontalInset = 18 * scaledText
+            let verticalInset = 12 * scaledText
+            let paragraphStyle = NSMutableParagraphStyle()
+            paragraphStyle.alignment = .center
+            paragraphStyle.lineBreakMode = .byWordWrapping
+
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: font,
+                .foregroundColor: caption.textColor.uiColor,
+                .paragraphStyle: paragraphStyle,
+            ]
+            let textBounds = (displayText as NSString).boundingRect(
+                with: CGSize(width: maxTextWidth - horizontalInset * 2, height: .greatestFiniteMagnitude),
+                options: [.usesLineFragmentOrigin, .usesFontLeading],
+                attributes: attributes,
+                context: nil,
+            )
+            let width = min(max(ceil(textBounds.width + horizontalInset * 2), 90 * scaledText), maxTextWidth)
+            let height = max(ceil(textBounds.height + verticalInset * 2), 58 * scaledText)
+            let center = CGPoint(
+                x: outputSize.width / 2 + caption.offset.width * xScale,
+                y: outputSize.height / 2 + caption.offset.height * yScale,
+            )
+            let backgroundRect = CGRect(x: center.x - width / 2, y: center.y - height / 2, width: width, height: height)
+            let path = UIBezierPath(roundedRect: backgroundRect, cornerRadius: 16 * scaledText)
+            caption.textBackground.uiColor.setFill()
+            path.fill()
+
+            let textRect = backgroundRect.insetBy(dx: horizontalInset, dy: verticalInset)
+            (displayText as NSString).draw(with: textRect, options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: attributes, context: nil)
+        }
+    }
+
+    private extension UIImage {
+        func storyUploadData() -> (data: Data, mimeType: String)? {
+            if let webp = webpData(quality: 0.86) {
+                return (webp, "image/webp")
+            }
+            guard let jpeg = jpegData(compressionQuality: 0.86) else { return nil }
+            return (jpeg, "image/jpeg")
+        }
+
+        func webpData(quality: CGFloat) -> Data? {
+            guard let cgImage else { return nil }
+            let data = NSMutableData()
+            guard let destination = CGImageDestinationCreateWithData(data, UTType.webP.identifier as CFString, 1, nil) else {
+                return nil
+            }
+            let options: [CFString: Any] = [kCGImageDestinationLossyCompressionQuality: quality]
+            CGImageDestinationAddImage(destination, cgImage, options as CFDictionary)
+            guard CGImageDestinationFinalize(destination) else { return nil }
+            return data as Data
+        }
+
+        func drawAspectFit(in rect: CGRect) {
+            let scale = min(rect.width / size.width, rect.height / size.height)
+            let drawSize = CGSize(width: size.width * scale, height: size.height * scale)
+            let drawRect = CGRect(
+                x: rect.midX - drawSize.width / 2,
+                y: rect.midY - drawSize.height / 2,
+                width: drawSize.width,
+                height: drawSize.height,
+            )
+            draw(in: drawRect)
+        }
+    }
+#endif
+
+private struct StoryCaption: Identifiable, Equatable {
+    let id = UUID()
+    var text: String
+    var offset = CGSize.zero
+    var scale: CGFloat = 1
+    var textBackground = StoryTextBackground.translucentBlack
+    var fontStyle = StoryTextFont.bold
+    var textColor = StoryTextColor.white
+    var mentions: [StoryCaptionMention] = []
+    var selectAllOnFocus = true
+    var cursorOffset: Int?
+}
+
+private struct StoryCaptionMention: Equatable {
+    let userId: String
+    let username: String
+}
+
+private struct MentionQuery: Equatable {
+    let captionID: UUID
+    let text: String
+    let startOffset: Int
+    let endOffset: Int
+}
+
+private struct MentionSuggestionRow: View {
+    let profile: NetworkProfile
+
+    var body: some View {
+        VStack(spacing: 6) {
+            avatar
+                .frame(width: 48, height: 48)
+
+            VStack(spacing: 1) {
+                Text("@\(profile.username ?? profile.id)")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                if let displayName = profile.displayName, !displayName.isEmpty {
+                    Text(displayName)
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.68))
+                        .lineLimit(1)
+                }
+            }
+        }
+        .frame(width: 92)
+        .padding(.vertical, 8)
+        .contentShape(Rectangle())
+    }
+
+    @ViewBuilder
+    private var avatar: some View {
+        if let avatarURL = profile.avatarURL {
+            CachedAsyncImage(url: avatarURL) {
+                avatarFallback
+            } failure: {
+                avatarFallback
+            }
+            .clipShape(Circle())
+        } else {
+            avatarFallback
+        }
+    }
+
+    private var avatarFallback: some View {
+        ZStack {
+            Circle()
+                .fill(.white.opacity(0.16))
+            Image(systemName: "person.fill")
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.7))
+        }
+    }
+}
+
+private enum StoryTextBackground: CaseIterable, Equatable {
+    case translucentBlack
+    case translucentWhite
+    case clear
+    case red
+    case blue
+
+    var next: StoryTextBackground {
+        let options = Self.allCases
+        guard let index = options.firstIndex(of: self) else { return .translucentBlack }
+        return options[(index + 1) % options.count]
+    }
+
+    var color: Color {
+        switch self {
+        case .translucentBlack:
+            .black.opacity(0.35)
+        case .translucentWhite:
+            .white.opacity(0.55)
+        case .clear:
+            .clear
+        case .red:
+            .red.opacity(0.75)
+        case .blue:
+            .blue.opacity(0.75)
+        }
+    }
+}
+
+private enum StoryTextFont: CaseIterable, Equatable {
+    case bold
+    case rounded
+    case serif
+    case mono
+
+    var next: StoryTextFont {
+        let options = Self.allCases
+        guard let index = options.firstIndex(of: self) else { return .bold }
+        return options[(index + 1) % options.count]
+    }
+}
+
+private enum StoryTextColor: CaseIterable, Equatable {
+    case white
+    case black
+    case yellow
+    case pink
+    case blue
+
+    var next: StoryTextColor {
+        let options = Self.allCases
+        guard let index = options.firstIndex(of: self) else { return .white }
+        return options[(index + 1) % options.count]
+    }
+
+    var color: Color {
+        switch self {
+        case .white:
+            .white
+        case .black:
+            .black
+        case .yellow:
+            .yellow
+        case .pink:
+            .pink
+        case .blue:
+            .blue
+        }
+    }
+}
+
+#if os(iOS)
+    private extension StoryTextBackground {
+        var uiColor: UIColor {
+            switch self {
+            case .translucentBlack:
+                UIColor.black.withAlphaComponent(0.35)
+            case .translucentWhite:
+                UIColor.white.withAlphaComponent(0.55)
+            case .clear:
+                UIColor.clear
+            case .red:
+                UIColor.systemRed.withAlphaComponent(0.75)
+            case .blue:
+                UIColor.systemBlue.withAlphaComponent(0.75)
+            }
+        }
+    }
+
+    private extension StoryTextFont {
+        func uiFont(size: CGFloat) -> UIFont {
+            switch self {
+            case .bold:
+                .systemFont(ofSize: size, weight: .bold)
+            case .rounded:
+                UIFont.systemFont(ofSize: size, weight: .bold).withDesign(.rounded)
+            case .serif:
+                UIFont.systemFont(ofSize: size, weight: .bold).withDesign(.serif)
+            case .mono:
+                .monospacedSystemFont(ofSize: size, weight: .bold)
+            }
+        }
+    }
+
+    private extension StoryTextColor {
+        var uiColor: UIColor {
+            switch self {
+            case .white:
+                .white
+            case .black:
+                .black
+            case .yellow:
+                .systemYellow
+            case .pink:
+                .systemPink
+            case .blue:
+                .systemBlue
+            }
+        }
+    }
+
+    private extension UIFont {
+        func withDesign(_ design: UIFontDescriptor.SystemDesign) -> UIFont {
+            guard let descriptor = fontDescriptor.withDesign(design) else { return self }
+            return UIFont(descriptor: descriptor, size: pointSize)
+        }
+    }
+#endif
+
+private enum StoryComposerBackground: Equatable, CaseIterable {
+    case black
+    case white
+    case blue
+    case purple
+    case sunset
+    case ocean
+    case graphite
+
+    static let `default` = StoryComposerBackground.black
+
+    var next: StoryComposerBackground {
+        let options = Self.allCases
+        guard let index = options.firstIndex(of: self) else { return Self.default }
+        return options[(index + 1) % options.count]
+    }
+
+    @ViewBuilder var view: some View {
+        switch self {
+        case .black:
+            Color.black
+        case .white:
+            Color.white
+        case .blue:
+            Color.blue
+        case .purple:
+            Color.purple
+        case .sunset:
+            LinearGradient(colors: [.orange, .pink, .purple], startPoint: .topLeading, endPoint: .bottomTrailing)
+        case .ocean:
+            LinearGradient(colors: [.cyan, .blue, .indigo], startPoint: .top, endPoint: .bottom)
+        case .graphite:
+            LinearGradient(colors: [.black, .gray], startPoint: .topLeading, endPoint: .bottomTrailing)
+        }
+    }
+}
+
+#if os(iOS)
+    private extension StoryComposerBackground {
+        func draw(in rect: CGRect) {
+            switch self {
+            case .black:
+                UIColor.black.setFill()
+                UIRectFill(rect)
+            case .white:
+                UIColor.white.setFill()
+                UIRectFill(rect)
+            case .blue:
+                UIColor.systemBlue.setFill()
+                UIRectFill(rect)
+            case .purple:
+                UIColor.systemPurple.setFill()
+                UIRectFill(rect)
+            case .sunset:
+                drawGradient(colors: [UIColor.systemOrange, UIColor.systemPink, UIColor.systemPurple], in: rect)
+            case .ocean:
+                drawGradient(colors: [UIColor.systemCyan, UIColor.systemBlue, UIColor.systemIndigo], in: rect)
+            case .graphite:
+                drawGradient(colors: [UIColor.black, UIColor.systemGray], in: rect)
+            }
+        }
+
+        private func drawGradient(colors: [UIColor], in rect: CGRect) {
+            guard let context = UIGraphicsGetCurrentContext(), let gradient = CGGradient(
+                colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                colors: colors.map(\.cgColor) as CFArray,
+                locations: nil,
+            ) else { return }
+            context.drawLinearGradient(
+                gradient,
+                start: CGPoint(x: rect.minX, y: rect.minY),
+                end: CGPoint(x: rect.maxX, y: rect.maxY),
+                options: [],
+            )
+        }
+    }
+#endif
+
+private struct ComposerToolbarIcon: View {
+    let systemName: String
+
+    var body: some View {
+        Image(systemName: systemName)
+            .font(.headline)
+            .foregroundStyle(.white)
+            .frame(width: 44, height: 44)
+            .background(.black.opacity(0.45), in: Circle())
+    }
+}
+
+private struct BackgroundToolbarIcon: View {
+    let background: StoryComposerBackground
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(.black.opacity(0.45))
+
+            background.view
+                .frame(width: 24, height: 24)
+                .clipShape(Circle())
+                .overlay {
+                    Circle()
+                        .stroke(.white.opacity(0.75), lineWidth: 1.5)
+                }
+        }
+        .frame(width: 44, height: 44)
+    }
+}
+
+#if os(iOS)
+    private struct SmoothDraggableTextOverlay: UIViewRepresentable {
+        let id: UUID
+        @Binding var text: String
+        @Binding var isFocused: Bool
+        @Binding var offset: CGSize
+        @Binding var scale: CGFloat
+        @Binding var textBackground: StoryTextBackground
+        @Binding var fontStyle: StoryTextFont
+        @Binding var textColor: StoryTextColor
+        @Binding var selectAllOnFocus: Bool
+        let maxTextWidth: CGFloat
+        let onDragEnded: (UUID, Bool) -> Void
+        let onTrashVisibilityChange: (Bool) -> Void
+        let onTextChange: (UUID, String) -> Void
+        let onSelectionChange: (UUID, Int) -> Void
+
+        func makeUIView(context: Context) -> DraggableTextCanvasView {
+            let view = DraggableTextCanvasView()
+            view.textView.delegate = context.coordinator
+            view.onOffsetChange = { offset in
+                self.offset = offset
+            }
+            view.onScaleChange = { scale in
+                self.scale = scale
+            }
+            view.onTextBackgroundChange = { textBackground in
+                self.textBackground = textBackground
+            }
+            view.onFontStyleChange = { fontStyle in
+                self.fontStyle = fontStyle
+            }
+            view.onTextColorChange = { textColor in
+                self.textColor = textColor
+            }
+            view.onFocusChange = { focused in
+                isFocused = focused
+            }
+            view.onDragEnded = { shouldDelete in
+                onDragEnded(id, shouldDelete)
+            }
+            view.onTrashVisibilityChange = { visible in
+                onTrashVisibilityChange(visible)
+            }
+            return view
+        }
+
+        func updateUIView(_ view: DraggableTextCanvasView, context: Context) {
+            view.maxTextWidth = maxTextWidth
+            if !view.isInteracting {
+                view.committedOffset = offset
+                view.committedScale = scale
+            }
+            view.isEditingCentered = isFocused
+            if view.textBackground != textBackground {
+                view.textBackground = textBackground
+            }
+            if view.fontStyle != fontStyle {
+                view.fontStyle = fontStyle
+            }
+            if view.textColor != textColor {
+                view.textColor = textColor
+            }
+            view.onOffsetChange = { offset in
+                self.offset = offset
+            }
+            view.onScaleChange = { scale in
+                self.scale = scale
+            }
+            view.onTextBackgroundChange = { textBackground in
+                self.textBackground = textBackground
+            }
+            view.onFontStyleChange = { fontStyle in
+                self.fontStyle = fontStyle
+            }
+            view.onTextColorChange = { textColor in
+                self.textColor = textColor
+            }
+            view.onFocusChange = { focused in
+                isFocused = focused
+            }
+            view.onDragEnded = { shouldDelete in
+                onDragEnded(id, shouldDelete)
+            }
+            view.onTrashVisibilityChange = { visible in
+                onTrashVisibilityChange(visible)
+            }
+            context.coordinator.onTextChange = { newText in
+                onTextChange(id, newText)
+            }
+            context.coordinator.onSelectionChange = { cursorOffset in
+                onSelectionChange(id, cursorOffset)
+            }
+
+            let displayText = text.isEmpty ? "Text" : text
+            if view.textView.text != displayText {
+                view.textView.text = displayText
+            }
+
+            if isFocused, !view.textView.isFirstResponder {
+                view.textView.becomeFirstResponder()
+                if selectAllOnFocus {
+                    view.textView.selectAll(nil)
+                    selectAllOnFocus = false
+                }
+            } else if !isFocused, view.textView.isFirstResponder {
+                view.textView.resignFirstResponder()
+            }
+
+            if !view.isInteracting {
+                view.setNeedsLayout()
+            }
+        }
+
+        func makeCoordinator() -> Coordinator {
+            Coordinator(text: $text, isFocused: $isFocused, onTextChange: { newText in
+                onTextChange(id, newText)
+            }, onSelectionChange: { cursorOffset in
+                onSelectionChange(id, cursorOffset)
+            })
+        }
+
+        final class Coordinator: NSObject, UITextViewDelegate {
+            @Binding var text: String
+            @Binding var isFocused: Bool
+            var onTextChange: (String) -> Void
+            var onSelectionChange: (Int) -> Void
+
+            init(text: Binding<String>, isFocused: Binding<Bool>, onTextChange: @escaping (String) -> Void, onSelectionChange: @escaping (Int) -> Void) {
+                _text = text
+                _isFocused = isFocused
+                self.onTextChange = onTextChange
+                self.onSelectionChange = onSelectionChange
+            }
+
+            func textViewDidChange(_ textView: UITextView) {
+                text = textView.text
+                onTextChange(textView.text)
+            }
+
+            func textViewDidChangeSelection(_ textView: UITextView) {
+                onSelectionChange(textView.selectedRange.location)
+            }
+
+            func textViewDidBeginEditing(_: UITextView) {
+                isFocused = true
+            }
+
+            func textViewDidEndEditing(_: UITextView) {
+                isFocused = false
+            }
+        }
+    }
+
+    private final class DraggableTextCanvasView: UIView {
+        let textView = UITextView()
+        private let trashContainer = UIView()
+        private let trashImageView = UIImageView(image: UIImage(systemName: "trash.fill"))
+        var maxTextWidth: CGFloat = 420
+        var committedOffset = CGSize.zero
+        var committedScale: CGFloat = 1
+        static let minimumScale: CGFloat = 0.1
+        static let maximumScale: CGFloat = 10
+        var isEditingCentered = false {
+            didSet {
+                if oldValue != isEditingCentered, !isInteracting {
+                    moveTextViewToCurrentEditingPosition(animated: true)
+                }
+            }
+        }
+
+        var textBackground = StoryTextBackground.translucentBlack {
+            didSet { applyTextAppearance(preserving: textView.center) }
+        }
+
+        var fontStyle = StoryTextFont.bold {
+            didSet { applyTextAppearance(preserving: textView.center) }
+        }
+
+        var textColor = StoryTextColor.white {
+            didSet { applyTextAppearance(preserving: textView.center) }
+        }
+
+        var onOffsetChange: ((CGSize) -> Void)?
+        var onScaleChange: ((CGFloat) -> Void)?
+        var onTextBackgroundChange: ((StoryTextBackground) -> Void)?
+        var onFontStyleChange: ((StoryTextFont) -> Void)?
+        var onTextColorChange: ((StoryTextColor) -> Void)?
+        var onFocusChange: ((Bool) -> Void)?
+        var onDragEnded: ((Bool) -> Void)?
+        var onTrashVisibilityChange: ((Bool) -> Void)?
+        private(set) var isDragging = false
+        private(set) var isResizing = false
+        var isInteracting: Bool {
+            isDragging || isResizing
+        }
+
+        private var dragStartCenter = CGPoint.zero
+        private var resizeStartScale: CGFloat = 1
+        private var trashIsActive = false
+
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            isOpaque = false
+            backgroundColor = .clear
+
+            textView.isScrollEnabled = false
+            textView.textAlignment = .center
+            textView.textContainer.lineFragmentPadding = 0
+            textView.clipsToBounds = true
+            textView.inputAccessoryView = makeAccessoryToolbar()
+            applyTextAppearance(preserving: textView.center)
+            addSubview(textView)
+
+            trashContainer.isHidden = true
+            trashContainer.alpha = 0
+            trashContainer.backgroundColor = UIColor.black.withAlphaComponent(0.55)
+            trashContainer.layer.cornerRadius = 38
+            trashContainer.layer.borderWidth = 2
+            trashContainer.layer.borderColor = UIColor.white.withAlphaComponent(0.35).cgColor
+            trashContainer.isUserInteractionEnabled = false
+            addSubview(trashContainer)
+
+            trashImageView.tintColor = .white
+            trashImageView.contentMode = .scaleAspectFit
+            trashContainer.addSubview(trashImageView)
+
+            let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
+            pan.delegate = self
+            pan.cancelsTouchesInView = false
+            textView.addGestureRecognizer(pan)
+
+            let pinch = UIPinchGestureRecognizer(target: self, action: #selector(handlePinch(_:)))
+            pinch.delegate = self
+            pinch.cancelsTouchesInView = false
+            textView.addGestureRecognizer(pinch)
+        }
+
+        @available(*, unavailable)
+        required init?(coder _: NSCoder) {
+            fatalError("init(coder:) has not been implemented")
+        }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            if isInteracting {
+                layoutTrashTarget()
+            } else {
+                layoutTextView()
+            }
+        }
+
+        override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+            guard !isHidden, alpha > 0, isUserInteractionEnabled else { return nil }
+            // Keep a pinchable target around tiny captions so they can be scaled back up.
+            let minimumTarget: CGFloat = 140
+            let expandedFrame = textView.frame.insetBy(
+                dx: -max(20, (minimumTarget - textView.frame.width) / 2),
+                dy: -max(20, (minimumTarget - textView.frame.height) / 2),
+            )
+            guard expandedFrame.contains(point) else { return nil }
+            return textView.hitTest(convert(point, to: textView), with: event) ?? textView
+        }
+
+        private func layoutTextView() {
+            updateTextMetrics(preserving: currentTextCenter())
+
+            layoutTrashTarget()
+        }
+
+        private func currentTextCenter() -> CGPoint {
+            CGPoint(
+                x: bounds.midX + (isEditingCentered ? 0 : committedOffset.width),
+                y: bounds.midY + (isEditingCentered ? -96 : committedOffset.height),
+            )
+        }
+
+        private func moveTextViewToCurrentEditingPosition(animated: Bool) {
+            let updates = {
+                self.updateTextMetrics(preserving: self.currentTextCenter())
+            }
+            if animated {
+                UIView.animate(withDuration: 0.22, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction, .curveEaseOut], animations: updates)
+            } else {
+                updates()
+            }
+        }
+
+        private func updateTextMetrics(preserving center: CGPoint) {
+            let clampedScale = min(max(committedScale, Self.minimumScale), Self.maximumScale)
+            textView.font = fontStyle.uiFont(size: 34 * clampedScale)
+            textView.textContainerInset = UIEdgeInsets(top: 12 * clampedScale, left: 18 * clampedScale, bottom: 12 * clampedScale, right: 18 * clampedScale)
+            textView.layer.cornerRadius = 16 * clampedScale
+
+            let targetWidth = min(maxTextWidth, max(bounds.width - 88, 120))
+            let fittingSize = textView.sizeThatFits(CGSize(width: targetWidth, height: .greatestFiniteMagnitude))
+            let width = min(max(fittingSize.width, 90 * clampedScale), targetWidth)
+            let height = max(fittingSize.height, 58 * clampedScale)
+            textView.bounds = CGRect(origin: .zero, size: CGSize(width: width, height: height))
+            textView.center = center
+        }
+
+        private func applyTextAppearance(preserving center: CGPoint) {
+            textView.backgroundColor = textBackground.uiColor
+            textView.textColor = textColor.uiColor
+            updateTextMetrics(preserving: center)
+        }
+
+        private func makeAccessoryToolbar() -> UIToolbar {
+            let toolbar = UIToolbar()
+            toolbar.sizeToFit()
+            toolbar.items = [
+                UIBarButtonItem(customView: accessoryButton(accessibilityLabel: "Change text background", action: #selector(cycleTextBackground), content: textBackgroundIcon())),
+                UIBarButtonItem(systemItem: .fixedSpace),
+                UIBarButtonItem(customView: accessoryButton(accessibilityLabel: "Change font", action: #selector(cycleFontStyle), content: fontStyleIcon())),
+                UIBarButtonItem(systemItem: .fixedSpace),
+                UIBarButtonItem(customView: accessoryButton(accessibilityLabel: "Change text color", action: #selector(cycleTextColor), content: textColorIcon())),
+                UIBarButtonItem(systemItem: .flexibleSpace),
+                UIBarButtonItem(image: UIImage(systemName: "keyboard.chevron.compact.down"), style: .plain, target: self, action: #selector(doneEditing)),
+            ]
+            toolbar.items?[1].width = 10
+            toolbar.items?[3].width = 10
+            return toolbar
+        }
+
+        private func accessoryButton(accessibilityLabel: String, action: Selector, content: UIView) -> UIButton {
+            let button = UIButton(type: .system)
+            button.translatesAutoresizingMaskIntoConstraints = false
+            button.accessibilityLabel = accessibilityLabel
+            button.addTarget(self, action: action, for: .touchUpInside)
+            content.isUserInteractionEnabled = false
+            content.translatesAutoresizingMaskIntoConstraints = false
+            button.addSubview(content)
+            NSLayoutConstraint.activate([
+                button.widthAnchor.constraint(equalToConstant: 44),
+                button.heightAnchor.constraint(equalToConstant: 36),
+                content.centerXAnchor.constraint(equalTo: button.centerXAnchor),
+                content.centerYAnchor.constraint(equalTo: button.centerYAnchor),
+                content.widthAnchor.constraint(equalToConstant: content.bounds.width),
+                content.heightAnchor.constraint(equalToConstant: content.bounds.height),
+            ])
+            return button
+        }
+
+        private func textBackgroundIcon() -> UIView {
+            swatchView(fillColor: textBackground.uiColor, borderColor: UIColor.label.withAlphaComponent(0.45))
+        }
+
+        private func textColorIcon() -> UIView {
+            swatchView(fillColor: textColor.uiColor, borderColor: UIColor.label.withAlphaComponent(0.45))
+        }
+
+        private func swatchView(fillColor: UIColor, borderColor: UIColor) -> UIView {
+            let view = UIView(frame: CGRect(origin: .zero, size: CGSize(width: 24, height: 24)))
+            view.backgroundColor = fillColor
+            view.layer.cornerRadius = 12
+            view.layer.borderWidth = 1.5
+            view.layer.borderColor = borderColor.cgColor
+            if fillColor == .clear {
+                view.backgroundColor = UIColor.systemBackground.withAlphaComponent(0.5)
+            }
+            return view
+        }
+
+        private func fontStyleIcon() -> UIView {
+            let label = UILabel(frame: CGRect(origin: .zero, size: CGSize(width: 28, height: 28)))
+            label.text = "A"
+            label.textAlignment = .center
+            label.textColor = .label
+            label.font = fontStyle.uiFont(size: 24)
+            return label
+        }
+
+        private func refreshAccessoryToolbar() {
+            guard textView.inputAccessoryView != nil else { return }
+            textView.inputAccessoryView = makeAccessoryToolbar()
+            textView.reloadInputViews()
+        }
+
+        @objc private func cycleTextBackground() {
+            textBackground = textBackground.next
+            onTextBackgroundChange?(textBackground)
+            refreshAccessoryToolbar()
+        }
+
+        @objc private func cycleFontStyle() {
+            fontStyle = fontStyle.next
+            onFontStyleChange?(fontStyle)
+            refreshAccessoryToolbar()
+        }
+
+        @objc private func cycleTextColor() {
+            textColor = textColor.next
+            onTextColorChange?(textColor)
+            refreshAccessoryToolbar()
+        }
+
+        @objc private func doneEditing() {
+            textView.resignFirstResponder()
+            onFocusChange?(false)
+        }
+
+        private func layoutTrashTarget() {
+            let trashFrame = captionTrashFrame()
+            trashContainer.frame = trashFrame
+            trashImageView.frame = trashContainer.bounds.insetBy(dx: 24, dy: 24)
+        }
+
+        private func captionTrashFrame() -> CGRect {
+            let dimension: CGFloat = 76
+            return CGRect(
+                x: (bounds.width - dimension) / 2,
+                y: bounds.height - dimension - 54,
+                width: dimension,
+                height: dimension,
+            )
+        }
+
+        private func captionTrashHitFrame() -> CGRect {
+            captionTrashFrame().insetBy(dx: -14, dy: -14)
+        }
+
+        private func setTrashVisible(_ visible: Bool) {
+            onTrashVisibilityChange?(visible)
+            trashContainer.isHidden = false
+            UIView.animate(withDuration: 0.12, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) {
+                self.trashContainer.alpha = visible ? 1 : 0
+            } completion: { _ in
+                if !visible {
+                    self.trashContainer.isHidden = true
+                }
+            }
+        }
+
+        private func setTrashActive(_ active: Bool) {
+            guard trashIsActive != active else { return }
+            trashIsActive = active
+            UIView.animate(withDuration: 0.12, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) {
+                self.trashContainer.backgroundColor = active ? .systemRed : UIColor.black.withAlphaComponent(0.55)
+                self.trashContainer.layer.borderColor = UIColor.white.withAlphaComponent(active ? 0.9 : 0.35).cgColor
+                self.trashContainer.transform = active ? CGAffineTransform(scaleX: 1.12, y: 1.12) : .identity
+            }
+        }
+
+        @objc private func handlePan(_ recognizer: UIPanGestureRecognizer) {
+            switch recognizer.state {
+            case .began:
+                isDragging = true
+                if !isResizing {
+                    setTrashVisible(true)
+                }
+                dragStartCenter = textView.center
+                textView.resignFirstResponder()
+                onFocusChange?(false)
+                setTrashActive(captionTrashHitFrame().contains(textView.center))
+            case .changed:
+                let translation = recognizer.translation(in: self)
+                textView.center = CGPoint(
+                    x: dragStartCenter.x + translation.x,
+                    y: dragStartCenter.y + translation.y,
+                )
+                setTrashActive(captionTrashHitFrame().contains(textView.center))
+            case .ended, .cancelled, .failed:
+                isDragging = false
+                let shouldDelete = captionTrashHitFrame().contains(textView.center)
+                if !isResizing {
+                    setTrashVisible(false)
+                }
+                setTrashActive(false)
+                if shouldDelete {
+                    onDragEnded?(true)
+                    return
+                }
+                committedOffset = CGSize(
+                    width: textView.center.x - bounds.midX,
+                    height: textView.center.y - bounds.midY,
+                )
+                onOffsetChange?(committedOffset)
+                onDragEnded?(false)
+            default:
+                break
+            }
+        }
+
+        @objc private func handlePinch(_ recognizer: UIPinchGestureRecognizer) {
+            switch recognizer.state {
+            case .began:
+                isResizing = true
+                resizeStartScale = committedScale
+                textView.resignFirstResponder()
+                onFocusChange?(false)
+            case .changed:
+                committedScale = min(max(resizeStartScale * recognizer.scale, Self.minimumScale), Self.maximumScale)
+                updateTextMetrics(preserving: textView.center)
+            case .ended, .cancelled, .failed:
+                committedScale = min(max(committedScale, Self.minimumScale), Self.maximumScale)
+                isResizing = false
+                updateTextMetrics(preserving: textView.center)
+                onScaleChange?(committedScale)
+            default:
+                break
+            }
+        }
+    }
+
+    extension DraggableTextCanvasView: UIGestureRecognizerDelegate {
+        func gestureRecognizer(_: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith _: UIGestureRecognizer) -> Bool {
+            true
+        }
+    }
+#endif

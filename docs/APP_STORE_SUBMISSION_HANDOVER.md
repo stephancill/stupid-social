@@ -100,7 +100,7 @@ All previously-blocked items are **resolved**:
 
 The screenshots come from a **demo-data mode** baked into the app (Debug-only):
 
-- `DemoData` (`Sources/NoFeedSocialCore/Sources/DemoData.swift`) seeds a realistic fake
+- `DemoData` (`Sources/StupidSocialCore/Sources/DemoData.swift`) seeds a realistic fake
   feed/story bar (Debug-only `#if DEBUG`; never compiled into release).
 - Enable: launch with `-demoData` OR env `DEMO_DATA=1`, OR Settings → enable the hidden
   Debug toggle (4-tap "About") → auto-loads; then "Load preview / Redact names /

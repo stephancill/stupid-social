@@ -4,11 +4,11 @@
 
 ```
 Sources/
-  NoFeedSocial/                     # App UI layer (SwiftUI views)
+  StupidSocial/                     # App UI layer (SwiftUI views)
     AppContainer.swift              # App-layer composition root
     AppDelegate.swift               # APNs token, notification taps, inline replies and foreground presentation
     ChatControlServer.swift         # Command-line chat access on a Mac: token-checked JSON lines on 127.0.0.1
-    NoFeedSocialApp.swift           # iOS @main entry point
+    StupidSocialApp.swift           # iOS @main entry point
     Views/
       ContentView.swift             # Root view, container wiring
       FeedView.swift                # Main list + StoriesBar + story viewer triggers
@@ -61,7 +61,7 @@ Sources/
       TelegramConnectionView.swift  # Telegram sign-in: phone, code, 2FA password
       TelegramChatView.swift        # Telegram chat with the group member list from the title
       TelegramProfileView.swift     # Telegram user profile from mentions, avatars and members: bio, last seen, Message
-  NoFeedSocialPush/                 # Shared with the notification extension: Web Push decryption, push store, notification content
+  StupidSocialPush/                 # Shared with the notification extension: Web Push decryption, push store, notification content
     WebPushDecryptor.swift
     ApronPushStore.swift
     ApronPushNotification.swift
@@ -71,9 +71,9 @@ Sources/
     PushExtensionLog.swift          # What the extension did per push, shown in Settings → Debug
     SpoilerText.swift               # Spoiler masking and the Telegram service account's login codes
     ChatUserColor.swift             # Per-user accent colors and the initials avatar, for chats and notifications
-  NoFeedSocialNotificationService/  # Notification Service Extension: decrypts Apron pushes
+  StupidSocialNotificationService/  # Notification Service Extension: decrypts Apron pushes
     NotificationService.swift
-  NoFeedSocialCore/                 # Shared core (models, services, sources)
+  StupidSocialCore/                 # Shared core (models, services, sources)
     Models/
       AppModels.swift               # All public model types
       Account.swift                 # Account (one of any number per network) and its preferences
@@ -202,7 +202,7 @@ Outside `Sources/`: `NotificationService/` holds the extension's Info.plist and 
 ## Usage Metrics
 
 - The app reports anonymous usage and errors to stupid metrics (`metrics.stupidtech.net`, source in `../stupid-metrics`). `docs/PLAN.md` § Usage Metrics has the requirements.
-- Every event and error goes through `AppMetrics` (`NoFeedSocialCore/Services/AppMetrics.swift`); call sites never use `StupidMetrics` directly. Add new events there, and list them in `docs/IMPLEMENTATION.md` § Usage metrics.
+- Every event and error goes through `AppMetrics` (`StupidSocialCore/Services/AppMetrics.swift`); call sites never use `StupidMetrics` directly. Add new events there, and list them in `docs/IMPLEMENTATION.md` § Usage metrics.
 - Properties are only networks, triggers, outcomes and similar low-cardinality values: never account names, handles, message or notification text, URLs, ids or tokens. Report errors with `StupidMetrics.error(_:error:)`, which sends only the type and case, never `localizedDescription`.
 - `Vendor/StupidMetrics` is a copy of a tagged release: change the package in `../stupid-metrics`, tag it, then run `scripts/vendor-stupid-metrics.sh <tag>`.
 - Dashboard: `https://metrics.stupidtech.net/dashboard/apps/tech.stupid.StupidSocial`.

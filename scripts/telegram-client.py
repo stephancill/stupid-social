@@ -2,7 +2,7 @@
 """Dependency-free Telegram MTProto 2.0 probe: the source of truth for the native Swift client.
 
 Talks to Telegram's production DCs over TCP (intermediate transport) with a user account, using the TL
-schema in Sources/NoFeedSocialCore/Resources/TelegramSchema.tl (built by scripts/telegram-schema.py).
+schema in Sources/StupidSocialCore/Resources/TelegramSchema.tl (built by scripts/telegram-schema.py).
 
 API credentials come from TELEGRAM_APP_ID and TELEGRAM_APP_API_HASH (environment or .env.local), from
 https://my.telegram.org. The session (auth keys per DC, salts, peer access hashes) is kept in
@@ -45,7 +45,7 @@ import time
 import zlib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-SCHEMA_PATH = ROOT / "Sources/NoFeedSocialCore/Resources/TelegramSchema.tl"
+SCHEMA_PATH = ROOT / "Sources/StupidSocialCore/Resources/TelegramSchema.tl"
 SESSION_PATH = ROOT / "logs/telegram-session.json"
 
 DC_ADDRESSES = {

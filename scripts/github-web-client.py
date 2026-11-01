@@ -28,7 +28,7 @@ import sim_keychain
 BASE_URL = "https://github.com"
 FOR_YOU_FEED_URL = BASE_URL + "/conduit/for_you_feed"
 USER_LOGIN_META = re.compile(r'<meta name="user-login" content="([^"]*)"')
-APP_USER_AGENT = "NoFeedSocial/1"
+APP_USER_AGENT = "StupidSocial/1"
 DEFAULT_ACCEPT_LANGUAGE = "en-US,en;q=0.9"
 
 

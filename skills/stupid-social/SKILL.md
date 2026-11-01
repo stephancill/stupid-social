@@ -11,7 +11,7 @@ works and reads, sends and read markers behave as they do in the app. Nothing wo
 on the Mac and Settings → Command Line → Command-Line Access is on.
 
 Source: github.com/stephancill/stupid-social. The CLI is `cli/`; the app side is
-`Sources/NoFeedSocial/ChatControlServer.swift`. The design notes are in `docs/IMPLEMENTATION.md` under
+`Sources/StupidSocial/ChatControlServer.swift`. The design notes are in `docs/IMPLEMENTATION.md` under
 "Command line".
 
 ## Install first
