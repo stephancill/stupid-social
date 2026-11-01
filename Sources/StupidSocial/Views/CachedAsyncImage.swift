@@ -27,6 +27,9 @@ struct CachedAsyncImage<Placeholder: View, Failure: View>: View {
         self.onComplete = onComplete
         self.placeholder = placeholder
         self.failure = failure
+        // Draw a cached image in the first frame, so a preloaded image never shows its placeholder.
+        _loadedImage = State(initialValue: url.flatMap { StoryImageCache.shared.image(for: $0) }
+            ?? cacheKey.flatMap { StoryImageCache.shared.image(forKey: $0) })
     }
 
     var body: some View {
@@ -83,23 +86,16 @@ struct CachedAsyncImage<Placeholder: View, Failure: View>: View {
             return
         }
 
-        do {
-            let (data, _) = try await URLSession.shared.data(from: url)
-            guard let image = PlatformImage(data: data) else {
-                failedURL = url
-                onComplete?()
-                return
-            }
-            StoryImageCache.shared.setImage(image, for: url)
-            if let cacheKey {
-                StoryImageCache.shared.setImage(image, forKey: cacheKey)
-            }
-            loadedImage = image
-            onComplete?()
-        } catch {
+        guard let image = await StoryImageCache.shared.load(url: url) else {
             failedURL = url
             onComplete?()
+            return
         }
+        if let cacheKey {
+            StoryImageCache.shared.setImage(image, forKey: cacheKey)
+        }
+        loadedImage = image
+        onComplete?()
     }
 
     private func platformImage(_ image: PlatformImage) -> Image {
@@ -113,9 +109,11 @@ final class StoryImageCache {
 
     private let cache = NSCache<NSURL, PlatformImage>()
     private let keyedCache = NSCache<NSString, PlatformImage>()
+    private var loads: [URL: Task<PlatformImage?, Never>] = [:]
 
     private init() {
-        cache.countLimit = 80
+        // Limited by decoded size, not count: a feed's worth of avatars is small, story slides are large.
+        cache.totalCostLimit = 150 * 1024 * 1024
         keyedCache.countLimit = 80
     }
 
@@ -124,7 +122,7 @@ final class StoryImageCache {
     }
 
     func setImage(_ image: PlatformImage, for url: URL) {
-        cache.setObject(image, forKey: url as NSURL)
+        cache.setObject(image, forKey: url as NSURL, cost: Self.cost(of: image))
     }
 
     func image(forKey key: String) -> PlatformImage? {
@@ -136,14 +134,36 @@ final class StoryImageCache {
     }
 
     func preload(url: URL) {
-        guard image(for: url) == nil else { return }
-        Task {
+        guard image(for: url) == nil, loads[url] == nil else { return }
+        Task { await load(url: url) }
+    }
+
+    /// Downloads and decodes `url` off the main thread, joining a load already in flight for it.
+    @discardableResult
+    func load(url: URL) async -> PlatformImage? {
+        if let cached = image(for: url) {
+            return cached
+        }
+        if let inFlight = loads[url] {
+            return await inFlight.value
+        }
+        let task = Task<PlatformImage?, Never> {
             guard let (data, _) = try? await URLSession.shared.data(from: url),
                   let image = PlatformImage(data: data)
-            else { return }
-            await MainActor.run {
-                StoryImageCache.shared.setImage(image, for: url)
-            }
+            else { return nil }
+            return await image.byPreparingForDisplay() ?? image
         }
+        loads[url] = task
+        let image = await task.value
+        loads[url] = nil
+        if let image {
+            setImage(image, for: url)
+        }
+        return image
+    }
+
+    private static func cost(of image: PlatformImage) -> Int {
+        let pixels = image.size.width * image.scale * image.size.height * image.scale
+        return Int(pixels) * 4
     }
 }

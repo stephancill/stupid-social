@@ -106,6 +106,7 @@ struct FeedView: View {
                         }
                         .compactListRowInsets()
                         .listRowSeparator(index == 0 ? .hidden : .visible, edges: .top)
+                        .onAppear { preloadImages(after: index) }
                         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                             if let reminderId = reminderId(of: displayItem) {
                                 removeReminderButton(reminderId)
@@ -206,6 +207,18 @@ struct FeedView: View {
 
     private var notificationItems: [DisplayNotificationItem] {
         viewModel.items
+    }
+
+    /// Loads the avatars and previews of the rows below `index` before they scroll into view.
+    private func preloadImages(after index: Int) {
+        let items = notificationItems
+        let upcoming = items.dropFirst(index + 1).prefix(10)
+        for displayItem in upcoming {
+            for actor in displayItem.item.actors.prefix(5) {
+                actor.avatarURL.map(StoryImageCache.shared.preload)
+            }
+            displayItem.item.target?.imageURL.map(StoryImageCache.shared.preload)
+        }
     }
 
     private var hasVisibleStoriesBar: Bool {
