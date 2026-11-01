@@ -19,6 +19,7 @@ struct ApronProfileView: View {
             Section {
                 VStack(spacing: 6) {
                     ApronUserAvatar(user: user, avatarURL: viewModel.avatarURL(for: user), presence: presence, size: 96, ringColor: Color(uiColor: .systemGroupedBackground), dotScale: 1 / 5, hasBorder: true)
+                        .opensFullScreenPhoto(viewModel.avatarURL(for: user))
                         .padding(.bottom, 6)
                     HStack(spacing: 6) {
                         Text(DebugRedaction.name(user.displayName, enabled: redactionEnabled))
@@ -59,7 +60,6 @@ struct ApronProfileView: View {
                 }
             }
         }
-        .navigationTitle(DebugRedaction.name(user.displayName, enabled: redactionEnabled))
         .navigationBarTitleDisplayMode(.inline)
     }
 

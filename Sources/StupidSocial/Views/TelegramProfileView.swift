@@ -6,9 +6,12 @@ import SwiftUI
 struct TelegramProfileView: View {
     @AppStorage("redactionEnabled") private var redactionEnabled = false
     @StateObject private var viewModel: TelegramProfileViewModel
+    /// The chat the profile was opened from; Message isn't offered when it is already your chat with them.
+    private let openChat: TelegramPeer?
 
-    init(viewModel: @autoclosure @escaping () -> TelegramProfileViewModel) {
+    init(viewModel: @autoclosure @escaping () -> TelegramProfileViewModel, openChat: TelegramPeer? = nil) {
         _viewModel = StateObject(wrappedValue: viewModel())
+        self.openChat = openChat
     }
 
     var body: some View {
@@ -21,7 +24,6 @@ struct TelegramProfileView: View {
                 ProgressView()
             }
         }
-        .navigationTitle(viewModel.profile.map { DebugRedaction.name($0.name, enabled: redactionEnabled) } ?? "Profile")
         .navigationBarTitleDisplayMode(.inline)
         .task { await viewModel.load() }
     }
@@ -31,6 +33,7 @@ struct TelegramProfileView: View {
             Section {
                 VStack(spacing: 6) {
                     ChatAvatarImage(url: profile.avatarURL, title: profile.name, size: 96, colorKey: String(profile.id))
+                        .opensFullScreenPhoto(profile.avatarURL, fullURL: profile.fullAvatarURL)
                         .padding(.bottom, 6)
                     Text(DebugRedaction.name(profile.name, enabled: redactionEnabled))
                         .font(.title2.weight(.semibold))
@@ -51,7 +54,7 @@ struct TelegramProfileView: View {
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
-                    if let peer = profile.peer, !profile.isYou {
+                    if let peer = profile.peer, !profile.isYou, peer != openChat {
                         Button {
                             NotificationRouter.shared.pendingChat = .telegram(peer: peer)
                         } label: {

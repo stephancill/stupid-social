@@ -23,7 +23,10 @@ Commands:
   read --peer user:1 --max-id N
   listen [--seconds N]        print updates pushed on the connection
   download --peer K --msg-id N [--size x] -o FILE   a message's photo or document (a size type, or "full")
-  avatar --peer K -o FILE     a user's or chat's profile photo (small)
+  avatar --peer K -o FILE [--big]   a user's or chat's profile photo (small, or big with --big)
+  chat-info --peer K          a group's full info: title, about, member count, and whether you may edit it
+  edit-chat --peer K [--title T] [--about A]   rename a group or replace its description (only in a group you
+                              named for testing)
   send-photo --peer K --file F [--caption T]   upload.saveFilePart + messages.sendMedia
   react --peer K --msg-id N [--emoji E]        messages.sendReaction; no emoji removes yours
   reactions --peer K          the emoji the account may react with there: messages.getAvailableReactions (active,
@@ -1193,6 +1196,7 @@ def main():
     download.add_argument("--size", default="x", help='photo or thumbnail size type such as m, x, y; "full" for a whole document')
     download.add_argument("-o", "--output", required=True)
     avatar = sub.add_parser("avatar")
+    avatar.add_argument("--big", action="store_true", help="the 640px photo instead of the 160px one")
     avatar.add_argument("--peer", required=True)
     avatar.add_argument("-o", "--output", required=True)
     send_photo = sub.add_parser("send-photo")
@@ -1214,6 +1218,12 @@ def main():
     react.add_argument("--emoji", default="", help="empty removes your reaction")
     reactions = sub.add_parser("reactions", help="the emoji the account may react with in a chat")
     reactions.add_argument("--peer", required=True)
+    chat_info = sub.add_parser("chat-info", help="a group's full info and whether you may edit it")
+    chat_info.add_argument("--peer", required=True)
+    edit_chat = sub.add_parser("edit-chat", help="rename a group or replace its description")
+    edit_chat.add_argument("--peer", required=True)
+    edit_chat.add_argument("--title")
+    edit_chat.add_argument("--about")
     members = sub.add_parser("members")
     members.add_argument("--peer", required=True)
     members.add_argument("--limit", type=int, default=200)
@@ -1345,6 +1355,44 @@ def main():
             statuses[status] = statuses.get(status, 0) + 1
         print("roles", roles)
         print("statuses", statuses)
+    elif args.command == "chat-info":
+        # Whether you may edit: the creator always may; an admin with change_info may; in a basic group, so may
+        # everyone unless default_banned_rights.change_info; a supergroup member may unless banned_rights or
+        # default_banned_rights has change_info.
+        peer = client.input_peer(args.peer)
+        if peer["_"] == "inputPeerChannel":
+            channel = {"_": "inputChannel", "channel_id": peer["channel_id"], "access_hash": peer["access_hash"]}
+            result = client.call({"_": "channels.getFullChannel", "channel": channel})
+            chat_id = peer["channel_id"]
+        elif peer["_"] == "inputPeerChat":
+            result = client.call({"_": "messages.getFullChat", "chat_id": peer["chat_id"]})
+            chat_id = peer["chat_id"]
+        else:
+            raise SystemExit("chat-info needs a group (chat:… or channel:…)")
+        full = result["full_chat"]
+        chat = next(c for c in result["chats"] if c["id"] == chat_id)
+        banned = (chat.get("banned_rights") or {}).get("change_info") or (chat.get("default_banned_rights") or {}).get("change_info")
+        print(json.dumps({
+            "chat": chat["_"], "full": full["_"], "megagroup": bool(chat.get("megagroup")),
+            "title_length": len(chat.get("title", "")), "about_length": len(full.get("about", "")),
+            "participants_count": chat.get("participants_count") or full.get("participants_count"),
+            "photo": (chat.get("photo") or {}).get("_"), "chat_photo": (full.get("chat_photo") or {}).get("_"),
+            "creator": bool(chat.get("creator")), "admin_change_info": bool((chat.get("admin_rights") or {}).get("change_info")),
+            "admin_invite_users": bool((chat.get("admin_rights") or {}).get("invite_users")),
+            "banned_change_info": bool(banned),
+            "can_edit": bool(chat.get("creator") or (chat.get("admin_rights") or {}).get("change_info") or not banned),
+        }, indent=1))
+    elif args.command == "edit-chat":
+        peer = client.input_peer(args.peer)
+        if args.title is not None:
+            if peer["_"] == "inputPeerChannel":
+                channel = {"_": "inputChannel", "channel_id": peer["channel_id"], "access_hash": peer["access_hash"]}
+                result = client.call({"_": "channels.editTitle", "channel": channel, "title": args.title})
+            else:
+                result = client.call({"_": "messages.editChatTitle", "chat_id": peer["chat_id"], "title": args.title})
+            print("title:", result["_"])
+        if args.about is not None:
+            print("about:", client.call({"_": "messages.editChatAbout", "peer": peer, "about": args.about}))
     elif args.command == "custom-emoji":
         result = client.call({"_": "messages.getHistory", "peer": client.input_peer(args.peer), "offset_id": 0, "offset_date": 0, "add_offset": 0, "limit": args.limit, "max_id": 0, "min_id": 0, "hash": 0})
         ids: list[int] = []
@@ -1445,7 +1493,7 @@ def main():
         photo = owner.get("photo") or {}
         if "photo_id" not in photo:
             raise SystemExit(f"No photo: {photo.get('_')}")
-        location = {"_": "inputPeerPhotoFileLocation", "peer": input_peer, "photo_id": photo["photo_id"]}
+        location = {"_": "inputPeerPhotoFileLocation", "peer": input_peer, "photo_id": photo["photo_id"], "big": args.big}
         started = time.time()
         data = client.download(location, photo["dc_id"])
         pathlib.Path(args.output).write_bytes(data)

@@ -435,6 +435,12 @@ public extension ApronConnection {
         _ = try await request("push_unregister", params: ["url": endpoint.absoluteString], as: ApronEmptyResult.self)
     }
 
+    /// Replaces a room's title and description, clearing those that are `nil` (§4.2.4); the edit comes back as a
+    /// `room_update` `updated` record (`scripts/apron-web-client.py room-set`).
+    func editRoom(roomId: String, title: String?, description: String?) async throws {
+        _ = try await request("room_set", params: ApronRoomEditParams(roomId: roomId, title: title, description: description), as: ApronRoomSetResult.self)
+    }
+
     /// Mutes or unmutes a room's notifications, mentions included (§4.5.3).
     func setRoomMuted(roomId: String, muted: Bool) async throws {
         _ = try await request("status", params: ApronRoomStatusParams(roomId: roomId, mute: muted), as: ApronEmptyResult.self)

@@ -17,6 +17,7 @@ Examples:
   scripts/apron-web-client.py email-signup ws://127.0.0.1:8090/ws --email alice@example.com --user-id alice --name Alice --token-file logs/apron-local/tokens/alice
   scripts/apron-web-client.py push-capture --port 8099   # local push endpoint that decrypts what it receives
   scripts/apron-web-client.py push-register ws://127.0.0.1:8080/ws --endpoint http://127.0.0.1:8099/p --wake mentions
+  scripts/apron-web-client.py room-set ws://127.0.0.1:8090/ws --room general --title General --description "About"
   scripts/apron-web-client.py mute ws://127.0.0.1:8080/ws --room general
   scripts/apron-web-client.py read-cursors ws://127.0.0.1:8090/ws --token-file logs/apron-local/tokens/bob --room general --read 1793116210787
   scripts/apron-web-client.py emoji wss://server.apron.chat/ --scan "12:30:apron::SideTable:" --images
@@ -754,6 +755,27 @@ def cmd_room_create(session: Session, args: argparse.Namespace) -> None:
     print_json({"room_id": room_id})
 
 
+def cmd_room_set(session: Session, args: argparse.Namespace) -> None:
+    """Edits a room with `room_set` and its `room_id` (§4.2.4): resubmits the client fields it doesn't change, since
+    omitted ones are cleared, and prints the `room_update` `updated` record the edit sends back."""
+    authenticate(session, args)
+    listed = session.request("room_list", {"room_id": args.room})
+    room = next(iter(listed.get("joined") or listed.get("not_joined") or []), None)
+    if room is None:
+        raise SystemExit(f"no room {args.room}")
+    params: dict[str, Any] = {"room_id": args.room}
+    for field in ("title", "description"):
+        value = getattr(args, field)
+        value = room.get(field) if value is None else value
+        if value:
+            params[field] = value
+    result = session.request("room_set", params)
+    session.drain(args.wait)
+    updates = [m for m in session.notifications if m.get("method") == "room_update"]
+    updated = [r for u in updates for r in u["params"].get("updated", []) if r["room_id"] == args.room]
+    print_json({"result": result, "updated": [{k: r.get(k) for k in ("room_id", "title", "description", "private", "parent_room_id")} for r in updated]})
+
+
 def direct_room_with(rooms: list[dict[str, Any]], you: str, user_id: str) -> dict[str, Any] | None:
     """apron-web's `directRoomWith`: a joined top-level untitled private room whose complete member list is
     exactly you and `user_id`."""
@@ -998,6 +1020,10 @@ def main() -> None:
     room.add_argument("--title")
     room.add_argument("--private", action="store_true")
     room.add_argument("--add", action="append", default=[], help="user_id to add (repeatable)")
+    room_set = add("room-set", cmd_room_set)
+    room_set.add_argument("--room", required=True)
+    room_set.add_argument("--title", help="empty clears it; omitted keeps it")
+    room_set.add_argument("--description", help="empty clears it; omitted keeps it")
     add("dm", cmd_dm).add_argument("--user", required=True, help="user_id to message")
     register = add("push-register", cmd_push_register)
     register.add_argument("--endpoint", required=True)

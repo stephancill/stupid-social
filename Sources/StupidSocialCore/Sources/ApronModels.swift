@@ -709,6 +709,20 @@ struct ApronRoomIdParams: Encodable {
     }
 }
 
+/// `room_set` with a `room_id` replaces the room's client fields, so a field left out is cleared; `parent_room_id`
+/// and `private` are fixed or kept, and `ext` merges, so they aren't sent (§4.2.4).
+struct ApronRoomEditParams: Encodable {
+    let roomId: String
+    let title: String?
+    let description: String?
+
+    enum CodingKeys: String, CodingKey {
+        case roomId = "room_id"
+        case title
+        case description
+    }
+}
+
 struct ApronRoomSetResult: Decodable {
     let roomId: String
 

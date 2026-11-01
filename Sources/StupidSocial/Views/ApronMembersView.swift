@@ -1,41 +1,39 @@
 import StupidSocialCore
 import SwiftUI
 
-/// The open room's members, from the chat's live member list (§4.2.1, §4.2.2), split into online and offline
-/// when the server reports statuses (§4.5).
+/// The open room's details (§4.2): title, description, editable where the room offers it, then its members, from
+/// the chat's live member list (§4.2.1, §4.2.2), online ones first, then by when they were last seen (§4.5).
 struct ApronMembersView: View {
+    @AppStorage("redactionEnabled") private var redactionEnabled = false
     @ObservedObject var viewModel: ApronRoomViewModel
     @State private var query = ""
+    @State private var isEditing = false
 
     var body: some View {
         Group {
             if let allMembers = viewModel.members {
-                let members = filtered(allMembers)
+                let members = ordered(filtered(allMembers))
+                let total = viewModel.memberCount ?? 0
                 List {
-                    if query.isEmpty {
-                        notificationSection
-                    }
-                    if members.contains(where: { viewModel.presence(of: $0) != nil }) {
-                        let online = members.filter { viewModel.presence(of: $0)?.isConnected == true }
-                        let offline = members.filter { viewModel.presence(of: $0)?.isConnected != true }
-                        if !online.isEmpty {
-                            memberSection("Online", online)
+                    header
+                    notificationSection
+                    MembersSection(
+                        query: $query,
+                        hasResults: !members.isEmpty,
+                        footer: total > allMembers.count ? "Showing \(allMembers.count) of \(total) members." : nil,
+                    ) {
+                        ForEach(members, id: \.userId) { member in
+                            NavigationLink {
+                                ApronProfileView(viewModel: viewModel, user: member)
+                            } label: {
+                                ApronMemberRow(
+                                    user: member,
+                                    avatarURL: viewModel.avatarURL(for: member),
+                                    isYou: viewModel.isOwnUser(member),
+                                    presence: viewModel.presence(of: member),
+                                )
+                            }
                         }
-                        if !offline.isEmpty {
-                            memberSection("Offline", offline)
-                        }
-                    } else {
-                        memberSection(nil, members)
-                    }
-                    if let total = viewModel.memberCount, total > allMembers.count {
-                        Section {} footer: {
-                            Text("Showing \(allMembers.count) of \(total) members.")
-                        }
-                    }
-                }
-                .overlay {
-                    if members.isEmpty, !query.isEmpty {
-                        ContentUnavailableView.search(text: query)
                     }
                 }
             } else if viewModel.isConnected {
@@ -45,10 +43,34 @@ struct ApronMembersView: View {
                 ProgressView()
             }
         }
-        // On the screen rather than the list, so it is under the title from the start, not added once members load.
-        .searchBar(text: $query, placement: .navigationBarDrawer(displayMode: .always))
-        .navigationTitle(memberTitle)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if viewModel.canEdit, viewModel.isConnected {
+                Button("Edit") { isEditing = true }
+            }
+        }
+        .sheet(isPresented: $isEditing) {
+            ChatDetailsEditView(
+                title: viewModel.titleIsMemberNames ? "" : viewModel.title,
+                description: viewModel.roomDescription ?? "",
+                requiresTitle: false,
+                save: { title, description in try await viewModel.editRoom(title: title, description: description) },
+            )
+        }
+    }
+
+    private var title: String {
+        viewModel.titleIsMemberNames ? DebugRedaction.name(viewModel.title, enabled: redactionEnabled) : viewModel.title
+    }
+
+    private var header: some View {
+        ChatDetailsHeader(
+            title: title,
+            subtitle: viewModel.members == nil ? nil : memberTitle.lowercased(),
+            description: viewModel.roomDescription,
+            avatarURL: viewModel.avatarURL,
+            colorKey: viewModel.avatarColorKey,
+        )
     }
 
     /// The room's notification level, kept by the server for all of the user's devices.
@@ -79,25 +101,16 @@ struct ApronMembersView: View {
         return members.filter { $0.displayName.localizedStandardContains(query) || $0.userId.localizedStandardContains(query) }
     }
 
-    private func memberSection(_ title: String?, _ members: [ApronUser]) -> some View {
-        Section {
-            ForEach(members, id: \.userId) { member in
-                NavigationLink {
-                    ApronProfileView(viewModel: viewModel, user: member)
-                } label: {
-                    ApronMemberRow(
-                        user: member,
-                        avatarURL: viewModel.avatarURL(for: member),
-                        isYou: viewModel.isOwnUser(member),
-                        presence: viewModel.presence(of: member),
-                    )
-                }
-            }
-        } header: {
-            if let title {
-                Text(title)
-            }
-        }
+    /// Online first, then the most recently seen; members without a time keep the list's order (you, then by name).
+    private func ordered(_ members: [ApronUser]) -> [ApronUser] {
+        members.enumerated().sorted { lhs, rhs in
+            let lhsOnline = viewModel.presence(of: lhs.element)?.isConnected == true
+            let rhsOnline = viewModel.presence(of: rhs.element)?.isConnected == true
+            if lhsOnline != rhsOnline { return lhsOnline }
+            let lhsSeen = lhsOnline ? nil : lhs.element.lastSeen, rhsSeen = rhsOnline ? nil : rhs.element.lastSeen
+            if lhsSeen != rhsSeen { return (lhsSeen ?? .distantPast) > (rhsSeen ?? .distantPast) }
+            return lhs.offset < rhs.offset
+        }.map(\.element)
     }
 
     private var memberTitle: String {

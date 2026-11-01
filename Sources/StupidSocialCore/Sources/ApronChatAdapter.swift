@@ -61,6 +61,8 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
     private var linkedMessages: [ApronLink: ChatEmbed?] = [:]
     private var pendingLinkedMessages: Set<ApronLink> = []
     private var isPrivateRoom = false
+    /// This room's record as last listed or updated (§4.2), for its description and whether it can be edited.
+    private var roomRecord: ApronRoom?
     private var notices: [ApronMessage] = []
     private var firstLogId: String?
     private var lastLogId: String?
@@ -257,9 +259,7 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
                 return
             }
             if let listed = listing.rooms.first(where: { $0.roomId == roomId }) {
-                isPrivateRoom = listed.isPrivate
-                info.titleIsMemberNames = listed.isNamedForMembers
-                info.title = listed.displayTitle(users: users, you: session.you.userId)
+                applyRecord(listed)
                 setMembers(of: listed)
             } else {
                 // Live deliveries only reach joined rooms (§3.4).
@@ -318,8 +318,7 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
                 room.roomId = roomId
                 // Members joined while the room had no id here, so they come from the listing.
                 if let listed = try? await session.connection.joinedRooms().rooms.first(where: { $0.roomId == roomId }) {
-                    isPrivateRoom = listed.isPrivate
-                    info.title = listed.displayTitle(users: users, you: session.you.userId)
+                    applyRecord(listed)
                     setMembers(of: listed)
                 }
                 updateNotifications()
@@ -773,13 +772,28 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
         publishMembers()
     }
 
-    /// Joining this room delivers it with its members; membership records then add and remove users.
+    /// The room's title, privacy and description from its record (§4.2), as listed or edited.
+    private func applyRecord(_ record: ApronRoom) {
+        roomRecord = record
+        isPrivateRoom = record.isPrivate
+        info.titleIsMemberNames = record.isNamedForMembers
+        info.title = record.displayTitle(users: users, you: you?.userId ?? "")
+        updateRoomDetails()
+    }
+
+    /// Joining this room delivers it with its members; membership records then add and remove users, and an edit
+    /// delivers its record in `updated` (§4.2.3).
     private func applyRoomUpdate(_ update: ApronRoomUpdate) {
         for user in update.users ?? [] {
             users[user.userId] = user
         }
         if let listed = update.joined?.first(where: { $0.roomId == roomId }) {
+            applyRecord(listed)
             setMembers(of: listed)
+        }
+        if let edited = update.updated?.first(where: { $0.roomId == roomId }) {
+            applyRecord(edited)
+            onChange?()
         }
         let records = (update.memberships ?? []).filter { $0.roomId == roomId }
         guard !records.isEmpty, var ids = memberIds else { return }
@@ -821,6 +835,27 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
             user.lastSeen.map { "last seen \(ChatPresence.lastSeenTime($0))" } ?? presence(of: user)?.text
         }
         info.subtitle = status ?? service.server(for: serverURL)?.displayTitle ?? ApronServerInfo.displayTitle(nil, serverURL: serverURL)
+        updateRoomDetails()
+    }
+
+    /// What the members screen's header shows. A direct room isn't offered for editing: a title would stop it
+    /// being found as the direct room with the other person (`ApronRoom.isDirect`).
+    private func updateRoomDetails() {
+        room.title = info.title
+        room.titleIsMemberNames = info.titleIsMemberNames
+        room.avatarURL = info.avatarURL
+        room.avatarColorKey = info.avatarUserId ?? roomId
+        let description = roomRecord?.description?.trimmingCharacters(in: .whitespacesAndNewlines)
+        room.roomDescription = description?.isEmpty == false ? description : nil
+        room.canEdit = roomRecord.map { !($0.isNamedForMembers && (memberIds?.count ?? 0) <= 2) } ?? false
+    }
+
+    /// Replaces the room's title and description; the change shows when the server sends the edited record.
+    func editRoom(title: String, description: String) async throws {
+        guard let session else { throw ApronError.closed }
+        let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let description = description.trimmingCharacters(in: .whitespacesAndNewlines)
+        try await session.connection.editRoom(roomId: roomId, title: title.isEmpty ? nil : title, description: description.isEmpty ? nil : description)
     }
 
     /// Whether the user is reachable now, `nil` when the server doesn't say (§4.5.1). Your own entry follows

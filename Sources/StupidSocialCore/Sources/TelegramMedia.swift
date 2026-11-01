@@ -251,10 +251,14 @@ enum TelegramMediaParser {
     }
 
     /// A user's or chat's small profile photo, through `inputPeer` (which may be `inputPeerUserFromMessage`).
-    static func avatarURL(photo: TLObject?, inputPeer: TLObject, key: String) -> URL? {
+    /// The 160 px profile photo, or with `big` the 640 px one for full screen (probe `avatar --big`).
+    static func avatarURL(photo: TLObject?, inputPeer: TLObject, key: String, big: Bool = false) -> URL? {
         guard let photo, let photoId = photo["photo_id"]?.long, let dc = photo["dc_id"]?.int else { return nil }
-        let location = TLObject("inputPeerPhotoFileLocation", ["peer": .object(inputPeer), "photo_id": .long(photoId)])
-        return TelegramMediaURL.make(key: "avatar-\(key)-\(photoId)", dc: Int(dc), location: location)
+        var location = TLObject("inputPeerPhotoFileLocation", ["peer": .object(inputPeer), "photo_id": .long(photoId)])
+        if big {
+            location["big"] = .bool(true)
+        }
+        return TelegramMediaURL.make(key: "avatar-\(key)-\(photoId)\(big ? "-big" : "")", dc: Int(dc), location: location)
     }
 
     /// What a message's media shows: embeds, and a one-line label for previews and media without a picture.

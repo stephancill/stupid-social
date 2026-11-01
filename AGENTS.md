@@ -52,14 +52,15 @@ Sources/
       ChatMessageFocusView.swift    # Long-press menu model, the focus overlay that lifts a message, reminder date picker
       ChatCustomEmojiImages.swift   # Custom emoji images (downsampled, cached) for text, chips, picker and the composer strip
       ChatAudioPreview.swift        # Inline audio preview player and track card for chat messages
-      ChatImageViewer.swift         # Full-screen chat image viewer: zoom, swipe to dismiss, save to Photos
+      ChatImageViewer.swift         # Full-screen chat image viewer: zoom, swipe to dismiss, save to Photos; full-screen profile photos
       ChatMediaViews.swift          # Chat videos (poster, looping GIFs, full-screen player) and the Quick Look file source
       ApronChatView.swift           # Apron chat: the shared chat plus members and profiles
-      ApronMembersView.swift        # Apron room member list, opened from the chat title
+      ApronMembersView.swift        # Apron room details (title, description, edit) and member list, opened from the chat title
+      ChatDetailsHeader.swift       # A chat's details header (photo, title, description), member search and edit sheet, for member lists
       ApronProfileView.swift        # Apron user profile and shared avatar with presence dot
       SettingsView.swift            # Settings: account list, Add Account sheet, account detail, remove
       TelegramConnectionView.swift  # Telegram sign-in: phone, code, 2FA password
-      TelegramChatView.swift        # Telegram chat with the group member list from the title
+      TelegramChatView.swift        # Telegram chat: the group's details and members, or the person's profile, from the title
       TelegramProfileView.swift     # Telegram user profile from mentions, avatars and members: bio, last seen, Message
   StupidSocialPush/                 # Shared with the notification extension: Web Push decryption, push store, notification content
     WebPushDecryptor.swift
@@ -156,7 +157,7 @@ Sources/
       ChatListViewModel.swift        # Chats list: ChatSummary, ChatListProvider (one per network), merged list, opening a destination
       ApronRoomViewModel.swift       # Apron room members, profiles and notification level, kept current by the room's adapter
       ApronLinkViewModel.swift       # What an opened Apron link offers: add server, sign in, join, open
-      TelegramMembersViewModel.swift # Telegram group member list, opened from the chat title
+      TelegramMembersViewModel.swift # Telegram group details, editing and member list, opened from the chat title
       TelegramProfileViewModel.swift # Telegram profile by user id or @username
       TelegramConnectionViewModel.swift # Telegram sign-in steps
       XChatUnlockViewModel.swift     # X Chat PIN unlock and Forget Keys

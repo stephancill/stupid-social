@@ -144,6 +144,8 @@ public struct TelegramProfile: Sendable, Equatable {
     public let username: String?
     public let about: String?
     public let avatarURL: URL?
+    /// The 640 px photo, for full screen.
+    public let fullAvatarURL: URL?
     /// Last seen; `nil` for yourself and bots.
     public let status: ChatPresence?
     public let isBot: Bool
@@ -166,6 +168,18 @@ public struct TelegramMember: Identifiable, Hashable, Sendable {
     public let status: ChatPresence
     public let isYou: Bool
     public let isBot: Bool
+}
+
+/// A group's details, as the top of its member list shows them.
+public struct TelegramGroupInfo: Sendable, Equatable {
+    public let title: String
+    public let about: String?
+    public let avatarURL: URL?
+    /// The 640 px photo, for full screen.
+    public let fullAvatarURL: URL?
+    public let memberCount: Int?
+    /// Whether the account may change the title and description.
+    public let canEdit: Bool
 }
 
 public struct TelegramMemberList: Sendable {
@@ -1059,12 +1073,15 @@ public actor TelegramClient: ChatListProvider {
         let hash = user.flatMap { $0.flag("min") ? nil : $0["access_hash"]?.long }
         let name = user.map(Self.name(of:)) ?? "Telegram User"
         profileNames.withLock { $0[userId] = name }
-        let avatar = hash.flatMap { hash in
-            TelegramMediaParser.avatarURL(
-                photo: user?["photo"]?.object,
-                inputPeer: TLObject("inputPeerUser", ["user_id": .long(userId), "access_hash": .long(hash)]),
-                key: "user:\(userId)",
-            )
+        let avatar = { (big: Bool) in
+            hash.flatMap { hash in
+                TelegramMediaParser.avatarURL(
+                    photo: user?["photo"]?.object,
+                    inputPeer: TLObject("inputPeerUser", ["user_id": .long(userId), "access_hash": .long(hash)]),
+                    key: "user:\(userId)",
+                    big: big,
+                )
+            }
         }
         let about = result["full_user"]?.object?["about"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines)
         return TelegramProfile(
@@ -1072,7 +1089,8 @@ public actor TelegramClient: ChatListProvider {
             name: name,
             username: user.flatMap { Self.usernames(of: $0).first },
             about: about?.isEmpty == false ? about : nil,
-            avatarURL: avatar,
+            avatarURL: avatar(false),
+            fullAvatarURL: avatar(true),
             status: user.flatMap(Self.userStatus),
             isBot: user?.flag("bot") ?? false,
             isYou: userId == stored.account?.userId,
@@ -1092,6 +1110,64 @@ public actor TelegramClient: ChatListProvider {
         }
         guard let userId = result["peer"]?.object?["user_id"]?.long else { throw TelegramError.notAPerson }
         return try await profile(userId: userId)
+    }
+
+    /// A group's title, description, photo and member count from `channels.getFullChannel` or `messages.getFullChat`.
+    /// The account may edit them as the creator, as an admin with `change_info`, or as a member when neither its
+    /// own nor the group's default banned rights withhold `change_info` (probe `chat-info`).
+    public func groupInfo(peer: TelegramPeer) async throws -> TelegramGroupInfo {
+        try requireAccount()
+        let result: TLObject?
+        switch peer.kind {
+        case .channel:
+            result = try await invoke(TLObject("channels.getFullChannel", [
+                "channel": .object(TLObject("inputChannel", ["channel_id": .long(peer.id), "access_hash": .long(peer.accessHash)])),
+            ])).object
+        case .chat:
+            result = try await invoke(TLObject("messages.getFullChat", ["chat_id": .long(peer.id)])).object
+        case .user:
+            throw TelegramError.protocolViolation("not a group")
+        }
+        guard let result, let full = result["full_chat"]?.object,
+              let chat = result.objects("chats").first(where: { $0["id"]?.long == peer.id })
+        else { throw TelegramError.protocolViolation("no full chat") }
+        let about = full["about"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let withheld = chat["banned_rights"]?.object?.flag("change_info") == true
+            || chat["default_banned_rights"]?.object?.flag("change_info") == true
+        let canEdit = chat.flag("creator") || chat["admin_rights"]?.object?.flag("change_info") == true || !withheld
+        let avatar = { (big: Bool) in
+            TelegramMediaParser.avatarURL(photo: chat["photo"]?.object, inputPeer: peer.inputPeer, key: peer.key, big: big)
+        }
+        return TelegramGroupInfo(
+            title: chat["title"]?.string ?? "Group",
+            about: about?.isEmpty == false ? about : nil,
+            avatarURL: avatar(false),
+            fullAvatarURL: avatar(true),
+            memberCount: (chat["participants_count"]?.int ?? full["participants_count"]?.int).map(Int.init),
+            canEdit: canEdit,
+        )
+    }
+
+    /// Renames a group (`channels.editTitle` or `messages.editChatTitle`, which post a service message) and replaces
+    /// its description (`messages.editChatAbout`); `nil` leaves that part as it is (probe `edit-chat`).
+    public func editGroup(peer: TelegramPeer, title: String?, about: String?) async throws {
+        try requireAccount()
+        if let title {
+            switch peer.kind {
+            case .channel:
+                _ = try await invoke(TLObject("channels.editTitle", [
+                    "channel": .object(TLObject("inputChannel", ["channel_id": .long(peer.id), "access_hash": .long(peer.accessHash)])),
+                    "title": .string(title),
+                ]))
+            case .chat:
+                _ = try await invoke(TLObject("messages.editChatTitle", ["chat_id": .long(peer.id), "title": .string(title)]))
+            case .user:
+                throw TelegramError.protocolViolation("not a group")
+            }
+        }
+        if let about {
+            _ = try await invoke(TLObject("messages.editChatAbout", ["peer": .object(peer.inputPeer), "about": .string(about)]))
+        }
     }
 
     /// A group's members: `channels.getParticipants` (recent, up to 200) for supergroups, the full participant list

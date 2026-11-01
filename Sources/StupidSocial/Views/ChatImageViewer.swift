@@ -14,14 +14,17 @@ final class ChatImageViewerController: UIViewController, UIScrollViewDelegate, U
     private let saveButton = UIButton(type: .system)
     private var chromeHidden = false
     private var loadTask: Task<Void, Never>?
+    /// The image passed in is a smaller version shown until `url` loads, such as a profile photo's thumbnail.
+    private let imageIsPreview: Bool
 
     /// Past this distance or speed, a vertical swipe dismisses instead of springing back.
     private static let dismissDistance: CGFloat = 120
     private static let dismissVelocity: CGFloat = 800
 
-    init(url: URL, image: UIImage?, alt: String?) {
+    init(url: URL, image: UIImage?, alt: String?, imageIsPreview: Bool = false) {
         self.url = url
         self.alt = alt
+        self.imageIsPreview = imageIsPreview
         super.init(nibName: nil, bundle: nil)
         imageView.image = image
         modalPresentationStyle = .overFullScreen
@@ -91,7 +94,7 @@ final class ChatImageViewerController: UIViewController, UIScrollViewDelegate, U
         pan.delegate = self
         view.addGestureRecognizer(pan)
 
-        if imageView.image == nil {
+        if imageView.image == nil || imageIsPreview {
             loadImage()
         }
     }
@@ -268,4 +271,44 @@ final class ChatImageViewerController: UIViewController, UIScrollViewDelegate, U
 
 private enum ChatImageSaveError: Error {
     case denied
+}
+
+import SwiftUI
+
+extension View {
+    /// Opens a profile photo full screen when tapped: `fullURL` when there is a larger one, showing the small
+    /// photo while it loads. Without a photo, or with names redacted, the avatar isn't tappable.
+    func opensFullScreenPhoto(_ url: URL?, fullURL: URL? = nil) -> some View {
+        modifier(FullScreenPhotoModifier(url: url, fullURL: fullURL))
+    }
+}
+
+private struct FullScreenPhotoModifier: ViewModifier {
+    @AppStorage("redactionEnabled") private var redactionEnabled = false
+    let url: URL?
+    let fullURL: URL?
+
+    func body(content: Content) -> some View {
+        if let target = fullURL ?? url, !redactionEnabled {
+            Button {
+                present(target)
+            } label: {
+                content
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Profile Photo")
+        } else {
+            content
+        }
+    }
+
+    private func present(_ target: URL) {
+        let window = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first
+        guard var presenter = window?.rootViewController else { return }
+        while let presented = presenter.presentedViewController {
+            presenter = presented
+        }
+        let placeholder = url.flatMap { StoryImageCache.shared.image(for: $0) }
+        presenter.present(ChatImageViewerController(url: target, image: placeholder, alt: "Profile photo", imageIsPreview: true), animated: true)
+    }
 }

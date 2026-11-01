@@ -2,8 +2,8 @@ import StupidSocialCore
 import StupidSocialPush
 import SwiftUI
 
-/// A Telegram chat: the shared chat, with the member list opened from the title in groups, and profiles from
-/// mentions and senders' avatars.
+/// A Telegram chat: the shared chat, with the group's details and members, or the other person's profile in a
+/// private chat, opened from the title, and profiles from mentions and senders' avatars.
 struct TelegramChatView: View {
     @StateObject private var viewModel: ChatViewModel
     @StateObject private var members: TelegramMembersViewModel
@@ -19,7 +19,7 @@ struct TelegramChatView: View {
     var body: some View {
         ChatView(
             viewModel: viewModel,
-            onTitleTap: members.isGroup ? { showsMembers = true } : nil,
+            onTitleTap: members.isGroup ? { showsMembers = true } : { profileTarget = String(members.peer.id) },
             showProfile: { profileTarget = $0.id },
             keepsConnection: showsMembers || profileTarget != nil,
         )
@@ -27,7 +27,7 @@ struct TelegramChatView: View {
             TelegramMembersView(viewModel: members)
         }
         .navigationDestination(item: $profileTarget) { target in
-            TelegramProfileView(viewModel: members.profile(for: target))
+            TelegramProfileView(viewModel: members.profile(for: target), openChat: members.peer)
         }
         .onAppear {
             NotificationRouter.shared.telegramChatDidOpen(members.peer)
@@ -38,47 +38,79 @@ struct TelegramChatView: View {
     }
 }
 
-/// A Telegram group's members, online ones first, as Telegram lists them.
+/// A Telegram group's details (photo, title, description), editable with the right to change them, then its
+/// members, online ones first, then by when they were last seen.
 struct TelegramMembersView: View {
     @ObservedObject var viewModel: TelegramMembersViewModel
     @State private var query = ""
+    @State private var isEditing = false
 
     var body: some View {
         Group {
             if let list = viewModel.members {
-                let members = filtered(list.members)
-                let online = members.filter { $0.status == .online }
-                let others = members.filter { $0.status != .online }.sorted { $0.lastSeenOrder > $1.lastSeenOrder }
+                // Telegram's order breaks ties: the sort keeps it, since members are enumerated first.
+                let members = filtered(list.members).enumerated()
+                    .sorted { $0.element.lastSeenOrder != $1.element.lastSeenOrder ? $0.element.lastSeenOrder > $1.element.lastSeenOrder : $0.offset < $1.offset }
+                    .map(\.element)
                 List {
-                    if !online.isEmpty {
-                        memberSection("Online", online)
-                    }
-                    if !others.isEmpty {
-                        memberSection(online.isEmpty ? nil : "Offline", others)
-                    }
-                    if list.count > list.members.count {
-                        Section {} footer: {
-                            Text("Showing \(list.members.count) of \(list.count) members.")
+                    header
+                    MembersSection(
+                        query: $query,
+                        hasResults: !members.isEmpty,
+                        footer: list.count > list.members.count ? "Showing \(list.members.count) of \(list.count) members." : nil,
+                    ) {
+                        ForEach(members) { member in
+                            NavigationLink {
+                                TelegramProfileView(viewModel: viewModel.profile(for: String(member.id)))
+                            } label: {
+                                TelegramMemberRow(member: member)
+                            }
                         }
                     }
                 }
-                .overlay {
-                    if members.isEmpty, !query.isEmpty {
-                        ContentUnavailableView.search(text: query)
-                    }
-                }
             } else if let error = viewModel.errorMessage {
-                ContentUnavailableView("No Member List", systemImage: "person.2", description: Text(error))
+                List {
+                    header
+                    Section {
+                        ContentUnavailableView("No Member List", systemImage: "person.2", description: Text(error))
+                    }
+                    .listRowBackground(Color.clear)
+                }
             } else {
                 ProgressView()
             }
         }
-        // On the screen rather than the list, so it is under the title from the start, not added once members load.
-        .searchBar(text: $query, placement: .navigationBarDrawer(displayMode: .always))
-        .navigationTitle(memberTitle)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if viewModel.info?.canEdit == true {
+                Button("Edit") { isEditing = true }
+            }
+        }
+        .sheet(isPresented: $isEditing) {
+            if let info = viewModel.info {
+                ChatDetailsEditView(
+                    title: info.title,
+                    description: info.about ?? "",
+                    save: { title, about in try await viewModel.edit(title: title, about: about) },
+                )
+            }
+        }
         .task { await viewModel.load() }
         .refreshable { await viewModel.load() }
+    }
+
+    @ViewBuilder
+    private var header: some View {
+        if let info = viewModel.info {
+            ChatDetailsHeader(
+                title: info.title,
+                subtitle: info.memberCount.map { $0 == 1 ? "1 member" : "\($0) members" },
+                description: info.about,
+                avatarURL: info.avatarURL,
+                fullAvatarURL: info.fullAvatarURL,
+                colorKey: String(viewModel.peer.id),
+            )
+        }
     }
 
     /// Members whose name or username contains the query.
@@ -86,27 +118,6 @@ struct TelegramMembersView: View {
         let query = query.trimmingCharacters(in: .whitespaces)
         guard !query.isEmpty else { return members }
         return members.filter { $0.name.localizedStandardContains(query) || ($0.username ?? "").localizedStandardContains(query) }
-    }
-
-    private func memberSection(_ title: String?, _ members: [TelegramMember]) -> some View {
-        Section {
-            ForEach(members) { member in
-                NavigationLink {
-                    TelegramProfileView(viewModel: viewModel.profile(for: String(member.id)))
-                } label: {
-                    TelegramMemberRow(member: member)
-                }
-            }
-        } header: {
-            if let title {
-                Text(title)
-            }
-        }
-    }
-
-    private var memberTitle: String {
-        guard let count = viewModel.members?.count else { return "Members" }
-        return count == 1 ? "1 Member" : "\(count) Members"
     }
 }
 

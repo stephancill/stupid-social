@@ -55,6 +55,12 @@ final class ApronModelsTests: XCTestCase {
         XCTAssertEqual(general.displayTitle(users: users, you: "me"), "general")
     }
 
+    /// `room_set` clears omitted client fields and keeps `private` and `ext`, so an edit sends only what it sets.
+    func testRoomEditLeavesOutClearedFields() throws {
+        let edit = try JSONSerialization.jsonObject(with: JSONEncoder().encode(ApronRoomEditParams(roomId: "r1", title: "Ops", description: nil))) as? [String: String]
+        XCTAssertEqual(edit, ["room_id": "r1", "title": "Ops"])
+    }
+
     func testGuestPermissionsSurviveEncoding() throws {
         let json = #"{"user_id":"guest_1","name":"guest_1","ext":{"permissions":{"write":false}}}"#
         let guest = try JSONDecoder().decode(ApronUser.self, from: Data(json.utf8))

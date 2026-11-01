@@ -66,6 +66,7 @@ struct ProfileDetailView: View {
                 VStack(spacing: 12) {
                     avatarView(url: profile.avatarURL)
                         .frame(width: 80, height: 80)
+                        .opensFullScreenPhoto(profile.avatarURL)
 
                     VStack(spacing: 4) {
                         HStack(spacing: 4) {

@@ -12,6 +12,15 @@ public final class ApronRoomViewModel: ObservableObject {
     @Published public internal(set) var notifications: ApronRoomNotifications?
     @Published public internal(set) var notificationError: String?
     @Published public internal(set) var isConnected = false
+    /// The chat's title, and the avatar of the other person in a direct room.
+    @Published public internal(set) var title = ""
+    @Published public internal(set) var titleIsMemberNames = false
+    @Published public internal(set) var avatarURL: URL?
+    @Published public internal(set) var avatarColorKey = ""
+    /// What the room is about (§4.2), CommonMark by convention.
+    @Published public internal(set) var roomDescription: String?
+    /// Whether the room offers editing its title and description; the server decides whether the edit is allowed.
+    @Published public internal(set) var canEdit = false
 
     public let serverURL: URL
     /// Empty in a new direct chat until its first message starts the room.
@@ -59,6 +68,12 @@ public final class ApronRoomViewModel: ObservableObject {
     public func existingDirectRoom(with user: ApronUser) async throws -> String? {
         guard let adapter else { throw ApronError.closed }
         return try await adapter.existingDirectRoom(with: user)
+    }
+
+    /// Replaces the room's title and description with `room_set` (§4.2.4); empty ones are cleared.
+    public func editRoom(title: String, description: String) async throws {
+        guard let adapter else { throw ApronError.closed }
+        try await adapter.editRoom(title: title, description: description)
     }
 
     /// Applies a notification level with `status` (`ApronRoomNotifications`); the server keeps it for every device.
