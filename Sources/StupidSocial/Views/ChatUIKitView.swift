@@ -398,6 +398,11 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
             send()
         }
         textView.onEscape = { [weak self] in self?.goBack() }
+        textView.canPasteImage = { [weak self] in
+            guard let self else { return false }
+            return viewModel.canAttach && editingMessage == nil
+        }
+        textView.onPasteImage = { [weak self] in self?.stageImage(from: $0) }
         textView.accessibilityLabel = "Message"
         textViewHeight = textView.heightAnchor.constraint(equalToConstant: minimumTextHeight)
         textViewHeight.isActive = true

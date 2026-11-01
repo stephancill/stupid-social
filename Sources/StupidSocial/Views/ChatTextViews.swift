@@ -1,4 +1,5 @@
 import UIKit
+import UniformTypeIdentifiers
 
 final class ChatActionTapGesture: UITapGestureRecognizer {
     private let handler: () -> Void
@@ -34,10 +35,12 @@ final class ChatLinkTapGesture: UITapGestureRecognizer {
 /// Return still adds a line. While an input method is composing, Return confirms the composition instead.
 /// On a Mac, keys reach the text view as inserted text rather than presses, so Return arrives as a newline.
 /// Escape runs `onEscape` (leaving the chat), ahead of the text view's own handling, unless it is cancelling a
-/// composition.
+/// composition. Pasting an image hands it to `onPasteImage` (staging it as an attachment) while `canPasteImage`.
 final class ChatComposerTextView: UITextView {
     var onReturn: () -> Void = {}
     var onEscape: () -> Void = {}
+    var canPasteImage: () -> Bool = { false }
+    var onPasteImage: (NSItemProvider) -> Void = { _ in }
     private let isOnMac = ProcessInfo.processInfo.isiOSAppOnMac
 
     override var keyCommands: [UIKeyCommand]? {
@@ -57,6 +60,25 @@ final class ChatComposerTextView: UITextView {
 
     @objc private func escapePressed() {
         onEscape()
+    }
+
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        if action == #selector(paste(_:)), UIPasteboard.general.hasImages, canPasteImage() {
+            return true
+        }
+        return super.canPerformAction(action, withSender: sender)
+    }
+
+    override func paste(_ sender: Any?) {
+        guard UIPasteboard.general.hasImages, canPasteImage(),
+              let provider = UIPasteboard.general.itemProviders.first(where: {
+                  $0.hasItemConformingToTypeIdentifier(UTType.image.identifier)
+              })
+        else {
+            super.paste(sender)
+            return
+        }
+        onPasteImage(provider)
     }
 
     override func insertText(_ text: String) {
