@@ -68,12 +68,11 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
     private let windowSize = 30
     /// Whether the server's cursor is the source of truth here (see `ApronService.serverTracksCursors`).
     private var tracksCursors = false
-    /// The furthest anyone else has read here, from their read cursors (§4.6).
+    /// The furthest anyone else has read here, from their read cursors (§4.6). `nil` until another member's
+    /// cursor for this room arrives: servers choose the rooms where members see each other's (the Go server every
+    /// room; `ext.settings.read_receipts: "private"` only small private rooms; older servers none), and in the
+    /// others one check on every message would read as nobody having read them.
     private var othersRead: Int64?
-    /// Whether the server relays read cursors to the room (the Go reference server) rather than only to the
-    /// reader's own connections (apron-server-cloudflare): known once any other user's cursor arrives. Until then
-    /// messages show no receipt, since one check on every message would read as nobody having read them.
-    private var sharesReadCursors = false
     /// The cursor last sent to the server, so `activity` goes out only when it moves.
     private var sentReadMessageId: Int64 = 0
     private var ownUserIds: Set<String>
@@ -170,17 +169,14 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
         let mediaOrigins: [URL]
         /// So custom emoji render before the connection is up; the catalog is cached for as long as its URL stays.
         var emojiCatalogURL: URL?
-        /// So read receipts render before the connection is up; only on servers that share read cursors.
+        /// So read receipts render before the connection is up; only in rooms where another member's cursor arrived.
         var othersRead: Int64?
     }
 
     public func restore(snapshot data: Data) {
         guard snapshots.isEmpty, let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data) else { return }
         mediaOrigins = snapshot.mediaOrigins
-        if let read = snapshot.othersRead {
-            othersRead = read
-            sharesReadCursors = true
-        }
+        othersRead = snapshot.othersRead
         if let url = snapshot.emojiCatalogURL {
             loadEmojiCatalog(url)
         }
@@ -219,7 +215,7 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
             reactions: reactions,
             mediaOrigins: mediaOrigins,
             emojiCatalogURL: emojiCatalogURL,
-            othersRead: sharesReadCursors ? othersRead ?? 0 : nil,
+            othersRead: othersRead,
         ))
     }
 
@@ -1165,19 +1161,16 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
     /// The connection keeps every cursor it received, including those sent after `room_list` before this chat
     /// observed it.
     private func updateOthersRead(from connection: ApronConnection) {
-        let others = connection.readCursors.mapValues { $0.filter { !isOwnUserId($0.key) } }
-        if others.values.contains(where: { !$0.isEmpty }) {
-            sharesReadCursors = true
-        }
-        if let furthest = others[roomId]?.values.max(), furthest > othersRead ?? 0 {
+        let others = (connection.readCursors[roomId] ?? [:]).filter { !isOwnUserId($0.key) }
+        if let furthest = others.values.max(), furthest > othersRead ?? 0 {
             othersRead = furthest
         }
     }
 
     /// None in a room with only you.
     public func receipt(for message: ChatMessage) -> ChatReceipt? {
-        guard sharesReadCursors, (memberIds?.count ?? 2) > 1, let id = Int64(message.id) else { return nil }
-        return id <= othersRead ?? 0 ? .seen : .sent
+        guard let othersRead, (memberIds?.count ?? 2) > 1, let id = Int64(message.id) else { return nil }
+        return id <= othersRead ? .seen : .sent
     }
 
     // MARK: Mentions
