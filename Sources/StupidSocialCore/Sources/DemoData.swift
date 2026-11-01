@@ -30,88 +30,71 @@ public enum DemoData {
             now.addingTimeInterval(-60 * m)
         }
 
-        let xAlex = actor("alex_smith", "Alex Smith", .x)
-        let xJules = actor("jules_dev", "Jules", .x)
-        let fcNova = actor("nova.builds", "Nova", .farcaster)
-        let fcRiley = actor("riley.wtf", "riley", .farcaster)
-        let bsMaya = actor("maya.co", "maya", .bluesky)
-        let bsKade = actor("kade.bsky.social", "Kade", .bluesky)
-        let igAmy = actor("amy_stories", "Amy", .instagram)
+        // The same people as the demo chats, with their faces, on each network's kind of handle.
+        let you = NotificationActor(id: "x-sam", network: .x, username: "sam", displayName: "Sam", avatarURL: nil)
+        let xMaya = person("maya_chen", "Maya Chen", .x, DemoChats.maya)
+        let xTheo = person("theo_builds", "Theo", .x, DemoChats.theo)
+        let xJules = person("julesmakes", "Jules", .x, DemoChats.jules)
+        let xRiley = person("rileyw", "Riley", .x, DemoChats.riley)
+        let bsJules = person("jules.bsky.social", "Jules", .bluesky, DemoChats.jules)
+        let bsMaya = person("maya.bsky.social", "Maya Chen", .bluesky, DemoChats.maya)
+        let fcNova = person("nova", "Nova", .farcaster, DemoChats.nova)
+        let fcRiley = person("riley", "Riley", .farcaster, DemoChats.riley)
+        let igAmy = person("amy.k", "Amy", .instagram, DemoChats.amy)
+        let ghKade = person("kade-codes", "Kade", .github, DemoChats.kade)
 
-        let xReplyTarget = NotificationTarget(
+        let farmPost = NotificationTarget(
             id: "1101",
-            text: "Love this — finally a feed I can open without getting lost. Shipping!",
-            url: URL(string: "https://x.com/alex_smith/status/1101"),
-            imageURL: placeholderImage("reply-coast"),
-            author: xAlex,
-            postedAt: mins(3),
+            text: "Last light on the farm tonight 🌾",
+            url: URL(string: "https://x.com/sam/status/1101"),
+            imageURL: media("golden-hour"),
+            author: you,
+            postedAt: mins(40),
+            likeCount: 24,
         )
-        let xLikeTarget = NotificationTarget(
-            id: "2204",
-            text: "@stephancill your microcopy about avoiding algorithmic feeds is spot on.",
-            url: URL(string: "https://x.com/jules_dev/status/2204"),
-            author: xJules,
-            postedAt: mins(11),
-            likeCount: 2,
-        )
-        let bsReplyTarget = NotificationTarget(
+        let julesReply = NotificationTarget(
             id: "3305",
-            text: "Big fan of showing notifications without the feed.",
+            text: "Okay this settles it, we're doing the coast road in May 🚗",
             url: nil,
-            author: bsMaya,
+            author: bsJules,
+            postedAt: mins(5),
+        )
+        let theoMention = NotificationTarget(
+            id: "2204",
+            text: "Huge thanks to @sam for the trip planning template, saved us hours",
+            url: URL(string: "https://x.com/theo_builds/status/2204"),
+            author: xTheo,
             postedAt: mins(14),
+            likeCount: 8,
         )
-        let igMsgTarget = NotificationTarget(
+        let trailPhoto = NotificationTarget(
             id: "4401",
-            text: "Do you have an invite code? I want in!",
+            text: "Sunday trail 🥾",
             url: nil,
-            imageURL: media("message-sunset"),
-            author: igAmy,
-            postedAt: mins(18),
+            imageURL: media("cabin-view"),
+            author: NotificationActor(id: "instagram-sam", network: .instagram, username: "sam", displayName: "Sam", avatarURL: nil),
+            postedAt: mins(90),
         )
-        let ghStarTarget = NotificationTarget(id: "5501", text: "stupid-social", url: URL(string: "https://github.com/stephancill/stupid-social")!)
-        let bsLikeTarget = NotificationTarget(id: "3306", text: "You can feel the algorithms adjusting.", url: nil, imageURL: media("algorithms"), author: bsKade, postedAt: mins(26))
-        let fcReplyTarget = NotificationTarget(
+        let repo = NotificationTarget(id: "5501", text: "sam/trailmap", url: URL(string: "https://github.com/sam/trailmap")!)
+        let rileyReply = NotificationTarget(
             id: "2206",
-            text: "This is the calm feed I came here for.",
+            text: "Those colours 🔥 what were you shooting on?",
             url: nil,
             author: fcRiley,
-            postedAt: mins(31),
+            postedAt: mins(33),
         )
 
         return [
             NotificationItem(
-                id: "demo-x-reply-1",
-                network: .x,
-                accountId: viewerAccountId,
-                sourceId: "1101",
-                type: .reply,
-                timestamp: mins(3),
-                text: "@alex_smith replied to your post",
-                actors: [xAlex],
-                target: xReplyTarget,
-            ),
-            NotificationItem(
-                id: "demo-fc-follow-1",
-                network: .farcaster,
-                accountId: viewerAccountId,
-                sourceId: "2202",
-                type: .follow,
-                timestamp: mins(8),
-                text: "@nova.builds followed you",
-                actors: [fcNova],
-                target: nil,
-            ),
-            NotificationItem(
                 id: "demo-x-like-1",
                 network: .x,
                 accountId: viewerAccountId,
-                sourceId: "2204",
-                type: .mention,
-                timestamp: mins(11),
-                text: "@jules_dev mentioned you in a post",
-                actors: [xJules],
-                target: xLikeTarget,
+                sourceId: "1101",
+                type: .reaction,
+                timestamp: mins(2),
+                text: "maya_chen and 3 others liked your post",
+                actors: [xMaya, xTheo, xJules, xRiley],
+                target: farmPost,
             ),
             NotificationItem(
                 id: "demo-bs-reply-1",
@@ -119,21 +102,43 @@ public enum DemoData {
                 accountId: viewerAccountId,
                 sourceId: "3305",
                 type: .reply,
-                timestamp: mins(14),
-                text: "@maya.co replied to your post",
-                actors: [bsMaya],
-                target: bsReplyTarget,
+                timestamp: mins(5),
+                text: "@jules.bsky.social replied to your post",
+                actors: [bsJules],
+                target: julesReply,
             ),
             NotificationItem(
-                id: "demo-ig-message-1",
+                id: "demo-fc-follow-1",
+                network: .farcaster,
+                accountId: viewerAccountId,
+                sourceId: "2202",
+                type: .follow,
+                timestamp: mins(9),
+                text: "@nova followed you",
+                actors: [fcNova],
+                target: nil,
+            ),
+            NotificationItem(
+                id: "demo-x-mention-1",
+                network: .x,
+                accountId: viewerAccountId,
+                sourceId: "2204",
+                type: .mention,
+                timestamp: mins(14),
+                text: "@theo_builds mentioned you in a post",
+                actors: [xTheo],
+                target: theoMention,
+            ),
+            NotificationItem(
+                id: "demo-ig-like-1",
                 network: .instagram,
                 accountId: viewerAccountId,
                 sourceId: "4401",
-                type: .message,
-                timestamp: mins(18),
-                text: "@amy_stories sent you a message",
+                type: .reaction,
+                timestamp: mins(19),
+                text: "amy.k liked your photo",
                 actors: [igAmy],
-                target: igMsgTarget,
+                target: trailPhoto,
             ),
             NotificationItem(
                 id: "demo-gh-star-1",
@@ -141,21 +146,10 @@ public enum DemoData {
                 accountId: viewerAccountId,
                 sourceId: "5501",
                 type: .reaction,
-                timestamp: mins(22),
-                text: "@kade.bsky.social starred your repository",
-                actors: [bsKade],
-                target: ghStarTarget,
-            ),
-            NotificationItem(
-                id: "demo-bs-like-1",
-                network: .bluesky,
-                accountId: viewerAccountId,
-                sourceId: "3306",
-                type: .reaction,
-                timestamp: mins(26),
-                text: "@kade.bsky.social liked your post",
-                actors: [bsKade],
-                target: bsLikeTarget,
+                timestamp: mins(24),
+                text: "kade-codes starred your repository",
+                actors: [ghKade],
+                target: repo,
             ),
             NotificationItem(
                 id: "demo-fc-reply-1",
@@ -163,20 +157,20 @@ public enum DemoData {
                 accountId: viewerAccountId,
                 sourceId: "2206",
                 type: .reply,
-                timestamp: mins(31),
-                text: "@riley.wtf replied to your cast",
+                timestamp: mins(33),
+                text: "@riley replied to your cast",
                 actors: [fcRiley],
-                target: fcReplyTarget,
+                target: rileyReply,
             ),
             NotificationItem(
-                id: "demo-x-follow-1",
-                network: .x,
+                id: "demo-bs-follow-1",
+                network: .bluesky,
                 accountId: viewerAccountId,
                 sourceId: "3308",
                 type: .follow,
-                timestamp: mins(36),
-                text: "@jules_dev followed you",
-                actors: [xJules],
+                timestamp: mins(41),
+                text: "@maya.bsky.social followed you",
+                actors: [bsMaya],
                 target: nil,
             ),
         ]
@@ -302,13 +296,18 @@ public enum DemoData {
         )
     }
 
+    private static func person(_ username: String, _ displayName: String, _ network: SocialNetwork, _ user: ChatUser) -> NotificationActor {
+        NotificationActor(
+            id: "\(network.rawValue)-\(username)",
+            network: network,
+            username: username,
+            displayName: displayName,
+            avatarURL: user.avatarURL,
+        )
+    }
+
     private static func avatar(_ seed: String?) -> URL? {
         guard let seed else { return nil }
-        // Female-presenting personas use randomuser.me women portraits (guaranteed female).
-        if ["jules_dev", "maya.co"].contains(seed) {
-            let n = seed.unicodeScalars.reduce(0) { $0 &+ Int($1.value) } % 60
-            return URL(string: "https://randomuser.me/api/portraits/women/\(n).jpg")
-        }
         // torres gets a distinct male portrait so it never collides with the pravatar faces.
         if seed == "torres" {
             let n = seed.unicodeScalars.reduce(0) { $0 &+ Int($1.value) } % 90
