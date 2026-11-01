@@ -241,6 +241,7 @@ Chat is one framework with an adapter per network; `docs/TECHNICAL_DESIGN.md` §
 - After making changes, install to the simulator with `stupid-app run --simulator` unless the user explicitly asks not to install or asks for a different target.
 - When asked to bump the build number, increment `CFBundleVersion` in `Info.plist` by 1.
 - Commit the build bump before archiving, so every uploaded build is a commit.
+- External TestFlight releases go to the beta group named `External` (id `ac67336d-4435-4ad7-9c6d-17ef19701dd1`, which has the testers and the public link): always pass `--group-name External` to `stupid-app release external-beta`. Its default, `External Testers`, is a different group with no testers; builds 167, 174 and 178 went there by mistake.
 - Every external TestFlight release is an annotated git tag `testflight/<build>` on the commit it was archived from, with the build's "What to Test" notes as its message. After `stupid-app release external-beta` succeeds, create it (`git tag -a testflight/<build> -m "External TestFlight build <build>"$'\n\n'"<notes>"`) and push it (`git push origin testflight/<build>`).
 - Draft "What to Test" notes from the commits since the last external release: `git fetch --tags`, then `git log --oneline $(git describe --tags --abbrev=0 --match 'testflight/*')..HEAD`. `git tag -n99 -l 'testflight/*'` lists past releases and their notes. Tags for builds 1, 50, 51, 55, 64, 72, 78, 79 and 116 are approximate: their build numbers were never committed, so they mark the last commit before upload.
 
