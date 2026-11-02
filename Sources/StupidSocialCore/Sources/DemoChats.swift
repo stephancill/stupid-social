@@ -54,8 +54,8 @@ enum DemoChats {
         }
     }
 
-    static func picture(_ seed: String, _ width: Int, _ height: Int) -> ChatEmbed {
-        .image(url: URL(string: "https://picsum.photos/seed/\(seed)/\(width)/\(height)")!, aspectRatio: Double(width) / Double(height), alt: nil, link: nil, opensViewer: true)
+    static func picture(_ id: Int, _ width: Int, _ height: Int) -> ChatEmbed {
+        .image(url: DemoData.photo(id, width, height), aspectRatio: Double(width) / Double(height), alt: nil, link: nil, opensViewer: true)
     }
 
     static let chats: [Chat] = [
@@ -63,42 +63,36 @@ enum DemoChats {
             id: "telegram-trip", network: .telegram, title: "Trip Photos 📸", isGroup: true,
             messages: { now in
                 [
-                    message("m1", maya, now, minutes: 240, "Landed! First batch from the coast", embeds: [
-                        picture("trip-coast", 1200, 900), picture("trip-cliffs", 900, 900), picture("trip-harbour", 900, 900),
+                    message("m1", maya, now, minutes: 240, "made it!! first batch from the coast", embeds: [
+                        picture(1050, 1200, 900), picture(1052, 900, 900), picture(211, 900, 900),
                     ]),
-                    message("m2", theo, now, minutes: 230, "", embeds: [
-                        .video(url: URL(string: "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4")!, posterURL: URL(string: "https://picsum.photos/seed/trip-flower/1280/720"), aspectRatio: 16 / 9, duration: "0:05", isGIF: false),
+                    message("m2", theo, now, minutes: 230, "the cliff path is covered in these", embeds: [
+                        .video(url: URL(string: "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4")!, posterURL: DemoData.photo(152, 1280, 720), aspectRatio: 16 / 9, duration: "0:05", isGIF: false),
                     ]),
                     message("m3", nova, now, minutes: 200, "", embeds: [
                         .video(url: URL(string: "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/360/Big_Buck_Bunny_360_10s_1MB.mp4")!, posterURL: nil, aspectRatio: 16 / 9, duration: nil, isGIF: true),
                     ]),
                     message("m4", maya, now, minutes: 120, "", embeds: [.voice(previewId: Self.voiceSample + "#maya", duration: 14, waveform: waveform(seed: 1))]),
                     message("m5", you, now, minutes: 110, "", embeds: [.voice(previewId: Self.voiceSample + "#you", duration: 6, waveform: waveform(seed: 4))]),
-                    message("m5b", theo, now, minutes: 90, "Booked this for Saturday night https://stays.example.com/cabin", embeds: [
-                        .card(title: "Cliffside cabin with ocean views", subtitle: "Entire cabin · 4 guests · 2 bedrooms · wood stove and a deck over the water", systemImage: "link", imageURL: URL(string: "https://picsum.photos/seed/trip-cabin/400/400"), link: URL(string: "https://stays.example.com/cabin")),
+                    message("m5b", theo, now, minutes: 90, "booked the cabin for saturday night https://seacliffcabins.com/the-loft", embeds: [
+                        .card(title: "The Loft · Seacliff Cabins", subtitle: "Sleeps 4 · wood stove · deck over the water", systemImage: "link", imageURL: DemoData.photo(424, 400, 400), link: URL(string: "https://seacliffcabins.com/the-loft")),
                     ]),
-                    message("m5c", you, now, minutes: 80, "And the route guide https://climbing.example.com/north-face", embeds: [
-                        .card(title: "North Face routes", subtitle: "Grades, approach and gear for every route on the wall", systemImage: "link", imageURL: nil, link: URL(string: "https://climbing.example.com/north-face")),
+                    message("m5c", you, now, minutes: 80, "and the route for sunday https://trailguide.io/cliff-path-loop", embeds: [
+                        .card(title: "Cliff path loop", subtitle: "11.4 km · 3h 40m · moderate, with a swim stop halfway", systemImage: "link", imageURL: nil, link: URL(string: "https://trailguide.io/cliff-path-loop")),
                     ]),
                     message("m6", theo, now, minutes: 60, "", embeds: [
-                        .file(url: URL(string: "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf")!, filename: "Itinerary.pdf", subtitle: "13 KB", thumbnailURL: nil),
+                        .file(url: URL(string: "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf")!, filename: "packing list.pdf", subtitle: "13 KB", thumbnailURL: nil),
                     ]),
                     message("m7", nova, now, minutes: 45, "", embeds: [
-                        .audio(previewId: Self.voiceSample + "#mix", title: "Road Trip Mix", subtitle: "SoundHelix · 6:12", detail: nil, imageURL: nil, link: nil),
+                        .audio(previewId: Self.voiceSample + "#mix", title: "roadtrip mix v2", subtitle: "MP3 · 6:12", detail: nil, imageURL: nil, link: nil),
                     ]),
-                    ChatMessage(
-                        id: "m8", sender: maya, timestamp: now.addingTimeInterval(-60 * 20), text: "Best trip ever 🚀 see you all soon 🧗",
-                        isOwn: false,
-                        customEmojis: [
-                            ChatMessageCustomEmoji(range: NSRange(location: 15, length: 2), key: ":stupid-social:"),
-                            ChatMessageCustomEmoji(range: NSRange(location: 35, length: 2), key: ":apron:"),
-                        ],
-                    ),
+                    message("m8", maya, now, minutes: 20, "same time next year? 🧗"),
                 ]
             },
             reactions: [
                 "m1": [ChatReaction(emoji: "😍", count: 3, includesYou: true)],
-                "m8": [ChatReaction(emoji: ":apron:", count: 2, includesYou: false)],
+                "m7": [ChatReaction(emoji: "🔥", count: 2, includesYou: false)],
+                "m8": [ChatReaction(emoji: "🙋", count: 4, includesYou: true)],
             ],
         ),
         Chat(
@@ -106,19 +100,19 @@ enum DemoChats {
             avatarURL: URL(string: "https://web.apron.chat/icon-512.png"), unreadCount: 3, isGroup: true,
             messages: { now in
                 [
-                    message("a1", nova, now, minutes: 42, "Anyone tried the new custom emoji yet? :apron:"),
-                    message("a2", theo, now, minutes: 40, "Yes! :stupid-social: works in reactions too"),
-                    message("a3", you, now, minutes: 31, "Shipped # autocomplete for rooms today, try it in the composer"),
-                    message("a4", nova, now, minutes: 12, "Linking the thread from #design so we don't lose it", embeds: [
-                        .message(title: "Theo in #design", text: "What if every chat looked the same no matter which network it came from?", link: nil),
+                    message("a1", nova, now, minutes: 42, "ok the new overhang wall at the gym is SO good"),
+                    message("a2", theo, now, minutes: 40, "I fell off the purple one 11 times 😭"),
+                    message("a3", you, now, minutes: 31, "going tomorrow after work if anyone wants to join"),
+                    message("a4", nova, now, minutes: 12, "linking this from #routes so it doesn't get buried", embeds: [
+                        .message(title: "Theo in #routes", text: "purple problem: start low, left heel hook, then just trust the sloper", link: nil),
                     ]),
-                    message("a5", theo, now, minutes: 9, "One inbox for everything. No feed. That's the dream", replyTo: "a4"),
-                    message("a6", maya, now, minutes: 2, "Telegram, X and Bluesky DMs all in one list now 🤯"),
+                    message("a5", theo, now, minutes: 9, "\"just trust the sloper\" is my new life motto", replyTo: "a4"),
+                    message("a6", maya, now, minutes: 2, "save me a spot, I'll bring snacks 🍪"),
                 ]
             },
             reactions: [
                 "a1": [ChatReaction(emoji: ":apron:", count: 4, includesYou: true), ChatReaction(emoji: "🔥", count: 2, includesYou: false)],
-                "a3": [ChatReaction(emoji: "🎉", count: 5, includesYou: false), ChatReaction(emoji: ":stupid-social:", count: 3, includesYou: false)],
+                "a3": [ChatReaction(emoji: "🙋", count: 3, includesYou: false), ChatReaction(emoji: ":stupid-social:", count: 2, includesYou: false)],
                 "a5": [ChatReaction(emoji: "💯", count: 2, includesYou: true)],
             ],
         ),
@@ -126,10 +120,10 @@ enum DemoChats {
             id: "telegram-maya", network: .telegram, title: "Maya Chen", avatarURL: maya.avatarURL, unreadCount: 2, presence: .online,
             messages: { now in
                 [
-                    message("t1", maya, now, minutes: 64, "are you coming to the climbing gym saturday?"),
-                    message("t2", you, now, minutes: 60, "yes! 10am?"),
-                    message("t3", maya, now, minutes: 5, "perfect, I'll bring the spare shoes"),
-                    message("t4", maya, now, minutes: 4, "", embeds: [.image(url: URL(string: "https://picsum.photos/seed/climbwall/1200/900")!, aspectRatio: 4 / 3, alt: nil, link: nil, opensViewer: true)]),
+                    message("t1", maya, now, minutes: 64, "are you still coming saturday?"),
+                    message("t2", you, now, minutes: 60, "yes!! what time"),
+                    message("t3", maya, now, minutes: 5, "10ish. this is where we're going 😍"),
+                    message("t4", maya, now, minutes: 4, "", embeds: [picture(1015, 1200, 900)]),
                 ]
             },
             reactions: ["t2": [ChatReaction(emoji: "👍", count: 1, includesYou: false)]],
@@ -138,8 +132,8 @@ enum DemoChats {
             id: "x-jules", network: .x, title: "Jules", avatarURL: jules.avatarURL, unreadCount: 1,
             messages: { now in
                 [
-                    message("x1", you, now, minutes: 30, "did you see X Chat is encrypted end to end now?"),
-                    message("x2", jules, now, minutes: 18, "and it works outside the X app 👀"),
+                    message("x1", you, now, minutes: 30, "did you end up getting the film camera?"),
+                    message("x2", jules, now, minutes: 18, "I did 👀 first roll gets developed this week"),
                 ]
             },
         ),
@@ -147,9 +141,9 @@ enum DemoChats {
             id: "instagram-amy", network: .instagram, title: "Amy", avatarURL: amy.avatarURL,
             messages: { now in
                 [
-                    message("i1", amy, now, minutes: 95, "", embeds: [.image(url: URL(string: "https://picsum.photos/seed/sunset-coast/1000/1250")!, aspectRatio: 0.8, alt: nil, link: nil, opensViewer: true)]),
-                    message("i2", amy, now, minutes: 94, "sunset from last night"),
-                    message("i3", you, now, minutes: 41, "wow, where is this?"),
+                    message("i1", amy, now, minutes: 95, "", embeds: [picture(900, 1000, 1250)]),
+                    message("i2", amy, now, minutes: 94, "sunset from the pier last night"),
+                    message("i3", you, now, minutes: 41, "ok I need to go there. where is this??"),
                 ]
             },
             reactions: ["i1": [ChatReaction(emoji: "😍", count: 1, includesYou: true)]],
@@ -159,7 +153,7 @@ enum DemoChats {
             messages: { now in
                 [
                     message("s1", riley, now, minutes: 180, "", embeds: [
-                        .audio(previewId: "demo", title: "Midnight Drive", subtitle: "The Night Owls", detail: "3:42", imageURL: URL(string: "https://picsum.photos/seed/album-night/400/400"), link: nil),
+                        .audio(previewId: "demo", title: "Midnight Drive", subtitle: "The Night Owls", detail: "3:42", imageURL: DemoData.photo(1082, 400, 400), link: nil),
                     ]),
                     message("s2", you, now, minutes: 150, "on repeat all morning"),
                 ]
@@ -169,8 +163,8 @@ enum DemoChats {
             id: "bluesky-kade", network: .bluesky, title: "Kade", avatarURL: kade.avatarURL,
             messages: { now in
                 [
-                    message("b1", kade, now, minutes: 300, "your app finally got me to delete the feed apps"),
-                    message("b2", you, now, minutes: 290, "that's the whole idea 😄"),
+                    message("b1", kade, now, minutes: 300, "pushed the fix for the map tiles, can you try it on your phone?"),
+                    message("b2", you, now, minutes: 290, "works now, and so fast 😄"),
                 ]
             },
             reactions: ["b2": [ChatReaction(emoji: "❤️", count: 1, includesYou: false)]],
@@ -179,7 +173,7 @@ enum DemoChats {
             id: "telegram-climbing", network: .telegram, title: "Weekend Climbing 🧗", unreadCount: 14, isGroup: true, isMuted: true,
             messages: { now in
                 [
-                    message("g1", theo, now, minutes: 420, "Who's in for the crag on Sunday?"),
+                    message("g1", theo, now, minutes: 420, "who's in for the crag on sunday?"),
                     message("g2", maya, now, minutes: 400, "me + 2 friends"),
                 ]
             },

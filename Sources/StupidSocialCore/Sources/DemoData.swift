@@ -34,7 +34,7 @@ public enum DemoData {
         let samAvatar = URL(string: "https://randomuser.me/api/portraits/men/22.jpg")
         let you = NotificationActor(id: "x-sam", network: .x, username: "sam", displayName: "Sam", avatarURL: samAvatar)
         let xMaya = person("maya_chen", "Maya Chen", .x, DemoChats.maya)
-        let xTheo = person("theo_builds", "Theo", .x, DemoChats.theo)
+        let xTheo = person("theo_outside", "Theo", .x, DemoChats.theo)
         let xJules = person("julesmakes", "Jules", .x, DemoChats.jules)
         let xRiley = person("rileyw", "Riley", .x, DemoChats.riley)
         let bsJules = person("jules.bsky.social", "Jules", .bluesky, DemoChats.jules)
@@ -42,44 +42,44 @@ public enum DemoData {
         let fcNova = person("nova", "Nova", .farcaster, DemoChats.nova)
         let fcRiley = person("riley", "Riley", .farcaster, DemoChats.riley)
         let igAmy = person("amy.k", "Amy", .instagram, DemoChats.amy)
-        let ghKade = person("kade-codes", "Kade", .github, DemoChats.kade)
+        let ghKade = person("kadeb", "Kade", .github, DemoChats.kade)
 
         let farmPost = NotificationTarget(
             id: "1101",
-            text: "Last light on the farm tonight 🌾",
+            text: "last light at the farm tonight 🌾",
             url: URL(string: "https://x.com/sam/status/1101"),
-            imageURL: media("golden-hour"),
+            imageURL: photo(110, 1200, 1000),
             author: you,
             postedAt: mins(40),
             likeCount: 24,
         )
         let julesReply = NotificationTarget(
             id: "3305",
-            text: "Okay this settles it, we're doing the coast road in May 🚗",
+            text: "ok this settles it, we're doing the coast road in may 🚗",
             url: nil,
             author: bsJules,
             postedAt: mins(5),
         )
         let theoMention = NotificationTarget(
             id: "2204",
-            text: "Huge thanks to @sam for the trip planning template, saved us hours",
-            url: URL(string: "https://x.com/theo_builds/status/2204"),
+            text: "@sam you were right about the early start, we had the whole crag to ourselves",
+            url: URL(string: "https://x.com/theo_outside/status/2204"),
             author: xTheo,
             postedAt: mins(14),
             likeCount: 8,
         )
         let trailPhoto = NotificationTarget(
             id: "4401",
-            text: "Sunday trail 🥾",
+            text: "sunday trail 🥾",
             url: nil,
-            imageURL: media("cabin-view"),
+            imageURL: photo(17, 1200, 1000),
             author: NotificationActor(id: "instagram-sam", network: .instagram, username: "sam", displayName: "Sam", avatarURL: samAvatar),
             postedAt: mins(90),
         )
         let repo = NotificationTarget(id: "5501", text: "sam/trailmap", url: URL(string: "https://github.com/sam/trailmap")!)
         let rileyReply = NotificationTarget(
             id: "2206",
-            text: "Those colours 🔥 what were you shooting on?",
+            text: "those colours 🔥 what were you shooting on?",
             url: nil,
             author: fcRiley,
             postedAt: mins(33),
@@ -126,7 +126,7 @@ public enum DemoData {
                 sourceId: "2204",
                 type: .mention,
                 timestamp: mins(14),
-                text: "@theo_builds mentioned you in a post",
+                text: "@theo_outside mentioned you in a post",
                 actors: [xTheo],
                 target: theoMention,
             ),
@@ -148,7 +148,7 @@ public enum DemoData {
                 sourceId: "5501",
                 type: .reaction,
                 timestamp: mins(24),
-                text: "kade-codes starred your repository",
+                text: "kadeb starred your repository",
                 actors: [ghKade],
                 target: repo,
             ),
@@ -192,17 +192,17 @@ public enum DemoData {
             slides: [
                 InstagramStorySlide(
                     id: "demo-ig-alix-1",
-                    imageURL: placeholderImage("alix-coast"),
+                    imageURL: photo(1061, 1080, 1920),
                     videoURL: nil,
                     isVideo: false,
                     takenAt: now.addingTimeInterval(-60 * 6).timeIntervalSince1970,
                 ),
                 InstagramStorySlide(
                     id: "demo-ig-alix-2",
-                    imageURL: placeholderImage("alix-sunset"),
+                    imageURL: photo(896, 1080, 1920),
                     videoURL: nil,
                     isVideo: false,
-                    music: InstagramStoryMusic(title: "Sunshine", artist: "Luna", artworkURL: placeholderImage("sunshine-art")),
+                    music: InstagramStoryMusic(title: "Sunshine", artist: "Luna", artworkURL: photo(1079, 400, 400)),
                     takenAt: now.addingTimeInterval(-60 * 4).timeIntervalSince1970,
                 ),
             ],
@@ -213,7 +213,7 @@ public enum DemoData {
             slides: [
                 InstagramStorySlide(
                     id: "demo-ig-miles-1",
-                    imageURL: placeholderImage("miles-board"),
+                    imageURL: photo(1060, 1080, 1920),
                     videoURL: nil,
                     isVideo: false,
                     takenAt: now.addingTimeInterval(-60 * 12).timeIntervalSince1970,
@@ -227,13 +227,13 @@ public enum DemoData {
             userName: "Nico",
             userURI: "spotify:demo:nico",
             userAvatarURL: avatar(spotifyNico.username),
-            trackName: "Midnight City",
-            artistName: "Riddle",
-            albumName: "Neon Drift",
+            trackName: "Slow Tide",
+            artistName: "Harbour Lights",
+            albumName: "Low Season",
             contextName: nil,
             trackURI: "spotify:track:demo1",
             trackURL: URL(string: "https://open.spotify.com/track/demo"),
-            imageURL: placeholderImage("neon-drift"),
+            imageURL: photo(1082, 640, 640),
             musicAnimation: MusicAnimationMetadata(tempo: 114, tempoConfidence: 0.8, loudness: -7.2, mode: 1),
         )
 
@@ -245,14 +245,14 @@ public enum DemoData {
                     kind: .starredRepository,
                     timestamp: now.addingTimeInterval(-60 * 5),
                     actor: ghTorres,
-                    targetId: "swiftui-gallery",
-                    targetName: "demo/swiftui-gallery",
-                    targetURL: URL(string: "https://github.com/demo/swiftui-gallery")!,
+                    targetId: "offline-tiles",
+                    targetName: "lunafield/offline-tiles",
+                    targetURL: URL(string: "https://github.com/lunafield/offline-tiles")!,
                     targetAvatarURL: avatar(ghTorres.username),
-                    summary: "starred demo/swiftui-gallery",
-                    repoDescription: "A gallery of modern SwiftUI patterns.",
+                    summary: "starred lunafield/offline-tiles",
+                    repoDescription: "Vector map tiles that keep working without signal.",
                     repoLanguage: "Swift",
-                    repoStars: "12.4k",
+                    repoStars: "2.1k",
                     repoLanguageColor: "#F05138",
                 ),
             ],
@@ -271,7 +271,7 @@ public enum DemoData {
                     targetAvatarURL: avatar(ghPearl.username),
                     summary: "followed you",
                     followUserDisplayName: "Felix",
-                    followUserBio: "Indie maker. Privacy first.",
+                    followUserBio: "makes small apps. climbs on weekends.",
                 ),
             ],
         )
@@ -321,11 +321,8 @@ public enum DemoData {
         return URL(string: "https://i.pravatar.cc/120?img=\(index)")
     }
 
-    private static func placeholderImage(_ seed: String) -> URL {
-        URL(string: "https://picsum.photos/seed/\(seed)/1080/1920")!
-    }
-
-    private static func media(_ seed: String) -> URL? {
-        URL(string: "https://picsum.photos/seed/\(seed)/1200/1000")
+    /// A picsum photo picked by id to match what the post or story says.
+    static func photo(_ id: Int, _ width: Int, _ height: Int) -> URL {
+        URL(string: "https://picsum.photos/id/\(id)/\(width)/\(height)")!
     }
 }
