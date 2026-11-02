@@ -384,7 +384,7 @@ class XWebClient:
         except json.JSONDecodeError as exc:
             raise SystemExit(f"Expected JSON for friendships/{path}, got {len(text)} bytes: {exc}") from exc
 
-    def notifications(self, count: int = 40) -> dict[str, Any]:
+    def notifications(self, count: int = 40, raw: bool = False) -> dict[str, Any]:
         variables = {"timeline_type": "All", "count": count}
         query = urllib.parse.urlencode(
             {
@@ -396,6 +396,8 @@ class XWebClient:
             "GET",
             BASE_URL + f"/i/api/graphql/{NOTIFICATIONS_TIMELINE_QUERY_ID}/NotificationsTimeline?{query}",
         )
+        if raw:
+            return response
         summary = summarize_notifications(response)
         summary["top_cursor"] = notification_top_cursor(response)
         return summary
@@ -771,6 +773,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("bootstrap", help="Print credential presence without making an X API request.")
     notifications = subparsers.add_parser("notifications", help="Fetch the X notifications feed and summarize grouped actor order.")
     notifications.add_argument("--count", type=int, default=40, help="Number of notifications to fetch (default 40).")
+    notifications.add_argument("--raw", action="store_true", help="Return the full NotificationsTimeline response instead of the grouped summary.")
     load_notifications = subparsers.add_parser(
         "load-notifications",
         help="Fetch X notifications, advance the server last-seen cursor, and verify the unread count.",
@@ -824,7 +827,7 @@ def main() -> None:
     if args.command == "bootstrap":
         result = client.bootstrap()
     elif args.command == "notifications":
-        result = client.notifications(count=args.count)
+        result = client.notifications(count=args.count, raw=args.raw)
     elif args.command == "load-notifications":
         result = client.load_notifications(count=args.count)
     elif args.command == "unread-count":
