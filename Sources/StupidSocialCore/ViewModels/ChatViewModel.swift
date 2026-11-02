@@ -842,6 +842,22 @@ public class ChatViewModel: ObservableObject {
         composeMessages()
     }
 
+    // MARK: Deleting
+
+    /// Whether the network lets the user delete the message; networks that delete override this.
+    public func networkAllowsDeleting(_: ChatMessage) -> Bool {
+        false
+    }
+
+    /// Whether the Delete action is offered for the message.
+    public func canDelete(_ message: ChatMessage) -> Bool {
+        message.isOwn && message.isUserMessage && !message.isSending && !message.isDeleted && !isReadOnly
+            && state == .connected && pendingEdits[message.id] == nil && networkAllowsDeleting(message)
+    }
+
+    /// Deletes the message for everyone once the network confirms it.
+    public func delete(_: ChatMessage) async {}
+
     /// Sets reactions before the messages they belong to, so new bubbles render with their reactions instead of
     /// growing a moment later.
     func publish(history newHistory: [ChatMessage], reactions newReactions: [String: [ChatReaction]]) {

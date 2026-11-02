@@ -402,6 +402,40 @@ final class AdapterChatViewModelTests: XCTestCase {
         chat.disconnect()
     }
 
+    func testDeletingRemovesTheUsersMessage() async {
+        let adapter = FakeDeletingAdapter()
+        adapter.pages = [[message(1), message(2, own: true)]]
+        let chat = makeChat(adapter)
+        await chat.connect()
+        XCTAssertFalse(chat.canDelete(message(1)), "someone else's message")
+        XCTAssertTrue(chat.canDelete(message(2, own: true)))
+        await chat.delete(message(2, own: true))
+        XCTAssertEqual(adapter.deleted, ["2"])
+        XCTAssertEqual(chat.messages.map(\.id), ["1"])
+        chat.disconnect()
+    }
+
+    func testAFailedDeleteKeepsTheMessage() async {
+        let adapter = FakeDeletingAdapter()
+        adapter.pages = [[message(2, own: true)]]
+        adapter.deleteError = URLError(.notConnectedToInternet)
+        let chat = makeChat(adapter)
+        await chat.connect()
+        await chat.delete(message(2, own: true))
+        XCTAssertEqual(chat.messages.map(\.id), ["2"])
+        XCTAssertNotNil(chat.errorMessage)
+        chat.disconnect()
+    }
+
+    func testChatsWithoutDeletingOfferNone() async {
+        let adapter = FakeAdapter()
+        adapter.pages = [[message(2, own: true)]]
+        let chat = makeChat(adapter)
+        await chat.connect()
+        XCTAssertFalse(chat.canDelete(message(2, own: true)))
+        chat.disconnect()
+    }
+
     private func makeChat(_ adapter: FakeAdapter) -> AdapterChatViewModel<FakeAdapter> {
         let suite = "AdapterChatViewModelTests-\(UUID().uuidString)"
         return AdapterChatViewModel(
@@ -573,6 +607,24 @@ private final class FakeEditingAdapter: FakeAdapter, ChatEditing {
         edits.append((messageId, text))
         guard appliesEdits else { return }
         replace(with: messages.map { $0.id == messageId ? ChatMessage(id: $0.id, sender: $0.sender, timestamp: $0.timestamp, text: text, isOwn: true, isEdited: true) : $0 })
+    }
+}
+
+@MainActor
+private final class FakeDeletingAdapter: FakeAdapter, ChatDeleting {
+    var deleteError: Error?
+    private(set) var deleted: [String] = []
+
+    func canDelete(_ message: ChatMessage) -> Bool {
+        message.isOwn
+    }
+
+    func delete(_ messageId: String) async throws {
+        if let deleteError {
+            throw deleteError
+        }
+        deleted.append(messageId)
+        replace(with: messages.filter { $0.id != messageId })
     }
 }
 

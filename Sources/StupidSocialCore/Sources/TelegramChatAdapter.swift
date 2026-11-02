@@ -8,7 +8,7 @@ import Foundation
 /// custom emoji in text and reactions draw as their images, and voice messages play in the chat. The user's
 /// messages show as seen once Telegram's outbox read cursor passes them.
 @MainActor
-public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, ChatUnseenReactions, ChatReadReceipts, ChatLiveUpdating, ChatReferenceResolving, ChatMentioning, ChatTyping, ChatCustomEmojis, ChatAudioPreviewing, ChatReactionChoices {
+public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, ChatReactionSending, ChatUnseenReactions, ChatReadReceipts, ChatLiveUpdating, ChatReferenceResolving, ChatMentioning, ChatTyping, ChatCustomEmojis, ChatAudioPreviewing, ChatReactionChoices {
     public let network = SocialNetwork.telegram
     public let canReply = true
     public let acceptsAttachments = true
@@ -56,6 +56,7 @@ public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatReactionSe
     private var statusObserver: UUID?
     private var reactionObserver: UUID?
     private var readOutboxObserver: UUID?
+    private var deleteObserver: UUID?
     private var typingObserver: UUID?
     /// Who is typing, in the order they started, and when each indication lapses.
     private var typingUsers: [(userId: Int64, expires: Date)] = []
@@ -148,6 +149,7 @@ public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatReactionSe
 
     /// The dialog (title, member count, read cursor, status) and the newest page together.
     public func loadNewest() async throws {
+        let loadedBefore = Set(loaded.keys)
         async let dialog = client.dialogState(peer: peer)
         async let page = client.history(peer: peer)
         let (state, history) = try await (dialog, page)
@@ -160,7 +162,7 @@ public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatReactionSe
             hasLoadedHistory = true
             hasEarlierMessages = history.hasMore
         }
-        merge(history)
+        merge(history, newestReplacing: loadedBefore)
         if reactionChoices == nil {
             reactionChoices = try? await client.reactionChoices(peer: peer, isSavedMessages: isSavedMessages)
         }
@@ -190,7 +192,7 @@ public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatReactionSe
         readOutboxMaxId = max(readOutboxMaxId, dialog.readOutboxMaxId)
         isSavedMessages = dialog.isSavedMessages
         userStatus = dialog.userStatus
-        info.subtitle = dialog.memberCount.map { "\($0) members" } ?? userStatus?.text ?? "Telegram"
+        info.subtitle = dialog.memberCount.map { "\($0) members" } ?? (dialog.isBot ? "Bot" : userStatus?.text ?? "Telegram")
     }
 
     public func startFollowing() async {
@@ -204,6 +206,9 @@ public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatReactionSe
         readOutboxObserver = await client.addReadOutboxObserver(peer: peer) { [weak self] maxId in
             Task { @MainActor in self?.apply(readOutboxMaxId: maxId) }
         }
+        deleteObserver = await client.addDeleteObserver(peer: peer) { [weak self] ids in
+            Task { @MainActor in self?.remove(ids) }
+        }
         typingObserver = await client.addTypingObserver(peer: peer) { [weak self] userId, isTyping in
             Task { @MainActor in self?.setTyping(userId: userId, isTyping: isTyping) }
         }
@@ -216,13 +221,14 @@ public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatReactionSe
 
     public func stopFollowing() {
         refreshTask?.cancel()
-        for id in [observer, statusObserver, reactionObserver, readOutboxObserver, typingObserver].compactMap(\.self) {
+        for id in [observer, statusObserver, reactionObserver, readOutboxObserver, deleteObserver, typingObserver].compactMap(\.self) {
             Task { [client] in await client.removeUpdateObserver(id) }
         }
         observer = nil
         statusObserver = nil
         reactionObserver = nil
         readOutboxObserver = nil
+        deleteObserver = nil
         typingObserver = nil
         typingUsers = []
         if updateTypingNames() {
@@ -247,9 +253,10 @@ public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatReactionSe
     }
 
     private func refreshNewest() async {
+        let loadedBefore = Set(loaded.keys)
         guard let page = try? await client.history(peer: peer, limit: 30) else { return }
         await resolveReferences(in: page)
-        merge(page)
+        merge(page, newestReplacing: loadedBefore)
     }
 
     public func loadEarlier() async throws {
@@ -352,6 +359,26 @@ public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatReactionSe
         loaded[id] = edited
         publish()
         scheduleRefresh()
+    }
+
+    // MARK: Deleting
+
+    /// The user's own messages, which Telegram lets them delete for everyone at any time.
+    public func canDelete(_ message: ChatMessage) -> Bool {
+        guard let id = Int32(message.id), let original = loaded[id] else { return false }
+        return original.isOutgoing && !original.isService
+    }
+
+    /// An album shows as one message, so its other messages go with it. Removed at once; Telegram's
+    /// `updateDeleteMessages` refresh follows.
+    public func delete(_ messageId: String) async throws {
+        guard let id = Int32(messageId), loaded[id] != nil else { return }
+        let ids = [id] + albumIds.filter { $0.value == id }.map(\.key)
+        try await client.delete(peer: peer, messageIds: ids)
+        for id in ids {
+            loaded[id] = nil
+        }
+        publish()
     }
 
     // MARK: Mentions
@@ -565,6 +592,28 @@ public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatReactionSe
     }
 
     // MARK: Display
+
+    /// Drops messages deleted on Telegram, from the update that says so, wherever they were deleted.
+    private func remove(_ ids: [Int32]) {
+        let gone = ids.filter { loaded[$0] != nil }
+        guard !gone.isEmpty else { return }
+        for id in gone {
+            loaded[id] = nil
+        }
+        publish()
+    }
+
+    /// A page of the newest messages holds every message from its oldest on (all of them without more), so a
+    /// message loaded before it was fetched that falls in that range and isn't in it was deleted, such as on
+    /// another device or while the chat was closed. Messages loaded since, such as one just sent, stay.
+    private func merge(_ page: TelegramHistoryPage, newestReplacing loadedBefore: Set<Int32>) {
+        let inPage = Set(page.messages.map(\.id))
+        let oldest = page.hasMore ? page.messages.map(\.id).min() ?? .max : .min
+        for id in loadedBefore where id >= oldest && !inPage.contains(id) {
+            loaded[id] = nil
+        }
+        merge(page)
+    }
 
     private func merge(_ page: TelegramHistoryPage) {
         // A new message from someone typing ends their indication.

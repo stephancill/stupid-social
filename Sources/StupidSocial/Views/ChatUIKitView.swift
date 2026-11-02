@@ -1848,6 +1848,11 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
             })
             menu.items.append(.submenu(title: "Remind Me", image: UIImage(systemName: "alarm"), children: delays))
         }
+        if viewModel.canDelete(message) {
+            menu.items.append(.action(ChatMessageMenu.Action(title: "Delete", image: UIImage(systemName: "trash"), isDestructive: true) { [weak self] in
+                self?.confirmDelete(id)
+            }))
+        }
         return menu.isEmpty ? nil : menu
     }
 
@@ -2263,6 +2268,16 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         guard let message = messagesById[id] else { return }
         viewModel.startEditing(message)
         textView.becomeFirstResponder()
+    }
+
+    private func confirmDelete(_ id: String) {
+        let alert = UIAlertController(title: "Delete Message?", message: "This deletes the message for everyone in the chat.", preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Delete Message", style: .destructive) { [weak self] _ in
+            guard let self, let message = messagesById[id] else { return }
+            Task { await self.viewModel.delete(message) }
+        })
+        present(alert, animated: true)
     }
 
     /// Reconfigures messages whose reminder changed, and those with one, whose "Due in" moves on.

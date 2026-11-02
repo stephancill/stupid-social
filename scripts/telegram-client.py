@@ -1174,6 +1174,9 @@ def main():
     edit.add_argument("--peer", required=True)
     edit.add_argument("--msg-id", type=int, required=True)
     edit.add_argument("--text", required=True)
+    delete = sub.add_parser("delete", help="messages.deleteMessages (revoke) or channels.deleteMessages: delete your messages for everyone")
+    delete.add_argument("--peer", required=True)
+    delete.add_argument("--msg-id", type=int, action="append", required=True)
     resolve = sub.add_parser("resolve", help="contacts.resolveUsername: the user or chat an @username names")
     resolve.add_argument("--username", required=True)
     profile = sub.add_parser("profile", help="users.getFullUser: a user's profile, bio and status")
@@ -1433,6 +1436,15 @@ def main():
             method["entities"] = [{"_": "inputMessageEntityMentionName", "offset": offset, "length": length, "user_id": user}]
         result = client.call(method)
         print(json.dumps(to_json(result), indent=1, ensure_ascii=False)[:2000])
+    elif args.command == "delete":
+        peer = client.input_peer(args.peer)
+        if peer.get("_") == "inputPeerChannel":
+            channel = {"_": "inputChannel", "channel_id": peer["channel_id"], "access_hash": peer["access_hash"]}
+            result = client.call({"_": "channels.deleteMessages", "channel": channel, "id": args.msg_id})
+        else:
+            result = client.call({"_": "messages.deleteMessages", "revoke": True, "id": args.msg_id})
+        # messages.affectedMessages: pts and pts_count, the number of messages deleted.
+        print(json.dumps({"result": result.get("_"), "pts_count": result.get("pts_count")}, indent=1))
     elif args.command == "edit":
         result = client.call({"_": "messages.editMessage", "peer": client.input_peer(args.peer), "id": args.msg_id, "message": args.text})
         # The edited message comes back in an updateEditMessage (updateEditChannelMessage in supergroups), with edit_date.

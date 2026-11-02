@@ -33,7 +33,7 @@ public struct ChatOutgoing {
 /// owns the screen's state and the behavior every chat shares: connecting, polling, paging, unread counting and
 /// the divider, read-marker debouncing, snapshots, drafts and optimistic sending.
 ///
-/// Optional abilities are separate protocols (editing, reactions, unseen reactions, read receipts, audio previews, live updates,
+/// Optional abilities are separate protocols (editing, deleting, reactions, unseen reactions, read receipts, audio previews, live updates,
 /// quoted messages, windows of older history, typing, mentions, custom emoji, commands, links), so a chat offers an action exactly when its adapter
 /// implements it.
 @MainActor
@@ -86,6 +86,15 @@ public protocol ChatEditing: ChatAdapter {
     func editableText(of message: ChatMessage) -> String?
     /// Saves the new text. When it returns, `messages` shows the edit or the network's copy of it.
     func edit(_ messageId: String, text: String) async throws
+}
+
+/// Deleting the user's sent messages for everyone in the chat.
+@MainActor
+public protocol ChatDeleting: ChatAdapter {
+    /// Whether the network lets the user delete this message.
+    func canDelete(_ message: ChatMessage) -> Bool
+    /// When it returns, `messages` no longer shows the message, or shows it as deleted.
+    func delete(_ messageId: String) async throws
 }
 
 /// Chats the user may only be allowed to read, such as a guest on a server that lets guests only read.
@@ -443,6 +452,23 @@ public final class AdapterChatViewModel<Adapter: ChatAdapter>: ChatViewModel {
 
     override public func editableText(of message: ChatMessage) -> String? {
         (adapter as? any ChatEditing)?.editableText(of: message)
+    }
+
+    override public func networkAllowsDeleting(_ message: ChatMessage) -> Bool {
+        (adapter as? any ChatDeleting)?.canDelete(message) ?? false
+    }
+
+    override public func delete(_ message: ChatMessage) async {
+        guard canDelete(message), let deleting = adapter as? any ChatDeleting else { return }
+        errorMessage = nil
+        do {
+            try await deleting.delete(message.id)
+            AppMetrics.messageDeleted(network: network, error: nil)
+        } catch {
+            AppMetrics.messageDeleted(network: network, error: error)
+            errorMessage = error.localizedDescription
+        }
+        adapterDidChange()
     }
 
     override public func mentionSuggestions(for query: String) -> [ChatUser] {

@@ -10,6 +10,7 @@ struct ChatMessageMenu {
         var title: String
         var image: UIImage?
         var isOn = false
+        var isDestructive = false
         /// More Reactions: on a lifted message it opens `reactionGrid` in place rather than running `handler`.
         var expandsReactions = false
         var handler: @MainActor () -> Void
@@ -54,7 +55,7 @@ struct ChatMessageMenu {
     }
 
     private static func uiAction(_ action: Action) -> UIAction {
-        UIAction(title: action.title, image: action.image, state: action.isOn ? .on : .off) { _ in action.handler() }
+        UIAction(title: action.title, image: action.image, attributes: action.isDestructive ? .destructive : [], state: action.isOn ? .on : .off) { _ in action.handler() }
     }
 }
 
@@ -400,7 +401,7 @@ final class ChatMessageFocusController: UIViewController, UITextViewDelegate {
             let image = image.map { Self.centered($0, width: iconWidth) }
             switch item {
             case let .action(action):
-                return row(title: action.title, image: image, primaryAction: UIAction { [weak self] _ in self?.perform(action) })
+                return row(title: action.title, image: image, isDestructive: action.isDestructive, primaryAction: UIAction { [weak self] _ in self?.perform(action) })
             case let .submenu(title, _, children):
                 let button = row(title: title, image: image, chevron: true)
                 button.menu = UIMenu(children: children.map { child in
@@ -426,12 +427,12 @@ final class ChatMessageFocusController: UIViewController, UITextViewDelegate {
         }.withRenderingMode(.alwaysTemplate)
     }
 
-    private func row(title: String, image: UIImage?, chevron: Bool = false, primaryAction: UIAction? = nil) -> UIButton {
+    private func row(title: String, image: UIImage?, chevron: Bool = false, isDestructive: Bool = false, primaryAction: UIAction? = nil) -> UIButton {
         var configuration = UIButton.Configuration.plain()
         configuration.title = title
         configuration.image = image
         configuration.imagePadding = 12
-        configuration.baseForegroundColor = .label
+        configuration.baseForegroundColor = isDestructive ? .systemRed : .label
         configuration.contentInsets = NSDirectionalEdgeInsets(top: 11, leading: 16, bottom: 11, trailing: 16)
         let button = UIButton(configuration: configuration, primaryAction: primaryAction)
         button.contentHorizontalAlignment = .leading

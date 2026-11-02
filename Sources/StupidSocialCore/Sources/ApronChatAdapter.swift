@@ -3,7 +3,7 @@ import Foundation
 /// One Apron room: loads recent history, applies live snapshots, posts messages and commands, and keeps the
 /// room's members, typing indications and read cursor.
 @MainActor
-public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditing, ChatReactionSending, ChatUnseenReactions, ChatLiveUpdating, ChatReferenceResolving, ChatWindowing, ChatTyping, ChatMentioning, ChatCustomEmojis, ChatCommanding, ChatLinking, ChatReadReceipts {
+public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditing, ChatDeleting, ChatReactionSending, ChatUnseenReactions, ChatLiveUpdating, ChatReferenceResolving, ChatWindowing, ChatTyping, ChatMentioning, ChatCustomEmojis, ChatCommanding, ChatLinking, ChatReadReceipts {
     public let network = SocialNetwork.apron
     public let canReply = true
     public let pollInterval: Duration? = nil
@@ -980,6 +980,22 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
             ),
             replyTo: snapshot.replyTo?.messageId,
         )
+    }
+
+    // MARK: Deleting
+
+    /// The user's messages, on servers with `edit` (§4.4).
+    public func canDelete(_ message: ChatMessage) -> Bool {
+        guard session?.server.has("edit") == true, let snapshot = snapshots[message.id] else { return false }
+        return snapshot.messageId != nil && !snapshot.isDeleted && isOwn(snapshot)
+    }
+
+    /// A save with `deleted: true` and no body (§4.4). The server broadcasts the tombstone before it answers, and
+    /// the chat shows it as deleted.
+    public func delete(_ messageId: String) async throws {
+        guard let session else { throw SourceError.serviceError("Not connected to the server.") }
+        guard let snapshot = snapshots[messageId] else { return }
+        try await session.connection.delete(messageId: messageId, roomId: snapshot.roomId ?? roomId)
     }
 
     // MARK: Reactions

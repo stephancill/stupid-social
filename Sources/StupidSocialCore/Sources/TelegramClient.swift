@@ -209,6 +209,8 @@ public struct TelegramDialogState: Sendable {
     /// Others have read the user's messages up to this one: in a private chat the other person, in a group anyone.
     public let readOutboxMaxId: Int32
     public let isSavedMessages: Bool
+    /// A private chat with a bot.
+    public let isBot: Bool
     /// The user's messages with reactions they haven't seen.
     public let unreadReactionsCount: Int
 }
@@ -553,6 +555,34 @@ public actor TelegramClient: ChatListProvider {
             peer.kind == .channel && update["channel_id"]?.long == peer.id
         default:
             false
+        }
+    }
+
+    /// Calls `observer` with the ids of messages Telegram says were deleted. Outside channels the update names
+    /// only ids, which are per account, so they may belong to another chat; the caller drops those it has.
+    public func addDeleteObserver(peer: TelegramPeer, _ observer: @escaping @Sendable ([Int32]) -> Void) -> UUID {
+        let id = UUID()
+        observers[id] = { update in
+            let ids = Self.deletedMessageIds(in: update, peer: peer)
+            if !ids.isEmpty {
+                observer(ids)
+            }
+        }
+        return id
+    }
+
+    static func deletedMessageIds(in update: TLObject, peer: TelegramPeer) -> [Int32] {
+        switch update.name {
+        case "updateShort":
+            update["update"]?.object.map { deletedMessageIds(in: $0, peer: peer) } ?? []
+        case "updates", "updatesCombined":
+            update.objects("updates").flatMap { deletedMessageIds(in: $0, peer: peer) }
+        case "updateDeleteMessages":
+            peer.kind != .channel ? update["messages"]?.vector?.compactMap(\.int) ?? [] : []
+        case "updateDeleteChannelMessages":
+            peer.kind == .channel && update["channel_id"]?.long == peer.id ? update["messages"]?.vector?.compactMap(\.int) ?? [] : []
+        default:
+            []
         }
     }
 
@@ -904,9 +934,11 @@ public actor TelegramClient: ChatListProvider {
         var memberCount: Int?
         var userStatus: ChatPresence?
         var isSavedMessages = false
+        var isBot = false
         if peer.kind == .user {
             let user = result.objects("users").first { $0["id"]?.long == peer.id }
             isSavedMessages = user?.flag("self") == true
+            isBot = user?.flag("bot") == true
             title = isSavedMessages ? "Saved Messages" : user.map(Self.name(of:)) ?? "Telegram"
             userStatus = user.flatMap(Self.userStatus)
         } else {
@@ -922,6 +954,7 @@ public actor TelegramClient: ChatListProvider {
             readInboxMaxId: dialog["read_inbox_max_id"]?.int ?? 0,
             readOutboxMaxId: dialog["read_outbox_max_id"]?.int ?? 0,
             isSavedMessages: isSavedMessages,
+            isBot: isBot,
             unreadReactionsCount: Int(dialog["unread_reactions_count"]?.int ?? 0),
         )
     }
@@ -1259,6 +1292,21 @@ public actor TelegramClient: ChatListProvider {
             method["entities"] = entities
         }
         _ = try await invoke(method)
+    }
+
+    /// Deletes messages for everyone: `channels.deleteMessages` in supergroups and channels, otherwise
+    /// `messages.deleteMessages` with `revoke`, which outside channels also removes them for the other people.
+    public func delete(peer: TelegramPeer, messageIds: [Int32]) async throws {
+        try requireAccount()
+        let ids: TLValue = .vector(messageIds.map { .int($0) })
+        if peer.kind == .channel {
+            _ = try await invoke(TLObject("channels.deleteMessages", [
+                "channel": .object(TLObject("inputChannel", ["channel_id": .long(peer.id), "access_hash": .long(peer.accessHash)])),
+                "id": ids,
+            ]))
+        } else {
+            _ = try await invoke(TLObject("messages.deleteMessages", ["revoke": .bool(true), "id": ids]))
+        }
     }
 
     /// Sends text, returning the new message's id. `mentions` are name mentions of users this device can name;

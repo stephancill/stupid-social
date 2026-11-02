@@ -411,6 +411,11 @@ public extension ApronConnection {
         return try await request(method, params: params, as: ApronSendResult.self)
     }
 
+    /// Deletes a message: a save with only its id, room and `deleted: true` (§4.4).
+    func delete(messageId: String, roomId: String) async throws {
+        _ = try await request("message", params: ApronDeleteParams(messageId: messageId, roomId: roomId), as: ApronSendResult.self)
+    }
+
     /// Replies with `{}`; the change arrives as a `reactions` broadcast (§4.7).
     func setReactions(messageId: String, emojis: [String]) async throws {
         _ = try await request("reactions", params: ApronReactionsParams(messageId: messageId, emojis: emojis), as: ApronEmptyResult.self)

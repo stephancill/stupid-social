@@ -312,6 +312,22 @@ final class TelegramTests: XCTestCase {
         XCTAssertFalse(TelegramClient.update(shortMessage, concerns: group))
     }
 
+    func testDeletedMessageIdsComeFromTheirChat() {
+        let group = TelegramPeer(kind: .channel, id: 2_009_589_709, accessHash: 1)
+        let dm = TelegramPeer(kind: .user, id: 185_733_531, accessHash: 2)
+        let deleted = TLObject("updates", ["updates": .vector([.object(TLObject("updateDeleteMessages", [
+            "messages": .vector([.int(7), .int(8)]), "pts": .int(1), "pts_count": .int(2),
+        ]))])])
+        let channelDeleted = TLObject("updateShort", ["update": .object(TLObject("updateDeleteChannelMessages", [
+            "channel_id": .long(2_009_589_709), "messages": .vector([.int(92290)]), "pts": .int(1), "pts_count": .int(1),
+        ]))])
+
+        XCTAssertEqual(TelegramClient.deletedMessageIds(in: deleted, peer: dm), [7, 8])
+        XCTAssertEqual(TelegramClient.deletedMessageIds(in: deleted, peer: group), [], "ids outside channels are the account's, never a channel's")
+        XCTAssertEqual(TelegramClient.deletedMessageIds(in: channelDeleted, peer: group), [92290])
+        XCTAssertEqual(TelegramClient.deletedMessageIds(in: channelDeleted, peer: dm), [])
+    }
+
     func testTypingUpdatesConcernOnlyTheirChat() {
         let group = TelegramPeer(kind: .channel, id: 2_009_589_709, accessHash: 1)
         let dm = TelegramPeer(kind: .user, id: 185_733_531, accessHash: 2)

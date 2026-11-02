@@ -646,6 +646,19 @@ struct ApronSendParams: Encodable {
     }
 }
 
+/// A save that deletes a message (§4.4); the server drops its body and `ext`.
+struct ApronDeleteParams: Encodable {
+    let messageId: String
+    let roomId: String
+    var deleted = true
+
+    enum CodingKeys: String, CodingKey {
+        case messageId = "message_id"
+        case roomId = "room_id"
+        case deleted
+    }
+}
+
 /// One user's complete emoji set on one message, logged per user (§4.7).
 public struct ApronReactionSet: Codable, Sendable {
     public let from: ApronUser

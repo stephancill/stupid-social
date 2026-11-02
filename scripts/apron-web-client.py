@@ -397,6 +397,22 @@ def cmd_edit(session: Session, args: argparse.Namespace) -> None:
             })
 
 
+def cmd_delete(session: Session, args: argparse.Namespace) -> None:
+    """Deletes one of your messages (§4.4): a save with only `message_id`, `room_id` and `deleted: true`. The
+    server broadcasts the tombstone, without `body` or `ext`, before it answers."""
+    authenticate(session, args)
+    print_json(session.request("message", {"message_id": args.message, "room_id": args.room, "deleted": True}))
+    session.drain(args.wait)
+    for frame in session.notifications:
+        snapshot = frame.get("params") or {}
+        if frame.get("method") == "message" and snapshot.get("message_id") == args.message:
+            print_json({
+                "kind": live_message_kind(frame),
+                "deleted": snapshot.get("deleted"),
+                "keys": sorted(snapshot.keys()),
+            })
+
+
 SEED_WORDS = (
     "deploy build cache room thread token server client frame snapshot history reply "
     "the a of and to in is that it for on with as was at by this we you they"
@@ -982,6 +998,9 @@ def main() -> None:
     edit.add_argument("--room", required=True)
     edit.add_argument("--message", required=True)
     edit.add_argument("--text", required=True)
+    delete = add("delete", cmd_delete)
+    delete.add_argument("--room", required=True)
+    delete.add_argument("--message", required=True)
     react = add("react", cmd_react)
     react.add_argument("--message", required=True)
     react.add_argument("--emoji", action="append", default=[])
