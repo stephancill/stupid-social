@@ -120,10 +120,16 @@ The screenshots come from a **demo-data mode** baked into the app (Debug-only):
   (`stupidsim swipe … --steps 20 --step-milliseconds 15`), and after backing out of a
   notification detail its page dots disappeared and it stopped paging until relaunch
   (observed 2026-11-01).
-- Capturing: boot a simulator, install the Debug build, launch with demo, screenshot with
-  `xcrun simctl io <udid> screenshot` (status bar override `--time 9:41`), then caption with
-  the skill's `ratioize.make` (caption above a framed screenshot on the native canvas) and
-  upload with `upload_screenshots.py <loc> <set> <file>`.
+- Capturing: on a temporary simulator, launch with demo and screenshot with
+  `xcrun simctl io <udid> screenshot` into `screenshots/<set>/raw/{iphone,ipad}/`, overriding the
+  status bar time with the real time so it agrees with the chats' message times. On iPhone, tap
+  rows by their accessibility labels (`stupidsim ui-tree`); the app reopens on the last pager
+  page. On the iPad simulator the tree came back empty and taps didn't register, but a 2-point
+  `stupidsim swipe` in place acts as a tap (observed 2026-11-01).
+- Framing: `bun scripts/appstore-screenshots.ts <set>` turns the raw captures into the
+  stupid-style set (white, plain lowercase headline, black mouse-drawn doodles via rough.js, like
+  the stupid app icons) at native size in `screenshots/<set>/{iphone,ipad}/`; slide headlines live
+  in the script and in `docs/app-store-copy.md`. Upload with `upload_screenshots.py <loc> <set> <file>`.
 - Device → set: iPhone 16 Pro Max (1320×2868) → `APP_IPHONE_67`; iPad Pro 12.9" 6th gen
   (2048×2732, no resize needed) → `APP_IPAD_PRO_3GEN_129`.
 - Alternated captures for avatar/no feed (jules/maya/torres use `randomuser.me`),
