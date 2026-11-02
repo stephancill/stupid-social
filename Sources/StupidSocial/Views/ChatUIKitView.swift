@@ -148,6 +148,8 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     private var shownSuggestionIds: [String] = []
     private let noticeView = ChatGlass.make(cornerRadius: 16)
     private let noticeLabel = UILabel()
+    /// The toast showing, if any.
+    private weak var toastLabel: UILabel?
     private let reconnectButton = UIButton(type: .system)
     private let attachButton = UIButton(type: .system)
     private let inputPill = ChatGlass.make(cornerRadius: 22)
@@ -279,6 +281,8 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
                     toggleEmbed: { [weak self] index in self?.toggleEmbed(index, of: id) },
                     customEmoji: { [weak self] key in self?.viewModel.customEmojis[key] },
                     customEmojiImageDidLoad: { [weak self] in self?.customEmojiImagesDidLoad() },
+                    canUseButton: { [weak self] button in self?.viewModel.canUse(button, on: message) ?? false },
+                    useButton: { [weak self] button in await self?.use(button, on: id) },
                 ),
                 status: status(of: message),
                 statusKey: itemKey(for: id),
@@ -1874,6 +1878,78 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         guard !NotificationRouter.shared.open(url, contentServer: viewModel.linkBaseURL) else { return }
         guard ["http", "https", "mailto"].contains(url.scheme?.lowercased()) else { return }
         UIApplication.shared.open(url)
+    }
+
+    // MARK: - Message buttons
+
+    private func use(_ button: ChatMessageButton, on id: String) async {
+        switch button.action {
+        case let .link(url):
+            confirmOpening(url)
+        case let .copy(text):
+            UIPasteboard.general.string = text
+            showToast("Copied")
+        case .press:
+            guard let message = messagesById[id], let answer = await viewModel.press(button, on: message) else { return }
+            if let url = answer.url {
+                openLink(url)
+            }
+            guard let text = answer.text else { return }
+            if answer.isAlert {
+                let alert = UIAlertController(title: nil, message: text, preferredStyle: .alert)
+                alert.addAction(UIAlertAction(title: "OK", style: .default))
+                present(alert, animated: true)
+            } else {
+                showToast(text)
+            }
+        case .unsupported:
+            break
+        }
+    }
+
+    /// A button's link doesn't show where it goes, so it shows before opening, as in Telegram.
+    private func confirmOpening(_ url: URL) {
+        let alert = UIAlertController(title: "Open Link?", message: url.absoluteString, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Open", style: .default) { [weak self] _ in self?.openLink(url) })
+        present(alert, animated: true)
+    }
+
+    /// A short notice over the top of the chat that fades after a moment, such as a bot's answer to a button.
+    private func showToast(_ text: String) {
+        toastLabel?.superview?.removeFromSuperview()
+        let label = UILabel()
+        label.text = text
+        label.numberOfLines = 3
+        label.textAlignment = .center
+        label.font = .preferredFont(forTextStyle: .subheadline)
+        label.textColor = .white
+        label.translatesAutoresizingMaskIntoConstraints = false
+        let toast = UIView()
+        toast.backgroundColor = UIColor.black.withAlphaComponent(0.75)
+        toast.layer.cornerRadius = 14
+        toast.layer.cornerCurve = .continuous
+        toast.isUserInteractionEnabled = false
+        toast.translatesAutoresizingMaskIntoConstraints = false
+        toast.addSubview(label)
+        view.addSubview(toast)
+        NSLayoutConstraint.activate([
+            label.topAnchor.constraint(equalTo: toast.topAnchor, constant: 10),
+            label.bottomAnchor.constraint(equalTo: toast.bottomAnchor, constant: -10),
+            label.leadingAnchor.constraint(equalTo: toast.leadingAnchor, constant: 14),
+            label.trailingAnchor.constraint(equalTo: toast.trailingAnchor, constant: -14),
+            toast.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 12),
+            toast.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            toast.widthAnchor.constraint(lessThanOrEqualTo: view.widthAnchor, constant: -32),
+        ])
+        toastLabel = label
+        toast.alpha = 0
+        UIView.animate(withDuration: 0.2) { toast.alpha = 1 } completion: { _ in
+            UIView.animate(withDuration: 0.3, delay: 2.5) { toast.alpha = 0 } completion: { _ in
+                toast.removeFromSuperview()
+            }
+        }
+        UIAccessibility.post(notification: .announcement, argument: text)
     }
 
     // MARK: - Replies and reactions

@@ -243,6 +243,10 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
         /// The chat's custom emoji for a reaction key, shown as its image.
         var customEmoji: (String) -> ChatCustomEmoji? = { _ in nil }
         var customEmojiImageDidLoad: () -> Void = {}
+        /// Whether a button under the message works now; asked on tap.
+        var canUseButton: (ChatMessageButton) -> Bool = { _ in false }
+        /// A button was tapped; a `.press` button shows a spinner until this returns.
+        var useButton: (ChatMessageButton) async -> Void = { _ in }
     }
 
     private static let timeFormatter: DateFormatter = {
@@ -326,6 +330,9 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
     private let systemLabel = UILabel()
     private let reactionsRow = UIStackView()
     private let reactionsContainer = UIView()
+    /// Rows of buttons under the bubble, such as a bot's inline keyboard, as wide as the bubble.
+    private let buttonsStack = UIStackView()
+    private var buttonsTop: NSLayoutConstraint!
     private let replyIcon = UIImageView(image: UIImage(systemName: "arrowshape.turn.up.left.fill"))
     private var imageTasks: [Task<Void, Never>] = []
     /// The images this cell shows by URL. A reconfigure rebuilds the image views, and starts them on these so a
@@ -372,6 +379,11 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
 
         avatarView.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(avatarView)
+
+        buttonsStack.axis = .vertical
+        buttonsStack.spacing = Self.buttonSpacing
+        buttonsStack.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(buttonsStack)
 
         nameLabel.font = UIFont.preferredFont(forTextStyle: .subheadline).withWeight(.semibold)
         reminderLabel.font = UIFont.preferredFont(forTextStyle: .footnote).withWeight(.semibold)
@@ -465,7 +477,9 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
 
         bubbleTop = bubble.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 2)
         systemTop = systemLabel.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 10)
-        let bubbleBottom = bubble.bottomAnchor.constraint(equalTo: contentView.bottomAnchor)
+        // The buttons follow the bubble; without any they take no room.
+        buttonsTop = buttonsStack.topAnchor.constraint(equalTo: bubble.bottomAnchor)
+        let bubbleBottom = buttonsStack.bottomAnchor.constraint(equalTo: contentView.bottomAnchor)
         bubbleBottom.priority = .defaultHigh
         // The bubble's width is computed from its content in `configure`; Auto Layout alone kept newly
         // inserted cells at their estimated (maximum) width.
@@ -479,6 +493,9 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
         NSLayoutConstraint.activate([
             bubbleTop,
             bubbleBottom,
+            buttonsTop,
+            buttonsStack.leadingAnchor.constraint(equalTo: bubble.leadingAnchor),
+            buttonsStack.trailingAnchor.constraint(equalTo: bubble.trailingAnchor),
             bubble.widthAnchor.constraint(lessThanOrEqualTo: contentView.widthAnchor, multiplier: 0.8),
 
             stack.topAnchor.constraint(equalTo: bubble.topAnchor),
@@ -506,7 +523,7 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
             timeBackground.bottomAnchor.constraint(equalTo: timeLabel.bottomAnchor, constant: 2),
 
             avatarView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 8),
-            avatarView.bottomAnchor.constraint(equalTo: bubble.bottomAnchor),
+            avatarView.bottomAnchor.constraint(equalTo: buttonsStack.bottomAnchor),
             avatarView.widthAnchor.constraint(equalToConstant: Self.avatarSize),
             avatarView.heightAnchor.constraint(equalToConstant: Self.avatarSize),
 
@@ -604,6 +621,7 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
         swipeOffset = offset
         let transform = CGAffineTransform(translationX: offset, y: 0)
         bubble.transform = transform
+        buttonsStack.transform = transform
         avatarView.transform = transform
         let progress = min(1, -offset / Self.replyThreshold)
         replyIcon.alpha = progress
@@ -662,6 +680,7 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
         defer { previousImages = [:] }
         embedsStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         mediaStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        configureButtons(layout.isSystem || message.isDeleted ? [] : message.buttons)
 
         if layout.isSystem {
             configureSystem(message: message, body: body, startsGroup: layout.startsGroup)
@@ -790,7 +809,7 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
         }
 
         if hasMedia {
-            // The images set the width, as in Telegram; a longer name or caption wraps or truncates.
+            // The images set the width, as in Telegram; a longer name, caption or button wraps or truncates.
             bubbleWidth.constant = ceil(images.map(Self.fittingWidth).max() ?? 0) + 4
             return
         }
@@ -806,8 +825,83 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
                     ? Self.fittingWidth(embedsStack) : Self.maxContentWidth(availableWidth: availableWidth, isOwn: layout.isOwn),
                 reactionsContainer.isHidden ? nil : reactionsRowWidth + 40,
                 timeSpacer.isHidden ? nil : timeRowWidth,
+                // Content widths leave out the bubble's padding, which the buttons don't have.
+                buttonsStack.arrangedSubviews.isEmpty ? nil : buttonsRowsWidth - 24,
             ].compactMap(\.self),
         )
+    }
+
+    // MARK: Buttons
+
+    private static let buttonSpacing: CGFloat = 4
+
+    /// One row per row of buttons, each button an equal share of it, like Telegram's inline keyboards.
+    private func configureButtons(_ rows: [[ChatMessageButton]]) {
+        buttonsStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        buttonsTop.constant = rows.isEmpty ? 0 : Self.buttonSpacing
+        for row in rows {
+            let rowStack = UIStackView(arrangedSubviews: row.map(makeButton))
+            rowStack.spacing = Self.buttonSpacing
+            rowStack.distribution = .fillEqually
+            buttonsStack.addArrangedSubview(rowStack)
+        }
+        UIView.performWithoutAnimation { buttonsStack.layoutIfNeeded() }
+    }
+
+    private func makeButton(_ button: ChatMessageButton) -> UIButton {
+        var configuration = UIButton.Configuration.gray()
+        configuration.cornerStyle = .large
+        configuration.baseForegroundColor = .label
+        configuration.contentInsets = NSDirectionalEdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10)
+        var title = AttributedString(button.title)
+        title.font = UIFont.preferredFont(forTextStyle: .subheadline).withWeight(.semibold)
+        configuration.attributedTitle = title
+        configuration.titleLineBreakMode = .byTruncatingTail
+        let symbol: String? = switch button.action {
+        case .link: "arrow.up.right"
+        case .copy: "doc.on.doc"
+        case .press, .unsupported: nil
+        }
+        if let symbol {
+            configuration.image = UIImage(systemName: symbol)
+            configuration.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: 10, weight: .semibold)
+            configuration.imagePlacement = .trailing
+            configuration.imagePadding = 4
+        }
+        let view = UIButton(configuration: configuration)
+        view.titleLabel?.numberOfLines = 1
+        // Only unsupported buttons dim. Whether the rest work is asked on tap: cells shown from the snapshot are
+        // configured before the chat connects, and aren't configured again for that.
+        if case .unsupported = button.action {
+            view.isEnabled = false
+        }
+        view.addAction(UIAction { [weak self, weak view] _ in
+            guard let self, let view, actions.canUseButton(button) else { return }
+            let useButton = actions.useButton
+            guard case .press = button.action else {
+                Task { await useButton(button) }
+                return
+            }
+            view.configuration?.showsActivityIndicator = true
+            view.isEnabled = false
+            Task {
+                await useButton(button)
+                view.configuration?.showsActivityIndicator = false
+                view.isEnabled = true
+            }
+        }, for: .primaryActionTriggered)
+        return view
+    }
+
+    /// The widest row's natural width, so short labels don't stretch a narrow bubble and long ones widen it.
+    private var buttonsRowsWidth: CGFloat {
+        let widths = buttonsStack.arrangedSubviews.compactMap { $0 as? UIStackView }.map { row in
+            let buttons = row.arrangedSubviews
+            // Equal shares: the widest button sets every button's width.
+            let widest = buttons.map(\.intrinsicContentSize.width).max() ?? 0
+            return widest * CGFloat(buttons.count) + Self.buttonSpacing * CGFloat(max(0, buttons.count - 1))
+        }
+        return ceil(widths.max() ?? 0)
     }
 
     // MARK: Width

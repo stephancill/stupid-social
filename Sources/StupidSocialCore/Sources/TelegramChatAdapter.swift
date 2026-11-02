@@ -8,7 +8,7 @@ import Foundation
 /// custom emoji in text and reactions draw as their images, and voice messages play in the chat. The user's
 /// messages show as seen once Telegram's outbox read cursor passes them.
 @MainActor
-public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, ChatReactionSending, ChatUnseenReactions, ChatReadReceipts, ChatLiveUpdating, ChatReferenceResolving, ChatMentioning, ChatTyping, ChatCustomEmojis, ChatAudioPreviewing, ChatReactionChoices {
+public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, ChatReactionSending, ChatUnseenReactions, ChatReadReceipts, ChatLiveUpdating, ChatReferenceResolving, ChatMentioning, ChatTyping, ChatCustomEmojis, ChatAudioPreviewing, ChatReactionChoices, ChatButtonPressing {
     public let network = SocialNetwork.telegram
     public let canReply = true
     public let acceptsAttachments = true
@@ -102,7 +102,7 @@ public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, 
 
     /// Raised when messages are parsed differently, such as when media gained new embeds: an older snapshot's
     /// messages are dropped, since only the newest page reloads on open and the rest would keep the old shapes.
-    private static let snapshotVersion = 2
+    private static let snapshotVersion = 3
 
     private struct Snapshot: Codable {
         var version: Int?
@@ -382,6 +382,21 @@ public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, 
             loaded[id] = nil
         }
         publish()
+    }
+
+    // MARK: Buttons
+
+    /// Sends a callback button's data to the bot; the bot's edit of the message follows with the refresh.
+    public func press(_ button: ChatMessageButton, on messageId: String) async throws -> ChatButtonAnswer? {
+        let position = button.id.split(separator: ".").compactMap { Int($0) }
+        guard let id = Int32(messageId), let rows = loaded[id]?.buttons, position.count == 2,
+              rows.indices.contains(position[0]), rows[position[0]].indices.contains(position[1]),
+              case let .callback(data) = rows[position[0]][position[1]].kind
+        else { throw TelegramError.protocolViolation("no such button") }
+        let answer = try await client.callbackAnswer(peer: peer, messageId: id, data: data)
+        scheduleRefresh()
+        guard answer.message != nil || answer.url != nil else { return nil }
+        return ChatButtonAnswer(text: answer.message, isAlert: answer.isAlert, url: answer.url.flatMap(URL.init(string:)))
     }
 
     // MARK: Mentions
@@ -758,6 +773,17 @@ public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, 
             mentions: text == message.caption ? (message.mentions ?? []).map(chatMention) : [],
             customEmojis: text == message.caption ? (message.customEmojis ?? []).map { ChatMessageCustomEmoji(range: $0.range, key: TelegramCustomEmoji.key(documentId: $0.documentId)) } : [],
             isEdited: message.editDate != nil,
+            buttons: (message.buttons ?? []).enumerated().map { row, buttons in
+                buttons.enumerated().map { column, button in
+                    let action: ChatMessageButton.Action = switch button.kind {
+                    case .callback: .press
+                    case let .url(url): URL(string: url).map { .link($0) } ?? .unsupported
+                    case let .copy(text): .copy(text)
+                    case .unsupported: .unsupported
+                    }
+                    return ChatMessageButton(id: "\(row).\(column)", title: button.text, action: action)
+                }
+            },
         )
     }
 

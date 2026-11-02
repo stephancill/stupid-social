@@ -145,6 +145,36 @@ final class TelegramTests: XCTestCase {
         XCTAssertEqual(service.text, "Someone changed the group name to “Friends”")
     }
 
+    /// The inline keyboard of a bot's message, as in the probe's `buttons`.
+    func testInlineKeyboardParses() {
+        func button(_ name: String, _ fields: [String: TLValue]) -> TLValue {
+            .object(TLObject(name, ["text": .string(name)].merging(fields) { _, new in new }))
+        }
+        func message(_ markup: TLObject?) -> TelegramMessage {
+            var fields: [String: TLValue] = ["id": .int(5), "date": .int(0), "message": .string("prices"), "peer_id": .object(TLObject("peerChat", ["chat_id": .long(4)]))]
+            fields["reply_markup"] = markup.map { .object($0) }
+            return TelegramClient.message(TLObject("message", fields))
+        }
+        let markup = TLObject("replyInlineMarkup", ["rows": .vector([
+            .object(TLObject("keyboardButtonRow", ["buttons": .vector([
+                button("keyboardButtonCallback", ["data": .bytes(Data("p".utf8))]),
+                button("keyboardButtonUrl", ["url": .string("https://example.com")]),
+            ])])),
+            .object(TLObject("keyboardButtonRow", ["buttons": .vector([
+                button("keyboardButtonCopy", ["copy_text": .string("code")]),
+                button("keyboardButtonCallback", ["data": .bytes(Data()), "requires_password": .bool(true)]),
+                button("keyboardButtonWebView", ["url": .string("https://example.com/app")]),
+            ])])),
+            .object(TLObject("keyboardButtonRow", ["buttons": .vector([])])),
+        ])])
+        XCTAssertEqual(message(markup).buttons, [
+            [.init(text: "keyboardButtonCallback", kind: .callback(Data("p".utf8))), .init(text: "keyboardButtonUrl", kind: .url("https://example.com"))],
+            [.init(text: "keyboardButtonCopy", kind: .copy("code")), .init(text: "keyboardButtonCallback", kind: .unsupported), .init(text: "keyboardButtonWebView", kind: .unsupported)],
+        ])
+        XCTAssertNil(message(TLObject("replyKeyboardMarkup", ["rows": .vector([])])).buttons, "a custom keyboard isn't on the message")
+        XCTAssertNil(message(nil).buttons)
+    }
+
     func testEditsAndWhatAnEditKeepsParse() {
         func message(_ fields: [String: TLValue]) -> TelegramMessage {
             TelegramClient.message(TLObject("message", [

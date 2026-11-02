@@ -97,6 +97,14 @@ public protocol ChatDeleting: ChatAdapter {
     func delete(_ messageId: String) async throws
 }
 
+/// Buttons under messages that ask the network to act (`ChatMessageButton.Action.press`), such as a bot's inline
+/// keyboard. Without it they show dimmed.
+@MainActor
+public protocol ChatButtonPressing: ChatAdapter {
+    /// What the network answers, if anything. A change the press makes to the message arrives as usual.
+    func press(_ button: ChatMessageButton, on messageId: String) async throws -> ChatButtonAnswer?
+}
+
 /// Chats the user may only be allowed to read, such as a guest on a server that lets guests only read.
 @MainActor
 public protocol ChatReadOnlyAccess: ChatAdapter {
@@ -469,6 +477,25 @@ public final class AdapterChatViewModel<Adapter: ChatAdapter>: ChatViewModel {
             errorMessage = error.localizedDescription
         }
         adapterDidChange()
+    }
+
+    override public var networkPressesButtons: Bool {
+        adapter is any ChatButtonPressing
+    }
+
+    override public func press(_ button: ChatMessageButton, on message: ChatMessage) async -> ChatButtonAnswer? {
+        guard canUse(button, on: message), let pressing = adapter as? any ChatButtonPressing else { return nil }
+        errorMessage = nil
+        do {
+            let answer = try await pressing.press(button, on: message.id)
+            AppMetrics.messageButtonPressed(network: network, error: nil)
+            adapterDidChange()
+            return answer
+        } catch {
+            AppMetrics.messageButtonPressed(network: network, error: error)
+            errorMessage = error.localizedDescription
+            return nil
+        }
     }
 
     override public func mentionSuggestions(for query: String) -> [ChatUser] {

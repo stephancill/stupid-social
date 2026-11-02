@@ -81,6 +81,13 @@ public enum AppMetrics {
         }
     }
 
+    static func messageButtonPressed(network: SocialNetwork, error: (any Error)?) {
+        StupidMetrics.track("message_button_press", properties: ["network": network.rawValue, "outcome": error == nil ? "ok" : "error"])
+        if let error {
+            StupidMetrics.error("message_button_press_failed", error: error, properties: ["network": network.rawValue])
+        }
+    }
+
     // MARK: Notifications
 
     public static func notificationOpened(network: SocialNetwork) {

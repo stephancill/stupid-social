@@ -75,6 +75,9 @@ public struct TelegramMessage: Codable, Sendable, Hashable {
     /// Whether an edit can change its text (or caption) and keep everything else, apart from Telegram's time
     /// limit. Optional so chat snapshots saved before it existed still decode.
     public var isEditable: Bool?
+    /// Rows of its inline keyboard (`replyInlineMarkup`). Optional so chat snapshots saved before it existed still
+    /// decode.
+    public var buttons: [[TelegramButton]]?
 
     /// `text` with its spoilers masked, for the Chats list.
     public var previewText: String {
@@ -105,6 +108,37 @@ public struct TelegramMention: Codable, Sendable, Hashable {
     public var range: NSRange {
         NSRange(location: offset, length: length)
     }
+}
+
+/// A button of a message's inline keyboard.
+public struct TelegramButton: Codable, Sendable, Hashable {
+    public enum Kind: Codable, Sendable, Hashable {
+        /// `keyboardButtonCallback`: pressing sends the data to the bot (`messages.getBotCallbackAnswer`).
+        case callback(Data)
+        /// `keyboardButtonUrl`, and `keyboardButtonUrlAuth`, whose URL also opens without signing in to the site.
+        case url(String)
+        /// `keyboardButtonCopy`.
+        case copy(String)
+        /// One the app doesn't perform: games, payments, mini apps, inline queries, requests to share a contact,
+        /// location, poll or chat, profiles, and callbacks that need the 2FA password.
+        case unsupported
+    }
+
+    public let text: String
+    public let kind: Kind
+
+    public init(text: String, kind: Kind) {
+        self.text = text
+        self.kind = kind
+    }
+}
+
+/// What a bot answers to a pressed callback button (`messages.botCallbackAnswer`).
+public struct TelegramCallbackAnswer: Sendable, Hashable {
+    public let message: String?
+    /// Shown as an alert rather than briefly.
+    public let isAlert: Bool
+    public let url: String?
 }
 
 /// A custom emoji's picture, as `TelegramClient.customEmojiImages` finds it.
@@ -1294,6 +1328,22 @@ public actor TelegramClient: ChatListProvider {
         _ = try await invoke(method)
     }
 
+    /// Presses a callback button. The bot has about 10 s to answer, or it fails with `BOT_RESPONSE_TIMEOUT`; any
+    /// change it makes to the message comes as an `updateEditMessage` (probe `press`).
+    public func callbackAnswer(peer: TelegramPeer, messageId: Int32, data: Data) async throws -> TelegramCallbackAnswer {
+        try requireAccount()
+        guard let answer = try await invoke(TLObject("messages.getBotCallbackAnswer", [
+            "peer": .object(peer.inputPeer), "msg_id": .int(messageId), "data": .bytes(data),
+        ])).object else {
+            throw TelegramError.protocolViolation("no callback answer")
+        }
+        return TelegramCallbackAnswer(
+            message: answer["message"]?.string.flatMap { $0.isEmpty ? nil : $0 },
+            isAlert: answer.flag("alert"),
+            url: answer["url"]?.string,
+        )
+    }
+
     /// Deletes messages for everyone: `channels.deleteMessages` in supergroups and channels, otherwise
     /// `messages.deleteMessages` with `revoke`, which outside channels also removes them for the other people.
     public func delete(peer: TelegramPeer, messageIds: [Int32]) async throws {
@@ -1570,7 +1620,31 @@ public actor TelegramClient: ChatListProvider {
             isService: isService,
             editDate: message.flag("edit_hide") ? nil : message["edit_date"]?.int.map { Date(timeIntervalSince1970: TimeInterval($0)) },
             isEditable: !isService && isEditable(message),
+            buttons: isService ? nil : buttons(of: message),
         )
+    }
+
+    /// The inline keyboard's rows, or `nil` without one. A bot's custom keyboard under the composer
+    /// (`replyKeyboardMarkup`) isn't part of the message.
+    static func buttons(of message: TLObject) -> [[TelegramButton]]? {
+        guard let markup = message["reply_markup"]?.object, markup.name == "replyInlineMarkup" else { return nil }
+        let rows = markup.objects("rows").map { row in
+            row.objects("buttons").map { button in
+                let text = button["text"]?.string ?? ""
+                let kind: TelegramButton.Kind = switch button.name {
+                case "keyboardButtonCallback" where !button.flag("requires_password"):
+                    button["data"]?.bytes.map { .callback($0) } ?? .unsupported
+                case "keyboardButtonUrl", "keyboardButtonUrlAuth":
+                    button["url"]?.string.map { .url($0) } ?? .unsupported
+                case "keyboardButtonCopy":
+                    button["copy_text"]?.string.map { .copy($0) } ?? .unsupported
+                default:
+                    .unsupported
+                }
+                return TelegramButton(text: text, kind: kind)
+            }
+        }.filter { !$0.isEmpty }
+        return rows.isEmpty ? nil : rows
     }
 
     /// Entities an edit keeps: those Telegram marks by itself in the text it's sent, and name mentions, which an

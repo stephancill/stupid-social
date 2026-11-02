@@ -123,6 +123,8 @@ public struct ChatMessage: Hashable, Identifiable, Sendable {
     public let customEmojis: [ChatMessageCustomEmoji]
     /// Changed since it was sent, where the network says so; shown as "edited" by the time.
     public let isEdited: Bool
+    /// Rows of buttons under the message, such as a bot's inline keyboard.
+    public let buttons: [[ChatMessageButton]]
 
     public init(
         id: String,
@@ -140,6 +142,7 @@ public struct ChatMessage: Hashable, Identifiable, Sendable {
         mentions: [ChatMessageMention] = [],
         customEmojis: [ChatMessageCustomEmoji] = [],
         isEdited: Bool = false,
+        buttons: [[ChatMessageButton]] = [],
     ) {
         self.id = id
         self.sender = sender
@@ -156,6 +159,7 @@ public struct ChatMessage: Hashable, Identifiable, Sendable {
         self.mentions = mentions
         self.customEmojis = customEmojis
         self.isEdited = isEdited
+        self.buttons = buttons
     }
 
     /// The message with `image` in place of its first image or pending upload, such as the picked file for a
@@ -175,7 +179,7 @@ public struct ChatMessage: Hashable, Identifiable, Sendable {
         return ChatMessage(
             id: id, sender: sender, timestamp: timestamp, text: text, isMarkdown: isMarkdown, embeds: embeds,
             replyToId: replyToId, isDeleted: isDeleted, isOwn: isOwn, isNotice: isNotice, isSending: isSending,
-            spoilers: spoilers, mentions: mentions, customEmojis: customEmojis, isEdited: isEdited,
+            spoilers: spoilers, mentions: mentions, customEmojis: customEmojis, isEdited: isEdited, buttons: buttons,
         )
     }
 
@@ -184,7 +188,7 @@ public struct ChatMessage: Hashable, Identifiable, Sendable {
         ChatMessage(
             id: id, sender: sender, timestamp: timestamp, text: text, isMarkdown: isMarkdown, embeds: embeds,
             replyToId: replyToId, isDeleted: isDeleted, isOwn: isOwn, isNotice: isNotice, isSending: isSending,
-            isEdited: true,
+            isEdited: true, buttons: buttons,
         )
     }
 
@@ -209,6 +213,46 @@ public struct ChatMessage: Hashable, Identifiable, Sendable {
             }
         }
         return "Attachment"
+    }
+}
+
+/// A button under a message, such as one of a bot's inline keyboard.
+public struct ChatMessageButton: Hashable, Sendable {
+    public enum Action: Hashable, Sendable {
+        /// Opens the link, after showing where it goes.
+        case link(URL)
+        /// Copies the text.
+        case copy(String)
+        /// Asks the network to act (`ChatButtonPressing`), such as a bot's callback.
+        case press
+        /// One the app can't perform, such as paying or opening a mini app; shown dimmed.
+        case unsupported
+    }
+
+    /// Unique within the message.
+    public let id: String
+    public let title: String
+    public let action: Action
+
+    public init(id: String, title: String, action: Action) {
+        self.id = id
+        self.title = title
+        self.action = action
+    }
+}
+
+/// What the network says after a button is pressed; any change to the message arrives as usual.
+public struct ChatButtonAnswer: Hashable, Sendable {
+    /// Shown briefly, or until dismissed when `isAlert`.
+    public let text: String?
+    public let isAlert: Bool
+    /// A link to open, such as a game.
+    public let url: URL?
+
+    public init(text: String?, isAlert: Bool, url: URL?) {
+        self.text = text
+        self.isAlert = isAlert
+        self.url = url
     }
 }
 
@@ -857,6 +901,27 @@ public class ChatViewModel: ObservableObject {
 
     /// Deletes the message for everyone once the network confirms it.
     public func delete(_: ChatMessage) async {}
+
+    // MARK: Buttons
+
+    /// Whether the network takes `.press` buttons; networks that do override this.
+    public var networkPressesButtons: Bool {
+        false
+    }
+
+    /// Whether a button under the message can be used now: links and copies always, presses once connected.
+    public func canUse(_ button: ChatMessageButton, on message: ChatMessage) -> Bool {
+        switch button.action {
+        case .link, .copy: true
+        case .press: networkPressesButtons && state == .connected && !message.isSending && !message.isDeleted
+        case .unsupported: false
+        }
+    }
+
+    /// Presses a `.press` button and returns the network's answer; a failure shows as `errorMessage`.
+    public func press(_: ChatMessageButton, on _: ChatMessage) async -> ChatButtonAnswer? {
+        nil
+    }
 
     /// Sets reactions before the messages they belong to, so new bubbles render with their reactions instead of
     /// growing a moment later.

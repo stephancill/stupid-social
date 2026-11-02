@@ -29,6 +29,11 @@ Commands:
                               named for testing)
   send-photo --peer K --file F [--caption T]   upload.saveFilePart + messages.sendMedia
   react --peer K --msg-id N [--emoji E]        messages.sendReaction; no emoji removes yours
+  buttons --peer K [--limit N]  the inline keyboards (replyInlineMarkup) in a chat's history: each button's
+                              constructor, label and data or URL, without message text
+  press --peer K --msg-id N --row R --column C   press a callback button: messages.getBotCallbackAnswer with its
+                              data, then the bot's answer (toast, alert or URL); only buttons with no side effects
+                              beyond the chat (such as Refresh) in a chat the user named for testing
   reactions --peer K          the emoji the account may react with there: messages.getAvailableReactions (active,
                               and not premium unless the account is), narrowed by the chat's available_reactions
   raw --method name --json '{...}'   any method, with peers like {"_": "inputPeerSelf"}
@@ -1219,6 +1224,14 @@ def main():
     react.add_argument("--peer", required=True)
     react.add_argument("--msg-id", type=int, required=True)
     react.add_argument("--emoji", default="", help="empty removes your reaction")
+    buttons = sub.add_parser("buttons", help="a chat's inline keyboards, without message text")
+    buttons.add_argument("--peer", required=True)
+    buttons.add_argument("--limit", type=int, default=50)
+    press = sub.add_parser("press", help="messages.getBotCallbackAnswer: press a message's callback button")
+    press.add_argument("--peer", required=True)
+    press.add_argument("--msg-id", type=int, required=True)
+    press.add_argument("--row", type=int, default=0)
+    press.add_argument("--column", type=int, default=0)
     reactions = sub.add_parser("reactions", help="the emoji the account may react with in a chat")
     reactions.add_argument("--peer", required=True)
     chat_info = sub.add_parser("chat-info", help="a group's full info and whether you may edit it")
@@ -1545,6 +1558,30 @@ def main():
             if update["_"] == "updateMessageReactions":
                 counts = [(r["reaction"].get("emoticon"), r["count"], "chosen_order" in r) for r in update["reactions"]["results"]]
                 print("updateMessageReactions", counts)
+    elif args.command == "buttons":
+        result = client.call({"_": "messages.getHistory", "peer": client.input_peer(args.peer), "offset_id": 0, "offset_date": 0, "add_offset": 0, "limit": args.limit, "max_id": 0, "min_id": 0, "hash": 0})
+        for message in result["messages"]:
+            markup = message.get("reply_markup")
+            if not markup:
+                continue
+            # replyKeyboardMarkup is the bot's custom keyboard under the composer, not buttons on the message.
+            print(message["id"], markup["_"], "edited" if message.get("edit_date") else "")
+            for row in markup.get("rows", []):
+                print("   ", [(b["_"].removeprefix("keyboardButton"), b.get("text"), b.get("data", b.get("url"))) for b in row["buttons"]])
+    elif args.command == "press":
+        peer = client.input_peer(args.peer)
+        message = client.call({"_": "messages.getMessages", "id": [{"_": "inputMessageID", "id": args.msg_id}]})["messages"][0] if peer["_"] != "inputPeerChannel" else client.call({"_": "channels.getMessages", "channel": {"_": "inputChannel", "channel_id": peer["channel_id"], "access_hash": peer["access_hash"]}, "id": [{"_": "inputMessageID", "id": args.msg_id}]})["messages"][0]
+        button = message["reply_markup"]["rows"][args.row]["buttons"][args.column]
+        if button["_"] != "keyboardButtonCallback":
+            sys.exit(f"{button['_']} is not a callback button")
+        print("pressing", button["text"], button["data"], "edit_date before:", message.get("edit_date"))
+        started = time.time()
+        answer = client.call({"_": "messages.getBotCallbackAnswer", "peer": peer, "msg_id": args.msg_id, "data": button["data"]})
+        print(f"{time.time() - started:.1f}s", json.dumps(to_json(answer), ensure_ascii=False))
+        time.sleep(2)
+        after = client.call({"_": "messages.getMessages", "id": [{"_": "inputMessageID", "id": args.msg_id}]})["messages"][0] if peer["_"] != "inputPeerChannel" else None
+        if after:
+            print("edit_date after:", after.get("edit_date"), "same text:", after.get("message") == message.get("message"))
     elif args.command == "reactions":
         # An emoji outside the list is refused with REACTION_INVALID (observed 2026-10-31); reactions in Saved
         # Messages are tags, which need Premium (PREMIUM_ACCOUNT_REQUIRED for any emoji).
