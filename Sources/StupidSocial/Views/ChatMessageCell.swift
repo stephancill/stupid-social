@@ -333,6 +333,8 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
     /// Rows of buttons under the bubble, such as a bot's inline keyboard, as wide as the bubble.
     private let buttonsStack = UIStackView()
     private var buttonsTop: NSLayoutConstraint!
+    /// An empty stack view has no height of its own and would stretch to the cell's estimated height.
+    private var buttonsEmptyHeight: NSLayoutConstraint!
     private let replyIcon = UIImageView(image: UIImage(systemName: "arrowshape.turn.up.left.fill"))
     private var imageTasks: [Task<Void, Never>] = []
     /// The images this cell shows by URL. A reconfigure rebuilds the image views, and starts them on these so a
@@ -479,6 +481,7 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
         systemTop = systemLabel.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 10)
         // The buttons follow the bubble; without any they take no room.
         buttonsTop = buttonsStack.topAnchor.constraint(equalTo: bubble.bottomAnchor)
+        buttonsEmptyHeight = buttonsStack.heightAnchor.constraint(equalToConstant: 0)
         let bubbleBottom = buttonsStack.bottomAnchor.constraint(equalTo: contentView.bottomAnchor)
         bubbleBottom.priority = .defaultHigh
         // The bubble's width is computed from its content in `configure`; Auto Layout alone kept newly
@@ -494,6 +497,7 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
             bubbleTop,
             bubbleBottom,
             buttonsTop,
+            buttonsEmptyHeight,
             buttonsStack.leadingAnchor.constraint(equalTo: bubble.leadingAnchor),
             buttonsStack.trailingAnchor.constraint(equalTo: bubble.trailingAnchor),
             bubble.widthAnchor.constraint(lessThanOrEqualTo: contentView.widthAnchor, multiplier: 0.8),
@@ -808,6 +812,10 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
             view.tintColor = timeLabel.textColor
         }
 
+        // The text wraps at the bubble's width from the first measurement. Left to Auto Layout, a multi-line label
+        // first wraps at its previous width, so a cell scrolled into view measured lines too tall and then shrank,
+        // moving the messages below it.
+        defer { bodyLabel.preferredMaxLayoutWidth = max(0, bubbleWidth.constant - 24) }
         if hasMedia {
             // The images set the width, as in Telegram; a longer name, caption or button wraps or truncates.
             bubbleWidth.constant = ceil(images.map(Self.fittingWidth).max() ?? 0) + 4
@@ -839,6 +847,7 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
     private func configureButtons(_ rows: [[ChatMessageButton]]) {
         buttonsStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         buttonsTop.constant = rows.isEmpty ? 0 : Self.buttonSpacing
+        buttonsEmptyHeight.isActive = rows.isEmpty
         for row in rows {
             let rowStack = UIStackView(arrangedSubviews: row.map(makeButton))
             rowStack.spacing = Self.buttonSpacing
