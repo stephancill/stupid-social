@@ -289,7 +289,10 @@ public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, 
             try await client.send(peer: peer, text: text, mentions: mentions, replyTo: replyTo)
         }
         if message.attachment == nil, let id {
-            loaded[id] = TelegramMessage(id: id, date: Date(), text: text, caption: text, mentions: mentions.isEmpty ? nil : mentions, senderId: nil, isOutgoing: true, replyToId: replyTo, isService: false)
+            var sent = TelegramMessage(id: id, date: Date(), text: text, caption: text, mentions: mentions.isEmpty ? nil : mentions, senderId: nil, isOutgoing: true, replyToId: replyTo, isService: false)
+            // Plain text with name mentions, which an edit keeps, so it can be edited before Telegram's copy loads.
+            sent.isEditable = true
+            loaded[id] = sent
             publish()
         } else {
             scheduleRefresh()
