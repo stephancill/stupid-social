@@ -48,6 +48,8 @@ OPS = {
     "SendMessageCreateMutation": "TWRPP7gnKwV_R8-tE-Dd3Q",
     "SendMessageEventMutation": "G7WwJGKvTBVb-BXhZNSVMw",
     "GenerateXChatTokenMutation": "Qh3fZRjPPtPoHYR_2sCZsA",
+    "InitializeXChatMediaUploadMutation": "6M543IPabOfZm7-yyIczdw",
+    "FinalizeXChatMediaUploadMutation": "3O4jPQ2hwW9LbqCc-wFmqA",
 }
 SOCKET_URL = "wss://chat-ws.x.com/ws?token="
 # Message{2: MessageInstruction{2: KeepAliveInstruction{}}}, which X's client sends every 30 s.
@@ -145,24 +147,37 @@ class XChatClient:
             ]
         )
 
-    def send_entry(self, conversation_id: str, expect_participant: str, entry: list[tuple[int, int, Any]]) -> dict[str, Any]:
-        """Encrypts, franks, signs and sends one MessageEntryContents as a MessageCreateEvent."""
+    def checked_state(self, conversation_id: str, expect_participant: str, keys: dict[str, Any]) -> dict[str, Any]:
+        state = self.conversation_state(conversation_id, keys)
+        names = [p["screen_name"] for p in state["participants"]]
+        if expect_participant.lower() not in [n.lower() for n in names if n]:
+            raise SystemExit(f"Refusing to send: participants are {names}, expected {expect_participant}")
+        return state
+
+    def send_entry(
+        self,
+        conversation_id: str,
+        expect_participant: str,
+        entry: list[tuple[int, int, Any]],
+        message_id: str | None = None,
+        media_hashes: list[bytes] | None = None,
+    ) -> dict[str, Any]:
+        """Encrypts, franks, signs and sends one MessageEntryContents as a MessageCreateEvent. Franking covers each
+        attachment's plaintext SHA-256 (verified against received media messages, whose franking has no field 3)."""
         import uuid
 
         import nacl.utils
 
         keys = load_keys()
-        state = self.conversation_state(conversation_id, keys)
-        names = [p["screen_name"] for p in state["participants"]]
-        if expect_participant.lower() not in [n.lower() for n in names if n]:
-            raise SystemExit(f"Refusing to send: participants are {names}, expected {expect_participant}")
+        state = self.checked_state(conversation_id, expect_participant, keys)
         version = max(state["keys"], key=int)
         conversation_key = state["keys"][version]
-        message_id = str(uuid.uuid4())
+        message_id = message_id or str(uuid.uuid4())
         plaintext = encode_struct([(1, 12, entry)])
         contents = seal(conversation_key, plaintext)
         nonce = nacl.utils.random(32)
-        franking = [(1, 11, franking_tag(plaintext, nonce, message_id, conversation_id, [])), (2, 11, seal(conversation_key, nonce))]
+        tag = franking_tag(plaintext, nonce, message_id, conversation_id, media_hashes or [])
+        franking = [(1, 11, tag), (2, 11, seal(conversation_key, nonce))]
         create_event = encode_struct(
             [
                 (100, 11, contents),
@@ -195,12 +210,145 @@ class XChatClient:
             "event_fields": sorted(event.keys()) if event else None,
         }
 
-    def send_message(self, conversation_id: str, expect_participant: str, message_text: str) -> dict[str, Any]:
-        return self.send_entry(
-            conversation_id,
-            expect_participant,
-            [(1, 12, [(1, 11, message_text), (2, 15, (12, [])), (3, 15, (12, [])), (7, 8, SENT_FROM_COMPOSER)])],
+    def send_message(self, conversation_id: str, expect_participant: str, message_text: str, reply_to: str | None = None) -> dict[str, Any]:
+        preview = self.reply_preview(conversation_id, reply_to) if reply_to else None
+        contents = [(1, 11, message_text), (2, 15, (12, [])), (3, 15, (12, [])), (4, 12, preview), (7, 8, SENT_FROM_COMPOSER)]
+        return self.send_entry(conversation_id, expect_participant, [(1, 12, contents)])
+
+    def find_event(self, conversation_id: str, sequence_id: str, pages: int = 10) -> tuple[dict[int, Any], dict[str, bytes]]:
+        """The message event with this sequence id from the conversation's pages, and the conversation keys seen."""
+        keys = load_keys()
+        conversation_keys = self.conversation_state(conversation_id, keys)["keys"]
+        min_sequence = NEWEST_SEQUENCE_ID
+        for _ in range(pages):
+            page = self.conversation_page(conversation_id, min_sequence)["data"]["get_conversation_page"]
+            events = [thrift(base64.b64decode(e)) for e in page.get("encoded_message_events") or []]
+            missing = [thrift(base64.b64decode(e)) for e in page.get("missing_conversation_key_change_events") or []]
+            conversation_keys.update(self.conversation_keys(missing + [e for e in events if 3 in e.get(7, {})], keys))
+            for event in events:
+                if text(event.get(1)) == sequence_id:
+                    return event, conversation_keys
+            if not page.get("has_more") or not events:
+                break
+            min_sequence = min((text(e.get(1)) for e in events), key=int)
+        raise SystemExit("Message not found in the conversation's newest pages")
+
+    def reply_preview(self, conversation_id: str, sequence_id: str) -> list[tuple[int, int, Any]]:
+        """A `ReplyingToPreview` as X's web client sends it while `xchat_additional_reply_preview_validation_send` is
+        off (observed 2026-11-03): sender id, text, entities, attachments, sender display name, sequence id and client
+        message id, without the raw source event and key."""
+        keys = load_keys()
+        event, conversation_keys = self.find_event(conversation_id, sequence_id)
+        create = event.get(7, {}).get(1) or {}
+        plain = 101 not in create
+        key = conversation_keys.get(text(create.get(101)) or "")
+        if not plain and key is None:
+            raise SystemExit("No key for the replied-to message")
+        entry = thrift(create[100] if plain else open_sealed(key, create[100])).get(1) or {}
+        message = entry.get(1)
+        if not isinstance(message, dict):
+            raise SystemExit("The replied-to event is not a message")
+        sender_id = text(event.get(3))
+        state = self.conversation_state(conversation_id, keys)
+        detail = state["item"]["conversation_detail"]
+        names = {
+            (p.get("result") or {}).get("rest_id"): ((p.get("result") or {}).get("core") or {}).get("name")
+            for p in detail.get("participants_results") or []
+        }
+        attachments = [(1, 12, media_attachment_fields(a[1])) for a in message.get(3) or [] if a.get(1)]
+        return [
+            (1, 10, int(sender_id)),
+            (2, 11, message.get(1)),
+            (3, 15, (12, [])),
+            (4, 15, (12, attachments)),
+            (5, 11, names.get(sender_id)),
+            (6, 11, sequence_id),
+            (7, 11, event.get(2)),
+        ]
+
+    def upload_media(self, conversation_id: str, message_id: str, conversation_key: bytes, data: bytes) -> dict[str, Any]:
+        """X's DmMediaUploadHandler: secretstream-encrypt under the conversation key (contents version 0), initialize
+        with the encrypted size, POST each part raw to ton.x.com with its resume id and 0-based part number, then
+        finalize with the part count."""
+        blob = encrypt_media(conversation_key, data)
+        init = self.mutation(
+            "InitializeXChatMediaUploadMutation",
+            {"conversation_id": conversation_id, "message_id": message_id, "total_bytes": str(len(blob)), "is_public": False},
         )
+        result = ((init.get("data") or {}).get("xchat_initialize_media_upload")) or {}
+        if "media_hash_key" not in result:
+            raise SystemExit(f"Initialize failed: {json.dumps(init)[:600]}")
+        hash_key, resume_id = result["media_hash_key"], result["resume_id"]
+        parts = [blob[i : i + MEDIA_UPLOAD_PART] for i in range(0, len(blob), MEDIA_UPLOAD_PART)]
+        statuses = []
+        for number, part in enumerate(parts):
+            url = f"{MEDIA_URL}{conversation_id}/{hash_key}?concurrent=true&resumeId={resume_id}&partNumber={number}"
+            headers = self.x.headers() | {"Content-Type": "application/octet-stream"}
+            request = urllib.request.Request(url, data=part, headers=headers, method="POST")
+            try:
+                with urllib.request.urlopen(request, timeout=120) as response:
+                    statuses.append(response.status)
+            except urllib.error.HTTPError as exc:
+                raise SystemExit(f"Part {number}: HTTP {exc.code} {exc.read()[:300]!r}") from exc
+        finalize = self.mutation(
+            "FinalizeXChatMediaUploadMutation",
+            {
+                "conversation_id": conversation_id,
+                "message_id": message_id,
+                "media_hash_key": hash_key,
+                "resume_id": str(resume_id),
+                "num_parts": str(len(parts)),
+                "is_public": False,
+            },
+        )
+        finalized = (finalize.get("data") or {}).get("xchat_finalize_media_upload")
+        if finalize.get("errors") or (finalized or {}).get("upload_error"):
+            raise SystemExit(f"Finalize failed: {json.dumps(finalize)[:600]}")
+        return {
+            "media_hash_key": hash_key,
+            "encrypted_bytes": len(blob),
+            "part_statuses": statuses,
+            "resume_url_matches": result.get("resume_upload_url", "").split("?")[0] == f"{MEDIA_URL}{conversation_id}/{hash_key}",
+            "finalize_typename": (finalized or {}).get("__typename"),
+        }
+
+    def send_media(
+        self, conversation_id: str, expect_participant: str, path: str, message_text: str | None, reply_to: str | None
+    ) -> dict[str, Any]:
+        """Uploads one file and sends it as a message: `MediaAttachment` with the hash key, dimensions, type, the
+        encrypted size, filename, a fresh attachment id and the plaintext SHA-256."""
+        import hashlib
+        import uuid
+
+        keys = load_keys()
+        state = self.checked_state(conversation_id, expect_participant, keys)
+        version = max(state["keys"], key=int)
+        with open(path, "rb") as handle:
+            data = handle.read()
+        message_id = str(uuid.uuid4())
+        upload = self.upload_media(conversation_id, message_id, state["keys"][version], data)
+        media_type = media_type_for(path)
+        width, height = image_size(path) if media_type in (1, 2) else (None, None)
+        digest = hashlib.sha256(data).digest()
+        attachment = [
+            (1, 11, upload["media_hash_key"]),
+            (2, 12, [(1, 10, width), (2, 10, height)] if width else None),
+            (3, 8, media_type),
+            (5, 10, upload["encrypted_bytes"]),
+            (6, 11, os.path.basename(path)),
+            (7, 11, str(uuid.uuid4())),
+            (11, 11, digest),
+        ]
+        preview = self.reply_preview(conversation_id, reply_to) if reply_to else None
+        contents = [
+            (1, 11, message_text),
+            (2, 15, (12, [])),
+            (3, 15, (12, [[(1, 12, attachment)]])),
+            (4, 12, preview),
+            (7, 8, SENT_FROM_COMPOSER),
+        ]
+        sent = self.send_entry(conversation_id, expect_participant, [(1, 12, contents)], message_id, [digest])
+        return {"upload": {k: v for k, v in upload.items() if k != "media_hash_key"}, "media_type": media_type, "width": width, **sent}
 
     def react(self, conversation_id: str, expect_participant: str, sequence_id: str, emoji: str, remove: bool) -> dict[str, Any]:
         return self.send_entry(conversation_id, expect_participant, [(3 if remove else 2, 12, [(1, 11, sequence_id), (2, 11, emoji)])])
@@ -787,6 +935,66 @@ MEDIA_URL = "https://ton.x.com/i/ton/data/xchat_media/"
 MEDIA_TYPES = {1: "image", 2: "gif", 3: "video", 4: "audio", 5: "file", 6: "svg"}
 # dm-core's LibsodiumStreamConfig: 1024-byte plaintext chunks, each pushed with the 17-byte secretstream overhead.
 MEDIA_CHUNK = 1024 + 17
+# SegmentSizesDecider: 1 MiB parts on a poor or unknown connection (6 MiB, 7.5 MB on better ones).
+MEDIA_UPLOAD_PART = 1024 * 1024
+
+
+def encrypt_media(key: bytes, data: bytes) -> bytes:
+    """The inverse of decrypt_media: header, then 1024-byte chunks, the last tagged final (an empty file is one
+    empty final chunk)."""
+    from nacl.bindings import (
+        crypto_secretstream_xchacha20poly1305_init_push,
+        crypto_secretstream_xchacha20poly1305_push,
+        crypto_secretstream_xchacha20poly1305_state,
+        crypto_secretstream_xchacha20poly1305_TAG_FINAL,
+        crypto_secretstream_xchacha20poly1305_TAG_MESSAGE,
+    )
+
+    state = crypto_secretstream_xchacha20poly1305_state()
+    output = bytearray(crypto_secretstream_xchacha20poly1305_init_push(state, key))
+    chunks = [data[i : i + 1024] for i in range(0, len(data), 1024)] or [b""]
+    for index, chunk in enumerate(chunks):
+        final = index == len(chunks) - 1
+        tag = crypto_secretstream_xchacha20poly1305_TAG_FINAL if final else crypto_secretstream_xchacha20poly1305_TAG_MESSAGE
+        output += crypto_secretstream_xchacha20poly1305_push(state, chunk, tag=tag)
+    return bytes(output)
+
+
+def media_type_for(path: str) -> int:
+    extension = os.path.splitext(path)[1].lower()
+    if extension == ".gif":
+        return 2
+    if extension in (".jpg", ".jpeg", ".png", ".heic", ".webp"):
+        return 1
+    if extension in (".mp4", ".mov", ".m4v"):
+        return 3
+    if extension in (".m4a", ".mp3", ".aac", ".wav", ".ogg"):
+        return 4
+    return 5
+
+
+def image_size(path: str) -> tuple[int | None, int | None]:
+    output = subprocess.run(["sips", "-g", "pixelWidth", "-g", "pixelHeight", path], capture_output=True, text=True).stdout
+    values = dict(line.split(": ") for line in output.splitlines()[1:] if ": " in line)
+    width, height = values.get("  pixelWidth"), values.get("  pixelHeight")
+    return (int(width), int(height)) if width and height else (None, None)
+
+
+def media_attachment_fields(media: dict[int, Any]) -> list[tuple[int, int, Any]]:
+    """A decoded `MediaAttachment` re-encoded for a reply preview, without the plaintext hash, as X's client does."""
+    size = media.get(2) or {}
+    return [
+        (1, 11, media.get(1)),
+        (2, 12, [(1, 10, size.get(1)), (2, 10, size.get(2))] if size else None),
+        (3, 8, media.get(3)),
+        (4, 10, media.get(4)),
+        (5, 10, media.get(5)),
+        (6, 11, media.get(6)),
+        (7, 11, media.get(7)),
+        (8, 11, media.get(8)),
+        (9, 11, media.get(9)),
+        (10, 11, media.get(10)),
+    ]
 
 
 def media_key(conversation_key: bytes, attachment_id: str | None) -> bytes:
@@ -985,6 +1193,15 @@ def build_parser() -> argparse.ArgumentParser:
     send.add_argument("conversation_id")
     send.add_argument("text")
     send.add_argument("--expect-participant", required=True, help="Screen name the conversation must be with.")
+    send.add_argument("--reply-to", help="Sequence id of the message to reply to.")
+    send_media = subparsers.add_parser(
+        "send-media", help="Upload one file (encrypted) and send it as a message. Only to a conversation agreed for testing."
+    )
+    send_media.add_argument("conversation_id")
+    send_media.add_argument("path")
+    send_media.add_argument("--text", help="Caption.")
+    send_media.add_argument("--reply-to", help="Sequence id of the message to reply to.")
+    send_media.add_argument("--expect-participant", required=True)
     edit = subparsers.add_parser("edit-message", help="Edit one of your messages by sequence id. Only in a conversation agreed for testing.")
     edit.add_argument("conversation_id")
     edit.add_argument("sequence_id")
@@ -1053,7 +1270,9 @@ def main() -> None:
             "downloads": {str(index): download_media(client, rows[index]) for index in args.download},
         }
     elif args.command == "send-message":
-        result = client.send_message(args.conversation_id, args.expect_participant, args.text)
+        result = client.send_message(args.conversation_id, args.expect_participant, args.text, args.reply_to)
+    elif args.command == "send-media":
+        result = client.send_media(args.conversation_id, args.expect_participant, args.path, args.text, args.reply_to)
     elif args.command == "edit-message":
         result = client.edit_message(args.conversation_id, args.expect_participant, args.sequence_id, args.message_id, args.text)
     elif args.command == "react":

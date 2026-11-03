@@ -145,6 +145,17 @@ final class XChatCryptoTests: XCTestCase {
         XCTAssertThrowsError(try XChatCrypto.decryptMedia(mediaBlob, key: wrongKey))
     }
 
+    /// Pushed streams open with the pull side, which matches libsodium, at chunk boundaries and in between
+    /// (multiples of 16 go through CryptoKit's MAC, other lengths through the native Poly1305).
+    func testEncryptedMediaOpens() throws {
+        for length in [0, 1, 15, 16, 1023, 1024, 1025, 3 * 1024, 5000] {
+            let plaintext = try XChatCrypto.randomBytes(length)
+            let encrypted = try XChatCrypto.encryptMedia(plaintext, key: mediaKey)
+            XCTAssertEqual(encrypted.count, 24 + max(1, (length + 1023) / 1024) * 17 + length, "length \(length)")
+            XCTAssertEqual(try XChatCrypto.decryptMedia(encrypted, key: mediaKey), plaintext, "length \(length)")
+        }
+    }
+
     func testMediaURLRoundTrip() throws {
         let reference = XChatMediaReference(conversationId: "100:200", hashKey: "AbC123xYz0", keyVersion: "1792015370411", fileExtension: "mp4")
         let url = try XCTUnwrap(XChatMediaURL.make(reference))

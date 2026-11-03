@@ -1,5 +1,7 @@
+import AVFoundation
 import CryptoKit
 import Foundation
+import ImageIO
 import UniformTypeIdentifiers
 
 /// An encrypted X Chat attachment: where X stores it and which conversation key opens it.
@@ -9,6 +11,65 @@ public struct XChatMediaReference: Hashable, Sendable {
     let keyVersion: String
     /// The filename's extension, for the cache file and the MIME type, so players and Quick Look know the type.
     let fileExtension: String
+}
+
+/// A file to send in an X chat, with what its `MediaAttachment` records: the kind, pixel size and length.
+public struct XChatOutgoingMedia: Sendable {
+    let data: Data
+    let filename: String
+    let kind: XChatMessageContents.Media.Kind
+    let width: Int64?
+    let height: Int64?
+    let durationMillis: Int64?
+
+    var fileExtension: String {
+        (filename as NSString).pathExtension.lowercased()
+    }
+
+    /// GIFs and images take their size from their pixels (turned for EXIF rotations), videos theirs and their
+    /// length from AVFoundation; anything else, audio included, goes as a file.
+    init(data: Data, mimeType: String, filename: String, isImage: Bool) async {
+        self.data = data
+        self.filename = filename
+        var width: Int64?, height: Int64?, duration: Int64?
+        if mimeType == "image/gif" {
+            kind = .gif
+            (width, height) = Self.pixelSize(of: data)
+        } else if isImage, mimeType != "image/svg+xml" {
+            kind = .image
+            (width, height) = Self.pixelSize(of: data)
+        } else if mimeType.hasPrefix("video/") {
+            kind = .video
+            (width, height, duration) = await Self.videoInfo(of: data, filename: filename)
+        } else {
+            kind = .file
+        }
+        self.width = width
+        self.height = height
+        durationMillis = duration
+    }
+
+    private static func pixelSize(of data: Data) -> (Int64?, Int64?) {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? Int64, let height = properties[kCGImagePropertyPixelHeight] as? Int64
+        else { return (nil, nil) }
+        // EXIF orientations 5–8 are rotated a quarter turn.
+        return (properties[kCGImagePropertyOrientation] as? Int ?? 1) >= 5 ? (height, width) : (width, height)
+    }
+
+    private static func videoInfo(of data: Data, filename: String) async -> (Int64?, Int64?, Int64?) {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString)-\(filename)")
+        defer { try? FileManager.default.removeItem(at: file) }
+        guard (try? data.write(to: file)) != nil else { return (nil, nil, nil) }
+        let asset = AVURLAsset(url: file)
+        let duration = try? await asset.load(.duration)
+        guard let track = try? await asset.loadTracks(withMediaType: .video).first,
+              let (size, transform) = try? await track.load(.naturalSize, .preferredTransform)
+        else { return (nil, nil, duration.map { Int64($0.seconds * 1000) }) }
+        let shown = size.applying(transform)
+        return (Int64(abs(shown.width)), Int64(abs(shown.height)), duration.map { Int64($0.seconds * 1000) })
+    }
 }
 
 /// `xchatmedia://media/<conversation id>/<media hash key>?v=<key version>&ext=<extension>`: an encrypted X Chat

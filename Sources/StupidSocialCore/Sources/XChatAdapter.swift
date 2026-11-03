@@ -1,14 +1,14 @@
 import Foundation
 
 /// One X Chat conversation: decrypts its events, pages its history, follows new events from X's chat WebSocket
-/// (`XChatLiveFeed`), sends text, edits and reactions, and moves the viewer's read marker as messages are read.
+/// (`XChatLiveFeed`), sends text, files, replies, edits and reactions, and moves the viewer's read marker as messages are read.
 /// Reactions, edits and deletes are events of their own, applied to the messages they name by sequence id.
 /// The user's messages show as seen once someone else's read marker passes them.
 @MainActor
 public final class XChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, ChatLiveUpdating, ChatReferenceResolving, ChatReadReceipts {
     public let network = SocialNetwork.x
-    public let canReply = false
-    public let acceptsAttachments = false
+    public let canReply = true
+    public let acceptsAttachments = true
     public let pollInterval: Duration? = nil
     public var onChange: (() -> Void)?
     public var onConnectionLost: ((Error?) -> Void)?
@@ -119,9 +119,15 @@ public final class XChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, 
         await merge(page.events)
     }
 
-    /// X answers with the stored event, which takes the sending copy's place.
+    /// X answers with the stored event, which takes the sending copy's place. A reply quotes the message as
+    /// shown, with its latest edit.
     public func send(_ message: ChatOutgoing) async throws -> String? {
-        let event = try await client.sendText(message.text, conversationId: conversationId, token: conversationToken)
+        let replyTo = try message.replyToId.map { id in
+            guard let event = events[id] else { throw SourceError.serviceError("The message you're replying to isn't loaded.") }
+            return XChatReplyTarget(event: event, senderName: event.senderId == viewerId ? nil : people[event.senderId]?.name, text: editedTexts[id])
+        }
+        let media: XChatOutgoingMedia? = if let attachment = message.attachment { await XChatOutgoingMedia(data: attachment.data, mimeType: attachment.mimeType, filename: attachment.filename, isImage: attachment.isImage) } else { nil }
+        let event = try await client.sendMessage(message.text, media: media, replyTo: replyTo, conversationId: conversationId, token: conversationToken)
         await merge([event])
         return event.sequenceId
     }
@@ -223,12 +229,14 @@ public final class XChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, 
             switch entries[event.sequenceId] {
             case let .some(.some(.message(contents))):
                 if let reply = contents.reply, let id = reply.sequenceId, events[id] == nil {
+                    // X's previews of the viewer's own messages may carry no name, so the sender id decides.
+                    let isOwnReply = reply.senderId != nil && reply.senderId == viewerId
                     references[id] = ChatMessage(
                         id: id,
-                        sender: ChatUser(id: "", name: reply.senderName ?? "Someone", avatarURL: nil),
+                        sender: isOwnReply ? person(reply.senderId ?? "") : ChatUser(id: reply.senderId ?? "", name: reply.senderName ?? reply.senderId.flatMap { people[$0]?.name } ?? "Someone", avatarURL: nil),
                         timestamp: nil,
                         text: reply.text,
-                        isOwn: false,
+                        isOwn: isOwnReply,
                     )
                 }
                 chatMessages.append(ChatMessage(

@@ -122,9 +122,9 @@ Sources/
       TelegramChatAdapter.swift     # Telegram chat adapter: history, pushed updates, send, replies, media, albums, custom emoji, reactions, typing, read cursor
       XChatThrift.swift             # Thrift binary protocol values and coder for X Chat events
       XChatCrypto.swift             # X Chat crypto: ECIES key unwrap, XSalsa20-Poly1305 secretbox, franking, signing
-      XChatClient.swift             # X Chat (encrypted X DMs): GraphQL inbox/history/send/read, Juicebox key recovery
+      XChatClient.swift             # X Chat (encrypted X DMs): GraphQL inbox/history/send/read, replies, media upload, Juicebox key recovery
       XChatAdapter.swift            # X Chat adapter: decrypted history, live events, send, reactions, read marker
-      XChatMedia.swift              # X Chat media: xchatmedia: URLs, the URLProtocol that downloads, decrypts and caches them
+      XChatMedia.swift              # X Chat media: xchatmedia: URLs, the URLProtocol that downloads, decrypts and caches them; outgoing media metadata
     Resources/
       TelegramSchema.tl             # Telegram TL schema (scripts/telegram-schema.py); TelegramAPI.json is gitignored
       Emoji.json                    # Every emoji by category with names and keywords (THIRD_PARTY_NOTICES.md)

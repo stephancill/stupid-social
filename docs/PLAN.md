@@ -153,9 +153,9 @@ Observed X behavior:
 
 - X's chats (X Chat, which replaced X DMs and is end-to-end encrypted) appear on the Chats screen when X is connected and the user has entered their X Chat PIN in Settings → X. The PIN recovers the account's chat keys from X's key backup once; the keys sync to the user's other devices through iCloud Keychain, so the PIN is needed once per Apple account. A wrong PIN uses one of X's limited tries, and the app says how many are left. "Forget Keys" removes them, and disconnecting X does too.
 - Every inbox conversation (not message requests) is listed with its latest message, time and unread count; archived ones sit behind the Archived Chats row and muted ones show a gray badge. Group chats are named for their members.
-- Opening a chat shows its decrypted history (older pages load on scroll), new messages and reactions as they happen (the Chats list updates live too), edits, deletions, reactions and quoted replies. The user can send text messages and add or remove reactions. Reading moves the user's X read marker, so the chat is read on X too. Unread counts, like X's badge, count messages, not reactions.
-- Messages that don't decrypt show as "Couldn't decrypt this message." rather than disappearing. Shared posts and links show as cards; photos migrated from old DMs show in the bubble, and newer (encrypted) media shows as a card that opens X.
-- Not supported yet: sending replies and media, decrypting encrypted media, group titles, message requests, starting chats, and old (pre-X Chat) DM conversations that weren't migrated.
+- Opening a chat shows its decrypted history (older pages load on scroll), new messages and reactions as they happen (the Chats list updates live too), edits, deletions, reactions and quoted replies. The user can send text messages, replies, and photos or files (with an optional caption), and add or remove reactions. Reading moves the user's X read marker, so the chat is read on X too. Unread counts, like X's badge, count messages, not reactions.
+- Messages that don't decrypt show as "Couldn't decrypt this message." rather than disappearing. Shared posts and links show as cards; photos, videos and files show in the bubble, decrypted on the device.
+- Not supported yet: group titles, message requests, starting chats, and old (pre-X Chat) DM conversations that weren't migrated.
 
 ### Bluesky Chat
 

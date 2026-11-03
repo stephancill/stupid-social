@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import JuiceboxSdk
 
@@ -88,6 +89,7 @@ public enum XChatEntry: Equatable, Sendable {
 public struct XChatMessageContents: Equatable, Sendable {
     public struct Reply: Equatable, Sendable {
         let sequenceId: String?
+        let senderId: String?
         let senderName: String?
         let text: String?
     }
@@ -153,7 +155,7 @@ public struct XChatMessageContents: Equatable, Sendable {
     init(_ message: ThriftStruct) {
         text = message.string(1)
         isForwarded = message.structure(6) != nil
-        reply = message.structure(4).map { Reply(sequenceId: $0.string(6), senderName: $0.string(5), text: $0.string(2)) }
+        reply = message.structure(4).map { Reply(sequenceId: $0.string(6), senderId: $0.int(1).map(String.init), senderName: $0.string(5), text: $0.string(2)) }
         attachments = message.structures(3).compactMap { attachment in
             if let media = attachment.structure(1) {
                 return .media(Media(media))
@@ -185,6 +187,14 @@ public struct XChatMessageContents: Equatable, Sendable {
         case nil: return "Message"
         }
     }
+}
+
+/// The message a reply quotes: its event, its sender's name (nil for the viewer's own) and its text when an edit
+/// changed it.
+public struct XChatReplyTarget: Sendable {
+    let event: XChatEvent
+    let senderName: String?
+    let text: String?
 }
 
 public struct XChatPerson: Hashable, Codable, Sendable {
@@ -232,6 +242,8 @@ public actor XChatClient: ChatListProvider {
         case sendCreate = "SendMessageCreateMutation"
         case sendEvent = "SendMessageEventMutation"
         case socketToken = "GenerateXChatTokenMutation"
+        case initializeMediaUpload = "InitializeXChatMediaUploadMutation"
+        case finalizeMediaUpload = "FinalizeXChatMediaUploadMutation"
 
         var queryId: String {
             switch self {
@@ -242,6 +254,8 @@ public actor XChatClient: ChatListProvider {
             case .sendCreate: "TWRPP7gnKwV_R8-tE-Dd3Q"
             case .sendEvent: "G7WwJGKvTBVb-BXhZNSVMw"
             case .socketToken: "Qh3fZRjPPtPoHYR_2sCZsA"
+            case .initializeMediaUpload: "6M543IPabOfZm7-yyIczdw"
+            case .finalizeMediaUpload: "3O4jPQ2hwW9LbqCc-wFmqA"
             }
         }
     }
@@ -250,6 +264,8 @@ public actor XChatClient: ChatListProvider {
     private static let signatureVersion = "7"
     /// `MessageSentFrom.ConversationScreenComposer`, as X's own composer sends.
     private static let sentFromComposer: Int32 = 1
+    /// dm-core's `SegmentSizesDecider` on a poor or unknown connection.
+    private static let uploadPartSize = 1024 * 1024
     /// GetConversationPageQuery returns events older than `min_local_sequence_id`.
     private static let newestSequenceId = String(Int64.max)
 
@@ -516,19 +532,24 @@ public actor XChatClient: ChatListProvider {
     }
 
     func decrypt(_ event: XChatEvent) throws -> XChatEntry? {
+        try plaintext(of: event).map(XChatEntry.init(plaintext:))
+    }
+
+    /// A message event's `MessageEntryHolder`, or nil for other events.
+    private func plaintext(of event: XChatEvent) throws -> Data? {
         guard let create = event.messageCreate else { return nil }
         guard let contents = create.data(100) else { throw SourceError.invalidResponse }
         // Without a key version (101) the message was sent unencrypted (109 is then true), such as to someone
         // without X Chat keys: the contents are the plain `MessageEntryHolder`.
         guard let version = create.string(101) else {
-            return try XChatEntry(plaintext: contents)
+            return contents
         }
         guard let key = conversationKeys[event.conversationId]?[version] else {
             throw SourceError.serviceError("Missing the key for an encrypted X message.")
         }
         // Version 1 derives a key per message; no account seen so far sends it, so it fails loudly instead.
         guard (create.int(112) ?? 0) == 0 else { throw SourceError.unsupported }
-        return try XChatEntry(plaintext: XChatCrypto.open(contents, key: key))
+        return try XChatCrypto.open(contents, key: key)
     }
 
     /// The name doesn't say which key sealed it, so each of the conversation's keys is tried, newest first.
@@ -590,14 +611,52 @@ public actor XChatClient: ChatListProvider {
 
     // MARK: Sending
 
-    /// Sends a text message and returns its sequence id.
-    func sendText(_ text: String, conversationId: String, token: String?) async throws -> XChatEvent {
+    /// Sends a message with text, a file or both, optionally as a reply, and returns the event X stored. A file
+    /// is uploaded first under the message's id (probe `send-media`).
+    func sendMessage(_ text: String, media: XChatOutgoingMedia?, replyTo: XChatReplyTarget?, conversationId: String, token: String?) async throws -> XChatEvent {
+        let messageId = UUID().uuidString.lowercased()
         var message = ThriftStruct()
-        message[1] = .string(text)
+        // X's composer leaves the text out of a message that is only a file.
+        if !text.isEmpty || media == nil {
+            message[1] = .string(text)
+        }
         message[2] = .structs([])
         message[3] = .structs([])
+        var mediaHashes: [Data] = []
+        if let media {
+            let attachment = try await upload(media, messageId: messageId, conversationId: conversationId)
+            message[3] = .structs([ThriftStruct([1: .structure(attachment)])])
+            mediaHashes = attachment.data(11).map { [$0] } ?? []
+        }
+        if let replyTo {
+            message[4] = try .structure(replyPreview(replyTo))
+        }
         message[7] = .i32(Self.sentFromComposer)
-        return try await send(entry: [1: .structure(message)], conversationId: conversationId, token: token)
+        return try await send(entry: [1: .structure(message)], conversationId: conversationId, token: token, messageId: messageId, mediaHashes: mediaHashes)
+    }
+
+    /// A `ReplyingToPreview` as X's web client sends it while `xchat_additional_reply_preview_validation_send` is
+    /// off (observed 2026-11-03): 1 sender id, 2 text, 3 entities, 4 attachments (each as the message carries it,
+    /// without the plaintext hash), 5 sender's name, 6 sequence id, 7 client message id; no raw source event or key.
+    private func replyPreview(_ target: XChatReplyTarget) throws -> ThriftStruct {
+        let event = target.event
+        guard let plaintext = try plaintext(of: event), let message = try ThriftCoder.decode(plaintext).structure(1)?.structure(1),
+              let senderId = Int64(event.senderId)
+        else { throw SourceError.serviceError("Can't reply to this X message.") }
+        let original = message.string(1)
+        var preview = ThriftStruct()
+        preview[1] = .i64(senderId)
+        preview[2] = (target.text ?? original).map(ThriftValue.string)
+        preview[3] = target.text == nil || target.text == original ? message[2] ?? .structs([]) : .structs([])
+        preview[4] = .structs(message.structures(3).map { attachment in
+            guard var media = attachment.structure(1) else { return attachment }
+            media[11] = nil
+            return ThriftStruct([1: .structure(media)])
+        })
+        preview[5] = target.senderName.map(ThriftValue.string)
+        preview[6] = .string(event.sequenceId)
+        preview[7] = event.messageId.map(ThriftValue.string)
+        return preview
     }
 
     /// A `MessageEdit` as X's web client builds it: the target's sequence id, the new text, entities (none, as
@@ -618,20 +677,32 @@ public actor XChatClient: ChatListProvider {
         return try await send(entry: [remove ? 3 : 2: .structure(reaction)], conversationId: conversationId, token: token)
     }
 
-    /// Encrypts, franks, signs and sends one `MessageEntryContents`, returning the event X stored.
-    private func send(entry: [Int16: ThriftValue], conversationId: String, token: String?) async throws -> XChatEvent {
-        let keys = try xChatKeys()
+    /// The conversation's newest key, which new messages and media are encrypted with.
+    private func currentKey(conversationId: String) throws -> (version: String, key: Data) {
         guard let (version, key) = conversationKeys[conversationId]?.max(by: { (Int64($0.key) ?? 0) < (Int64($1.key) ?? 0) }) else {
             throw SourceError.serviceError("Missing the key for this X chat.")
         }
-        let messageId = UUID().uuidString.lowercased()
+        return (version, key)
+    }
+
+    /// Encrypts, franks, signs and sends one `MessageEntryContents`, returning the event X stored. Franking
+    /// covers each attachment's plaintext SHA-256, which received media messages verify against.
+    private func send(
+        entry: [Int16: ThriftValue],
+        conversationId: String,
+        token: String?,
+        messageId: String = UUID().uuidString.lowercased(),
+        mediaHashes: [Data] = [],
+    ) async throws -> XChatEvent {
+        let keys = try xChatKeys()
+        let (version, key) = try currentKey(conversationId: conversationId)
         var holder = ThriftStruct()
         holder[1] = .structure(ThriftStruct(entry))
         let plaintext = ThriftCoder.encode(holder)
         let contents = try XChatCrypto.seal(plaintext, key: key)
         let frankingNonce = try XChatCrypto.randomBytes(32)
         var franking = ThriftStruct()
-        franking[1] = .binary(XChatCrypto.frankingTag(plaintext: plaintext, nonce: frankingNonce, messageId: messageId, conversationId: conversationId))
+        franking[1] = .binary(XChatCrypto.frankingTag(plaintext: plaintext, nonce: frankingNonce, messageId: messageId, conversationId: conversationId, mediaHashes: mediaHashes))
         franking[2] = try .binary(XChatCrypto.seal(frankingNonce, key: key))
         var create = ThriftStruct()
         create[100] = .binary(contents)
@@ -693,6 +764,71 @@ public actor XChatClient: ChatListProvider {
     }
 
     // MARK: Media
+
+    /// X's media upload (dm-core's `DmMediaUploadHandler`): the file is encrypted like downloads decrypt it, X
+    /// is told its encrypted size and returns a hash key and resume id, each 1 MiB part is POSTed raw to the
+    /// hash key's ton.x.com URL with its 0-based part number, and finalizing gives the part count. Returns the
+    /// message's `MediaAttachment`, and caches the plaintext so the sent file shows without downloading it.
+    private func upload(_ media: XChatOutgoingMedia, messageId: String, conversationId: String) async throws -> ThriftStruct {
+        let (version, key) = try currentKey(conversationId: conversationId)
+        let encrypted = try XChatCrypto.encryptMedia(media.data, key: key)
+        let initialized = try await mutation(.initializeMediaUpload, variables: [
+            "conversation_id": conversationId,
+            "message_id": messageId,
+            "total_bytes": String(encrypted.count),
+            "is_public": false,
+        ])["xchat_initialize_media_upload"] as? [String: Any]
+        guard let hashKey = initialized?["media_hash_key"] as? String, let resumeId = initialized?["resume_id"].map({ "\($0)" }) else {
+            throw SourceError.serviceError("X didn't accept the upload (\(initialized?["upload_error"].map { "\($0)" } ?? "no error code")).")
+        }
+        let headers = try XClient.apiHeaders(credentials: xCredentials())
+        let reference = XChatMediaReference(conversationId: conversationId, hashKey: hashKey, keyVersion: version, fileExtension: media.fileExtension)
+        var parts = 0
+        for start in stride(from: encrypted.startIndex, to: encrypted.endIndex, by: Self.uploadPartSize) {
+            var components = URLComponents(url: XChatMediaURL.downloadURL(reference), resolvingAgainstBaseURL: false)!
+            components.queryItems = [
+                URLQueryItem(name: "concurrent", value: "true"),
+                URLQueryItem(name: "resumeId", value: resumeId),
+                URLQueryItem(name: "partNumber", value: String(parts)),
+            ]
+            var request = URLRequest(url: components.url!)
+            request.httpMethod = "POST"
+            request.allHTTPHeaderFields = headers
+            request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+            let (_, response) = try await session.upload(for: request, from: encrypted[start ..< min(start + Self.uploadPartSize, encrypted.endIndex)])
+            guard let status = (response as? HTTPURLResponse)?.statusCode, (200 ..< 300).contains(status) else {
+                throw SourceError.serviceError("X returned HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0) uploading the file.")
+            }
+            parts += 1
+        }
+        let finalized = try await mutation(.finalizeMediaUpload, variables: [
+            "conversation_id": conversationId,
+            "message_id": messageId,
+            "media_hash_key": hashKey,
+            "resume_id": resumeId,
+            "num_parts": String(parts),
+            "is_public": false,
+        ])["xchat_finalize_media_upload"] as? [String: Any]
+        if let error = finalized?["upload_error"], !(error is NSNull) {
+            throw SourceError.serviceError("X didn't finish the upload (\(error)).")
+        }
+        let cached = XChatMediaCache.file(for: reference)
+        try? FileManager.default.createDirectory(at: XChatMediaCache.directory, withIntermediateDirectories: true)
+        try? media.data.write(to: cached, options: .atomic)
+
+        var attachment = ThriftStruct()
+        attachment[1] = .string(hashKey)
+        if let width = media.width, let height = media.height {
+            attachment[2] = .structure(ThriftStruct([1: .i64(width), 2: .i64(height)]))
+        }
+        attachment[3] = .i32(Int32(media.kind.rawValue))
+        attachment[4] = media.durationMillis.map(ThriftValue.i64)
+        attachment[5] = .i64(Int64(encrypted.count))
+        attachment[6] = .string(media.filename)
+        attachment[7] = .string(UUID().uuidString.lowercased())
+        attachment[11] = .binary(Data(SHA256.hash(data: media.data)))
+        return attachment
+    }
 
     func hasKey(conversationId: String, version: String) -> Bool {
         conversationKeys[conversationId]?[version] != nil

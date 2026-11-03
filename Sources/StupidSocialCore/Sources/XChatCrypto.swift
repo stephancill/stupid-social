@@ -124,6 +124,21 @@ extension XChatCrypto {
         return output
     }
 
+    /// Encrypts an attachment for upload, as dm-core's `encryptStream`: a fresh header, then 1024-byte chunks, the
+    /// last tagged final (an empty file is one empty final chunk).
+    static func encryptMedia(_ plaintext: Data, key: Data) throws -> Data {
+        var stream = try SecretStream(key: key, header: randomBytes(SecretStream.headerSize))
+        var output = stream.header
+        let chunkSize = mediaChunkSize - SecretStream.overhead
+        var offset = plaintext.startIndex
+        repeat {
+            let end = min(offset + chunkSize, plaintext.endIndex)
+            try output.append(stream.push(plaintext[offset ..< end], tag: end == plaintext.endIndex ? SecretStream.tagFinal : SecretStream.tagMessage))
+            offset = end
+        } while offset < plaintext.endIndex
+        return output
+    }
+
     /// Decrypts an attachment file into `output` a chunk at a time, so a long video never sits in memory, and
     /// returns the plaintext's SHA-256.
     static func decryptMedia(from input: URL, to output: URL, key: Data) throws -> Data {
@@ -158,7 +173,7 @@ extension XChatCrypto {
     }
 }
 
-/// libsodium's `crypto_secretstream_xchacha20poly1305` (pull side). Each chunk is an encrypted tag byte, the
+/// libsodium's `crypto_secretstream_xchacha20poly1305`. Each chunk is an encrypted tag byte, the
 /// ciphertext and a 16-byte MAC, where the MAC covers a 64-byte block holding the encrypted tag and the rest of
 /// that keystream block. For a message length that is a multiple of 16 (every 1024-byte chunk) that is exactly
 /// RFC 8439 ChaCha20-Poly1305 over (tag || 63 zero bytes || message), so CryptoKit's `ChaChaPoly` opens the chunk
@@ -166,18 +181,49 @@ extension XChatCrypto {
 struct SecretStream {
     static let headerSize = 24
     static let overhead = 17
+    static let tagMessage: UInt8 = 0
     static let tagFinal: UInt8 = 3
     private static let tagRekey: UInt8 = 2
 
+    /// The stream's first 24 bytes: 16 for the subkey, then the inner nonce.
+    let header: Data
     private var key: [UInt8]
     /// 4-byte little-endian counter, then the 8-byte inner nonce.
     private var nonce: [UInt8]
 
     init(key: Data, header: Data) throws {
         guard key.count == 32, header.count == Self.headerSize else { throw XChatCrypto.CryptoError.invalidKey }
+        self.header = header
         let header = [UInt8](header)
         self.key = ChaCha20.hchacha20(key: [UInt8](key), input: Array(header[0 ..< 16]))
         nonce = [1, 0, 0, 0] + header[16 ..< 24]
+    }
+
+    /// The inverse of `pull`: CryptoKit encrypts (tag || 63 zero bytes || message) from keystream block 1, whose
+    /// RFC 8439 MAC is libsodium's when the message length is a multiple of 16; otherwise the MAC is the native
+    /// Poly1305 over libsodium's padding, as `openUnaligned` checks it.
+    mutating func push(_ message: Data, tag: UInt8) throws -> Data {
+        let symmetricKey = SymmetricKey(data: key)
+        let chachaNonce = try ChaChaPoly.Nonce(data: nonce)
+        var plaintext = Data([tag]) + Data(count: 63)
+        plaintext.append(message)
+        let box = try ChaChaPoly.seal(plaintext, using: symmetricKey, nonce: chachaNonce)
+        let encrypted = [UInt8](box.ciphertext)
+        let mac: Data
+        if message.count % 16 == 0 {
+            mac = Data(box.tag)
+        } else {
+            var authenticated = encrypted
+            authenticated += [UInt8](repeating: 0, count: message.count % 16)
+            authenticated += [UInt8](repeating: 0, count: 8)
+            withUnsafeBytes(of: UInt64(64 + message.count).littleEndian) { authenticated += $0 }
+            mac = Poly1305.tag(Data(authenticated), key: Data(ChaCha20.block(key: key, counter: 0, nonce: nonce)[0 ..< 32]))
+        }
+        var chunk = Data([encrypted[0]])
+        chunk.append(contentsOf: encrypted[64...])
+        chunk.append(mac)
+        advance(mac: mac, tag: tag)
+        return chunk
     }
 
     mutating func pull(_ chunk: Data) throws -> (message: Data, tag: UInt8) {
@@ -202,7 +248,12 @@ struct SecretStream {
             opened = try openUnaligned(bytes, mac: mac, symmetricKey: symmetricKey, nonce: chachaNonce)
         }
         let tag = opened[opened.startIndex]
-        // The inner nonce absorbs the MAC and the counter moves on, as libsodium does after every chunk.
+        advance(mac: mac, tag: tag)
+        return (Data(opened.dropFirst(64)), tag)
+    }
+
+    /// The inner nonce absorbs the MAC and the counter moves on, as libsodium does after every chunk.
+    private mutating func advance(mac: Data, tag: UInt8) {
         for index in 0 ..< 8 {
             nonce[4 + index] ^= mac[mac.startIndex + index]
         }
@@ -212,7 +263,6 @@ struct SecretStream {
         if tag & Self.tagRekey != 0 || counter == 0 {
             rekey()
         }
-        return (Data(opened.dropFirst(64)), tag)
     }
 
     /// libsodium pads the ciphertext in the MAC by `length % 16` bytes where RFC 8439 pads to the next multiple
