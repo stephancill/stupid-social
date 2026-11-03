@@ -1,0 +1,33 @@
+name: Announce
+
+# Posts commits pushed to main, and each external TestFlight release (a pushed
+# testflight/<build> tag, see AGENTS.md § Build And Install), to the stupid
+# social room on the Apron demo server. Posts as the bot whose token is the
+# APRON_BOT_TOKEN secret of the announce environment; the bot must have
+# joined the room.
+on:
+  push:
+    branches: [main]
+    tags: ['testflight/*']
+
+permissions:
+  contents: read
+
+jobs:
+  announce:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: announce
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: node .github/scripts/apron-announce.mjs
+        env:
+          APRON_URL: wss://server.apron.chat/
+          APRON_ROOM_ID: '1793555674934'
+          APRON_BOT_TOKEN: ${{ secrets.APRON_BOT_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}

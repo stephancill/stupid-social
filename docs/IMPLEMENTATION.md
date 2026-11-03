@@ -877,6 +877,7 @@ How the app works today, by topic: decisions and their reasons, endpoint and pro
 - The CLI's external-review poll reads `submissionState`/`state`, but the response exposes `betaReviewState: APPROVED`, so it keeps polling after approval (observed 2026-10-10); verify with `release status --live` or submit with `--no-wait`
 - An interrupted release can bump `CFBundleVersion` without archiving/uploading; check App Store Connect's latest build before bumping again
 - Before upload, grep the release binary for new endpoint markers to confirm they shipped
+- `.github/workflows/announce.yml` posts commits pushed to main, and each pushed `testflight/<build>` tag with its notes, to the stupid social room (`1793555674934`) on `wss://server.apron.chat/`, as the bot `stupid-bot` (`APRON_BOT_TOKEN`, a secret of the `announce` environment). `apron-chat/apron-pr-bot` only announces merged pull requests, so `.github/scripts/apron-announce.mjs` is a dependency-free copy of its connection. The bot must have joined the room (`room_join`); the request id (push head or tag) keeps reruns from posting twice
 
 ## Probes, scripts & debug tooling
 
