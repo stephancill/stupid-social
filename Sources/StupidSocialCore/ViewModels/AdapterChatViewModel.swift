@@ -218,6 +218,16 @@ public protocol ChatCustomEmojis: ChatAdapter {
     var customEmojis: [String: ChatCustomEmoji] { get }
 }
 
+/// Stickers the user can send: their recent stickers and installed sets.
+@MainActor
+public protocol ChatStickerSending: ChatAdapter {
+    /// Recently used first, with its stickers; the other sets may leave theirs to `stickers(inSet:)`.
+    func stickerSets() async throws -> [ChatStickerSet]
+    func stickers(inSet id: String) async throws -> [ChatSticker]
+    /// Returns the sent message's id, as `send(_:)` does.
+    func send(sticker: ChatSticker, replyToId: String?) async throws -> String?
+}
+
 /// Text that runs a command rather than posting a message, which may post nothing.
 @MainActor
 public protocol ChatCommanding: ChatAdapter {
@@ -448,6 +458,28 @@ public final class AdapterChatViewModel<Adapter: ChatAdapter>: ChatViewModel {
         await sendOptimistically(text: text, attachment: attachment, replyToId: replyToId) { [adapter] in
             let id = try await adapter.send(ChatOutgoing(text: text, attachment: attachment, replyToId: replyToId))
             adapterDidChange()
+            return id
+        }
+    }
+
+    override public var offersStickers: Bool {
+        adapter is any ChatStickerSending
+    }
+
+    override public func stickerSets() async throws -> [ChatStickerSet] {
+        try await (adapter as? any ChatStickerSending)?.stickerSets() ?? []
+    }
+
+    override public func stickers(inSet id: String) async throws -> [ChatSticker] {
+        try await (adapter as? any ChatStickerSending)?.stickers(inSet: id) ?? []
+    }
+
+    override public func send(sticker: ChatSticker) async {
+        guard let sending = adapter as? any ChatStickerSending, state == .connected, !isReadOnly else { return }
+        let replyToId = canReply ? replyingTo?.id : nil
+        await sendOptimistically(text: "", attachment: nil, sticker: sticker, replyToId: replyToId) { [weak self] in
+            let id = try await sending.send(sticker: sticker, replyToId: replyToId)
+            self?.adapterDidChange()
             return id
         }
     }

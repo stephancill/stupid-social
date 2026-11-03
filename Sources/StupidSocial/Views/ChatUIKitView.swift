@@ -358,10 +358,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         attachButton.tintColor = .label
         attachButton.accessibilityLabel = "Add Attachment"
         attachButton.showsMenuAsPrimaryAction = true
-        attachButton.menu = UIMenu(children: [
-            UIAction(title: "Photo Library", image: UIImage(systemName: "photo.on.rectangle")) { [weak self] _ in self?.presentPhotoPicker() },
-            UIAction(title: "Files", image: UIImage(systemName: "folder")) { [weak self] _ in self?.presentDocumentPicker() },
-        ])
+        attachButton.menu = attachMenu()
         let attachGlass = ChatGlass.make(cornerRadius: 22)
         attachGlass.contentView.addSubview(attachButton)
         attachButton.pinToEdges(of: attachGlass.contentView)
@@ -370,7 +367,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
             attachGlass.heightAnchor.constraint(equalToConstant: 44),
         ])
         attachGlass.setContentHuggingPriority(.required, for: .horizontal)
-        attachGlass.isHidden = !viewModel.offersAttachments
+        attachGlass.isHidden = !viewModel.offersAttachments && !viewModel.offersStickers
 
         // Staged attachment shown inside the input pill, above the text.
         attachmentThumbnail.contentMode = .scaleAspectFill
@@ -966,9 +963,10 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
             replyPreview.isHidden = true
         }
         // An edit changes only the text.
-        let attaches = canAttach && editingMessage == nil
+        let attaches = (canAttach || viewModel.offersStickers) && editingMessage == nil
         attachButton.isEnabled = attaches
         attachButton.alpha = attaches ? 1 : 0.35
+        attachButton.menu = attachMenu()
         let sendImage = editingMessage == nil ? "arrow.up.circle.fill" : "checkmark.circle.fill"
         if sendButton.configuration?.image != UIImage(systemName: sendImage) {
             sendButton.configuration?.image = UIImage(systemName: sendImage)
@@ -1297,6 +1295,36 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     }
 
     // MARK: - Attachments
+
+    /// Photos and files where the network takes uploads, and stickers where it has them.
+    private func attachMenu() -> UIMenu {
+        var actions: [UIAction] = []
+        if viewModel.offersAttachments {
+            let photos = UIAction(title: "Photo Library", image: UIImage(systemName: "photo.on.rectangle")) { [weak self] _ in self?.presentPhotoPicker() }
+            let files = UIAction(title: "Files", image: UIImage(systemName: "folder")) { [weak self] _ in self?.presentDocumentPicker() }
+            if !canAttach {
+                photos.attributes = .disabled
+                files.attributes = .disabled
+            }
+            actions += [photos, files]
+        }
+        if viewModel.offersStickers {
+            actions.append(UIAction(title: "Sticker", image: UIImage(systemName: "face.smiling")) { [weak self] _ in self?.presentStickerPicker() })
+        }
+        return UIMenu(children: actions)
+    }
+
+    private func presentStickerPicker() {
+        let viewModel = viewModel
+        let picker = UIHostingController(rootView: ChatStickerPicker(
+            loadSets: { try await viewModel.stickerSets() },
+            loadStickers: { try await viewModel.stickers(inSet: $0) },
+            send: { sticker in Task { await viewModel.send(sticker: sticker) } },
+        ))
+        picker.sheetPresentationController?.detents = [.medium(), .large()]
+        picker.sheetPresentationController?.prefersGrabberVisible = true
+        present(picker, animated: true)
+    }
 
     private func presentPhotoPicker() {
         var configuration = PHPickerConfiguration()

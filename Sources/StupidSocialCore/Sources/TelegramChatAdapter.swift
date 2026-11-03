@@ -8,7 +8,7 @@ import Foundation
 /// custom emoji in text and reactions draw as their images, and voice messages play in the chat. The user's
 /// messages show as seen once Telegram's outbox read cursor passes them.
 @MainActor
-public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, ChatReactionSending, ChatUnseenReactions, ChatReadReceipts, ChatLiveUpdating, ChatReferenceResolving, ChatMentioning, ChatTyping, ChatCustomEmojis, ChatAudioPreviewing, ChatReactionChoices, ChatButtonPressing {
+public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, ChatReactionSending, ChatUnseenReactions, ChatReadReceipts, ChatLiveUpdating, ChatReferenceResolving, ChatMentioning, ChatTyping, ChatCustomEmojis, ChatAudioPreviewing, ChatReactionChoices, ChatButtonPressing, ChatStickerSending {
     public let network = SocialNetwork.telegram
     public let canReply = true
     public let acceptsAttachments = true
@@ -102,7 +102,7 @@ public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, 
 
     /// Raised when messages are parsed differently, such as when media gained new embeds: an older snapshot's
     /// messages are dropped, since only the newest page reloads on open and the rest would keep the old shapes.
-    private static let snapshotVersion = 3
+    private static let snapshotVersion = 4
 
     private struct Snapshot: Codable {
         var version: Int?
@@ -297,6 +297,24 @@ public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, 
         } else {
             scheduleRefresh()
         }
+        return id.map(String.init)
+    }
+
+    // MARK: Stickers
+
+    public func stickerSets() async throws -> [ChatStickerSet] {
+        try await client.stickerSets()
+    }
+
+    public func stickers(inSet id: String) async throws -> [ChatSticker] {
+        try await client.stickers(inSet: id)
+    }
+
+    /// Waits for Telegram's copy of the message, as media does.
+    public func send(sticker: ChatSticker, replyToId: String?) async throws -> String? {
+        typingSentAt = nil
+        let id = try await client.send(peer: peer, sticker: sticker, replyTo: replyToId.flatMap { Int32($0) })
+        scheduleRefresh()
         return id.map(String.init)
     }
 
@@ -751,6 +769,8 @@ public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, 
                 .audio(previewId: url.absoluteString, title: title, subtitle: subtitle, detail: nil, imageURL: nil, link: nil)
             case let .voice(url, duration, waveform):
                 .voice(previewId: url.absoluteString, duration: duration, waveform: waveform ?? [])
+            case let .sticker(sticker):
+                .sticker(sticker)
             }
         }
         // Media without a caption shows only the media; media the app can't draw shows its label.

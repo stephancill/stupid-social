@@ -11,6 +11,7 @@ public enum TelegramEmbed: Codable, Hashable, Sendable {
     case audio(url: URL, title: String, subtitle: String?)
     /// A voice message, with its waveform (levels from 0 to 1).
     case voice(url: URL, duration: Double?, waveform: [Double]?)
+    case sticker(ChatSticker)
 }
 
 /// One emoji's total on a message; `isMine` when the user chose it.
@@ -222,6 +223,27 @@ enum TelegramMediaParser {
         return TelegramMediaURL.make(key: "document-\(id)/\(name)", dc: Int(dc), location: location, maxSize: TelegramMediaURL.maxWholeDownloadSize)
     }
 
+    /// A sticker document as the chat draws it: TGS (Lottie), WebM (VP9 with alpha) or WebP, the whole file loaded
+    /// (stickers are at most 64 KB for TGS and 256 KB for WebM and WebP), with its largest thumbnail up to 320 px as
+    /// the still shown while it loads. `nil` for other documents.
+    static func sticker(_ document: TLObject) -> ChatSticker? {
+        guard document.name == "document", let id = document["id"]?.long else { return nil }
+        let format: ChatStickerFormat
+        switch document["mime_type"]?.string {
+        case "application/x-tgsticker": format = .lottie
+        case "video/webm": format = .video
+        case "image/webp", "image/png": format = .image
+        default: return nil
+        }
+        guard let url = documentURL(document, thumbSize: "") else { return nil }
+        let attributes = document.objects("attributes")
+        let size = attributes.first { $0.name == "documentAttributeImageSize" || $0.name == "documentAttributeVideo" }
+        let aspect = size.flatMap { size in size["w"]?.int.flatMap { w in size["h"]?.int.map { Double(w) / Double(max($0, 1)) } } } ?? 1
+        let alt = attributes.first { $0.name == "documentAttributeSticker" || $0.name == "documentAttributeCustomEmoji" }?["alt"]?.string
+        let poster = format == .image ? nil : bestSize(document.objects("thumbs"), maxSide: 320).flatMap { documentURL(document, thumbSize: $0.type) }
+        return ChatSticker(id: String(id), url: url, format: format, posterURL: poster, aspectRatio: aspect, alt: alt?.isEmpty == false ? alt : nil)
+    }
+
     /// A voice message's waveform: 5-bit levels packed least significant bit first, usually 100 of them in 63 bytes
     /// (observed 2026-10-30), scaled to 0...1.
     static func waveform(_ data: Data) -> [Double] {
@@ -318,18 +340,12 @@ enum TelegramMediaParser {
             let total = Int(seconds.rounded())
             return String(format: "%d:%02d", total / 60, total % 60)
         }
-        if let sticker = attributes.first(where: { $0.name == "documentAttributeSticker" }) {
-            let label = [sticker["alt"]?.string, "Sticker"].compactMap(\.self).filter { !$0.isEmpty }.joined(separator: " ")
-            let size = attributes.first { $0.name == "documentAttributeImageSize" || $0.name == "documentAttributeVideo" }
-            let aspect = size.flatMap { size in size["w"]?.int.flatMap { w in size["h"]?.int.map { Double(w) / Double(max($0, 1)) } } } ?? 1
-            // Static WebP stickers load whole; animated (TGS) and video (WebM) ones show their thumbnail.
-            if mime == "image/webp", let url = documentURL(document, thumbSize: "") {
-                return (label, [.image(url: url, aspectRatio: aspect)])
+        if attributes.contains(where: { $0.name == "documentAttributeSticker" }) {
+            guard let sticker = sticker(document) else {
+                let label = attributes.first { $0.name == "documentAttributeSticker" }?["alt"]?.string
+                return ([label, "Sticker"].compactMap(\.self).filter { !$0.isEmpty }.joined(separator: " "), thumbURL.map { [.image(url: $0, aspectRatio: 1)] } ?? [])
             }
-            if let thumbURL {
-                return (label, [.image(url: thumbURL, aspectRatio: aspect)])
-            }
-            return (label, [])
+            return (sticker.label, [.sticker(sticker)])
         }
         let video = attributes.first { $0.name == "documentAttributeVideo" }
         let isGIF = attributes.contains { $0.name == "documentAttributeAnimated" }

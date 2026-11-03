@@ -54,6 +54,8 @@ Sources/
       ChatAudioPreview.swift        # Inline audio preview player and track card for chat messages
       ChatImageViewer.swift         # Full-screen chat image viewer: zoom, swipe to dismiss, save to Photos; full-screen profile photos
       ChatMediaViews.swift          # Chat videos (poster, looping GIFs, full-screen player) and the Quick Look file source
+      ChatStickerView.swift         # A sticker: still, image or looping animation (Lottie, WebM) rendered off the main thread
+      ChatStickerPicker.swift       # Sticker picker sheet from the composer's attachments menu: sets as tabs, a grid, tap to send
       ApronChatView.swift           # Apron chat: the shared chat plus members and profiles
       ApronMembersView.swift        # Apron room details (title, description, edit) and member list, opened from the chat title
       ChatDetailsHeader.swift       # A chat's details header (photo, title, description), member search and edit sheet, for member lists
@@ -125,6 +127,11 @@ Sources/
       XChatClient.swift             # X Chat (encrypted X DMs): GraphQL inbox/history/send/read, replies, media upload, Juicebox key recovery
       XChatAdapter.swift            # X Chat adapter: decrypted history, live events, send, reactions, read marker
       XChatMedia.swift              # X Chat media: xchatmedia: URLs, the URLProtocol that downloads, decrypts and caches them; outgoing media metadata
+    Stickers/                       # Sticker renderers, no dependencies (docs/TECHNICAL_DESIGN.md § Stickers)
+      LottieModel.swift             # TGS/Lottie parsing: layers, shapes, keyframes, easing, motion curves
+      LottiePath.swift              # Bezier paths, rlottie's lengths and trims
+      LottieRenderer.swift          # Core Graphics frames matching Telegram's rlottie fork, quirks included
+      WebMSticker.swift             # WebM (VP9 + alpha) reader and VideoToolbox decoder
     Resources/
       TelegramSchema.tl             # Telegram TL schema (scripts/telegram-schema.py); TelegramAPI.json is gitignored
       Emoji.json                    # Every emoji by category with names and keywords (THIRD_PARTY_NOTICES.md)
@@ -216,7 +223,7 @@ Chat is one framework with an adapter per network; `docs/TECHNICAL_DESIGN.md` §
 - A network joins chat through a `ChatAdapter` (one conversation) and a `ChatListProvider` (its Chats rows). `AdapterChatViewModel` drives every adapter; don't subclass `ChatViewModel` for a network.
 - Adapters only translate between the network and the shared models (`ChatMessage`, `ChatEmbed`, `ChatReaction`, `ChatSummary`, `ChatInfo`). They hold no `@Published` state and do no UI work; they call `onChange` when what they show changes. State a network-specific screen needs (members, profiles) lives in that screen's own view model, which the adapter may keep current (`ApronRoomViewModel`).
 - Behavior users expect to match across chats belongs to the framework: connecting and reconnecting, polling, paging, unread counting and the divider, read-marker debouncing, snapshots, drafts, optimistic sending. An adapter supplies the network's part (`loadNewest`, `isAfterReadPosition`, `markRead` returning the send, `snapshot`); if the shared behavior doesn't fit, extend the framework.
-- An optional ability is its own protocol (`ChatEditing`, `ChatDeleting`, `ChatReactionSending`, `ChatReactionChoices`, `ChatLiveUpdating`, `ChatWindowing`, `ChatTyping`, `ChatMentioning`, `ChatCustomEmojis`, `ChatCommanding`, `ChatLinking`, `ChatButtonPressing`, …), and the UI offers it exactly when the adapter conforms. A new network-specific need becomes such a protocol any network could adopt, never a special case in shared code or a flag that can disagree with the code.
+- An optional ability is its own protocol (`ChatEditing`, `ChatDeleting`, `ChatReactionSending`, `ChatReactionChoices`, `ChatLiveUpdating`, `ChatWindowing`, `ChatTyping`, `ChatMentioning`, `ChatCustomEmojis`, `ChatCommanding`, `ChatLinking`, `ChatButtonPressing`, `ChatStickerSending`, …), and the UI offers it exactly when the adapter conforms. A new network-specific need becomes such a protocol any network could adopt, never a special case in shared code or a flag that can disagree with the code.
 - Each account contributes its `ChatListProvider` through `AccountComponents.chatListProvider`, and the list scopes rows to that account. Live row changes use `updateChats(_:accountId:)` or `replaceChats(where:with:)`.
 - Adding a network takes its adapter, its `ChatListProvider` (and its line in `AccountComponents.chatListProvider`), a `Destination` case and its case in `ChatsView`'s switch. If it needs more, extend the framework first.
 - Every chat has a `chatKey` (`<account id>|<adapter key>`), used for drafts and snapshots; two accounts can share a chat, so keys always include the account.
@@ -225,6 +232,7 @@ Chat is one framework with an adapter per network; `docs/TECHNICAL_DESIGN.md` §
 ## Network Integration
 
 - Always diagnose network behavior and validate the fix in the dependency-free Python client first, before implementing or changing the native Swift client. The probes (`scripts/x-web-client.py`, `scripts/instagram-web-client.py`, `scripts/github-web-client.py`, `scripts/spotify-web-client.py`, `scripts/bluesky-web-client.py`, `scripts/apron-web-client.py`, `scripts/telegram-client.py`, `scripts/xchat-client.py`) are the source of truth for endpoint behavior, auth/session freshness, redirects, and response shape. Reproduce the issue live with the probe (using simulator credentials where applicable), add or update a probe command that demonstrates the diagnosis, then port the validated behavior into Swift. Do not guess endpoint/auth behavior from Swift alone.
+- Sticker rendering is checked the same way, against references: run `scripts/lottie-compare.py` (Telegram's rlottie) and `scripts/webm-compare.sh` (ffmpeg) on the sticker corpus after changing `Sources/StupidSocialCore/Stickers/`.
 - `scripts/xchat-client.py` is the one probe with dependencies: Python's standard library has no P-256 or libsodium, so it runs as a uv inline script (`uv run --script scripts/xchat-client.py --env-local …`, reading `DIAGNOSE_X_CREDS` from `.env.local`) and recovers keys through the official Juicebox JS SDK under bun (`scripts/xchat-juicebox-recover.ts`, PIN from `X_CHAT_PIN`). `recover-keys` uses a PIN guess when the PIN is wrong; it saves the keys to `logs/xchat-keys.json` (0600, gitignored) so decryption can be iterated without more guesses. Never print message text from other people (`--show-text` is for messages the agent sent), and send, react and mark read only in a conversation the user named for testing (`--expect-participant` guards the recipient).
 - Implement X as a native Swift client that sends what X's own web client sends. Take GraphQL query ids, variables and feature switches from the web client's `main.<hash>.js` bundle (`queryId:"…",operationName:"…",metadata:{featureSwitches:[…]}`, linked from the signed-in `https://x.com/home`) and the switch values from that page's `featureSwitch` config. Never use `twitter-cli` or other third-party clients as a reference for endpoints, ids or request shapes.
 - X background polling must use count-only behavior to avoid marking notifications read server-side.

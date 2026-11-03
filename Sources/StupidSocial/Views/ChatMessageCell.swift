@@ -698,7 +698,9 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
 
         NSLayoutConstraint.deactivate(layout.isOwn ? incomingConstraints : ownConstraints)
         NSLayoutConstraint.activate(layout.isOwn ? ownConstraints : incomingConstraints)
-        bubble.backgroundColor = layout.isOwn ? .systemBlue : .secondarySystemBackground
+        // A sticker on its own goes without a bubble, as in Telegram.
+        let isSticker = !message.isDeleted && body == nil && embeds.count == 1 && { if case .sticker = embeds[0] { true } else { false } }()
+        bubble.backgroundColor = isSticker ? .clear : layout.isOwn ? .systemBlue : .secondarySystemBackground
         let accent = ChatUserColor.color(for: message.sender.id)
         self.accent = accent
 
@@ -718,8 +720,8 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
             replyView.configure(
                 name: reply.name,
                 text: reply.text,
-                accent: layout.isOwn ? .white : reply.accentUserId.map(ChatUserColor.color(for:)) ?? .secondaryLabel,
-                onBubbleColor: layout.isOwn,
+                accent: layout.isOwn && !isSticker ? .white : reply.accentUserId.map(ChatUserColor.color(for:)) ?? .secondaryLabel,
+                onBubbleColor: layout.isOwn && !isSticker,
             )
         } else {
             replyView.isHidden = true
@@ -792,9 +794,9 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
             var corners: CACornerMask = []
             if index == 0, !hasHeader { corners.formUnion([.layerMinXMinYCorner, .layerMaxXMinYCorner]) }
             if index == images.count - 1, !hasContent { corners.formUnion([.layerMinXMaxYCorner, .layerMaxXMaxYCorner]) }
-            image.layer.cornerRadius = 16
+            image.layer.cornerRadius = isSticker ? 0 : 16
             image.layer.maskedCorners = corners
-            image.clipsToBounds = true
+            image.clipsToBounds = !isSticker
         }
         // The views above are rebuilt on every configure and start with a zero frame. A reconfigure inside an
         // animation, such as a reaction arriving, would grow them from the corner, so they take their frames first.
@@ -1284,6 +1286,16 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
             }
             video.addGestureRecognizer(ChatActionTapGesture { [weak self] in self?.actions.playVideo(url) })
             return video
+        case let .sticker(sticker):
+            let view = ChatStickerView(sticker: sticker)
+            // Telegram's size: the long side 160 points.
+            let ratio = CGFloat(min(max(sticker.aspectRatio, 0.25), 4))
+            view.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                view.widthAnchor.constraint(equalToConstant: ratio >= 1 ? 160 : 160 * ratio),
+                view.heightAnchor.constraint(equalTo: view.widthAnchor, multiplier: 1 / ratio),
+            ])
+            return view
         case let .file(url, filename, subtitle, thumbnailURL):
             let row = fileRow(filename: filename, subtitle: subtitle, thumbnailURL: thumbnailURL)
             row.accessibilityTraits = .button
@@ -1305,10 +1317,10 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
         if case .voice = embed { true } else { false }
     }
 
-    /// Photos and videos fill the bubble's media area; other embeds sit under the text.
+    /// Photos, videos and stickers fill the bubble's media area; other embeds sit under the text.
     private static func isMedia(_ embed: ChatEmbed) -> Bool {
         switch embed {
-        case .image(_, _, _, _, true), .video: true
+        case .image(_, _, _, _, true), .video, .sticker: true
         default: false
         }
     }
@@ -1653,7 +1665,8 @@ final class ChatMediaImageCache {
         if let task = loading[url] { return await task.value }
         let task = Task<UIImage?, Never> {
             let data = try? await URLSession.shared.data(from: url).0
-            let image = await Task.detached { data.flatMap(UIImage.init(data:))?.preparingForDisplay() }.value
+            // Some WebP stickers fail to decode ahead of display (error -17102, observed 2026-11-04) but draw as is.
+            let image = await Task.detached { data.flatMap(UIImage.init(data:)).map { $0.preparingForDisplay() ?? $0 } }.value
             if let image {
                 let pixels = image.size.width * image.scale * image.size.height * image.scale
                 cache.setObject(image, forKey: url as NSURL, cost: Int(pixels) * 4)

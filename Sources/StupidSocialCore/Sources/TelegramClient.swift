@@ -309,6 +309,12 @@ public actor TelegramClient: ChatListProvider {
     /// Downloads in flight by cache key, so a file shown twice downloads once.
     private var downloads: [String: Task<Data, Error>] = [:]
     private var customEmojiImages: [Int64: TelegramCustomEmojiImage] = [:]
+    /// Sticker documents seen in the user's sets, by id, which sending a sticker needs (its access hash and file
+    /// reference).
+    private var stickerDocuments: [Int64: TLObject] = [:]
+    /// Installed sets' access hashes, for loading their stickers.
+    private var stickerSetHashes: [Int64: Int64] = [:]
+    private var stickerSetStickers: [Int64: [ChatSticker]] = [:]
     /// How to name each user seen in a history, member list or lookup to Telegram (`InputUser`), for profiles and
     /// name mentions: with their access hash, or through a message they sent when Telegram gave a "min" user.
     private var inputUsers: [Int64: TLObject] = [:]
@@ -1458,6 +1464,85 @@ public actor TelegramClient: ChatListProvider {
             }
         }
         return customEmojiImages.filter { documentIds.contains($0.key) }
+    }
+
+    /// The sticker picker's sets: recently used (`messages.getRecentStickers`), favourites (`getFavedStickers`)
+    /// with their stickers, then the installed sets (`getAllStickers`) without theirs, which `stickers(inSet:)`
+    /// loads (probe `stickers`, observed 2026-11-03).
+    public func stickerSets() async throws -> [ChatStickerSet] {
+        try requireAccount()
+        var sets: [ChatStickerSet] = []
+        for (method, id, title) in [("messages.getRecentStickers", "recent", "Recent"), ("messages.getFavedStickers", "favorites", "Favorites")] {
+            let documents = try await invoke(TLObject(method, ["hash": .long(0)])).object?.objects("stickers") ?? []
+            let stickers = documents.compactMap(rememberSticker)
+            if !stickers.isEmpty {
+                sets.append(ChatStickerSet(id: id, title: title, cover: nil, stickers: stickers))
+            }
+        }
+        for set in try await invoke(TLObject("messages.getAllStickers", ["hash": .long(0)])).object?.objects("sets") ?? [] {
+            guard let id = set["id"]?.long, let accessHash = set["access_hash"]?.long else { continue }
+            stickerSetHashes[id] = accessHash
+            sets.append(ChatStickerSet(id: String(id), title: set["title"]?.string ?? "Stickers", cover: Self.stickerSetCover(set), stickers: stickerSetStickers[id]))
+        }
+        return sets
+    }
+
+    /// An installed set's stickers (`messages.getStickerSet`), remembered for the session.
+    public func stickers(inSet id: String) async throws -> [ChatSticker] {
+        try requireAccount()
+        guard let setId = Int64(id), let accessHash = stickerSetHashes[setId] else { return [] }
+        if let stickers = stickerSetStickers[setId] { return stickers }
+        let input = TLObject("inputStickerSetID", ["id": .long(setId), "access_hash": .long(accessHash)])
+        let documents = try await invoke(TLObject("messages.getStickerSet", ["stickerset": .object(input), "hash": .int(0)])).object?.objects("documents") ?? []
+        let stickers = documents.compactMap(rememberSticker)
+        stickerSetStickers[setId] = stickers
+        return stickers
+    }
+
+    private func rememberSticker(_ document: TLObject) -> ChatSticker? {
+        guard let sticker = TelegramMediaParser.sticker(document), let id = document["id"]?.long else { return nil }
+        stickerDocuments[id] = document
+        return sticker
+    }
+
+    /// A set's own thumbnail (`inputStickerSetThumb`): type `a` is a TGS, `v` a WebM, others a still. Sets without
+    /// one (most static sets, observed 2026-11-03) have no cover until their stickers load.
+    private static func stickerSetCover(_ set: TLObject) -> ChatSticker? {
+        guard let id = set["id"]?.long, let accessHash = set["access_hash"]?.long, let dc = set["thumb_dc_id"]?.int,
+              let version = set["thumb_version"]?.int, let thumb = set.objects("thumbs").last(where: { $0["type"]?.string != "j" })
+        else { return nil }
+        let format: ChatStickerFormat = switch thumb["type"]?.string {
+        case "a": .lottie
+        case "v": .video
+        default: .image
+        }
+        let location = TLObject("inputStickerSetThumb", [
+            "stickerset": .object(TLObject("inputStickerSetID", ["id": .long(id), "access_hash": .long(accessHash)])),
+            "thumb_version": .int(version),
+        ])
+        guard let url = TelegramMediaURL.make(key: "stickerset-\(id)-\(version)", dc: Int(dc), location: location) else { return nil }
+        return ChatSticker(id: "set-\(id)", url: url, format: format, posterURL: nil, aspectRatio: 1, alt: nil)
+    }
+
+    /// Sends a sticker from the user's sets (`messages.sendMedia` with `inputMediaDocument`; probe `send-sticker`),
+    /// returning the new message's id.
+    public func send(peer: TelegramPeer, sticker: ChatSticker, replyTo: Int32?) async throws -> Int32? {
+        try requireAccount()
+        guard let documentId = Int64(sticker.id), let document = stickerDocuments[documentId],
+              let accessHash = document["access_hash"]?.long, let reference = document["file_reference"]?.bytes
+        else { throw TelegramError.protocolViolation("sticker not in the user's sets") }
+        let input = TLObject("inputDocument", ["id": .long(documentId), "access_hash": .long(accessHash), "file_reference": .bytes(reference)])
+        let randomId = Int64.random(in: 1 ... .max)
+        var method = TLObject("messages.sendMedia", [
+            "peer": .object(peer.inputPeer),
+            "media": .object(TLObject("inputMediaDocument", ["id": .object(input)])),
+            "message": .string(""),
+            "random_id": .long(randomId),
+        ])
+        if let replyTo {
+            method["reply_to"] = .object(TLObject("inputReplyToMessage", ["reply_to_msg_id": .int(replyTo)]))
+        }
+        return try await Self.sentMessageId(invoke(method).object, randomId: randomId)
     }
 
     /// Sets the user's reaction (nil removes it), returning the message's new totals when Telegram sends them.

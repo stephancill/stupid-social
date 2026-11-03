@@ -248,6 +248,33 @@ final class TelegramTests: XCTestCase {
         ]))])
     }
 
+    /// Attribute shapes from stickers the probe listed (`stickers`): TGS, WebM and WebP, 512×512.
+    func testStickersLoadWholeInTheirFormat() throws {
+        func sticker(_ mime: String, _ size: TLObject) -> TLObject {
+            document(id: 9, mime: mime, size: 34792, attributes: [
+                TLObject("documentAttributeSticker", ["alt": .string("😘"), "stickerset": .object(TLObject("inputStickerSetEmpty"))]),
+                size,
+            ])
+        }
+        let imageSize = TLObject("documentAttributeImageSize", ["w": .int(512), "h": .int(512)])
+        let animated = TelegramMediaParser.content(of: sticker("application/x-tgsticker", imageSize))
+        XCTAssertEqual(animated.label, "😘 Sticker")
+        guard case let .sticker(tgs) = try XCTUnwrap(animated.embeds.first) else { return XCTFail("\(animated)") }
+        XCTAssertEqual(tgs.format, .lottie)
+        XCTAssertEqual(tgs.id, "9")
+        XCTAssertEqual(tgs.alt, "😘")
+        XCTAssertEqual(tgs.aspectRatio, 1)
+        XCTAssertEqual(try XCTUnwrap(TelegramMediaURL.parse(tgs.url)).key, "document-9-full")
+        let video = TelegramMediaParser.content(of: sticker("video/webm", TLObject("documentAttributeVideo", ["w": .int(512), "h": .int(256), "duration": .double(3)])))
+        guard case let .sticker(webm) = try XCTUnwrap(video.embeds.first) else { return XCTFail("\(video)") }
+        XCTAssertEqual(webm.format, .video)
+        XCTAssertEqual(webm.aspectRatio, 2)
+        let still = TelegramMediaParser.content(of: sticker("image/webp", imageSize))
+        guard case let .sticker(webp) = try XCTUnwrap(still.embeds.first) else { return XCTFail("\(still)") }
+        XCTAssertEqual(webp.format, .image)
+        XCTAssertNil(webp.posterURL, "a still needs no poster")
+    }
+
     /// Attribute shapes from a video, a GIF, a voice message and a PDF read with the probe (`history --json`).
     func testVideosVoiceAndFilesLoadWhole() throws {
         let video = TelegramMediaParser.content(of: document(id: 1, mime: "video/mp4", size: 3_417_577, attributes: [

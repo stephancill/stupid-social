@@ -45,6 +45,61 @@ public enum ChatPresence: Codable, Hashable, Sendable {
     }
 }
 
+/// How a sticker's file is drawn.
+public enum ChatStickerFormat: String, Codable, Hashable, Sendable {
+    /// A still image, such as WebP.
+    case image
+    /// A gzipped Lottie animation (Telegram's TGS), drawn by `LottieAnimation`.
+    case lottie
+    /// A VP9 WebM video with an alpha channel.
+    case video
+}
+
+/// A sticker: in a message (`ChatEmbed.sticker`) or offered to send (`ChatStickerSending`).
+public struct ChatSticker: Identifiable, Codable, Hashable, Sendable {
+    public let id: String
+    /// The whole file, loaded through `URLSession` (a network's own scheme, such as `tgfile:`, included).
+    public let url: URL
+    public let format: ChatStickerFormat
+    /// A still shown while the file loads, and in its place when the format can't be drawn here.
+    public let posterURL: URL?
+    /// Width / height.
+    public let aspectRatio: Double
+    /// The emoji it stands for, read by VoiceOver and in previews.
+    public let alt: String?
+
+    public init(id: String, url: URL, format: ChatStickerFormat, posterURL: URL?, aspectRatio: Double, alt: String?) {
+        self.id = id
+        self.url = url
+        self.format = format
+        self.posterURL = posterURL
+        self.aspectRatio = aspectRatio
+        self.alt = alt
+    }
+
+    /// "😀 Sticker", for previews and the Chats list.
+    public var label: String {
+        [alt, "Sticker"].compactMap(\.self).filter { !$0.isEmpty }.joined(separator: " ")
+    }
+}
+
+/// One of the user's sticker sets, offered in the sticker picker. `stickers` is `nil` until loaded
+/// (`ChatStickerSending.stickers(inSet:)`).
+public struct ChatStickerSet: Identifiable, Hashable, Sendable {
+    public let id: String
+    public let title: String
+    /// The picker's tab for the set.
+    public let cover: ChatSticker?
+    public let stickers: [ChatSticker]?
+
+    public init(id: String, title: String, cover: ChatSticker?, stickers: [ChatSticker]?) {
+        self.id = id
+        self.title = title
+        self.cover = cover
+        self.stickers = stickers
+    }
+}
+
 /// Rich content shown in a message bubble.
 public enum ChatEmbed: Hashable, Sendable {
     /// An image sized from `aspectRatio` (width / height). Media that `opensViewer` fills the bubble and opens
@@ -70,6 +125,8 @@ public enum ChatEmbed: Hashable, Sendable {
     /// A voice message: a play button by its waveform (levels from 0 to 1, empty when the network sends none) and
     /// its length in seconds. It plays from `audioPreviewURL(for:)`, like `.audio`.
     case voice(previewId: String, duration: Double?, waveform: [Double])
+    /// A sticker, drawn without a bubble and animated when its format allows.
+    case sticker(ChatSticker)
 }
 
 /// A custom emoji a network marks by position over fallback text, such as a Telegram custom emoji entity, rather
@@ -207,6 +264,7 @@ public struct ChatMessage: Hashable, Identifiable, Sendable {
             case let .video(_, _, _, _, isGIF): return isGIF ? "GIF" : "Video"
             case let .file(_, filename, _, _): return filename
             case .voice: return "Voice message"
+            case let .sticker(sticker): return sticker.label
             case let .card(title, _, _, _, _), let .message(title, _, _): return title
             case let .audio(_, title, _, _, _, _): return title
             case let .pending(title): return title
@@ -767,12 +825,32 @@ public class ChatViewModel: ObservableObject {
     /// Call as the user edits the draft, for typing indications.
     public func draftDidChange() {}
 
+    // MARK: Stickers
+
+    /// Whether the composer offers stickers; networks that send them override this.
+    public var offersStickers: Bool {
+        false
+    }
+
+    /// The user's sticker sets for the picker, recently used first.
+    public func stickerSets() async throws -> [ChatStickerSet] {
+        []
+    }
+
+    public func stickers(inSet _: String) async throws -> [ChatSticker] {
+        []
+    }
+
+    /// Sends a sticker optimistically, as a reply when one is being written.
+    public func send(sticker _: ChatSticker) async {}
+
     /// The optimistic send every network shares: the message shows at once as sending and the composer clears;
     /// `deliver` sends it and returns the network's id for it (nil when unknown). The sending copy stays until a
     /// message with that id is in `history`, so it never blinks out; without an id it goes when `deliver`
     /// returns, which should first load the sent message. A failure takes it away and puts the text and
-    /// attachment back in the composer, if the user hasn't started another message.
-    func sendOptimistically(text: String, attachment: ChatAttachment?, replyToId: String?, deliver: () async throws -> String?) async {
+    /// attachment back in the composer, if the user hasn't started another message. A sticker shows as itself and
+    /// leaves the draft as it is.
+    func sendOptimistically(text: String, attachment: ChatAttachment?, sticker: ChatSticker? = nil, replyToId: String?, deliver: () async throws -> String?) async {
         errorMessage = nil
         let localId = "sending-\(UUID().uuidString)"
         historyAtSend[localId] = Set(history.map(\.id))
@@ -782,13 +860,15 @@ public class ChatViewModel: ObservableObject {
             sender: ChatUser(id: "you", name: "You", avatarURL: nil),
             timestamp: Date(),
             text: text.isEmpty ? nil : text,
-            embeds: image.map { [$0] } ?? attachment.map { [.pending(title: $0.filename)] } ?? [],
+            embeds: sticker.map { [.sticker($0)] } ?? image.map { [$0] } ?? attachment.map { [.pending(title: $0.filename)] } ?? [],
             replyToId: replyToId,
             isOwn: true,
             isSending: true,
         ))
-        draft = ""
-        self.attachment = nil
+        if sticker == nil {
+            draft = ""
+            self.attachment = nil
+        }
         replyingTo = nil
         composeMessages()
         scrollToLatestRequest += 1
@@ -805,7 +885,7 @@ public class ChatViewModel: ObservableObject {
             AppMetrics.messageSent(network: network, hasAttachment: attachment != nil, isReply: replyToId != nil, error: error)
             historyAtSend[localId] = nil
             outgoing.removeAll { $0.id == localId }
-            if draft.isEmpty, self.attachment == nil {
+            if sticker == nil, draft.isEmpty, self.attachment == nil {
                 draft = text
                 self.attachment = attachment
             }
@@ -1075,6 +1155,8 @@ public class ChatViewModel: ObservableObject {
             return filename
         case .voice:
             return "Voice message"
+        case let .sticker(sticker):
+            return sticker.label
         case let .pending(title):
             return title
         case nil:
@@ -1288,6 +1370,7 @@ public class ChatViewModel: ObservableObject {
             case let .message(title, text, _): parts += [title, text]
             case let .image(_, _, alt, _, _): parts.append(alt ?? "")
             case let .file(_, filename, subtitle, _): parts += [filename, subtitle ?? ""]
+            case let .sticker(sticker): parts.append(sticker.alt ?? "")
             case .pending, .video, .voice: break
             }
         }

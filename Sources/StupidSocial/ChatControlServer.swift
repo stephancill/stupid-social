@@ -644,6 +644,7 @@ private struct ChatControlMessage: Encodable {
             case let .video(url, _, _, duration, isGIF): Embed(type: isGIF ? "gif" : "video", text: duration, url: Self.webURL(url))
             case let .file(url, filename, subtitle, _): Embed(type: "file", title: filename, text: subtitle, url: Self.webURL(url))
             case let .voice(_, duration, _): Embed(type: "voice", text: duration.map { Duration.seconds($0).formatted(.time(pattern: .minuteSecond)) })
+            case let .sticker(sticker): Embed(type: "sticker", title: sticker.alt)
             }
         }
         reactions = (viewModel.reactions[message.id] ?? []).map { Reaction(emoji: $0.emoji, count: $0.count, includesYou: $0.includesYou) }

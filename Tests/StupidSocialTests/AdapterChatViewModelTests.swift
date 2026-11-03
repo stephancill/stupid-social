@@ -340,6 +340,49 @@ final class AdapterChatViewModelTests: XCTestCase {
         chat.disconnect()
     }
 
+    func testStickersAreOfferedOnlyWhereTheAdapterSendsThem() async throws {
+        XCTAssertFalse(makeChat(FakeAdapter()).offersStickers)
+        let adapter = FakeStickerAdapter()
+        let chat = makeChat(adapter)
+        XCTAssertTrue(chat.offersStickers)
+        let sets = try await chat.stickerSets()
+        XCTAssertEqual(sets.map(\.id), ["recent", "set-1"])
+        let stickers = try await chat.stickers(inSet: "set-1")
+        XCTAssertEqual(stickers.map(\.id), ["7"])
+    }
+
+    func testASentStickerShowsAtOnceRepliesAndKeepsTheDraft() async {
+        let adapter = FakeStickerAdapter()
+        adapter.pages = [[message(1)]]
+        let chat = makeChat(adapter)
+        await chat.connect()
+        chat.draft = "Half written"
+        chat.startReply(to: message(1))
+        await chat.send(sticker: adapter.sticker)
+        XCTAssertEqual(adapter.sentStickers.map(\.id), ["7"])
+        XCTAssertEqual(adapter.sentStickerReplies, ["1"])
+        XCTAssertEqual(chat.messages.last?.id, "sticker-1")
+        XCTAssertEqual(chat.messages.last?.embeds, [.sticker(adapter.sticker)])
+        XCTAssertFalse(chat.messages.contains(where: \.isSending))
+        XCTAssertEqual(chat.draft, "Half written", "a sticker leaves the draft")
+        XCTAssertNil(chat.replyingTo)
+        chat.disconnect()
+    }
+
+    func testAFailedStickerGoesAwayWithTheReason() async {
+        let adapter = FakeStickerAdapter()
+        adapter.pages = [[message(1)]]
+        adapter.stickerError = URLError(.notConnectedToInternet)
+        let chat = makeChat(adapter)
+        await chat.connect()
+        chat.draft = "Half written"
+        await chat.send(sticker: adapter.sticker)
+        XCTAssertEqual(chat.messages.map(\.id), ["1"])
+        XCTAssertNotNil(chat.errorMessage)
+        XCTAssertEqual(chat.draft, "Half written")
+        chat.disconnect()
+    }
+
     func testCancellingOrKeepingTheTextSavesNothing() async {
         let adapter = FakeEditingAdapter()
         adapter.pages = [[message(2, own: true)]]
@@ -638,6 +681,33 @@ private final class FakeReactingAdapter: FakeAdapter, ChatReactionSending {
 
     func toggleReaction(_ emoji: String, on messageId: String) async throws {
         reactions[messageId] = [ChatReaction(emoji: emoji, count: 1, includesYou: true)]
+    }
+}
+
+@MainActor
+private final class FakeStickerAdapter: FakeAdapter, ChatStickerSending {
+    let sticker = ChatSticker(id: "7", url: URL(string: "tgfile://file/document-7-full")!, format: .lottie, posterURL: nil, aspectRatio: 1, alt: "👋")
+    var stickerError: Error?
+    private(set) var sentStickers: [ChatSticker] = []
+    private(set) var sentStickerReplies: [String?] = []
+
+    func stickerSets() async throws -> [ChatStickerSet] {
+        [ChatStickerSet(id: "recent", title: "Recent", cover: nil, stickers: [sticker]), ChatStickerSet(id: "set-1", title: "Hands", cover: nil, stickers: nil)]
+    }
+
+    func stickers(inSet id: String) async throws -> [ChatSticker] {
+        id == "set-1" ? [sticker] : []
+    }
+
+    func send(sticker: ChatSticker, replyToId: String?) async throws -> String? {
+        if let stickerError {
+            throw stickerError
+        }
+        sentStickers.append(sticker)
+        sentStickerReplies.append(replyToId)
+        let id = "sticker-\(sentStickers.count)"
+        append(ChatMessage(id: id, sender: ChatUser(id: "you", name: "You", avatarURL: nil), timestamp: Date(), text: nil, embeds: [.sticker(sticker)], isOwn: true))
+        return id
     }
 }
 

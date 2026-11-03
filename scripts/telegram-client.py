@@ -1145,6 +1145,33 @@ def message_line(message: dict, users: dict, chats: dict) -> str:
     return f"{message['id']:>8} {when} {sender}{reply}: {text}"
 
 
+def sticker_set_documents(client: "Client", name: str, access_hash: int | None = None) -> list[dict]:
+    """messages.getStickerSet by id (with its access hash, else looked up among installed sets) or short name."""
+    if name.lstrip("-").isdigit():
+        if access_hash is None:
+            sets = client.call({"_": "messages.getAllStickers", "hash": 0}).get("sets", [])
+            access_hash = next(s["access_hash"] for s in sets if s["id"] == int(name))
+        stickerset = {"_": "inputStickerSetID", "id": int(name), "access_hash": access_hash}
+    else:
+        stickerset = {"_": "inputStickerSetShortName", "short_name": name}
+    return client.call({"_": "messages.getStickerSet", "stickerset": stickerset, "hash": 0}).get("documents", [])
+
+
+def sticker_line(doc: dict) -> str:
+    attrs = {a["_"]: a for a in doc.get("attributes", [])}
+    size = attrs.get("documentAttributeImageSize") or attrs.get("documentAttributeVideo") or {}
+    alt = (attrs.get("documentAttributeSticker") or {}).get("alt")
+    thumbs = [f"{t.get('type')}" for t in doc.get("thumbs") or []]
+    return f"{doc['id']} {doc.get('mime_type')} {doc.get('size')}B {size.get('w')}x{size.get('h')} alt={alt!r} dc={doc.get('dc_id')} thumbs={thumbs}"
+
+
+def sticker_formats(documents: list[dict]) -> dict:
+    counts: dict[str, int] = {}
+    for doc in documents:
+        counts[doc.get("mime_type")] = counts.get(doc.get("mime_type"), 0) + 1
+    return counts
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1250,6 +1277,17 @@ def main():
     custom_emoji.add_argument("--peer", required=True)
     custom_emoji.add_argument("--limit", type=int, default=100)
     custom_emoji.add_argument("-o", "--output", help="download the first emoji's image (the whole WebP, else its largest thumbnail) here")
+    stickers = sub.add_parser("stickers", help="the account's recent and favourite stickers and installed sticker sets, by format")
+    stickers.add_argument("--set", help="list one set's stickers instead: its id or short name")
+    sticker_corpus = sub.add_parser("sticker-corpus", help="download stickers (TGS, WebM, WebP) from sets into a directory, for renderer tests")
+    sticker_corpus.add_argument("--set", action="append", default=[], help="a set's short name; repeatable. Default: every installed set, recent and favourite stickers")
+    sticker_corpus.add_argument("--animated-emoji", action="store_true", help="also Telegram's animated emoji set")
+    sticker_corpus.add_argument("--format", choices=["tgs", "webm", "webp", "all"], default="tgs")
+    sticker_corpus.add_argument("-o", "--output", required=True)
+    send_sticker = sub.add_parser("send-sticker", help="messages.sendMedia with inputMediaDocument: send a sticker by its document id")
+    send_sticker.add_argument("--peer", required=True)
+    send_sticker.add_argument("--document-id", type=int, help="a sticker from `stickers` (recent, favourite or an installed set); default: the most recent one")
+    send_sticker.add_argument("--reply-to", type=int)
     raw = sub.add_parser("raw")
     raw.add_argument("--method", required=True)
     raw.add_argument("--json", default="{}")
@@ -1434,6 +1472,76 @@ def main():
             data = client.download(location, doc["dc_id"])
             pathlib.Path(args.output).write_bytes(data)
             print(f"{len(data)} bytes (thumb {thumb or 'full'}) -> {args.output}")
+    elif args.command == "stickers":
+        if args.set:
+            documents = sticker_set_documents(client, args.set)
+            for doc in documents:
+                print(sticker_line(doc))
+            return
+        recent = client.call({"_": "messages.getRecentStickers", "hash": 0})
+        faved = client.call({"_": "messages.getFavedStickers", "hash": 0})
+        installed = client.call({"_": "messages.getAllStickers", "hash": 0})
+        print(f"recent: {recent['_']} {sticker_formats(recent.get('stickers', []))}")
+        for doc in recent.get("stickers", [])[:5]:
+            print("  " + sticker_line(doc))
+        print(f"faved: {faved['_']} {sticker_formats(faved.get('stickers', []))}")
+        print(f"installed: {installed['_']} {len(installed.get('sets', []))} sets")
+        for sticker_set in installed.get("sets", []):
+            print(f"  {sticker_set['id']} {sticker_set['short_name']!r} {sticker_set['count']} stickers thumbs={[t.get('type') for t in sticker_set.get('thumbs') or []]} thumb_document_id={sticker_set.get('thumb_document_id')}")
+    elif args.command == "sticker-corpus":
+        output = pathlib.Path(args.output)
+        output.mkdir(parents=True, exist_ok=True)
+        documents: dict[int, dict] = {}
+        if args.set:
+            for name in args.set:
+                documents.update((d["id"], d) for d in sticker_set_documents(client, name))
+        else:
+            for method in ("messages.getRecentStickers", "messages.getFavedStickers"):
+                documents.update((d["id"], d) for d in client.call({"_": method, "hash": 0}).get("stickers", []))
+            for sticker_set in client.call({"_": "messages.getAllStickers", "hash": 0}).get("sets", []):
+                documents.update((d["id"], d) for d in sticker_set_documents(client, str(sticker_set["id"]), access_hash=sticker_set["access_hash"]))
+        if args.animated_emoji:
+            result = client.call({"_": "messages.getStickerSet", "stickerset": {"_": "inputStickerSetAnimatedEmoji"}, "hash": 0})
+            documents.update((d["id"], d) for d in result.get("documents", []))
+        extensions = {"application/x-tgsticker": "tgs", "video/webm": "webm", "image/webp": "webp"}
+        saved = 0
+        for doc in documents.values():
+            ext = extensions.get(doc.get("mime_type"))
+            if ext is None or (args.format != "all" and ext != args.format):
+                continue
+            path = output / f"{doc['id']}.{ext}"
+            if not path.exists():
+                location = {"_": "inputDocumentFileLocation", "id": doc["id"], "access_hash": doc["access_hash"], "file_reference": doc["file_reference"], "thumb_size": ""}
+                path.write_bytes(client.download(location, doc["dc_id"]))
+            saved += 1
+        print(f"{saved} of {len(documents)} stickers ({args.format}) in {output}")
+    elif args.command == "send-sticker":
+        if args.document_id:
+            pool = client.call({"_": "messages.getRecentStickers", "hash": 0}).get("stickers", [])
+            pool += client.call({"_": "messages.getFavedStickers", "hash": 0}).get("stickers", [])
+            doc = next((d for d in pool if d["id"] == args.document_id), None)
+            if doc is None:
+                for sticker_set in client.call({"_": "messages.getAllStickers", "hash": 0}).get("sets", []):
+                    doc = next((d for d in sticker_set_documents(client, str(sticker_set["id"]), access_hash=sticker_set["access_hash"]) if d["id"] == args.document_id), None)
+                    if doc:
+                        break
+            if doc is None:
+                raise SystemExit("No such sticker among recent, favourite or installed stickers")
+        else:
+            doc = client.call({"_": "messages.getRecentStickers", "hash": 0})["stickers"][0]
+        method = {
+            "_": "messages.sendMedia",
+            "peer": client.input_peer(args.peer),
+            "media": {"_": "inputMediaDocument", "id": {"_": "inputDocument", "id": doc["id"], "access_hash": doc["access_hash"], "file_reference": doc["file_reference"]}},
+            "message": "",
+            "random_id": secrets.randbits(63),
+        }
+        if args.reply_to:
+            method["reply_to"] = {"_": "inputReplyToMessage", "reply_to_msg_id": args.reply_to}
+        result = client.call(method)
+        sent = [u for u in result.get("updates", []) if u["_"] in ("updateNewMessage", "updateNewChannelMessage")]
+        media = sent[0]["message"].get("media", {}) if sent else {}
+        print(f"{result['_']}: sent {sticker_line(doc)}; message {sent[0]['message']['id'] if sent else '?'} media {media.get('_')} document {(media.get('document') or {}).get('id')}")
     elif args.command == "peer-status":
         result = client.call({"_": "messages.getPeerDialogs", "peers": [{"_": "inputDialogPeer", "peer": client.input_peer(args.peer)}]})
         user_id = int(args.peer.split(":")[1])
