@@ -1,104 +1,69 @@
 # stupid social
 
-A notifications-only social app. See what matters without the algorithmic feed.
+Only the best parts of social.
 
-iOS
+Your notifications, friends' stories and every chat from X, Instagram, Telegram, Bluesky and more, in one calm iOS app. No feed. No algorithm. No doomscroll.
 
 ## Screenshots
 
 <p align="center">
-  <img src="screenshots/settings.png" width="200" alt="Settings">
-  &nbsp;&nbsp;&nbsp;&nbsp;
-  <img src="screenshots/feed.png" width="200" alt="Feed">
+  <img src="docs/screenshots/01-feed.png" width="200" alt="Feed">
+  <img src="docs/screenshots/02-chats.png" width="200" alt="Chats">
+  <img src="docs/screenshots/03-story.png" width="200" alt="Story">
+  <img src="docs/screenshots/04-chat-apron.png" width="200" alt="Chat reactions">
+</p>
+<p align="center">
+  <img src="docs/screenshots/05-chat-trip-top.png" width="200" alt="Chat photos">
+  <img src="docs/screenshots/06-detail.png" width="200" alt="Post detail">
+  <img src="docs/screenshots/07-chat-amy.png" width="200" alt="Chat">
 </p>
 
 ## Features
 
-- Combined feed for X and Farcaster notifications
-- Engagement-only X filtering (mentions, replies, quotes, likes, retweets)
-- Unread/read sections with compact timestamps
-- Pull-to-refresh
-- Liquid Glass design on iOS 26
+- One inbox for Telegram, X, Instagram, Bluesky, Spotify and Apron chats, with replies, reactions, custom emoji, edits, photos, videos, voice notes and files
+- Notifications meant for you from X, Farcaster, Instagram, Bluesky and GitHub: mentions, replies, likes and follows
+- A story bar with Instagram stories, what friends are listening to on Spotify, and GitHub activity
+- The post behind a notification, so you can like, reply or repost without falling into the feed
+- Reminders on messages you want to get back to
+- Any number of accounts per network, synced across your devices with iCloud Keychain
+
+What's not in it: no algorithmic feed, no ads, no tracking. The app counts anonymous usage and crashes, never your messages, names or accounts.
 
 ## Setup
 
-Built with [xtool](https://github.com/xtool-org/xtool).
-
-### Prerequisites
-
-- macOS with Xcode 26
-- [xtool](https://github.com/xtool-org/xtool) installed and authenticated (`xtool auth status`)
-- For TestFlight: Apple Developer Program membership and App Store Connect app record
-
-### Clone and configure
+Built and released with the `stupid-app` CLI (no Xcode project). Configuration is in `stupid-app.yml`.
 
 ```bash
 git clone git@github.com:stephancill/stupid-social.git
 cd stupid-social
 ```
 
-Add your Apple Developer Team ID to `xtool.yml`:
-```yaml
-teamID: YOUR_TEAM_ID
-```
-
-### Run on iOS Simulator
+Telegram needs an API id and hash from [my.telegram.org](https://my.telegram.org). Put `TELEGRAM_APP_ID` and `TELEGRAM_APP_API_HASH` in `.env.local`, then write the gitignored config the build reads:
 
 ```bash
-xtool dev run --simulator
+python3 scripts/telegram-api-config.py
 ```
 
-### Run on iPhone over Wi-Fi
+Without it the app builds, but Telegram shows as unavailable.
+
+### Build and run
 
 ```bash
-xtool devices --all --no-wait        # find your device UDID
-xtool dev run --network -u <udid>
+stupid-app build
+stupid-app run --simulator   # or --usb / --network for a device
 ```
 
-### Regenerate Xcode workspace (after changing Info.plist or xtool.yml)
+### Release
 
 ```bash
-xtool dev run --simulator --no-attach --no-logs
-open xtool/StupidSocial.xcworkspace
+stupid-app release external-beta --group-name External
 ```
 
-## Release
+See `AGENTS.md` for the release conventions (build numbers, `testflight/<build>` tags, What to Test notes).
 
-### Prerequisites
+## Docs
 
-- Apple Developer Program membership
-- App Store Connect app record with bundle ID `tech.stupid.StupidSocial`
-- xtool installed and authenticated (`xtool auth status`)
-
-### Build and Submit
-
-1. **Edit `Info.plist`** for any metadata changes (display name, supported devices, etc.)
-
-2. **Regenerate the Xcode workspace:**
-   ```bash
-   xtool dev run --simulator --no-attach --no-logs
-   ```
-
-3. **Open the workspace in Xcode:**
-   ```bash
-   open xtool/StupidSocial.xcworkspace
-   ```
-
-4. **Archive:**
-   - Select the `StupidSocial` scheme
-   - Destination: **Any iOS Device (arm64)**
-   - **Product → Archive**
-
-5. **Distribute:**
-   - In the Organizer, select the archive
-   - Click **Distribute App**
-   - Choose **App Store Connect** → **Upload**
-   - Xcode handles signing and provisioning automatically
-
-6. **App Store Connect:**
-   - Uploaded build appears in **TestFlight** within a few minutes
-   - Add internal/external testers under **TestFlight** → **Internal Testing** or **External Testing**
-   - Set category to **Social Networking** under **App Information**
-   - First external build requires Beta App Review approval
-   - When ready: **App Store** tab → select build → fill in metadata → **Submit for Review**
-
+- `docs/PLAN.md`: requirements
+- `docs/TECHNICAL_DESIGN.md`: architecture
+- `docs/IMPLEMENTATION.md`: implementation notes and endpoint behavior
+- `docs/app-store-copy.md`: App Store listing copy
