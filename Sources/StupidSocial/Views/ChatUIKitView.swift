@@ -98,6 +98,9 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     private var isAnchoredToDivider = false
     private var hasScrolledInitially = false
     private var defersShortContentInset = false
+    /// Set while `scrollToDivider` or `scrollToBottom` move the list in passes: a pass made from cells still being
+    /// measured can land short of the bottom, which flashed the jump-to-latest button on a cold open.
+    private var isRepositioning = false
 
     // Latest published composer state; @Published emits in willSet, so the view model still holds old values.
     private var state: ChatConnectionState = .connecting
@@ -1150,6 +1153,11 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
             isAnchoredToDivider = false
             return
         }
+        isRepositioning = true
+        defer {
+            isRepositioning = false
+            updateJumpToLatestButton()
+        }
         for _ in 0 ..< 2 {
             collectionView.layoutIfNeeded()
             guard let frame = collectionView.layoutAttributesForItem(at: divider)?.frame else { break }
@@ -1189,6 +1197,11 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         }
         // Self-sizing cells start at estimated heights; each pass lays out the cells it lands on and
         // corrects `contentSize`, so repeat until the bottom stops moving.
+        isRepositioning = true
+        defer {
+            isRepositioning = false
+            updateJumpToLatestButton()
+        }
         for _ in 0 ..< 4 {
             collectionView.layoutIfNeeded()
             let offset = bottomOffset
@@ -1547,7 +1560,9 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         if scrollView.isDragging || scrollView.isDecelerating {
             isPinnedToBottom = isNearBottom
         }
-        updateJumpToLatestButton()
+        if !isRepositioning {
+            updateJumpToLatestButton()
+        }
         loadMoreIfNeeded(scrollView)
         reportVisibleRead()
         showDateHeaders()
