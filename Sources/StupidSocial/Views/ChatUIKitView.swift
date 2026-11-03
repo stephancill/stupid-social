@@ -45,6 +45,8 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     }
 
     private let viewModel: ChatViewModel
+    /// The width messages were last configured at.
+    private var configuredWidth: CGFloat?
     var showProfile: (ChatUser) -> Void = { _ in }
     var goBack: () -> Void = {}
     private var cancellables = Set<AnyCancellable>()
@@ -197,6 +199,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        reconfigureForWidthIfNeeded()
         performInitialScrollIfNeeded()
         updateTextViewHeight()
         updateContentInsetForComposer()
@@ -245,6 +248,8 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
             let reply = message.replyToId.map(replyQuote(for:))
             prefetchReactorAvatars(on: message)
             cell.bubbleView.alpha = id == focusedMessageId ? 0 : 1
+            let availableWidth = collectionView.bounds.width > 0 ? collectionView.bounds.width : view.bounds.width
+            configuredWidth = availableWidth
             cell.configure(
                 message: message,
                 layout: layout,
@@ -287,7 +292,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
                 status: status(of: message),
                 statusKey: itemKey(for: id),
                 reminderDue: message.isDeleted ? nil : reminderDates[id],
-                availableWidth: collectionView.bounds.width > 0 ? collectionView.bounds.width : view.bounds.width,
+                availableWidth: availableWidth,
             )
         }
         let dividerRegistration = UICollectionView.CellRegistration<ChatUnreadDividerCell, Item> { _, _, _ in }
@@ -2354,6 +2359,19 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
             Task { await self.viewModel.delete(message) }
         })
         present(alert, animated: true)
+    }
+
+    /// Bubble widths are computed from the width messages were configured at, so a message configured before the
+    /// chat had its width (or before a rotation or resize) collapsed to its time; configure them again.
+    private func reconfigureForWidthIfNeeded() {
+        let width = collectionView.bounds.width
+        guard width > 0, let configuredWidth, configuredWidth != width else { return }
+        self.configuredWidth = width
+        var snapshot = dataSource.snapshot()
+        let items = snapshot.itemIdentifiers.filter { if case .message = $0 { true } else { false } }
+        guard !items.isEmpty else { return }
+        snapshot.reconfigureItems(items)
+        dataSource.apply(snapshot, animatingDifferences: false)
     }
 
     /// Reconfigures messages whose reminder changed, and those with one, whose "Due in" moves on.

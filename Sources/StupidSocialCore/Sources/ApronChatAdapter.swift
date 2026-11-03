@@ -43,6 +43,9 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
     /// The catalog `customEmojis` came from or is loading from.
     private var emojiCatalogURL: URL?
     private var snapshots: [String: ApronMessage] = [:]
+    /// Messages moved to another room (§4.4), by the `log_id` of the move, so an older page loaded later doesn't
+    /// bring them back.
+    private var movedOut: [String: Int64] = [:]
     /// Kept current user objects (§3.3.1); messages carry recorded `from` objects that often omit avatars.
     /// Mentions show these names; a name another known user shares is left out, so those mentions keep their
     /// `@user_id` (§3.3.1).
@@ -497,8 +500,12 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
 
     /// `more` describes the selected direction: older pages for `before`, newer ones for `after` (§4.3.2).
     private func apply(_ page: ApronHistoryResult, direction: PageDirection = .backward, publishing: Bool = true) {
-        for message in page.messages ?? [] where message.roomId == nil || message.roomId == roomId {
-            install(message)
+        for message in page.messages ?? [] {
+            if message.roomId == nil || message.roomId == roomId {
+                install(message)
+            } else {
+                moveOut(message)
+            }
         }
         for record in page.reactions ?? [] {
             applyReactions(record)
@@ -525,11 +532,22 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
     /// Keeps the snapshot with the greatest `log_id`; at an equal `log_id` the tombstone wins (§2.3).
     private func install(_ message: ApronMessage) {
         guard let id = message.messageId else { return }
+        if let moved = movedOut[id], moved >= message.sortKey { return }
         if let existing = snapshots[id] {
             if existing.sortKey > message.sortKey { return }
             if existing.sortKey == message.sortKey, existing.isDeleted { return }
         }
         snapshots[id] = message
+    }
+
+    /// A snapshot in another room: the room's log holds it when the message moved out (§4.3.1), and it then
+    /// leaves this chat. A bot's delete sent with the wrong `room_id` is such a move.
+    private func moveOut(_ message: ApronMessage) {
+        guard let id = message.messageId else { return }
+        movedOut[id] = max(movedOut[id] ?? .min, message.sortKey)
+        if let existing = snapshots[id], existing.sortKey < message.sortKey {
+            snapshots[id] = nil
+        }
     }
 
     private func sortedSnapshots() -> [ApronMessage] {
@@ -718,9 +736,8 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
             if !hasLaterMessages || message.messageId.map({ snapshots[$0] != nil }) == true {
                 install(message)
             }
-        } else if let id = message.messageId, snapshots[id] != nil {
-            // Moved out of this room (§4.4).
-            snapshots[id] = nil
+        } else {
+            moveOut(message)
         }
         // Sending a message means the user has read up to it.
         if let id = message.messageId.flatMap(Int64.init), isOwn(message), let send = markRead(upTo: id) {
