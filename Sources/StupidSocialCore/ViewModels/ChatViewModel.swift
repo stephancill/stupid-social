@@ -90,12 +90,15 @@ public struct ChatStickerSet: Identifiable, Hashable, Sendable {
     public let title: String
     /// The picker's tab for the set.
     public let cover: ChatSticker?
+    /// How many stickers it has, so the picker can hold their place before they load.
+    public let count: Int
     public let stickers: [ChatSticker]?
 
-    public init(id: String, title: String, cover: ChatSticker?, stickers: [ChatSticker]?) {
+    public init(id: String, title: String, cover: ChatSticker?, count: Int, stickers: [ChatSticker]?) {
         self.id = id
         self.title = title
         self.cover = cover
+        self.count = stickers?.count ?? count
         self.stickers = stickers
     }
 }
@@ -838,6 +841,11 @@ public class ChatViewModel: ObservableObject {
     }
 
     public func stickers(inSet _: String) async throws -> [ChatSticker] {
+        []
+    }
+
+    /// Stickers the network offers for an emoji, the user's own first.
+    public func stickers(forEmoji _: String) async throws -> [ChatSticker] {
         []
     }
 

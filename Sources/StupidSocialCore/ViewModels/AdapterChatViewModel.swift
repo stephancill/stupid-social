@@ -224,6 +224,8 @@ public protocol ChatStickerSending: ChatAdapter {
     /// Recently used first, with its stickers; the other sets may leave theirs to `stickers(inSet:)`.
     func stickerSets() async throws -> [ChatStickerSet]
     func stickers(inSet id: String) async throws -> [ChatSticker]
+    /// Stickers for an emoji, from the user's sets first, then ones the network suggests.
+    func stickers(forEmoji emoji: String) async throws -> [ChatSticker]
     /// Returns the sent message's id, as `send(_:)` does.
     func send(sticker: ChatSticker, replyToId: String?) async throws -> String?
 }
@@ -472,6 +474,10 @@ public final class AdapterChatViewModel<Adapter: ChatAdapter>: ChatViewModel {
 
     override public func stickers(inSet id: String) async throws -> [ChatSticker] {
         try await (adapter as? any ChatStickerSending)?.stickers(inSet: id) ?? []
+    }
+
+    override public func stickers(forEmoji emoji: String) async throws -> [ChatSticker] {
+        try await (adapter as? any ChatStickerSending)?.stickers(forEmoji: emoji) ?? []
     }
 
     override public func send(sticker: ChatSticker) async {

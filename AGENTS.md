@@ -55,7 +55,7 @@ Sources/
       ChatImageViewer.swift         # Full-screen chat image viewer: zoom, swipe to dismiss, save to Photos; full-screen profile photos
       ChatMediaViews.swift          # Chat videos (poster, looping GIFs, full-screen player) and the Quick Look file source
       ChatStickerView.swift         # A sticker: still, image or looping animation (Lottie, WebM) rendered off the main thread
-      ChatStickerPicker.swift       # Sticker picker sheet from the composer's attachments menu: sets as tabs, a grid, tap to send
+      ChatStickerPanel.swift        # Sticker panel in the keyboard's place: every set in one grid, set tabs, emoji filter, hold to preview, tap to send
       ApronChatView.swift           # Apron chat: the shared chat plus members and profiles
       ApronMembersView.swift        # Apron room details (title, description, edit) and member list, opened from the chat title
       ChatDetailsHeader.swift       # A chat's details header (photo, title, description), member search and edit sheet, for member lists

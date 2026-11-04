@@ -169,6 +169,12 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     private let textView = ChatComposerTextView()
     private let placeholderLabel = UILabel()
     private let sendButton = UIButton(configuration: .plain())
+    /// Swaps the keyboard for the sticker panel and back, where the network sends stickers.
+    private let stickerButton = UIButton(configuration: .plain())
+    private var stickerPanel: ChatStickerPanel?
+    private var showsStickerPanel = false
+    /// The last on-screen keyboard's height, which the sticker panel takes.
+    private var keyboardHeight: CGFloat = 0
     private let pillStack = UIStackView()
     private var textViewHeight: NSLayoutConstraint!
     private let maxComposerLines: CGFloat = 5
@@ -367,7 +373,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
             attachGlass.heightAnchor.constraint(equalToConstant: 44),
         ])
         attachGlass.setContentHuggingPriority(.required, for: .horizontal)
-        attachGlass.isHidden = !viewModel.offersAttachments && !viewModel.offersStickers
+        attachGlass.isHidden = !viewModel.offersAttachments
 
         // Staged attachment shown inside the input pill, above the text.
         attachmentThumbnail.contentMode = .scaleAspectFill
@@ -432,7 +438,23 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         sendButton.accessibilityLabel = "Send"
         sendButton.addAction(UIAction { [weak self] _ in self?.send() }, for: .primaryActionTriggered)
 
-        let textRow = UIStackView(arrangedSubviews: [textView, sendButton])
+        var stickerConfiguration = UIButton.Configuration.plain()
+        stickerConfiguration.image = UIImage(systemName: "face.smiling", withConfiguration: UIImage.SymbolConfiguration(pointSize: 20))
+        stickerConfiguration.baseForegroundColor = .secondaryLabel
+        stickerConfiguration.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 2, bottom: 6, trailing: 2)
+        stickerButton.configuration = stickerConfiguration
+        stickerButton.accessibilityLabel = "Stickers"
+        stickerButton.isHidden = !viewModel.offersStickers
+        stickerButton.setContentHuggingPriority(.required, for: .horizontal)
+        stickerButton.addAction(UIAction { [weak self] _ in self?.toggleStickerPanel() }, for: .primaryActionTriggered)
+        // A tap in the text while the stickers show brings the keyboard back.
+        let typeTap = UITapGestureRecognizer(target: self, action: #selector(textTappedForKeyboard))
+        typeTap.cancelsTouchesInView = false
+        typeTap.delegate = self
+        textView.addGestureRecognizer(typeTap)
+        NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillChangeFrame(_:)), name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
+
+        let textRow = UIStackView(arrangedSubviews: [textView, stickerButton, sendButton])
         textRow.alignment = .bottom
         textRow.spacing = 6
         configureReplyPreview()
@@ -963,10 +985,10 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
             replyPreview.isHidden = true
         }
         // An edit changes only the text.
-        let attaches = (canAttach || viewModel.offersStickers) && editingMessage == nil
+        let attaches = canAttach && editingMessage == nil
         attachButton.isEnabled = attaches
         attachButton.alpha = attaches ? 1 : 0.35
-        attachButton.menu = attachMenu()
+        stickerButton.isHidden = !viewModel.offersStickers || editingMessage != nil || isReadOnly
         let sendImage = editingMessage == nil ? "arrow.up.circle.fill" : "checkmark.circle.fill"
         if sendButton.configuration?.image != UIImage(systemName: sendImage) {
             sendButton.configuration?.image = UIImage(systemName: sendImage)
@@ -1296,34 +1318,81 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
 
     // MARK: - Attachments
 
-    /// Photos and files where the network takes uploads, and stickers where it has them.
     private func attachMenu() -> UIMenu {
-        var actions: [UIAction] = []
-        if viewModel.offersAttachments {
-            let photos = UIAction(title: "Photo Library", image: UIImage(systemName: "photo.on.rectangle")) { [weak self] _ in self?.presentPhotoPicker() }
-            let files = UIAction(title: "Files", image: UIImage(systemName: "folder")) { [weak self] _ in self?.presentDocumentPicker() }
-            if !canAttach {
-                photos.attributes = .disabled
-                files.attributes = .disabled
-            }
-            actions += [photos, files]
-        }
-        if viewModel.offersStickers {
-            actions.append(UIAction(title: "Sticker", image: UIImage(systemName: "face.smiling")) { [weak self] _ in self?.presentStickerPicker() })
-        }
-        return UIMenu(children: actions)
+        UIMenu(children: [
+            UIAction(title: "Photo Library", image: UIImage(systemName: "photo.on.rectangle")) { [weak self] _ in self?.presentPhotoPicker() },
+            UIAction(title: "Files", image: UIImage(systemName: "folder")) { [weak self] _ in self?.presentDocumentPicker() },
+        ])
     }
 
-    private func presentStickerPicker() {
+    // MARK: - Stickers
+
+    private func makeStickerPanel() -> ChatStickerPanel {
+        if let stickerPanel { return stickerPanel }
+        let panel = ChatStickerPanel(height: 300)
         let viewModel = viewModel
-        let picker = UIHostingController(rootView: ChatStickerPicker(
-            loadSets: { try await viewModel.stickerSets() },
-            loadStickers: { try await viewModel.stickers(inSet: $0) },
-            send: { sticker in Task { await viewModel.send(sticker: sticker) } },
-        ))
-        picker.sheetPresentationController?.detents = [.medium(), .large()]
-        picker.sheetPresentationController?.prefersGrabberVisible = true
-        present(picker, animated: true)
+        panel.loadSets = { try await viewModel.stickerSets() }
+        panel.loadStickers = { try await viewModel.stickers(inSet: $0) }
+        panel.stickersForEmoji = { try await viewModel.stickers(forEmoji: $0) }
+        panel.send = { [weak self, weak panel] sticker in
+            panel?.didSend(sticker)
+            Task { await self?.viewModel.send(sticker: sticker) }
+        }
+        stickerPanel = panel
+        return panel
+    }
+
+    /// The sticker panel takes the keyboard's place, as in Telegram, so the chat stays in view; on a Mac, where
+    /// there's no on-screen keyboard to replace, it opens as a sheet.
+    private func toggleStickerPanel() {
+        let panel = makeStickerPanel()
+        if ProcessInfo.processInfo.isiOSAppOnMac {
+            let sheet = UIViewController()
+            sheet.view = panel
+            sheet.preferredContentSize = CGSize(width: 420, height: 420)
+            panel.send = { [weak self, weak panel, weak sheet] sticker in
+                panel?.didSend(sticker)
+                sheet?.dismiss(animated: true)
+                Task { await self?.viewModel.send(sticker: sticker) }
+            }
+            panel.load()
+            present(sheet, animated: true)
+            return
+        }
+        showsStickerPanel.toggle()
+        if showsStickerPanel {
+            panel.height = keyboardHeight > 100 ? keyboardHeight : 336
+            panel.load()
+        }
+        textView.inputView = showsStickerPanel ? panel : nil
+        if textView.isFirstResponder {
+            textView.reloadInputViews()
+        } else {
+            textView.becomeFirstResponder()
+        }
+        updateStickerButton()
+    }
+
+    private func updateStickerButton() {
+        stickerButton.configuration?.image = UIImage(systemName: showsStickerPanel ? "keyboard" : "face.smiling", withConfiguration: UIImage.SymbolConfiguration(pointSize: 20))
+        stickerButton.accessibilityLabel = showsStickerPanel ? "Keyboard" : "Stickers"
+    }
+
+    @objc private func textTappedForKeyboard() {
+        if showsStickerPanel {
+            toggleStickerPanel()
+        }
+    }
+
+    @objc private func keyboardWillChangeFrame(_ notification: Notification) {
+        guard !showsStickerPanel, let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect,
+              let screen = view.window?.screen, frame.minY < screen.bounds.maxY
+        else { return }
+        let height = screen.bounds.maxY - frame.minY
+        // A hardware keyboard leaves only a short bar.
+        if height > 150 {
+            keyboardHeight = height
+        }
     }
 
     private func presentPhotoPicker() {
@@ -1563,6 +1632,12 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     }
 
     func textViewDidEndEditing(_: UITextView) {
+        // Next time the composer is tapped, it's the keyboard.
+        if showsStickerPanel {
+            showsStickerPanel = false
+            textView.inputView = nil
+            updateStickerButton()
+        }
         updateMentionSuggestions()
     }
 
@@ -2651,5 +2726,12 @@ extension UIFont {
     func withWeight(_ weight: UIFont.Weight) -> UIFont {
         let descriptor = fontDescriptor.addingAttributes([.traits: [UIFontDescriptor.TraitKey.weight: weight]])
         return UIFont(descriptor: descriptor, size: 0)
+    }
+}
+
+extension ChatViewController: UIGestureRecognizerDelegate {
+    /// The tap that brings the keyboard back alongside the text view's own.
+    func gestureRecognizer(_: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith _: UIGestureRecognizer) -> Bool {
+        true
     }
 }

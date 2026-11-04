@@ -310,6 +310,10 @@ public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, 
         try await client.stickers(inSet: id)
     }
 
+    public func stickers(forEmoji emoji: String) async throws -> [ChatSticker] {
+        try await client.stickers(forEmoji: emoji)
+    }
+
     /// Waits for Telegram's copy of the message, as media does.
     public func send(sticker: ChatSticker, replyToId: String?) async throws -> String? {
         typingSentAt = nil

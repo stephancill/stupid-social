@@ -1279,6 +1279,8 @@ def main():
     custom_emoji.add_argument("-o", "--output", help="download the first emoji's image (the whole WebP, else its largest thumbnail) here")
     stickers = sub.add_parser("stickers", help="the account's recent and favourite stickers and installed sticker sets, by format")
     stickers.add_argument("--set", help="list one set's stickers instead: its id or short name")
+    stickers_for = sub.add_parser("stickers-for", help="messages.getStickers: stickers for an emoji, from installed sets and Telegram's suggestions")
+    stickers_for.add_argument("--emoji", required=True)
     sticker_corpus = sub.add_parser("sticker-corpus", help="download stickers (TGS, WebM, WebP) from sets into a directory, for renderer tests")
     sticker_corpus.add_argument("--set", action="append", default=[], help="a set's short name; repeatable. Default: every installed set, recent and favourite stickers")
     sticker_corpus.add_argument("--animated-emoji", action="store_true", help="also Telegram's animated emoji set")
@@ -1488,6 +1490,16 @@ def main():
         print(f"installed: {installed['_']} {len(installed.get('sets', []))} sets")
         for sticker_set in installed.get("sets", []):
             print(f"  {sticker_set['id']} {sticker_set['short_name']!r} {sticker_set['count']} stickers thumbs={[t.get('type') for t in sticker_set.get('thumbs') or []]} thumb_document_id={sticker_set.get('thumb_document_id')}")
+    elif args.command == "stickers-for":
+        result = client.call({"_": "messages.getStickers", "emoticon": args.emoji, "hash": 0})
+        documents = result.get("stickers", [])
+        installed = {s["id"] for s in client.call({"_": "messages.getAllStickers", "hash": 0}).get("sets", [])}
+        def set_id(doc):
+            sticker = next((a for a in doc.get("attributes", []) if a["_"] == "documentAttributeSticker"), {})
+            return (sticker.get("stickerset") or {}).get("id")
+        print(f"{result['_']}: {len(documents)} stickers, {sum(set_id(d) in installed for d in documents)} from installed sets, formats {sticker_formats(documents)}")
+        for doc in documents[:8]:
+            print(("  installed " if set_id(doc) in installed else "  suggested ") + sticker_line(doc))
     elif args.command == "sticker-corpus":
         output = pathlib.Path(args.output)
         output.mkdir(parents=True, exist_ok=True)

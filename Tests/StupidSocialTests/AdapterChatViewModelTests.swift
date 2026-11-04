@@ -692,7 +692,11 @@ private final class FakeStickerAdapter: FakeAdapter, ChatStickerSending {
     private(set) var sentStickerReplies: [String?] = []
 
     func stickerSets() async throws -> [ChatStickerSet] {
-        [ChatStickerSet(id: "recent", title: "Recent", cover: nil, stickers: [sticker]), ChatStickerSet(id: "set-1", title: "Hands", cover: nil, stickers: nil)]
+        [ChatStickerSet(id: "recent", title: "Recent", cover: nil, count: 1, stickers: [sticker]), ChatStickerSet(id: "set-1", title: "Hands", cover: nil, count: 1, stickers: nil)]
+    }
+
+    func stickers(forEmoji emoji: String) async throws -> [ChatSticker] {
+        emoji == "👋" ? [sticker] : []
     }
 
     func stickers(inSet id: String) async throws -> [ChatSticker] {

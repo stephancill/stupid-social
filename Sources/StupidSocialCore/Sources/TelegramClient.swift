@@ -1476,13 +1476,13 @@ public actor TelegramClient: ChatListProvider {
             let documents = try await invoke(TLObject(method, ["hash": .long(0)])).object?.objects("stickers") ?? []
             let stickers = documents.compactMap(rememberSticker)
             if !stickers.isEmpty {
-                sets.append(ChatStickerSet(id: id, title: title, cover: nil, stickers: stickers))
+                sets.append(ChatStickerSet(id: id, title: title, cover: nil, count: stickers.count, stickers: stickers))
             }
         }
         for set in try await invoke(TLObject("messages.getAllStickers", ["hash": .long(0)])).object?.objects("sets") ?? [] {
             guard let id = set["id"]?.long, let accessHash = set["access_hash"]?.long else { continue }
             stickerSetHashes[id] = accessHash
-            sets.append(ChatStickerSet(id: String(id), title: set["title"]?.string ?? "Stickers", cover: Self.stickerSetCover(set), stickers: stickerSetStickers[id]))
+            sets.append(ChatStickerSet(id: String(id), title: set["title"]?.string ?? "Stickers", cover: Self.stickerSetCover(set), count: Int(set["count"]?.int ?? 0), stickers: stickerSetStickers[id]))
         }
         return sets
     }
@@ -1497,6 +1497,30 @@ public actor TelegramClient: ChatListProvider {
         let stickers = documents.compactMap(rememberSticker)
         stickerSetStickers[setId] = stickers
         return stickers
+    }
+
+    /// Stickers for an emoji (`messages.getStickers`): the user's installed sets' first, then Telegram's suggestions,
+    /// all animated in practice (91 for 😂, 9 installed; observed 2026-11-04, probe `stickers-for`), so the user's
+    /// loaded sets' stickers with that emoji go first.
+    public func stickers(forEmoji emoji: String) async throws -> [ChatSticker] {
+        try requireAccount()
+        let documents = try await invoke(TLObject("messages.getStickers", ["emoticon": .string(emoji), "hash": .long(0)])).object?.objects("stickers") ?? []
+        let installed = Set(stickerSetHashes.keys)
+        func setId(_ document: TLObject) -> Int64? {
+            document.objects("attributes").first { $0.name == "documentAttributeSticker" }?["stickerset"]?.object?["id"]?.long
+        }
+        let own = stickerSetStickers.values.joined().filter { Self.emoji($0.alt, matches: emoji) }
+        let fromInstalled = documents.filter { setId($0).map(installed.contains) ?? false }.compactMap(rememberSticker)
+        let suggested = documents.filter { !(setId($0).map(installed.contains) ?? false) }.compactMap(rememberSticker)
+        var seen = Set<String>()
+        return (own + fromInstalled + suggested).filter { seen.insert($0.id).inserted }
+    }
+
+    /// Whether a sticker's emoji is `emoji`, ignoring variation selectors (❤️ and ❤).
+    private static func emoji(_ alt: String?, matches emoji: String) -> Bool {
+        guard let alt else { return false }
+        let strip = { (text: String) in text.unicodeScalars.filter { $0.value != 0xFE0F }.map(String.init).joined() }
+        return strip(alt) == strip(emoji)
     }
 
     private func rememberSticker(_ document: TLObject) -> ChatSticker? {
