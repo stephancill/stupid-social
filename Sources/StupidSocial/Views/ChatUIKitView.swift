@@ -441,8 +441,11 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         var stickerConfiguration = UIButton.Configuration.plain()
         stickerConfiguration.image = UIImage(systemName: "face.smiling", withConfiguration: UIImage.SymbolConfiguration(pointSize: 20))
         stickerConfiguration.baseForegroundColor = .secondaryLabel
-        stickerConfiguration.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 2, bottom: 6, trailing: 2)
+        // 2 points at the bottom lift the symbol 1 point, which centres it in the pill (measured on screen).
+        stickerConfiguration.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 2, bottom: 2, trailing: 2)
         stickerButton.configuration = stickerConfiguration
+        // As tall as one line of text, so the icon centres on the line it sits beside (the row aligns to the bottom).
+        stickerButton.heightAnchor.constraint(equalToConstant: minimumTextHeight).isActive = true
         stickerButton.accessibilityLabel = "Stickers"
         stickerButton.isHidden = !viewModel.offersStickers
         stickerButton.setContentHuggingPriority(.required, for: .horizontal)
