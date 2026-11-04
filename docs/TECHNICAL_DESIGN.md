@@ -456,7 +456,7 @@ Stickers are drawn in the app, with no dependency (`StupidSocialCore/Stickers`):
 
 - **Lottie (TGS):** `LottieAnimation` parses the gzipped Lottie JSON and `LottieRenderer` draws a frame with Core Graphics. It follows Telegram's rlottie fork (`TelegramMessenger/rlottie`, what Telegram's apps drew stickers with) rather than the Lottie spec where they differ, so stickers look as they do in Telegram: no skew, merge paths, expressions, effects or masks; rlottie's approximate distances for motion paths and trims; its gradient stops; and its unmasked colour packing, which some emoji rely on. Correctness is measured against rlottie frame by frame (`scripts/lottie-compare.py`) over a corpus of real stickers (`scripts/telegram-client.py sticker-corpus`, kept out of the repository), with the feature census in `scripts/lottie-census.py`.
 - **Video (WebM):** `WebMSticker` reads the Matroska container (VP9 frames, each with its alpha as a second VP9 frame in the block additions) and decodes both with VideoToolbox's VP9 decoder, which iOS 26.2 lets apps register; the alpha frame's luma becomes the alpha. Checked against ffmpeg's libvpx decode (`scripts/webm-compare.sh`).
-- **Playback:** a sticker view renders frames off the main thread at its pixel size, at most 30 a second, only while on screen; grids such as the picker show first frames.
+- **Playback:** as Telegram's apps do, frames are prepared ahead on a background queue, shown in order at the sticker's own frame rate (up to 60) only while on screen, and kept LZ4-compressed after the first loop, shared by every view showing the sticker at that size; grids such as the picker show first frames.
 
 ## Chat Framework
 
