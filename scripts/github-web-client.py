@@ -683,6 +683,9 @@ def follow_user_metadata_from_html(html: str, username: str) -> dict[str, str | 
     anchor_re = re.compile(
         r'href="/%s"[^>]*class="[^"]*text-bold"[^>]*>([^<]+)</a>' % re.escape(username)
     )
+    # GitHub writes "1 repository" and "1 follower" in the singular.
+    repos_re = re.compile(r"([0-9.,]+[kKmM]?)\s+repositor(?:y|ies)\b")
+    followers_re = re.compile(r"([0-9.,]+[kKmM]?)\s+followers?\b")
     chosen = None
     chunk = None
     for match in anchor_re.finditer(html):
@@ -693,14 +696,19 @@ def follow_user_metadata_from_html(html: str, username: str) -> dict[str, str | 
         candidate = html[article_start:article_end]
         if chosen is None:
             chosen, chunk = match, candidate
-        if 'class="m-0 mt-1 wb-break-all"' in candidate:
+        # A user without a bio still has the counts paragraph.
+        if (
+            'class="m-0 mt-1 wb-break-all"' in candidate
+            or repos_re.search(candidate)
+            or followers_re.search(candidate)
+        ):
             chosen, chunk = match, candidate
             break
     if chosen is None or chunk is None:
         return None
     display_name = chosen.group(1).strip() or None
-    repos = re.search(r"([0-9.,]+[kKmM]?)\s+repositories", chunk)
-    followers = re.search(r"([0-9.,]+[kKmM]?)\s+followers", chunk)
+    repos = repos_re.search(chunk)
+    followers = followers_re.search(chunk)
     bio_match = re.search(
         r'class="m-0 mt-1 wb-break-all"[^>]*>\s*<div>(.*?)</div>\s*</div>',
         chunk,

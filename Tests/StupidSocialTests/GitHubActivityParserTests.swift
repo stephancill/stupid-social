@@ -156,6 +156,31 @@ final class GitHubActivityParserTests: XCTestCase {
         XCTAssertEqual(metadata.followers, "13.8k")
     }
 
+    func testFollowedUserWithoutBioReadsSingularCountsFromTheirCard() throws {
+        let username = "Dantesrival"
+        let html = #"""
+        <article data-hydro-view="">
+        <a href="/\#(username)" class="Link--primary Link text-bold">\#(username)</a>
+        <a href="/example/repo" class="Link--primary Link text-bold">example/repo</a>
+        </article>
+        <article data-hydro-view="">
+        <a href="/subtleGradient">subtleGradient</a>
+        <a href="/\#(username)" class="Link--primary Link text-bold">\#(username)</a>
+        <span data-view-component="true" class="color-fg-muted text-normal">\#(username)</span>
+        <p class="m-0 mt-1 color-fg-muted">
+          <span class="tmp-mr-3">1 repository</span>
+          <span>1 follower</span>
+        </p>
+        </article>
+        """#
+
+        let metadata = try XCTUnwrap(GitHubActivityParser.followUserMetadata(for: username, in: html))
+
+        XCTAssertNil(metadata.bio)
+        XCTAssertEqual(metadata.repos, "1")
+        XCTAssertEqual(metadata.followers, "1")
+    }
+
     func testMovesStarOfViewerRepositoryToNotifications() throws {
         let viewer = "stephancill"
         let html = [

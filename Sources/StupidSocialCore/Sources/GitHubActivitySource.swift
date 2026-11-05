@@ -671,8 +671,8 @@ public enum GitHubActivityParser {
 
         let displayName = Range(match.range(at: 1), in: html).flatMap { trimmed(String(html[$0])) }
 
-        let repos = chunk.flatMap { firstCapture(in: $0, pattern: #"([0-9.,]+[kKmM]?)\s+repositories"#) }.flatMap { trimmed($0) }
-        let followers = chunk.flatMap { firstCapture(in: $0, pattern: #"([0-9.,]+[kKmM]?)\s+followers"#) }.flatMap { trimmed($0) }
+        let repos = chunk.flatMap { firstCapture(in: $0, pattern: followUserReposPattern) }.flatMap { trimmed($0) }
+        let followers = chunk.flatMap { firstCapture(in: $0, pattern: followUserFollowersPattern) }.flatMap { trimmed($0) }
 
         // The bio lives only inside the card's `wb-break-all` container. Parsing
         // that container (rather than everything up to the repo count) keeps the
@@ -694,11 +694,15 @@ public enum GitHubActivityParser {
         )
     }
 
+    /// GitHub writes "1 repository" and "1 follower" in the singular.
+    private static let followUserReposPattern = #"([0-9.,]+[kKmM]?)\s+repositor(?:y|ies)\b"#
+    private static let followUserFollowersPattern = #"([0-9.,]+[kKmM]?)\s+followers?\b"#
+
     /// Finds the `<a ... class="...text-bold">` link for the followed user,
-    /// preferring the one inside a card that actually renders their bio. A
-    /// username can also appear earlier in the document as an actor/star card,
-    /// whose article has no `wb-break-all` bio container; that match must not be
-    /// mistaken for the followed user's card.
+    /// preferring the one inside a card that actually renders their bio or
+    /// counts. A username can also appear earlier in the document as an
+    /// actor/star card, which has neither; that match must not be mistaken for
+    /// the followed user's card. A user without a bio still has the counts.
     private static func followedUserAnchor(anchorRe: NSRegularExpression, in html: String) -> (result: NSTextCheckingResult, chunk: String?)? {
         let ns = html as NSString
         let fullRange = NSRange(html.startIndex..., in: html)
@@ -714,7 +718,11 @@ public enum GitHubActivityParser {
                 fallback = match
                 fallbackChunk = chunk
             }
-            if let chunk, chunk.contains(#"class="m-0 mt-1 wb-break-all""#) {
+            if let chunk,
+               chunk.contains(#"class="m-0 mt-1 wb-break-all""#)
+               || firstCapture(in: chunk, pattern: followUserReposPattern) != nil
+               || firstCapture(in: chunk, pattern: followUserFollowersPattern) != nil
+            {
                 return (match, chunk)
             }
         }
