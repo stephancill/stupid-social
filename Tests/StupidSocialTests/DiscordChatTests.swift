@@ -59,11 +59,11 @@ final class DiscordChatTests: XCTestCase {
         """
     }
 
-    private func message(_ id: String, channel: String, author: String, authorName: String, content: String, type: Int = 0, attachments: String = "[]", extra: String = "") -> String {
+    private func message(_ id: String, channel: String, author: String, authorName: String, content: String, type: Int = 0, attachments: String = "[]", flags: Int = 0, extra: String = "") -> String {
         """
         {"id": "\(id)", "channel_id": "\(channel)", "type": \(type), "content": "\(content)", "author": \(user(author, authorName)),
          "timestamp": "2026-11-07T10:00:00.000000+00:00", "edited_timestamp": null, "attachments": \(attachments), "embeds": [],
-         "mentions": [], "mention_roles": [], "pinned": false, "mention_everyone": false, "tts": false, "flags": 0\(extra)}
+         "mentions": [], "mention_roles": [], "pinned": false, "mention_everyone": false, "tts": false, "flags": \(flags)\(extra)}
         """
     }
 
@@ -208,6 +208,31 @@ final class DiscordChatTests: XCTestCase {
 
         dispatch(gateway, "TYPING_START", #"{"channel_id": "\#(general)", "user_id": "\#(friend)", "timestamp": 1}"#)
         XCTAssertEqual(adapter.typingNames, ["Pal"])
+        adapter.stopFollowing()
+    }
+
+    /// The shapes the probe's `forward` and `send-voice` read back (observed 2026-11-07).
+    func testForwardsShowTheirSnapshotAndVoiceMessagesTheirWaveform() async throws {
+        let gateway = try gateway(readyJSON(readId: snowflake(1000)))
+        let adapter = DiscordChatAdapter(gateway: gateway, channelId: general, title: "general")
+        await adapter.startFollowing()
+        let forward = snowflake(2000)
+        let snapshot = #", "message_reference": {"type": 1, "channel_id": "300000000000000099", "message_id": "\#(snowflake(1500))"}, "message_snapshots": [{"message": {"type": 0, "content": "from elsewhere", "mentions": [], "attachments": [], "embeds": [], "timestamp": "2026-11-07T10:00:00+00:00", "edited_timestamp": null, "flags": 0, "components": []}}]"#
+        dispatch(gateway, "MESSAGE_CREATE", message(forward, channel: general, author: friend, authorName: "friend", content: "", flags: 16384, extra: snapshot))
+        let voice = snowflake(3000)
+        let waveform = Data([0, 255, 128]).base64EncodedString()
+        let audio = #"[{"id": "2", "filename": "voice-message.ogg", "size": 9000, "url": "https://cdn.discordapp.com/v.ogg", "proxy_url": "https://media.discordapp.net/v.ogg", "content_type": "audio/ogg", "duration_secs": 2.02, "waveform": "\#(waveform)"}]"#
+        dispatch(gateway, "MESSAGE_CREATE", message(voice, channel: general, author: friend, authorName: "friend", content: "", attachments: audio, flags: 8192))
+
+        XCTAssertEqual(adapter.messages.map(\.id), [forward, voice])
+        XCTAssertEqual(adapter.messages[0].text, "from elsewhere")
+        XCTAssertEqual(adapter.messages[0].forwardedFrom, ChatForwardOrigin(name: nil))
+        guard case let .voice(previewId, duration, levels)? = adapter.messages[1].embeds.first else { return XCTFail("\(adapter.messages[1].embeds)") }
+        XCTAssertEqual(previewId, "https://cdn.discordapp.com/v.ogg")
+        XCTAssertEqual(duration, 2.02)
+        XCTAssertEqual(levels, [0, 1, 128.0 / 255])
+        XCTAssertNil(adapter.messages[1].forwardedFrom)
+        XCTAssertEqual(ChatVoiceNote(fileURL: URL(fileURLWithPath: "/tmp/v.caf"), duration: 1, waveform: [0, 0.5, 1, 0.25]).levels(2), [0.5, 1])
         adapter.stopFollowing()
     }
 

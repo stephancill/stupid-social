@@ -17,7 +17,6 @@ import os
 import random
 import re
 import string
-import subprocess
 import sys
 import time
 import urllib.error
@@ -33,10 +32,6 @@ from typing import Any
 BASE_URL = "https://www.instagram.com"
 DEFAULT_CACHE_FILE = "logs/instagram-web-client-cache.json"
 DEFAULT_CACHE_TTL_SECONDS = 60 * 60
-SIM_PREFS_SCRIPT = os.path.expanduser(
-    "~/.config/opencode/skills/sim-prefs/sim-prefs/scripts/read_prefs.py"
-)
-SIM_INSTAGRAM_FALLBACK_KEY = "tech.stupid.StupidSocial.credentials.instagram.localFallback"
 
 WEB_APP_ID_MOBILE = "1217981644879628"
 ASBD_ID = "359341"
@@ -493,6 +488,191 @@ class InstagramWebClient:
         )
         if not (result.get("data") or {}).get("xig_direct_text_send_with_slide_messaging_response"):
             raise SystemExit(f"direct send was not applied: {json.dumps(result)[:500]}")
+        return result
+
+    def bootload_doc_ids(self, modules: list[str]) -> dict[str, str]:
+        """Doc IDs from modules the web client loads on demand, such as a dialog's mutation. The bootloader
+        endpoint answers a GET with error 1357004; a POST with the page's ajax fields in the body returns the
+        modules' script URLs (observed 2026-11-07)."""
+        self._ensure_bootstrapped()
+        state = self._state()
+        fields = {"__a": "1", "__user": state.page_user_id or "0", "__comet_req": "7", "__req": request_id(self.request_count), "dpr": "3"}
+        for key, value in {"__rev": state.revision, "__spin_r": state.revision, "__hs": state.haste_session, "__hsi": state.hsi, "lsd": state.lsd, "fb_dtsg": state.fb_dtsg}.items():
+            if value:
+                fields[key] = value
+        if state.csrf_token:
+            fields["jazoest"] = jazoest(state.csrf_token)
+        self.request_count += 1
+        text = self.request_text(
+            "POST",
+            BASE_URL + "/ajax/bootloader-endpoint/?" + urllib.parse.urlencode({"modules": ",".join(modules)}),
+            headers={**self.web_headers(), "Content-Type": "application/x-www-form-urlencoded"},
+            body=urllib.parse.urlencode(fields).encode(),
+        )
+        doc_ids: dict[str, str] = {}
+        for url in sorted({u.replace("\\/", "/") for u in re.findall(r'https:\\?/\\?/[^"]+?\.js[^"]*', text)}):
+            try:
+                doc_ids.update(parse_doc_ids(self.request_text("GET", url, headers=self._base_asset_headers())))
+            except InstagramHTTPError:
+                continue
+        self.doc_ids.update(doc_ids)
+        self._save_cache()
+        return doc_ids
+
+    def direct_thread_info(self, thread_fbid: str) -> dict[str, Any]:
+        return self.direct_thread(thread_fbid)["data"]["get_slide_thread_nullable"]["as_ig_direct_thread"]
+
+    def guard_participant(self, thread: dict[str, Any], expected: str) -> None:
+        """Stops unless the thread's title or one of its other members' names contains `expected`, so a
+        mutation only reaches the thread agreed for testing."""
+        names = [thread.get("thread_title") or ""]
+        for user in thread.get("usersWithoutViewer") or thread.get("users") or []:
+            names += [user.get("username") or "", user.get("full_name") or ""]
+        if not any(expected.lower() in name.lower() for name in names if name):
+            raise SystemExit("Thread does not match --expect-participant; nothing sent.")
+
+    def direct_forward(self, target_thread_fbid: str, source_thread_fbid: str, message_id: str) -> dict[str, Any]:
+        """Forwards a message the way the web client's Forward menu item does (useIGDForwardMessageViaIGDMAPIOffMsys):
+        text is sent again with the source thread as `forwarded_from_thread_id`; a single photo or video goes
+        through IGDMediaForwardPublisherMutation with its `attachment_fbid`; anything else (voice clips, shares)
+        through the REST broadcast forward, which takes the legacy thread ids."""
+        source = self.direct_thread_info(source_thread_fbid)
+        viewer = (source.get("viewer") or {}).get("interop_messaging_user_fbid")
+        node = next((e["node"] for e in source["slide_messages"]["edges"] if message_id in (e["node"].get("message_id"), e["node"].get("id"))), None)
+        if node is None:
+            raise SystemExit("Message not among the source thread's newest 20.")
+        own = node.get("sender_fbid") == viewer
+        content = node.get("content") or {}
+        typename = content.get("__typename")
+        page_path = f"/direct/t/{urllib.parse.quote(target_thread_fbid)}/"
+        if typename == "SlideMessageText":
+            result = self.direct_graphql(
+                "IGDirectTextSendMutation",
+                page_path,
+                "xig_direct_text_send_with_slide_messaging_response",
+                {
+                    "commands": None,
+                    "forwarded_from_thread_id": source_thread_fbid,
+                    "ig_thread_igid": target_thread_fbid,
+                    "is_forwarded_from_own_message": own,
+                    "mentioned_user_ids": None,
+                    "mentions": None,
+                    "offline_threading_id": offline_threading_id(),
+                    "recipient_igids": None,
+                    "replied_to_item_id": None,
+                    "reply_to_message_id": None,
+                    "send_attribution": None,
+                    "text": {"sensitive_string_value": node.get("text_body") or ""},
+                },
+            )
+            return {"path": "text", "own": own, "result": result}
+        attachments = content.get("attachments") or content.get("videos") or content.get("audio_attachments") or []
+        if typename in ("SlideMessageImageContent", "SlideMessageVideosContent", "SlideMessageAudiosContent") and len(attachments) == 1:
+            result = self.direct_graphql(
+                "IGDMediaForwardPublisherMutation",
+                page_path,
+                "xig_direct_media_send_with_slide_messaging_response",
+                {
+                    "attachment_fbid": attachments[0].get("attachment_fbid"),
+                    "forwarded_from_thread_id": source_thread_fbid,
+                    "forwarded_from_thread_item_id": node.get("id"),
+                    "is_forwarded_from_own_message": own,
+                    "offline_threading_id": offline_threading_id(),
+                    "recipient_users": None,
+                    "thread_id": target_thread_fbid,
+                },
+            )
+            return {"path": "media", "own": own, "result": result}
+        target = self.direct_thread_info(target_thread_fbid)
+        client_context = offline_threading_id()
+        fields = {
+            "action": "forward_item",
+            "client_context": client_context,
+            "forwarded_from_thread_id": source["thread_id"],
+            "forwarded_from_thread_item_id": node.get("id"),
+            "item_type": "generic_xma",
+            "mutation_token": client_context,
+            "send_attribution": "thread_view",
+            "thread_id": target["thread_id"],
+        }
+        result = self.request_json_with_refresh(
+            "POST",
+            BASE_URL + "/api/v1/direct_v2/threads/broadcast/forward/",
+            headers={**self.web_headers(), "Content-Type": "application/x-www-form-urlencoded"},
+            body=urllib.parse.urlencode(fields).encode(),
+        )
+        return {"path": "broadcast", "own": own, "typename": typename, "result": result}
+
+    def upload_voice_clip(self, path: str, duration: float, levels: list[float]) -> str:
+        """Uploads an Ogg Opus voice clip as the desktop web composer does (WmiStartRuploadAndGetMercuryFallback):
+        a POST of the file to rupload's `messenger_audio` consumer with `audio_type: fb_voice_message` and the
+        waveform as 64 levels of 0-100 with `sampling_freq` levels per second. Returns the attachment fbid."""
+        with open(path, "rb") as handle:
+            data = handle.read()
+        thread_viewer = self.viewer_fbid()
+        name = f"audioclip-{int(time.time() * 1000)}-{round(duration * 1000)}.ogg"
+        headers = {
+            "User-Agent": self.user_agent,
+            "Accept": "*/*",
+            "Origin": BASE_URL,
+            "Referer": BASE_URL + "/",
+            "X-Entity-Name": name,
+            "X-Entity-Type": "audio/ogg",
+            "X-Entity-Length": str(len(data)),
+            "Offset": "0",
+            "ig-u-ds-user-id": thread_viewer,
+            "audio_type": "fb_voice_message",
+            "waveform_data": json.dumps({"amplitudes": [round(level, 3) for level in levels], "sampling_freq": round(len(levels) / duration)}, separators=(",", ":")),
+            "Content-Type": "audio/ogg",
+        }
+        text = self.request_text("POST", f"https://rupload.instagram.com/messenger_audio/{uuid.uuid4()}", headers=headers, body=data)
+        response = json.loads(text.removeprefix("for (;;);"))
+        media_id = response.get("media_id_str") or response.get("media_id")
+        if media_id is None:
+            raise SystemExit(f"voice upload returned no media id: {text[:300]}")
+        return str(media_id)
+
+    def viewer_fbid(self) -> str:
+        if not getattr(self, "_viewer_fbid", None):
+            inbox = self.direct_inbox()["data"]["get_slide_mailbox_for_iris_subscription"]["threads_by_folder"]["edges"]
+            self._viewer_fbid = inbox[0]["node"]["as_ig_direct_thread"]["viewer"]["interop_messaging_user_fbid"]
+        return self._viewer_fbid
+
+    def direct_send_voice(self, thread_fbid: str, path: str, duration: float, levels: list[float]) -> dict[str, Any]:
+        """Sends a voice clip: the upload, then IGDirectMediaSendMutation with its fbid (IGDMAPISendVoiceClip)."""
+        attachment_fbid = self.upload_voice_clip(path, duration, levels)
+        result = self.direct_graphql(
+            "IGDirectMediaSendMutation",
+            f"/direct/t/{urllib.parse.quote(thread_fbid)}/",
+            "xig_direct_media_send_with_slide_messaging_response",
+            {
+                "attachment_fbid": attachment_fbid,
+                "forwarded_from_thread_id": None,
+                "is_forwarded_from_own_message": None,
+                "offline_threading_id": offline_threading_id(),
+                "reply_to_message_id": None,
+                "thread_id": thread_fbid,
+            },
+        )
+        return {"attachment_fbid": attachment_fbid, "result": result}
+
+    def direct_unsend(self, thread_fbid: str, message_id: str) -> dict[str, Any]:
+        """Unsends one of the viewer's messages (IGDMessageUnsendDialogOffMsysMutation, loaded on demand with
+        the unsend dialog). It takes the legacy `thread_id`."""
+        if "IGDMessageUnsendDialogOffMsysMutation" not in self.doc_ids:
+            self.bootload_doc_ids(["IGDMessageUnsendDialogOffMsys.react"])
+        thread = self.direct_thread_info(thread_fbid)
+        doc_id = self.doc_ids.get("IGDMessageUnsendDialogOffMsysMutation")
+        if doc_id is None:
+            raise SystemExit("Could not discover IGDMessageUnsendDialogOffMsysMutation")
+        result = self.graphql_post(
+            doc_id,
+            {"message_id": message_id, "send_data": {"thread_id": thread["thread_id"]}},
+            friendly_name="IGDMessageUnsendDialogOffMsysMutation",
+            root_field_name="direct_unsend_message",
+        )
+        if result.get("errors"):
+            raise SystemExit(f"unsend failed: {json.dumps(result['errors'])[:500]}")
         return result
 
     def rest_stories_tray(self) -> dict[str, Any]:
@@ -1121,9 +1301,10 @@ def load_credentials(args: argparse.Namespace) -> dict[str, Any]:
         with open(args.credentials_file, "r", encoding="utf-8") as handle:
             return json.load(handle)
     if args.simulator:
-        command = [sys.executable, SIM_PREFS_SCRIPT, "--raw-key", SIM_INSTAGRAM_FALLBACK_KEY]
-        result = subprocess.run(command, check=True, text=True, capture_output=True)
-        return json.loads(result.stdout)
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import sim_keychain
+
+        return sim_keychain.load_credentials("instagram", args.account_id)
     raise SystemExit("Pass --simulator, --credentials-file, or --credentials-json")
 
 
@@ -1279,7 +1460,8 @@ def write_output(path: str | None, value: Any) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Validate Instagram web API calls using captured app cookies.")
-    parser.add_argument("--simulator", action="store_true", help="Read Instagram credentials from the booted simulator fallback store.")
+    parser.add_argument("--simulator", action="store_true", help="Read Instagram credentials from the booted simulator's keychain (scripts/sim_keychain.py).")
+    parser.add_argument("--account-id", help="With --simulator, the Instagram account to use when the simulator has several.")
     parser.add_argument("--credentials-file", help="Path to credentials JSON, or '-' for stdin.")
     parser.add_argument("--credentials-json", help="Credentials JSON string.")
     parser.add_argument(
@@ -1326,6 +1508,22 @@ def build_parser() -> argparse.ArgumentParser:
     direct_send.add_argument("thread_fbid")
     direct_send.add_argument("text")
     direct_send.add_argument("--reply-to", help="Message id (mid.$...) to reply to.")
+    direct_send.add_argument("--expect-participant", help="Only send when the thread's title or a member's name contains this.")
+    direct_forward = subparsers.add_parser("direct-forward", help="Forward a message as the web client does (text, photo/video, or broadcast forward). Sends a real DM.")
+    direct_forward.add_argument("thread_fbid", help="Target thread.")
+    direct_forward.add_argument("--from-thread", required=True, help="Source thread fbid.")
+    direct_forward.add_argument("--message-id", required=True, help="Source message id (mid.$...), among the source thread's newest 20.")
+    direct_forward.add_argument("--expect-participant", required=True, help="Only send when the target thread matches this name.")
+    direct_voice = subparsers.add_parser("direct-send-voice", help="Send an Ogg Opus voice clip (rupload messenger_audio + IGDirectMediaSendMutation). Sends a real DM.")
+    direct_voice.add_argument("thread_fbid")
+    direct_voice.add_argument("--file", required=True, help="Ogg Opus file.")
+    direct_voice.add_argument("--duration", type=float, required=True, help="Seconds.")
+    direct_voice.add_argument("--levels", help="Comma-separated waveform levels from 0 to 1; 64 by default, rising and falling.")
+    direct_voice.add_argument("--expect-participant", required=True, help="Only send when the thread matches this name.")
+    direct_unsend = subparsers.add_parser("direct-unsend", help="Unsend one of your messages (IGDMessageUnsendDialogOffMsysMutation).")
+    direct_unsend.add_argument("thread_fbid")
+    direct_unsend.add_argument("message_id", help="mid.$...")
+    direct_unsend.add_argument("--expect-participant", required=True, help="Only unsend when the thread matches this name.")
     username_profile = subparsers.add_parser("profile-username", help="Call web-visible /api/v1/users/web_profile_info/.")
     username_profile.add_argument("username", help="Instagram username.")
 
@@ -1477,7 +1675,19 @@ def main() -> None:
     elif args.command == "direct-react":
         result = client.direct_react(args.thread_fbid, args.message_id, args.emoji, args.remove)
     elif args.command == "direct-send-text":
+        if args.expect_participant:
+            client.guard_participant(client.direct_thread_info(args.thread_fbid), args.expect_participant)
         result = client.direct_send_text(args.thread_fbid, args.text, args.reply_to)
+    elif args.command == "direct-forward":
+        client.guard_participant(client.direct_thread_info(args.thread_fbid), args.expect_participant)
+        result = client.direct_forward(args.thread_fbid, args.from_thread, args.message_id)
+    elif args.command == "direct-send-voice":
+        client.guard_participant(client.direct_thread_info(args.thread_fbid), args.expect_participant)
+        levels = [float(v) for v in args.levels.split(",")] if args.levels else [abs((i % 16) - 8) / 8 for i in range(64)]
+        result = client.direct_send_voice(args.thread_fbid, args.file, args.duration, levels)
+    elif args.command == "direct-unsend":
+        client.guard_participant(client.direct_thread_info(args.thread_fbid), args.expect_participant)
+        result = client.direct_unsend(args.thread_fbid, args.message_id)
     elif args.command == "profile-username":
         result = client.rest_profile_by_username(args.username)
     elif args.command == "search-users":

@@ -55,6 +55,19 @@ public enum AppMetrics {
         StupidMetrics.track("chat_search", properties: ["network": network.rawValue])
     }
 
+    /// `native`: the network's own forward; otherwise a copy of the content, possibly from another network.
+    static func messageForwarded(network: SocialNetwork, from source: SocialNetwork, isNative: Bool, error: (any Error)?) {
+        StupidMetrics.track("message_forward", properties: [
+            "network": network.rawValue,
+            "from": source.rawValue,
+            "native": isNative ? "yes" : "no",
+            "outcome": error == nil ? "ok" : "error",
+        ])
+        if let error {
+            StupidMetrics.error("message_forward_failed", error: error, properties: ["network": network.rawValue])
+        }
+    }
+
     static func messageSent(network: SocialNetwork, hasAttachment: Bool, isVoice: Bool, isReply: Bool, error: (any Error)?) {
         StupidMetrics.track("message_send", properties: [
             "network": network.rawValue,

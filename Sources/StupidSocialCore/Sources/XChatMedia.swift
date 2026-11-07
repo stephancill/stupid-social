@@ -16,7 +16,7 @@ public struct XChatMediaReference: Hashable, Sendable {
 /// A file to send in an X chat, with what its `MediaAttachment` records: the kind, pixel size and length.
 public struct XChatOutgoingMedia: Sendable {
     let data: Data
-    let filename: String
+    var filename: String
     let kind: XChatMessageContents.Media.Kind
     let width: Int64?
     let height: Int64?
@@ -47,6 +47,41 @@ public struct XChatOutgoingMedia: Sendable {
         self.width = width
         self.height = height
         durationMillis = duration
+    }
+
+    /// A voice message as X's web recorder sends it (observed 2026-11-07): AAC in MP4 named
+    /// `voice_note_<ms>.m4a`, type AUDIO with its length; X keeps no waveform. A picked audio file goes as a file.
+    init(voiceNote data: Data, durationMillis: Int64) {
+        self.data = data
+        filename = "voice_note_\(Int64(Date().timeIntervalSince1970 * 1000)).m4a"
+        kind = .audio
+        width = nil
+        height = nil
+        self.durationMillis = durationMillis
+    }
+
+    /// A file of a message being forwarded, with what its `MediaAttachment` recorded.
+    static func forwarded(data: Data, filename: String, kind: XChatMessageContents.Media.Kind, durationMillis: Int64?) async -> XChatOutgoingMedia {
+        switch kind {
+        case .image, .gif, .video:
+            let mimeType = kind == .gif ? "image/gif" : kind == .video ? "video/mp4" : "image/jpeg"
+            return await XChatOutgoingMedia(data: data, mimeType: mimeType, filename: filename, isImage: kind != .video)
+        case .audio:
+            var media = XChatOutgoingMedia(voiceNote: data, durationMillis: durationMillis ?? 0)
+            media.filename = filename
+            return media
+        case .file, .svg:
+            return XChatOutgoingMedia(file: data, filename: filename, kind: kind)
+        }
+    }
+
+    private init(file data: Data, filename: String, kind: XChatMessageContents.Media.Kind) {
+        self.data = data
+        self.filename = filename
+        self.kind = kind
+        width = nil
+        height = nil
+        durationMillis = nil
     }
 
     private static func pixelSize(of data: Data) -> (Int64?, Int64?) {

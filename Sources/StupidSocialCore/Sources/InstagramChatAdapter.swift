@@ -4,7 +4,7 @@ import Foundation
 /// which the app doesn't use), sends text and replies, reacts, and moves the read receipt as messages are read.
 /// The user's messages show as seen once someone else's read receipt passes them.
 @MainActor
-public final class InstagramChatAdapter: ChatAdapter, ChatReactionSending, ChatReadReceipts {
+public final class InstagramChatAdapter: ChatAdapter, ChatReactionSending, ChatReadReceipts, ChatForwarding, ChatVoiceSending, ChatAudioPreviewing {
     public let network = SocialNetwork.instagram
     public let canReply = true
     public let acceptsAttachments = false
@@ -142,6 +142,48 @@ public final class InstagramChatAdapter: ChatAdapter, ChatReactionSending, ChatR
         return sent.id
     }
 
+    // MARK: Forwarding
+
+    /// Text, or a message with one photo, video or voice clip; shares can't be forwarded from this session.
+    public func forwardReference(for message: ChatMessage) -> String? {
+        guard let source = loaded[message.id] else { return nil }
+        let content = source.content
+        let files = (content?.attachments ?? []).map(\.attachmentFbid) + (content?.videos ?? []).map(\.attachmentFbid) + (content?.audioAttachments ?? []).map(\.attachmentFbid)
+        let text = [source.textBody, content?.textBody].compactMap(\.self).first { !$0.isEmpty }
+        guard content?.xma == nil, files.count <= 1, files.allSatisfy({ $0 != nil }), text != nil || files.count == 1 else { return nil }
+        let forward = InstagramDirectForward(
+            threadFbid: threadFbid, messageId: source.id, isOwn: source.senderFbid != nil && source.senderFbid == viewerFbid,
+            text: files.isEmpty ? text : nil, attachmentFbid: files.first ?? nil,
+        )
+        guard let data = try? JSONEncoder().encode(forward) else { return nil }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    public func forward(reference: String) async throws -> String? {
+        let forward = try JSONDecoder().decode(InstagramDirectForward.self, from: Data(reference.utf8))
+        let sent = try await client.forwardDirect(forward, to: threadFbid)
+        try await loadNewest()
+        return sent.id
+    }
+
+    // MARK: Voice messages
+
+    /// Ogg Opus with 64 levels, as the desktop web composer sends voice clips.
+    public func send(voice: ChatVoiceNote, replyToId: String?) async throws -> String? {
+        guard let viewerFbid else { throw SourceError.serviceError("The chat hasn't loaded yet.") }
+        let fileURL = voice.fileURL
+        let data = try await Task.detached { try OggOpusEncoder.encode(fileAt: fileURL) }.value
+        let levels = voice.levels(64)
+        let sent = try await client.sendDirectVoice(threadFbid: threadFbid, oggOpus: data, duration: voice.duration, levels: levels, viewerFbid: viewerFbid, replyToMessageId: replyToId)
+        try await loadNewest()
+        return sent.id
+    }
+
+    public func audioPreviewURL(for previewId: String) async -> URL? {
+        guard let url = URL(string: previewId), url.scheme == "https" else { return nil }
+        return try? await ChatMediaFiles.shared.file(for: url, filename: "voice.ogg")
+    }
+
     // MARK: Read position
 
     public func isAfterReadPosition(_ message: ChatMessage) -> Bool {
@@ -268,6 +310,10 @@ public final class InstagramChatAdapter: ChatAdapter, ChatReactionSending, ChatR
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .first { !$0.isEmpty }
         var embeds: [ChatEmbed] = []
+        for audio in content?.audioAttachments ?? [] {
+            guard let url = audio.attachmentCdnUrl.flatMap(URL.init) else { continue }
+            embeds.append(.voice(previewId: url.absoluteString, duration: audio.playableDurationMs.map { $0 / 1000 }, waveform: audio.waveformData ?? []))
+        }
         for media in content?.media ?? [] {
             guard let url = (media.isVideo ? media.previewCdnUrl : media.attachmentCdnUrl ?? media.previewCdnUrl).flatMap(URL.init) else { continue }
             let aspectRatio = media.previewWidth.flatMap { width in media.previewHeight.map { width / max($0, 1) } }
@@ -291,6 +337,7 @@ public final class InstagramChatAdapter: ChatAdapter, ChatReactionSending, ChatR
             embeds: embeds,
             replyToId: message.repliedToMessageId,
             isOwn: isOwn,
+            forwardedFrom: message.igdIsForwarded == true ? ChatForwardOrigin(name: nil) : nil,
         )
     }
 

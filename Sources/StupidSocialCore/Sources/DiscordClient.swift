@@ -83,6 +83,34 @@ public final class DiscordClient: @unchecked Sendable {
         return try await request("POST", "/channels/\(channelId)/messages", body: body)
     }
 
+    /// A forward (`message_reference` type 1, probe `forward`, observed 2026-11-07): empty content, and Discord copies
+    /// the original into `message_snapshots`. `guild_id` names a server channel's guild; DMs leave it out.
+    func forward(channelId: String, from source: DiscordForwardReference, nonce: String) async throws -> DiscordMessage {
+        var reference: [String: Any] = ["type": 1, "channel_id": source.channelId, "message_id": source.messageId]
+        if let guildId = source.guildId {
+            reference["guild_id"] = guildId
+        }
+        return try await request("POST", "/channels/\(channelId)/messages", body: [
+            "content": "", "nonce": nonce, "tts": false, "flags": 0, "message_reference": reference,
+        ])
+    }
+
+    /// A voice message (probe `send-voice`, observed 2026-11-07): an uploaded Ogg Opus file named
+    /// `voice-message.ogg`, flagged `IS_VOICE_MESSAGE`, with its length and a waveform of 0–255 levels in base64.
+    func sendVoice(channelId: String, upload: DiscordUploaded, duration: Double, waveform: Data, replyTo: String?, nonce: String) async throws -> DiscordMessage {
+        var body: [String: Any] = [
+            "content": "", "nonce": nonce, "channel_id": channelId, "type": 0, "flags": DiscordMessage.voiceMessageFlag, "sticker_ids": [] as [String],
+            "attachments": [[
+                "id": "0", "filename": upload.filename, "uploaded_filename": upload.uploadedFilename,
+                "duration_secs": duration, "waveform": waveform.base64EncodedString(),
+            ]],
+        ]
+        if let replyTo {
+            body["message_reference"] = ["channel_id": channelId, "message_id": replyTo]
+        }
+        return try await request("POST", "/channels/\(channelId)/messages", body: body)
+    }
+
     /// Uploads a file as the web client does: Discord names a storage URL for it (`POST /channels/{id}/attachments`),
     /// the bytes go there with a `PUT`, and the message then names the uploaded file.
     func upload(channelId: String, data: Data, mimeType: String, filename: String) async throws -> DiscordUploaded {

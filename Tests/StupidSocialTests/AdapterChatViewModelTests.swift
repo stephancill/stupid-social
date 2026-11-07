@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 @testable import StupidSocialCore
 import XCTest
@@ -417,6 +418,102 @@ final class AdapterChatViewModelTests: XCTestCase {
         chat.disconnect()
     }
 
+    func testVoiceMessagesGoAsAFileWhereTheNetworkTakesFilesButNotVoice() async throws {
+        let adapter = FakeAdapter()
+        adapter.acceptsAttachments = true
+        adapter.pages = [[message(1)]]
+        let chat = makeChat(adapter)
+        await chat.connect()
+        XCTAssertTrue(chat.offersVoiceNotes)
+        let recording = try makeRecording()
+        try await chat.send(voice: ChatVoiceNote(recordingAt: recording))
+        XCTAssertNil(chat.errorMessage)
+        XCTAssertEqual(adapter.sent.first?.attachment?.mimeType, "audio/mp4")
+        XCTAssertEqual(adapter.sent.first?.attachment?.filename, "Voice Message.m4a")
+        XCTAssertFalse(adapter.sent.first?.attachment?.data.isEmpty ?? true)
+        chat.disconnect()
+    }
+
+    func testForwardIsOfferedOnceTheOpeningScreenTakesIt() async {
+        let adapter = FakeForwardingAdapter()
+        adapter.pages = [[message(1)]]
+        let chat = makeChat(adapter)
+        await chat.connect()
+        XCTAssertFalse(chat.canForward(message(1)))
+        var picked: ChatForward?
+        chat.forwardHandler = { picked = $0 }
+        XCTAssertTrue(chat.canForward(message(1)))
+        await chat.startForward(message(1))
+        XCTAssertEqual(picked?.reference, "ref-1")
+        XCTAssertEqual(picked?.accountId, "test")
+        XCTAssertEqual(picked?.originName, "Ada")
+        chat.disconnect()
+    }
+
+    func testAForwardInTheSameAccountGoesNativelyAfterTheTypedText() async {
+        let adapter = FakeForwardingAdapter()
+        adapter.pages = [[message(1)]]
+        let chat = makeChat(adapter)
+        await chat.connect()
+        chat.stage(ChatForward(message: message(1), network: .telegram, accountId: "test", reference: "ref-1", media: []))
+        chat.draft = "Look"
+        await chat.send()
+        XCTAssertEqual(adapter.sent.map(\.text), ["Look"])
+        XCTAssertEqual(adapter.forwarded, ["ref-1"])
+        XCTAssertNil(chat.forwarding)
+        XCTAssertEqual(chat.messages.last?.id, "forward-1")
+        XCTAssertFalse(chat.messages.contains(where: \.isSending))
+        chat.disconnect()
+    }
+
+    func testAForwardFromAnotherNetworkOrAccountSendsACopyNamingItsOrigin() async {
+        let adapter = FakeForwardingAdapter()
+        adapter.pages = [[]]
+        let chat = makeChat(adapter)
+        await chat.connect()
+        chat.stage(ChatForward(message: message(1), network: .discord, accountId: "other", reference: "discord-ref", media: []))
+        await chat.send()
+        XCTAssertEqual(adapter.forwarded, [])
+        XCTAssertEqual(adapter.sent.map(\.text), ["Forwarded from Ada on Discord\n\nMessage 1"])
+        chat.stage(ChatForward(message: message(2), network: .telegram, accountId: "other", reference: "ref-2", media: []))
+        await chat.send()
+        XCTAssertEqual(adapter.sent.last?.text, "Forwarded from Ada\n\nMessage 2")
+        chat.stage(ChatForward(message: message(3, own: true), network: .discord, accountId: "other", reference: nil, media: []))
+        await chat.send()
+        XCTAssertEqual(adapter.sent.last?.text, "Forwarded from Discord\n\nMessage 3", "the user's own message names no one")
+        chat.disconnect()
+    }
+
+    func testAForwardWithFilesToAChatWithoutFilesFailsAndStays() async {
+        let adapter = FakeAdapter()
+        adapter.pages = [[]]
+        let chat = makeChat(adapter)
+        await chat.connect()
+        let forward = ChatForward(message: message(1), network: .discord, accountId: "other", reference: nil, media: [.image(url: URL(fileURLWithPath: "/tmp/photo.jpg"))])
+        chat.stage(forward)
+        await chat.send()
+        XCTAssertEqual(adapter.sent.count, 0)
+        XCTAssertNotNil(chat.errorMessage)
+        XCTAssertEqual(chat.forwarding, forward)
+        XCTAssertFalse(chat.messages.contains(where: \.isSending))
+        chat.disconnect()
+    }
+
+    /// A short tone as PCM in a CAF file, as the composer records.
+    private func makeRecording() throws -> URL {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appending(path: "voice.caf")
+        let format = AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 1)!
+        let file = try AVAudioFile(forWriting: url, settings: format.settings)
+        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 24000)!
+        buffer.frameLength = 24000
+        for index in 0 ..< 24000 {
+            buffer.floatChannelData![0][index] = Float(sin(Double(index) * 2 * .pi * 440 / 48000) * 0.5)
+        }
+        try file.write(from: buffer)
+        return url
+    }
+
     func testCancellingOrKeepingTheTextSavesNothing() async {
         let adapter = FakeEditingAdapter()
         adapter.pages = [[message(2, own: true)]]
@@ -538,7 +635,7 @@ private class FakeAdapter: ChatAdapter {
     let network = SocialNetwork.telegram
     let key = "fake:1"
     let canReply = true
-    let acceptsAttachments = false
+    var acceptsAttachments = false
     let pollInterval: Duration? = .seconds(60)
     var onChange: (() -> Void)?
     var info = ChatInfo(title: "Fake", subtitle: "Test")
@@ -745,6 +842,22 @@ private final class FakeStickerAdapter: FakeAdapter, ChatStickerSending {
         sentStickerReplies.append(replyToId)
         let id = "sticker-\(sentStickers.count)"
         append(ChatMessage(id: id, sender: ChatUser(id: "you", name: "You", avatarURL: nil), timestamp: Date(), text: nil, embeds: [.sticker(sticker)], isOwn: true))
+        return id
+    }
+}
+
+@MainActor
+private final class FakeForwardingAdapter: FakeAdapter, ChatForwarding {
+    private(set) var forwarded: [String] = []
+
+    func forwardReference(for message: ChatMessage) -> String? {
+        "ref-\(message.id)"
+    }
+
+    func forward(reference: String) async throws -> String? {
+        forwarded.append(reference)
+        let id = "forward-\(forwarded.count)"
+        append(ChatMessage(id: id, sender: ChatUser(id: "you", name: "You", avatarURL: nil), timestamp: Date(), text: "Message 1", isOwn: true, forwardedFrom: ChatForwardOrigin(name: "Ada")))
         return id
     }
 }

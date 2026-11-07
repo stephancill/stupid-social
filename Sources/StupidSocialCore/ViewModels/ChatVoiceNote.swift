@@ -46,6 +46,18 @@ public struct ChatVoiceNote: Equatable, Sendable {
     }
 }
 
+public extension ChatVoiceNote {
+    /// The waveform as `count` levels, the loudest of each stretch, for networks that take a set number.
+    func levels(_ count: Int) -> [Double] {
+        guard !waveform.isEmpty else { return Array(repeating: 0, count: count) }
+        return (0 ..< count).map { index in
+            let start = index * waveform.count / count
+            let end = max(start + 1, (index + 1) * waveform.count / count)
+            return min(max(waveform[start ..< min(end, waveform.count)].max() ?? 0, 0), 1)
+        }
+    }
+}
+
 public enum ChatVoiceNoteError: LocalizedError {
     case empty
 

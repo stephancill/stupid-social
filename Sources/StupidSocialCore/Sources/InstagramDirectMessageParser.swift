@@ -77,6 +77,9 @@ enum InstagramDirectMessageParser {
         case .storyReply: return "Replied to a story"
         case nil: break
         }
+        if content?.audioAttachments?.isEmpty == false {
+            return "Sent a voice message"
+        }
         if let media = content?.media, !media.isEmpty {
             return media.allSatisfy(\.isVideo) ? "Sent a video" : "Sent a photo"
         }

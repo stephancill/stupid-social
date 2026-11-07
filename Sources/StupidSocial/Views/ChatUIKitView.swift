@@ -109,6 +109,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     private var draft = ""
     private var attachment: ChatAttachment?
     private var replyingTo: ChatMessage?
+    private var forwarding: ChatForward?
     private var editingMessage: ChatMessage?
     private var canAttach = false
     private let replyPreviewCancel = UIButton(type: .system)
@@ -760,6 +761,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         viewModel.$attachment.sink { [weak self] in self?.attachment = $0; self?.refreshComposer() }.store(in: &cancellables)
         viewModel.$errorMessage.sink { [weak self] _ in DispatchQueue.main.async { self?.refreshComposer() } }.store(in: &cancellables)
         viewModel.$replyingTo.sink { [weak self] in self?.replyingTo = $0; self?.refreshComposer() }.store(in: &cancellables)
+        viewModel.$forwarding.sink { [weak self] in self?.forwarding = $0; self?.refreshComposer() }.store(in: &cancellables)
         viewModel.$editingMessage.sink { [weak self] in self?.editingMessage = $0; self?.refreshComposer() }.store(in: &cancellables)
         viewModel.$reactions.sink { [weak self] totals in self?.applyReactionTotals(totals) }.store(in: &cancellables)
         viewModel.$receipts.sink { [weak self] receipts in self?.applyReceipts(receipts) }.store(in: &cancellables)
@@ -1039,6 +1041,11 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
             replyPreviewName.text = "Edit Message"
             replyPreviewText.text = mentionText(editingMessage.previewText).replacingOccurrences(of: "\n", with: " ")
             replyPreviewCancel.accessibilityLabel = "Cancel Editing"
+        } else if let forwarding {
+            replyPreview.isHidden = false
+            replyPreviewName.text = "Forward from \(DebugRedaction.name(forwarding.originName ?? forwarding.message.sender.name ?? "You"))"
+            replyPreviewText.text = forwarding.message.previewText.replacingOccurrences(of: "\n", with: " ")
+            replyPreviewCancel.accessibilityLabel = "Cancel Forward"
         } else if let replyingTo {
             replyPreview.isHidden = false
             replyPreviewName.text = "Reply to \(DebugRedaction.name(replyingTo.sender.name))"
@@ -1088,7 +1095,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
             attachmentThumbnail.image = nil
         }
 
-        let hasContent = attachment != nil || !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasContent = attachment != nil || forwarding != nil || !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         // The send button appears only once there is something to send, like Messages.
         let showsSend = hasContent || isSending
         let showsVoice = !showsSend && viewModel.offersVoiceNotes && editingMessage == nil && !isReadOnly
@@ -2213,6 +2220,12 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
                 self?.beginReply(to: id)
             }))
         }
+        if viewModel.canForward(message) {
+            menu.items.append(.action(ChatMessageMenu.Action(title: "Forward", image: UIImage(systemName: "arrowshape.turn.up.right")) { [weak self] in
+                guard let self else { return }
+                Task { await self.viewModel.startForward(message) }
+            }))
+        }
         if viewModel.canEdit(message) {
             menu.items.append(.action(ChatMessageMenu.Action(title: "Edit", image: UIImage(systemName: "pencil")) { [weak self] in
                 self?.beginEditing(id)
@@ -2687,6 +2700,8 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
             guard let self else { return }
             if editingMessage != nil {
                 viewModel.cancelEditing()
+            } else if forwarding != nil {
+                viewModel.cancelForward()
             } else {
                 viewModel.cancelReply()
             }

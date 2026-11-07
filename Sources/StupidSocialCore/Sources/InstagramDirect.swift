@@ -142,6 +142,8 @@ struct InstagramDirectMessage: Codable {
     let repliedToMessageId: String?
     var reactions: [Reaction]?
     let sender: Sender?
+    /// Set on forwards; Instagram doesn't say where from (observed 2026-11-07).
+    var igdIsForwarded: Bool? = nil
 
     var sentAt: Date? {
         instagramDirectDate(timestampMs)
@@ -164,6 +166,8 @@ struct InstagramDirectContent: Codable {
         let previewCdnUrl: String?
         let previewWidth: Double?
         let previewHeight: Double?
+        /// What a forward names (`IGDMediaForwardPublisherMutation`).
+        var attachmentFbid: String? = nil
 
         var isVideo: Bool {
             typename?.contains("Video") == true
@@ -175,7 +179,17 @@ struct InstagramDirectContent: Codable {
             case previewCdnUrl
             case previewWidth
             case previewHeight
+            case attachmentFbid
         }
+    }
+
+    /// A voice clip (`SlideMessageAudiosContent.audio_attachments`, observed 2026-11-07): a signed, expiring Ogg
+    /// Opus URL, the length Instagram measured, and the levels the sender gave (0 to 1).
+    struct Audio: Codable {
+        let attachmentCdnUrl: String?
+        let attachmentFbid: String?
+        let playableDurationMs: Double?
+        let waveformData: [Double]?
     }
 
     /// A shared post, reel or story, or a placeholder for one that expired.
@@ -216,6 +230,7 @@ struct InstagramDirectContent: Codable {
     let orderedPhotoVideoAttachments: [Attachment]?
     /// Admin messages, such as "Reacted 😂 to your message".
     let textFragments: [TextFragment]?
+    var audioAttachments: [Audio]? = nil
 
     var media: [Attachment] {
         (orderedPhotoVideoAttachments ?? []) + (attachments ?? []) + (videos ?? [])
@@ -230,7 +245,17 @@ struct InstagramDirectContent: Codable {
         case videos
         case orderedPhotoVideoAttachments
         case textFragments
+        case audioAttachments
     }
+}
+
+/// What forwarding a Direct message needs: where it is, whose it is, and its text or its one file.
+struct InstagramDirectForward: Codable {
+    let threadFbid: String
+    let messageId: String
+    let isOwn: Bool
+    let text: String?
+    let attachmentFbid: String?
 }
 
 struct InstagramDirectSentMessage: Decodable {
@@ -433,6 +458,105 @@ extension InstagramClient {
             variables: variables,
         ) else {
             throw SourceError.serviceError("Instagram didn't send the message.")
+        }
+        return sent
+    }
+
+    /// A forward as the web client sends it (`useIGDForwardMessageViaIGDMAPIOffMsys`, probe `direct-forward`,
+    /// observed 2026-11-07): text through the text send with `forwarded_from_thread_id` and
+    /// `is_forwarded_from_own_message`, one photo, video or voice clip through `IGDMediaForwardPublisherMutation`
+    /// with its `attachment_fbid`. Shares go through a REST endpoint this session can't call.
+    func forwardDirect(_ forward: InstagramDirectForward, to threadFbid: String) async throws -> InstagramDirectSentMessage {
+        let credentials = try directCredentials()
+        let variables: [String: Any]
+        let operation: String
+        let rootField: String
+        if let attachmentFbid = forward.attachmentFbid {
+            operation = "IGDMediaForwardPublisherMutation"
+            rootField = "xig_direct_media_send_with_slide_messaging_response"
+            variables = [
+                "attachment_fbid": attachmentFbid,
+                "forwarded_from_thread_id": forward.threadFbid,
+                "forwarded_from_thread_item_id": forward.messageId,
+                "is_forwarded_from_own_message": forward.isOwn,
+                "offline_threading_id": Self.offlineThreadingID(),
+                "recipient_users": NSNull(),
+                "thread_id": threadFbid,
+            ]
+        } else {
+            operation = "IGDirectTextSendMutation"
+            rootField = "xig_direct_text_send_with_slide_messaging_response"
+            variables = [
+                "commands": NSNull(),
+                "forwarded_from_thread_id": forward.threadFbid,
+                "ig_thread_igid": threadFbid,
+                "is_forwarded_from_own_message": forward.isOwn,
+                "mentioned_user_ids": NSNull(),
+                "mentions": NSNull(),
+                "offline_threading_id": Self.offlineThreadingID(),
+                "recipient_igids": NSNull(),
+                "replied_to_item_id": NSNull(),
+                "reply_to_message_id": NSNull(),
+                "send_attribution": NSNull(),
+                "text": ["sensitive_string_value": forward.text ?? ""],
+            ]
+        }
+        guard let sent = try await directGraphQL(
+            InstagramDirectSentMessage.self, credentials: credentials, operation: operation, pagePath: Self.threadPage(threadFbid), rootField: rootField, variables: variables,
+        ) else {
+            throw SourceError.serviceError("Instagram didn't forward the message.")
+        }
+        return sent
+    }
+
+    /// A voice clip as the web composer sends it (probe `direct-send-voice`, observed 2026-11-07): Ogg Opus
+    /// POSTed to rupload's `messenger_audio` with `audio_type: fb_voice_message` and the levels as floats 0–1
+    /// (integers come back clamped), then `IGDirectMediaSendMutation` with the returned `media_id_str`.
+    func sendDirectVoice(threadFbid: String, oggOpus data: Data, duration: Double, levels: [Double], viewerFbid: String, replyToMessageId: String?) async throws -> InstagramDirectSentMessage {
+        let credentials = try directCredentials()
+        let name = "audioclip-\(Int64(Date().timeIntervalSince1970 * 1000))-\(Int64((duration * 1000).rounded())).ogg"
+        let waveform = try JSONSerialization.data(withJSONObject: [
+            "amplitudes": levels.map { ($0 * 1000).rounded() / 1000 },
+            "sampling_freq": Int((Double(levels.count) / max(duration, 0.1)).rounded()),
+        ])
+        let upload = try await webDataRequest(
+            credentials: credentials,
+            method: "POST",
+            url: URL(string: "https://rupload.instagram.com/messenger_audio/\(UUID().uuidString.lowercased())")!,
+            headers: [
+                "X-Entity-Name": name,
+                "X-Entity-Type": "audio/ogg",
+                "X-Entity-Length": String(data.count),
+                "Offset": "0",
+                "ig-u-ds-user-id": viewerFbid,
+                "audio_type": "fb_voice_message",
+                "waveform_data": String(decoding: waveform, as: UTF8.self),
+                "Content-Type": "audio/ogg",
+            ],
+            body: data,
+        )
+        let text = String(decoding: upload, as: UTF8.self)
+        let json = text.hasPrefix("for (;;);") ? String(text.dropFirst(9)) : text
+        let response = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any]
+        guard let mediaId = (response?["media_id_str"] as? String) ?? (response?["media_id"]).map({ "\($0)" }) else {
+            throw SourceError.serviceError("Instagram didn't take the voice message.")
+        }
+        guard let sent = try await directGraphQL(
+            InstagramDirectSentMessage.self,
+            credentials: credentials,
+            operation: "IGDirectMediaSendMutation",
+            pagePath: Self.threadPage(threadFbid),
+            rootField: "xig_direct_media_send_with_slide_messaging_response",
+            variables: [
+                "attachment_fbid": mediaId,
+                "forwarded_from_thread_id": NSNull(),
+                "is_forwarded_from_own_message": NSNull(),
+                "offline_threading_id": Self.offlineThreadingID(),
+                "reply_to_message_id": replyToMessageId ?? NSNull(),
+                "thread_id": threadFbid,
+            ],
+        ) else {
+            throw SourceError.serviceError("Instagram didn't send the voice message.")
         }
         return sent
     }

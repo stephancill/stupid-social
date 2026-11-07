@@ -266,6 +266,8 @@ public protocol ChatLinking: ChatAdapter {
 @MainActor
 public final class AdapterChatViewModel<Adapter: ChatAdapter>: ChatViewModel {
     public let adapter: Adapter
+    /// The account the chat belongs to (`Account.id`).
+    public let accountId: String
     private let snapshotCache: ChatSnapshotCache
     /// From a successful `connect()` until `disconnect()` or a lost connection; `connect()` runs again when the
     /// app becomes active.
@@ -279,6 +281,7 @@ public final class AdapterChatViewModel<Adapter: ChatAdapter>: ChatViewModel {
 
     public init(adapter: Adapter, accountId: String, snapshotCache: ChatSnapshotCache = ChatSnapshotCache(), draftStore: ChatDraftStore = ChatDraftStore()) {
         self.adapter = adapter
+        self.accountId = accountId
         self.snapshotCache = snapshotCache
         super.init(
             network: adapter.network,
@@ -448,6 +451,19 @@ public final class AdapterChatViewModel<Adapter: ChatAdapter>: ChatViewModel {
             return
         }
         let attachment = adapter.acceptsAttachments ? attachment : nil
+        if let forward = forwarding {
+            guard state == .connected, !isReadOnly else { return }
+            if !text.isEmpty || attachment != nil {
+                await sendOptimistically(text: text, attachment: attachment, replyToId: nil) { [adapter] in
+                    let id = try await adapter.send(ChatOutgoing(text: text, attachment: attachment, replyToId: nil))
+                    adapterDidChange()
+                    return id
+                }
+                guard errorMessage == nil else { return }
+            }
+            await send(forward)
+            return
+        }
         guard !text.isEmpty || attachment != nil, state == .connected else { return }
         let replyToId = canReply ? replyingTo?.id : nil
         if let commanding = adapter as? any ChatCommanding, commanding.isCommand(text) {
@@ -497,18 +513,88 @@ public final class AdapterChatViewModel<Adapter: ChatAdapter>: ChatViewModel {
         }
     }
 
+    /// Networks without voice messages take the recording as an audio file.
     override public var offersVoiceNotes: Bool {
-        adapter is any ChatVoiceSending
+        adapter is any ChatVoiceSending || canAttach
     }
 
     override public func send(voice: ChatVoiceNote) async {
-        guard let sending = adapter as? any ChatVoiceSending, state == .connected, !isReadOnly else { return }
+        guard offersVoiceNotes, state == .connected, !isReadOnly else { return }
         let replyToId = canReply ? replyingTo?.id : nil
-        await sendOptimistically(text: "", attachment: nil, voice: voice, replyToId: replyToId) { [weak self] in
-            let id = try await sending.send(voice: voice, replyToId: replyToId)
+        await sendOptimistically(text: "", attachment: nil, voice: voice, replyToId: replyToId) { [weak self, adapter] in
+            let id: String? = if let sending = adapter as? any ChatVoiceSending {
+                try await sending.send(voice: voice, replyToId: replyToId)
+            } else {
+                try await adapter.send(ChatOutgoing(text: "", attachment: ChatVoiceFile.attachment(for: voice), replyToId: replyToId))
+            }
             self?.adapterDidChange()
             return id
         }
+    }
+
+    // MARK: Forwarding
+
+    override func forward(of message: ChatMessage) async -> ChatForward? {
+        let media = await ChatForwardMedia.from(message.embeds) { [weak self] previewId in
+            await self?.audioPreviewURL(for: previewId)
+        }
+        let reference = (adapter as? any ChatForwarding)?.forwardReference(for: message)
+        return ChatForward(message: message, network: network, accountId: accountId, reference: reference, media: media)
+    }
+
+    /// Whether the forward goes natively: from a chat of this account on this network that gave a reference.
+    func forwardsNatively(_ forward: ChatForward) -> Bool {
+        forward.reference != nil && forward.network == network && forward.accountId == accountId && adapter is any ChatForwarding
+    }
+
+    /// Forwards natively where the network can (`ChatForwarding`), else sends a copy: the header and text with the
+    /// first file, then each other file, voice messages as voice where the network takes them.
+    private func send(_ forward: ChatForward) async {
+        let isNative = forwardsNatively(forward)
+        await sendOptimistically(text: "", attachment: nil, forward: forward, replyToId: nil) { [weak self] in
+            guard let self else { return nil }
+            do {
+                let id: String? = if isNative, let reference = forward.reference, let forwarding = adapter as? any ChatForwarding {
+                    try await forwarding.forward(reference: reference)
+                } else {
+                    try await sendCopy(of: forward)
+                }
+                AppMetrics.messageForwarded(network: network, from: forward.network, isNative: isNative, error: nil)
+                adapterDidChange()
+                return id
+            } catch {
+                AppMetrics.messageForwarded(network: network, from: forward.network, isNative: isNative, error: error)
+                throw error
+            }
+        }
+        if errorMessage == nil {
+            forwarding = nil
+        }
+    }
+
+    private func sendCopy(of forward: ChatForward) async throws -> String? {
+        let voiceOnly = forward.media.allSatisfy { if case .voice = $0 { true } else { false } }
+        guard forward.media.isEmpty || adapter.acceptsAttachments || (voiceOnly && adapter is any ChatVoiceSending) else {
+            throw ChatForwardError.noAttachments
+        }
+        var lastId: String?
+        for part in ChatForwardCopy.parts(of: forward, to: network) {
+            guard let media = part.media else {
+                lastId = try await adapter.send(ChatOutgoing(text: part.text, attachment: nil, replyToId: nil))
+                continue
+            }
+            if case .voice = media, let sending = adapter as? any ChatVoiceSending, let note = try await ChatForwardCopy.voiceNote(for: media) {
+                if !part.text.isEmpty {
+                    lastId = try await adapter.send(ChatOutgoing(text: part.text, attachment: nil, replyToId: nil))
+                }
+                lastId = try await sending.send(voice: note, replyToId: nil)
+                continue
+            }
+            guard adapter.acceptsAttachments else { throw ChatForwardError.noAttachments }
+            let attachment = try await ChatForwardCopy.attachment(for: media)
+            lastId = try await adapter.send(ChatOutgoing(text: part.text, attachment: attachment, replyToId: nil))
+        }
+        return lastId
     }
 
     /// Editing a message isn't typing a new one.

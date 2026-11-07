@@ -113,6 +113,22 @@ final class TelegramTests: XCTestCase {
 
     // MARK: Messages
 
+    /// `messageFwdHeader` as forwards carry it (probe `forwards`, observed 2026-11-07): a channel or user in
+    /// `from_id`, named from the same response, else only `from_name` from someone who hides their account.
+    func testForwardHeadersNameWhereTheyCameFrom() {
+        func forwarded(_ header: [String: TLValue]) -> TelegramMessage {
+            TelegramClient.message(TLObject("message", [
+                "id": .int(8), "date": .int(0), "message": .string("hi"),
+                "peer_id": .object(TLObject("peerUser", ["user_id": .long(9)])),
+                "fwd_from": .object(TLObject("messageFwdHeader", header.merging(["date": .int(0)]) { $1 })),
+            ]), names: [77: "News", 3: "Ada"])
+        }
+        XCTAssertEqual(forwarded(["from_id": .object(TLObject("peerChannel", ["channel_id": .long(77)])), "channel_post": .int(5)]).forward, TelegramForward(fromId: 77, name: "News"))
+        XCTAssertEqual(forwarded(["from_id": .object(TLObject("peerUser", ["user_id": .long(3)]))]).forward, TelegramForward(fromId: 3, name: "Ada"))
+        XCTAssertEqual(forwarded(["from_name": .string("Hidden")]).forward, TelegramForward(fromId: nil, name: "Hidden"))
+        XCTAssertNil(TelegramClient.message(TLObject("message", ["id": .int(9), "date": .int(0), "message": .string("plain")])).forward)
+    }
+
     func testPreviewsMediaAndService() {
         let voice = TelegramClient.message(TLObject("message", [
             "id": .int(5), "date": .int(1_700_000_000), "message": .string(""), "out": .bool(true),

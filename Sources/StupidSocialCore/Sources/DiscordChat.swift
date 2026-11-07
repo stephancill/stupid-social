@@ -78,18 +78,20 @@ enum DiscordText {
             names[user.id] = user.name
         }
         context.userNames = names
-        let text = display(message.content, context: context).text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let forwarded = message.forwarded
+        let attachments = forwarded?.attachments ?? message.attachments
+        let text = display(forwarded?.content ?? message.content, context: context).text.trimmingCharacters(in: .whitespacesAndNewlines)
         if !text.isEmpty { return text.replacingOccurrences(of: "\n", with: " ") }
-        if let attachment = message.attachments.first {
+        if let attachment = attachments.first {
             let type = attachment.contentType ?? ""
             if type.hasPrefix("image/gif") { return "GIF" }
-            if type.hasPrefix("image/") { return message.attachments.count > 1 ? "\(message.attachments.count) Photos" : "Photo" }
+            if type.hasPrefix("image/") { return attachments.count > 1 ? "\(attachments.count) Photos" : "Photo" }
             if type.hasPrefix("video/") { return "Video" }
-            if type.hasPrefix("audio/") { return attachment.filename.hasPrefix("voice-message") ? "Voice message" : attachment.filename }
+            if type.hasPrefix("audio/") { return attachment.waveform != nil || attachment.filename.hasPrefix("voice-message") ? "Voice message" : attachment.filename }
             return attachment.filename
         }
-        if let sticker = message.stickerItems?.first { return "\(sticker.name) Sticker" }
-        if let embed = message.embeds.first { return embed.title ?? embed.description ?? "Link" }
+        if let sticker = (forwarded?.stickerItems ?? message.stickerItems)?.first { return "\(sticker.name) Sticker" }
+        if let embed = (forwarded?.embeds ?? message.embeds).first { return embed.title ?? embed.description ?? "Link" }
         return systemText(message) ?? "Message"
     }
 

@@ -38,6 +38,9 @@ struct ChatsView: View {
     /// With the search bar in the navigation bar's drawer, rows present while the bar first lays out start the
     /// list collapsed to the inline title, so saved chats are inserted just after the screen appears.
     @State private var hasAppeared = false
+    /// A message the user chose to forward, while they pick the chat it goes to.
+    @State private var forwardingMessage: ChatForward?
+    @State private var forwardHandoff = ChatForwardHandoff()
 
     var body: some View {
         List {
@@ -111,6 +114,13 @@ struct ChatsView: View {
         .navigationDestination(item: $selection) { chat in
             destination(for: chat)
         }
+        .sheet(item: $forwardingMessage) { forward in
+            ChatForwardPicker(chats: viewModel.chats + viewModel.archivedChats) { chat in
+                forwardingMessage = nil
+                forwardHandoff.pending = (chat.id, forward)
+                open(chat)
+            }
+        }
         .navigationDestination(isPresented: $isShowingArchive) {
             ArchivedChatsView(viewModel: viewModel) { AnyView(destination(for: $0)) }
         }
@@ -179,6 +189,14 @@ struct ChatsView: View {
         chatViewModel.reminderTarget = ChatReminderTarget(destination: chat.destination, accountId: chat.accountId, network: chat.network, chatTitle: chat.title)
         if focus?.destination == chat.destination, let messageId = focus?.focus.messageId {
             chatViewModel.focusMessageId = messageId
+        }
+        chatViewModel.forwardHandler = { [forwardHandoff] forward in
+            forwardHandoff.pending = nil
+            forwardingMessage = forward
+        }
+        if let pending = forwardHandoff.pending, pending.chatId == chat.id {
+            forwardHandoff.pending = nil
+            chatViewModel.stage(pending.forward)
         }
         return viewModel.follow(chatViewModel, chatId: chat.id)
     }
@@ -249,6 +267,54 @@ struct ChatsView: View {
         case let .demo(chatId):
             NetworkChatView(viewModel: opened(AdapterChatViewModel(adapter: DemoChatAdapter(chatId: chatId), accountId: chat.accountId), chat: chat))
         }
+    }
+}
+
+/// The forward a picked chat stages in its composer as it opens. A reference, since the chat's view model is
+/// built while SwiftUI evaluates the destination, where state can't change.
+private final class ChatForwardHandoff {
+    var pending: (chatId: String, forward: ChatForward)?
+}
+
+/// Picks the chat a forwarded message goes to: every chat, archived ones too, searchable by name.
+private struct ChatForwardPicker: View {
+    let chats: [ChatSummary]
+    let onPick: (ChatSummary) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var query = ""
+
+    var body: some View {
+        NavigationStack {
+            List(filtered) { chat in
+                Button {
+                    onPick(chat)
+                } label: {
+                    ChatRow(chat: chat)
+                }
+                .buttonStyle(.plain)
+                .compactListRowInsets()
+            }
+            .listStyle(.plain)
+            .overlay {
+                if filtered.isEmpty {
+                    ContentUnavailableView.search(text: query)
+                }
+            }
+            .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always))
+            .navigationTitle("Forward To")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private var filtered: [ChatSummary] {
+        let query = query.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty else { return chats }
+        return chats.filter { $0.title.localizedStandardContains(query) || ($0.titlePrefix ?? "").localizedStandardContains(query) }
     }
 }
 

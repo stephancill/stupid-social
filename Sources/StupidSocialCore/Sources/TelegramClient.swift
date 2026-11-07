@@ -46,6 +46,14 @@ public struct TelegramAccount: Codable, Sendable, Equatable {
 }
 
 /// One message as the chat shows it, already reduced from Telegram's `Message`.
+/// Whom a forwarded message came from (`messageFwdHeader`): a user or channel in `from_id`, else only `from_name`
+/// when the sender hides their account (observed 2026-11-07).
+public struct TelegramForward: Codable, Sendable, Hashable {
+    public let fromId: Int64?
+    /// `from_name`, or the name of `from_id` from the same response.
+    public let name: String?
+}
+
 public struct TelegramMessage: Codable, Sendable, Hashable {
     public let id: Int32
     public let date: Date
@@ -78,6 +86,8 @@ public struct TelegramMessage: Codable, Sendable, Hashable {
     /// Rows of its inline keyboard (`replyInlineMarkup`). Optional so chat snapshots saved before it existed still
     /// decode.
     public var buttons: [[TelegramButton]]?
+    /// Set on a forwarded message (`fwd_from`). Optional so chat snapshots saved before it existed still decode.
+    public var forward: TelegramForward?
 
     /// `text` with its spoilers masked, for the Chats list.
     public var previewText: String {
@@ -1394,6 +1404,21 @@ public actor TelegramClient: ChatListProvider {
         return entities.isEmpty ? nil : .vector(entities)
     }
 
+    /// Forwards messages (an album's together) with `messages.forwardMessages`, returning the last new message's id
+    /// (validated with the probe's `forward`, observed 2026-11-07: `updateMessageID` per random id, then the new
+    /// messages; Telegram adds no `fwd_from` when the user forwards their own message into Saved Messages).
+    public func forward(from source: TelegramPeer, ids: [Int32], to peer: TelegramPeer) async throws -> Int32? {
+        try requireAccount()
+        let randomIds = ids.map { _ in Int64.random(in: 1 ... .max) }
+        let method = TLObject("messages.forwardMessages", [
+            "from_peer": .object(source.inputPeer),
+            "id": .vector(ids.map { .int($0) }),
+            "random_id": .vector(randomIds.map { .long($0) }),
+            "to_peer": .object(peer.inputPeer),
+        ])
+        return try await Self.sentMessageId(invoke(method).object, randomId: randomIds.last ?? 0)
+    }
+
     private static func sentMessageId(_ updates: TLObject?, randomId: Int64) -> Int32? {
         guard let updates else { return nil }
         if updates.name == "updateShortSentMessage" {
@@ -1768,6 +1793,10 @@ public actor TelegramClient: ChatListProvider {
             editDate: message.flag("edit_hide") ? nil : message["edit_date"]?.int.map { Date(timeIntervalSince1970: TimeInterval($0)) },
             isEditable: !isService && isEditable(message),
             buttons: isService ? nil : buttons(of: message),
+            forward: message["fwd_from"]?.object.map { header in
+                let fromId = header["from_id"]?.object.flatMap { $0["user_id"]?.long ?? $0["channel_id"]?.long ?? $0["chat_id"]?.long }
+                return TelegramForward(fromId: fromId, name: header["from_name"]?.string ?? fromId.flatMap { names[$0] })
+            },
         )
     }
 

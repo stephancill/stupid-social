@@ -185,6 +185,8 @@ public struct ChatMessage: Hashable, Identifiable, Sendable {
     public let isEdited: Bool
     /// Rows of buttons under the message, such as a bot's inline keyboard.
     public let buttons: [[ChatMessageButton]]
+    /// Set when the network marks the message as forwarded from another chat.
+    public let forwardedFrom: ChatForwardOrigin?
 
     public init(
         id: String,
@@ -203,6 +205,7 @@ public struct ChatMessage: Hashable, Identifiable, Sendable {
         customEmojis: [ChatMessageCustomEmoji] = [],
         isEdited: Bool = false,
         buttons: [[ChatMessageButton]] = [],
+        forwardedFrom: ChatForwardOrigin? = nil,
     ) {
         self.id = id
         self.sender = sender
@@ -220,6 +223,7 @@ public struct ChatMessage: Hashable, Identifiable, Sendable {
         self.customEmojis = customEmojis
         self.isEdited = isEdited
         self.buttons = buttons
+        self.forwardedFrom = forwardedFrom
     }
 
     /// The message with `image` in place of its first image or pending upload, such as the picked file for a
@@ -240,6 +244,7 @@ public struct ChatMessage: Hashable, Identifiable, Sendable {
             id: id, sender: sender, timestamp: timestamp, text: text, isMarkdown: isMarkdown, embeds: embeds,
             replyToId: replyToId, isDeleted: isDeleted, isOwn: isOwn, isNotice: isNotice, isSending: isSending,
             spoilers: spoilers, mentions: mentions, customEmojis: customEmojis, isEdited: isEdited, buttons: buttons,
+            forwardedFrom: forwardedFrom,
         )
     }
 
@@ -248,7 +253,7 @@ public struct ChatMessage: Hashable, Identifiable, Sendable {
         ChatMessage(
             id: id, sender: sender, timestamp: timestamp, text: text, isMarkdown: isMarkdown, embeds: embeds,
             replyToId: replyToId, isDeleted: isDeleted, isOwn: isOwn, isNotice: isNotice, isSending: isSending,
-            isEdited: true, buttons: buttons,
+            isEdited: true, buttons: buttons, forwardedFrom: forwardedFrom,
         )
     }
 
@@ -548,6 +553,8 @@ public class ChatViewModel: ObservableObject {
 
     @Published public var attachment: ChatAttachment?
     @Published public internal(set) var replyingTo: ChatMessage?
+    /// A message from another chat waiting in the composer to be forwarded here; Send sends it after any text.
+    @Published public internal(set) var forwarding: ChatForward?
     /// The user's message being edited (`startEditing(_:)`): the composer holds its text, and sending saves it.
     @Published public internal(set) var editingMessage: ChatMessage?
     /// A message the view should scroll to and highlight, set by `jump(to:)`.
@@ -870,7 +877,7 @@ public class ChatViewModel: ObservableObject {
     /// returns, which should first load the sent message. A failure takes it away and puts the text and
     /// attachment back in the composer, if the user hasn't started another message. A sticker or voice message shows
     /// as itself and leaves the draft as it is; a voice message that fails is lost, like a sticker.
-    func sendOptimistically(text: String, attachment: ChatAttachment?, sticker: ChatSticker? = nil, voice: ChatVoiceNote? = nil, replyToId: String?, deliver: () async throws -> String?) async {
+    func sendOptimistically(text: String, attachment: ChatAttachment?, sticker: ChatSticker? = nil, voice: ChatVoiceNote? = nil, forward: ChatForward? = nil, replyToId: String?, deliver: () async throws -> String?) async {
         errorMessage = nil
         let localId = "sending-\(UUID().uuidString)"
         historyAtSend[localId] = Set(history.map(\.id))
@@ -881,13 +888,14 @@ public class ChatViewModel: ObservableObject {
             id: localId,
             sender: ChatUser(id: "you", name: "You", avatarURL: nil),
             timestamp: Date(),
-            text: text.isEmpty ? nil : text,
-            embeds: sticker.map { [.sticker($0)] } ?? voiceEmbed.map { [$0] } ?? image.map { [$0] } ?? attachment.map { [.pending(title: $0.filename)] } ?? [],
+            text: forward?.message.text ?? (text.isEmpty ? nil : text),
+            embeds: forward?.message.embeds ?? sticker.map { [.sticker($0)] } ?? voiceEmbed.map { [$0] } ?? image.map { [$0] } ?? attachment.map { [.pending(title: $0.filename)] } ?? [],
             replyToId: replyToId,
             isOwn: true,
             isSending: true,
+            forwardedFrom: forward.map { ChatForwardOrigin(name: $0.originName) },
         ))
-        let keepsDraft = sticker != nil || voice != nil
+        let keepsDraft = sticker != nil || voice != nil || forward != nil
         if !keepsDraft {
             draft = ""
             self.attachment = nil
@@ -1118,6 +1126,40 @@ public class ChatViewModel: ObservableObject {
         // EXIF orientations 5–8 are rotated a quarter turn.
         let orientation = properties[kCGImagePropertyOrientation] as? Int ?? 1
         return orientation >= 5 ? height / width : width / height
+    }
+
+    // MARK: Forwarding
+
+    /// Set by the screen that opened the chat to pick where a message goes; while unset nothing offers Forward.
+    public var forwardHandler: ((ChatForward) -> Void)?
+
+    public func canForward(_ message: ChatMessage) -> Bool {
+        forwardHandler != nil && message.isUserMessage && !message.isDeleted && !message.isSending
+    }
+
+    /// Describes the message for forwarding (networks that forward natively add their reference) and hands it to
+    /// `forwardHandler`.
+    public func startForward(_ message: ChatMessage) async {
+        guard canForward(message), let forward = await forward(of: message), forward.isCopyable || forward.reference != nil else {
+            errorMessage = "This message can't be forwarded."
+            return
+        }
+        forwardHandler?(forward)
+    }
+
+    func forward(of _: ChatMessage) async -> ChatForward? {
+        nil
+    }
+
+    /// Puts a forward in the composer, in place of a reply or an edit.
+    public func stage(_ forward: ChatForward) {
+        cancelEditing()
+        replyingTo = nil
+        forwarding = forward
+    }
+
+    public func cancelForward() {
+        forwarding = nil
     }
 
     public func startReply(to message: ChatMessage) {

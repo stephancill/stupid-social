@@ -36,6 +36,10 @@ GRAPHQL_URL = "https://x.com/i/api/graphql"
 SIGNATURE_VERSION = "7"
 # MessageSentFrom.ConversationScreenComposer, as the web composer sends.
 SENT_FROM_COMPOSER = 1
+# MessageSentFrom.MessageForwardSheet, which X's forward sheet sends.
+SENT_FROM_FORWARD_SHEET = 5
+# MediaType AUDIO: the type X's voice recorder gives its recordings; a picked audio file goes as FILE (5).
+VOICE_MEDIA_TYPE = 4
 # GetConversationPageQuery returns events older than min_local_sequence_id, so the newest page starts above every id.
 NEWEST_SEQUENCE_ID = str(2**63 - 1)
 
@@ -47,6 +51,7 @@ OPS = {
     "GetPublicKeysQuery": "C-YphxeIcPLOGtFNGhkuOw",
     "SendMessageCreateMutation": "TWRPP7gnKwV_R8-tE-Dd3Q",
     "SendMessageEventMutation": "G7WwJGKvTBVb-BXhZNSVMw",
+    "DeleteMessageMutation": "4gsDQKEmYkOtvsSIpHXdQA",
     "GenerateXChatTokenMutation": "Qh3fZRjPPtPoHYR_2sCZsA",
     "InitializeXChatMediaUploadMutation": "6M543IPabOfZm7-yyIczdw",
     "FinalizeXChatMediaUploadMutation": "3O4jPQ2hwW9LbqCc-wFmqA",
@@ -349,6 +354,137 @@ class XChatClient:
         ]
         sent = self.send_entry(conversation_id, expect_participant, [(1, 12, contents)], message_id, [digest])
         return {"upload": {k: v for k, v in upload.items() if k != "media_hash_key"}, "media_type": media_type, "width": width, **sent}
+
+    def send_voice(self, conversation_id: str, expect_participant: str, path: str, reply_to: str | None) -> dict[str, Any]:
+        """A voice message as X's web client sends one (WebVoiceNoteRecorder, observed 2026-11-07): the recording
+        transcoded to AAC in MP4 (32 kbps, 22.05 kHz), named `voice_note_<ms>.m4a`, attached as `MediaAttachment`
+        type AUDIO (4) with `duration_millis` and no dimensions. X keeps no waveform."""
+        import hashlib
+        import time
+        import uuid
+
+        keys = load_keys()
+        state = self.checked_state(conversation_id, expect_participant, keys)
+        version = max(state["keys"], key=int)
+        with open(path, "rb") as handle:
+            data = handle.read()
+        duration_millis = audio_duration_millis(path)
+        message_id = str(uuid.uuid4())
+        upload = self.upload_media(conversation_id, message_id, state["keys"][version], data)
+        digest = hashlib.sha256(data).digest()
+        attachment = [
+            (1, 11, upload["media_hash_key"]),
+            (3, 8, VOICE_MEDIA_TYPE),
+            (4, 10, duration_millis),
+            (5, 10, upload["encrypted_bytes"]),
+            (6, 11, f"voice_note_{int(time.time() * 1000)}.m4a"),
+            (7, 11, str(uuid.uuid4())),
+            (11, 11, digest),
+        ]
+        preview = self.reply_preview(conversation_id, reply_to) if reply_to else None
+        contents = [(2, 15, (12, [])), (3, 15, (12, [[(1, 12, attachment)]])), (4, 12, preview), (7, 8, SENT_FROM_COMPOSER)]
+        sent = self.send_entry(conversation_id, expect_participant, [(1, 12, contents)], message_id, [digest])
+        return {"duration_millis": duration_millis, "plaintext_bytes": len(data), **sent}
+
+    def source_message(self, conversation_id: str, sequence_id: str) -> tuple[dict[int, Any], dict[int, Any], bytes]:
+        """The event, its decrypted `MessageContents` and the key it was sealed with."""
+        event, conversation_keys = self.find_event(conversation_id, sequence_id)
+        create = event.get(7, {}).get(1) or {}
+        plain = 101 not in create
+        key = conversation_keys.get(text(create.get(101)) or "")
+        if not plain and key is None:
+            raise SystemExit("No key for the message")
+        message = (thrift(create[100] if plain else open_sealed(key, create[100])).get(1) or {}).get(1)
+        if not isinstance(message, dict):
+            raise SystemExit("The event is not a message")
+        return event, message, key
+
+    def forward_message(
+        self, conversation_id: str, expect_participant: str, source_conversation_id: str, source_sequence_id: str, own_only: bool = True
+    ) -> dict[str, Any]:
+        """A forward as X's MessageSendHandler sends one (observed 2026-11-07): `MessageContents` without its own
+        text (field 1), the source's text and entities in `forwarded_message` (field 6, `ForwardedMessage {1 text,
+        2 entities}`), the source's attachments re-uploaded into this conversation (media is encrypted per
+        conversation; the web client caps forwarded media at `xchat_forward_media_max_size_mb`, 100), and
+        `sent_from` MESSAGE_FORWARD_SHEET (5). There is no original sender or conversation on the wire: readers
+        show "Forwarded" when field 6 has text and field 1 is empty."""
+        import hashlib
+        import uuid
+
+        keys = load_keys()
+        state = self.checked_state(conversation_id, expect_participant, keys)
+        version = max(state["keys"], key=int)
+        event, source, source_key = self.source_message(source_conversation_id, source_sequence_id)
+        if own_only and text(event.get(3)) != keys["user_id"]:
+            raise SystemExit("Refusing to forward someone else's message")
+        message_id = str(uuid.uuid4())
+        attachments, digests = [], []
+        for attachment in source.get(3) or []:
+            media = attachment.get(1)
+            if not media:
+                continue
+            url = MEDIA_URL + source_conversation_id + "/" + text(media.get(1))
+            with urllib.request.urlopen(urllib.request.Request(url, headers=self.x.headers()), timeout=120) as response:
+                blob = response.read()
+            attachment_id = text(media.get(7))
+            try:
+                data = decrypt_media(media_key(source_key, attachment_id), blob)
+            except Exception:  # noqa: BLE001 - older media is sealed with the conversation key itself
+                data = decrypt_media(source_key, blob)
+            upload = self.upload_media(conversation_id, message_id, state["keys"][version], data)
+            digest = hashlib.sha256(data).digest()
+            digests.append(digest)
+            size = media.get(2) or {}
+            attachments.append([(1, 12, [
+                (1, 11, upload["media_hash_key"]),
+                (2, 12, [(1, 10, size.get(1)), (2, 10, size.get(2))] if size else None),
+                (3, 8, media.get(3)),
+                (4, 10, media.get(4)),
+                (5, 10, upload["encrypted_bytes"]),
+                (6, 11, media.get(6)),
+                (7, 11, str(uuid.uuid4())),
+                (11, 11, digest),
+            ])])
+        forwarded = [(1, 11, source.get(1) or b""), (2, 15, (12, []))]
+        contents = [(2, 15, (12, [])), (3, 15, (12, attachments)), (6, 12, forwarded), (7, 8, SENT_FROM_FORWARD_SHEET)]
+        sent = self.send_entry(conversation_id, expect_participant, [(1, 12, contents)], message_id, digests)
+        return {"forwarded_attachments": len(attachments), **sent}
+
+    def delete_messages(self, conversation_id: str, expect_participant: str, sequence_ids: list[str], for_all: bool = True) -> dict[str, Any]:
+        """X's web client (observed 2026-11-07): DeleteMessageMutation {sequence_ids, conversation_id,
+        delete_message_action "DeleteForAll"/"DeleteForSelf", action_signatures: [ActionSignatureInput {message_id,
+        encoded_message_event_detail: base64 `MessageEventDetail {7 MessageDeleteEvent {1 sequence ids,
+        2 delete_message_action (DELETE_FOR_SELF 1, DELETE_FOR_ALL 2)}}`, message_event_signature
+        {public_key_version, signature, signature_version, signing_public_key}}]}. The signature covers
+        "MessageDeleteEvent,<message id>,<sender>,<conversation>,<action>,<sequence id>…" (dm-core ZVs). The same
+        event sent through SendMessageEventMutation answers InvalidRequest."""
+        import uuid
+
+        keys = load_keys()
+        self.checked_state(conversation_id, expect_participant, keys)
+        message_id = str(uuid.uuid4())
+        action = 2 if for_all else 1
+        payload = ",".join(["MessageDeleteEvent", message_id, keys["user_id"], conversation_id, str(action), *sequence_ids])
+        detail = encode_struct([(7, 12, [(1, 15, (11, list(sequence_ids))), (2, 8, action)])])
+        signature = {
+            "public_key_version": keys["version"],
+            "signature": sign(keys["signing_private"], payload),
+            "signature_version": SIGNATURE_VERSION,
+            "signing_public_key": keys["public_key"]["signing_public_key"],
+        }
+        response = self.mutation(
+            "DeleteMessageMutation",
+            {
+                "sequence_ids": list(sequence_ids),
+                "conversation_id": conversation_id,
+                "delete_message_action": "DeleteForAll" if for_all else "DeleteForSelf",
+                "action_signatures": [
+                    {"message_id": message_id, "encoded_message_event_detail": base64.b64encode(detail).decode(), "message_event_signature": signature}
+                ],
+            },
+        )
+        result = (response.get("data") or {}).get("xchat_delete_messages") or {}
+        return {"errors": response.get("errors"), "typename": result.get("__typename"), "error_code": result.get("error_code")}
 
     def react(self, conversation_id: str, expect_participant: str, sequence_id: str, emoji: str, remove: bool) -> dict[str, Any]:
         return self.send_entry(conversation_id, expect_participant, [(3 if remove else 2, 12, [(1, 11, sequence_id), (2, 11, emoji)])])
@@ -743,6 +879,24 @@ def summarize_events(events: list[dict[int, Any]], keys_by_version: dict[str, by
                     row["edit_fields"] = sorted(edit)
                     if show_text:
                         row["text"] = text(edit.get(2))
+                if message:
+                    row["sent_from"] = message.get(7)
+                    forwarded = message.get(6)
+                    if forwarded is not None:
+                        row["forwarded_fields"] = sorted(forwarded)
+                        row["forwarded_text_length"] = len(forwarded.get(1) or b"")
+                        row["own_text_present"] = bool(message.get(1))
+                    attachments = [a.get(1) for a in message.get(3) or [] if a.get(1)]
+                    if attachments:
+                        row["attachments"] = [
+                            {
+                                "type": MEDIA_TYPES.get(m.get(3), m.get(3)),
+                                "fields": sorted(m),
+                                "duration_millis": m.get(4),
+                                "extension": os.path.splitext(text(m.get(6)) or "")[1].lower(),
+                            }
+                            for m in attachments
+                        ]
                 reaction = contents.get(2) or contents.get(3)
                 if reaction:
                     row["reaction_on"] = text(reaction.get(1))
@@ -971,6 +1125,15 @@ def media_type_for(path: str) -> int:
     if extension in (".m4a", ".mp3", ".aac", ".wav", ".ogg"):
         return 4
     return 5
+
+
+def audio_duration_millis(path: str) -> int:
+    output = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", path],
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    return round(float(output) * 1000)
 
 
 def image_size(path: str) -> tuple[int | None, int | None]:
@@ -1202,6 +1365,21 @@ def build_parser() -> argparse.ArgumentParser:
     send_media.add_argument("--text", help="Caption.")
     send_media.add_argument("--reply-to", help="Sequence id of the message to reply to.")
     send_media.add_argument("--expect-participant", required=True)
+    voice = subparsers.add_parser("send-voice", help="Send an .m4a (AAC) as a voice message. Only to a conversation agreed for testing.")
+    voice.add_argument("conversation_id")
+    voice.add_argument("path")
+    voice.add_argument("--reply-to", help="Sequence id of the message to reply to.")
+    voice.add_argument("--expect-participant", required=True)
+    forward = subparsers.add_parser("forward-message", help="Forward one of your messages into a conversation agreed for testing.")
+    forward.add_argument("conversation_id")
+    forward.add_argument("source_sequence_id")
+    forward.add_argument("--source-conversation", help="Conversation the message is in (default: the target).")
+    forward.add_argument("--expect-participant", required=True)
+    delete = subparsers.add_parser("delete-messages", help="Delete your messages for everyone (--for-self: only for you).")
+    delete.add_argument("conversation_id")
+    delete.add_argument("sequence_ids", nargs="+")
+    delete.add_argument("--for-self", action="store_true")
+    delete.add_argument("--expect-participant", required=True)
     edit = subparsers.add_parser("edit-message", help="Edit one of your messages by sequence id. Only in a conversation agreed for testing.")
     edit.add_argument("conversation_id")
     edit.add_argument("sequence_id")
@@ -1273,6 +1451,13 @@ def main() -> None:
         result = client.send_message(args.conversation_id, args.expect_participant, args.text, args.reply_to)
     elif args.command == "send-media":
         result = client.send_media(args.conversation_id, args.expect_participant, args.path, args.text, args.reply_to)
+    elif args.command == "send-voice":
+        result = client.send_voice(args.conversation_id, args.expect_participant, args.path, args.reply_to)
+    elif args.command == "forward-message":
+        source = args.source_conversation or args.conversation_id
+        result = client.forward_message(args.conversation_id, args.expect_participant, source, args.source_sequence_id)
+    elif args.command == "delete-messages":
+        result = client.delete_messages(args.conversation_id, args.expect_participant, args.sequence_ids, not args.for_self)
     elif args.command == "edit-message":
         result = client.edit_message(args.conversation_id, args.expect_participant, args.sequence_id, args.message_id, args.text)
     elif args.command == "react":
