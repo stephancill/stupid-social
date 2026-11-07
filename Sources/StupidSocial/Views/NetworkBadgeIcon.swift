@@ -49,6 +49,8 @@ extension SocialNetwork {
             "ApronBadge"
         case .telegram:
             "TelegramBadge"
+        case .discord:
+            "DiscordBadge"
         case .debug:
             "DebugBadge"
         }
@@ -72,6 +74,8 @@ extension SocialNetwork {
             "A"
         case .telegram:
             "T"
+        case .discord:
+            "D"
         case .debug:
             "D"
         }
@@ -94,6 +98,8 @@ extension SocialNetwork {
         case .apron:
             .white
         case .telegram:
+            .white
+        case .discord:
             .white
         case .debug:
             .white
@@ -118,6 +124,8 @@ extension SocialNetwork {
             .orange
         case .telegram:
             Color(red: 0.16, green: 0.63, blue: 0.89)
+        case .discord:
+            Color(red: 0.35, green: 0.40, blue: 0.95)
         case .debug:
             .orange
         }

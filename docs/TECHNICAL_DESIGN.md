@@ -450,6 +450,15 @@ X Chat replaced X DMs in 2025 and is end-to-end encrypted. The app is a native c
 - **Chat (`XChatAdapter`):** history from the conversation page plus older pages; events are kept by sequence id, and edits, deletes and reactions are applied to the messages they name. Message ids are sequence ids. Replies render from the decrypted reply preview when the original isn't loaded, and are sent with a preview of the loaded message (its latest edit). Photos and files send through the composer's attachment.
 - **Unlock (`XChatUnlockViewModel`, Settings → X):** the PIN field, Unlock, and Forget Keys (with a confirmation).
 
+## Discord
+
+Discord chat is a native client of discord.com's web client protocol: REST v9 for history and actions, the gateway WebSocket for state and live events. `scripts/discord-web-client.py` is the source of truth for both.
+
+- **Auth:** a user token from the web login (`DiscordLoginWebView` hooks the web client's `Authorization` header and `localStorage.token` in a non-persistent WebView), stored per account in the Keychain (`saveDiscordCredentials`). Every request carries the web client's headers: Chrome user agent, `X-Super-Properties` (base64 JSON with the client build number), locale and time zone.
+- **Gateway (`DiscordGateway`):** one per account while the app is in the foreground. Identify with `capabilities: 0` and no compression, so `READY` has its plain shape (guilds with channels, roles and the user's member; DMs; read states and notification settings as arrays). The state is kept current by `MESSAGE_CREATE`, `MESSAGE_ACK`, channel and guild events; events go to observers (the Chats list and open chats). A dropped connection identifies again with backoff and observers catch up; close code 4004 means the token is gone.
+- **Chats list (`DiscordChatList`):** rows from the gateway state, filtered to listed channel types the user can view (permissions computed from roles and overwrites), with the guild as the row's title prefix like an Apron server. The 25 newest rows fetch their newest page for the preview and unread count, cached until the channel's last message changes; live messages and acks update rows through `updateChats`.
+- **Chat (`DiscordChatAdapter`):** REST pages of 50 (`before` for older), gateway events for the channel, an `op 37` subscription to the guild on open (as the web client does), and a 30 s poll as a fallback for guilds that send events only to subscribed sessions. Discord's tokens become the framework's forms: `<@id>` ↔ `@id` (`mentionPattern`), `<:name:id>` → `:id:` custom emoji keys, channel and role mentions and timestamps as text. Text is Markdown. The read position is the read state's message id; `markRead` sends the ack.
+
 ## Stickers
 
 Stickers are drawn in the app, with no dependency (`StupidSocialCore/Stickers`):
@@ -460,7 +469,7 @@ Stickers are drawn in the app, with no dependency (`StupidSocialCore/Stickers`):
 
 ## Chat Framework
 
-Chat is one framework with an adapter per chat network (Apron, Telegram, Instagram Direct, Spotify Messages, X Chat, Bluesky). The framework owns everything a user would expect to behave the same in every chat; an adapter only translates between its network and the framework's models. The rules for working on it are in AGENTS.md § Chat Framework. This section is written without platform specifics so another client of the same networks can follow it.
+Chat is one framework with an adapter per chat network (Apron, Telegram, Instagram Direct, Spotify Messages, X Chat, Bluesky, Discord). The framework owns everything a user would expect to behave the same in every chat; an adapter only translates between its network and the framework's models. The rules for working on it are in AGENTS.md § Chat Framework. This section is written without platform specifics so another client of the same networks can follow it.
 
 **Framework (shared):**
 

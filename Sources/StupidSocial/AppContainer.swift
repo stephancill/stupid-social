@@ -107,6 +107,7 @@ final class AppContainer {
         apronLiveFeed.start()
         for component in services.components {
             component.xChatLiveFeed?.start()
+            component.discordGateway?.start()
         }
     }
 
@@ -114,6 +115,7 @@ final class AppContainer {
         apronLiveFeed.stop()
         for component in services.components {
             component.xChatLiveFeed?.stop()
+            component.discordGateway?.stop()
         }
     }
 
@@ -142,6 +144,12 @@ final class AppContainer {
     func blueskyChatFactory(accountId: String, convoId: String, title: String) -> (() -> ChatViewModel)? {
         guard let client = services.component(id: accountId)?.blueskyClient else { return nil }
         return { AdapterChatViewModel(adapter: BlueskyChatAdapter(client: client, convoId: convoId, title: title), accountId: accountId) }
+    }
+
+    /// `nil` when the Discord account is gone.
+    func discordChatFactory(accountId: String, channelId: String, title: String) -> (() -> ChatViewModel)? {
+        guard let gateway = services.component(id: accountId)?.discordGateway else { return nil }
+        return { AdapterChatViewModel(adapter: DiscordChatAdapter(gateway: gateway, channelId: channelId, title: title), accountId: accountId) }
     }
 
     /// `nil` until the X Chat PIN has unlocked the account's keys.
@@ -188,6 +196,8 @@ final class AppContainer {
             xChatFactory(accountId: chat.accountId, conversationId: conversationId, title: chat.title)?()
         case let .bluesky(convoId):
             blueskyChatFactory(accountId: chat.accountId, convoId: convoId, title: chat.title)?()
+        case let .discord(channelId):
+            discordChatFactory(accountId: chat.accountId, channelId: channelId, title: chat.title)?()
         case let .demo(chatId):
             AdapterChatViewModel(adapter: DemoChatAdapter(chatId: chatId), accountId: chat.accountId)
         }

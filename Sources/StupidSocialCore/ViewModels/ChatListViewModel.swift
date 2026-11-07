@@ -15,6 +15,8 @@ public struct ChatSummary: Identifiable, Hashable, Codable, Sendable {
         case x(conversationId: String)
         /// A `chat.bsky.convo` id.
         case bluesky(convoId: String)
+        /// A Discord channel id: a DM, group DM or guild text channel.
+        case discord(channelId: String)
         /// A preview chat in demo mode (`DemoChats`).
         case demo(chatId: String)
     }

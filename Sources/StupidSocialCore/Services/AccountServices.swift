@@ -28,6 +28,8 @@ public final class AccountComponents {
     public private(set) var blueskyClient: BlueskyClient?
     public private(set) var telegramClient: TelegramClient?
     public private(set) var telegramConnection: TelegramConnectionViewModel?
+    public private(set) var discordGateway: DiscordGateway?
+    public private(set) var discordChatList: DiscordChatList?
 
     init(account: Account, store: AccountStore, keychain: KeychainCredentialStore, farcasterClient: FarcasterClient, chatList: ChatListViewModel?, onTelegramChange: (() -> Void)?, onXChatChange: (() -> Void)?) {
         accountId = account.id
@@ -113,6 +115,10 @@ public final class AccountComponents {
             connection.onChange = onTelegramChange
             telegramClient = client
             telegramConnection = connection
+        case .discord:
+            let gateway = DiscordGateway(client: DiscordClient(credentialStore: credentials))
+            discordGateway = gateway
+            discordChatList = DiscordChatList(gateway: gateway, accountId: account.id, chatList: chatList)
         case .apron, .debug:
             break
         }
@@ -133,12 +139,13 @@ public final class AccountComponents {
 
     /// The account's chats, when its network has any. Apron servers list through one shared source instead.
     public var chatListProvider: (any ChatListProvider)? {
-        spotifyMessagesSource ?? instagramClient ?? telegramClient ?? xChatClient ?? blueskyClient
+        spotifyMessagesSource ?? instagramClient ?? telegramClient ?? xChatClient ?? blueskyClient ?? discordChatList
     }
 
     /// Stops what runs in the background, when the account goes away.
     func shutDown() {
         xChatLiveFeed?.stop()
+        discordGateway?.stop()
     }
 }
 
@@ -222,7 +229,7 @@ public final class AccountServices: ObservableObject {
         let existing = Dictionary(components.map { ($0.accountId, $0) }, uniquingKeysWith: { first, _ in first })
         var rebuilt: [AccountComponents] = []
         for account in accounts {
-            if let kept = existing[account.id], !(force && kept.network == .x && kept.xChatLiveFeed == nil) {
+            if let kept = existing[account.id], !(force && ((kept.network == .x && kept.xChatLiveFeed == nil) || kept.network == .discord)) {
                 rebuilt.append(kept)
             } else {
                 existing[account.id]?.shutDown()

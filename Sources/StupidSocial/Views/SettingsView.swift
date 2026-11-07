@@ -286,6 +286,7 @@ struct AddAccountView: View {
         case .spotify: SpotifyConnectionView(viewModel: viewModel, accountId: nil, onDone: done)
         case .bluesky: BlueskyConnectionView(viewModel: viewModel, accountId: nil, onDone: done)
         case .github: GitHubConnectionView(viewModel: viewModel, accountId: nil, onDone: done)
+        case .discord: DiscordConnectionView(viewModel: viewModel, accountId: nil, onDone: done)
         case .telegram: TelegramAddAccountView(settings: viewModel, onDone: done)
         case .apron: ApronAddServerView(viewModel: apronServersViewModel, onDone: done)
         case .debug: EmptyView()
@@ -335,6 +336,7 @@ struct AccountDetailView: View {
         case .spotify: SpotifyConnectionView(viewModel: viewModel, accountId: account.id, onDone: done)
         case .bluesky: BlueskyConnectionView(viewModel: viewModel, accountId: account.id, onDone: done)
         case .github: GitHubConnectionView(viewModel: viewModel, accountId: account.id, onDone: done)
+        case .discord: DiscordConnectionView(viewModel: viewModel, accountId: account.id, onDone: done)
         case .telegram:
             if let connection = viewModel.services.component(id: account.id)?.telegramConnection {
                 TelegramConnectionView(viewModel: connection, account: account, settings: viewModel, onDone: done)

@@ -436,7 +436,7 @@ struct ProfileDetailView: View {
             return URL(string: "https://bsky.app/profile/\(username)")
         case .github:
             return URL(string: "https://github.com/\(username)")
-        case .apron, .telegram, .debug:
+        case .apron, .telegram, .discord, .debug:
             return nil
         }
     }

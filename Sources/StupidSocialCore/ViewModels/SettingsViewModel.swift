@@ -220,6 +220,8 @@ public final class SettingsViewModel: ObservableObject {
         case .telegram:
             // A `tgfile:` URL, which loads through a signed-in Telegram client.
             return try? await services.component(id: account.id)?.telegramClient?.ownAvatarURL()
+        case .discord:
+            return try? await DiscordClient(credentialStore: credentials).currentUser().avatarURL
         case .debug:
             return nil
         }
@@ -229,6 +231,17 @@ public final class SettingsViewModel: ObservableObject {
         guard let url = await avatarURL(for: account) else { return }
         store.update(id: account.id) { $0.avatarURL = url }
         loadStatuses()
+    }
+
+    /// Adds a Discord account from the token its web login used, or gives a listed one the new token.
+    @discardableResult
+    public func addDiscord(token: String, reconnecting accountId: String? = nil) async -> Account? {
+        await connect(.discord, reconnecting: accountId) { store in
+            _ = try store.saveDiscordCredentials(DiscordCredentials(token: token))
+        } identify: { store in
+            let user = try await DiscordClient(credentialStore: store).currentUser()
+            return Identity(remoteId: user.id, handle: user.username, displayName: user.globalName, avatarURL: user.avatarURL)
+        }
     }
 
     @discardableResult

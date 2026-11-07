@@ -15,6 +15,7 @@ How the app works today, by topic: decisions and their reasons, endpoint and pro
 - [GitHub](#github)
 - [Apron](#apron)
 - [Telegram](#telegram)
+- [Discord](#discord)
 - [Chats & chat screen](#chats-chat-screen)
 - [Push notifications](#push-notifications)
 - [Build, signing & release](#build-signing-release)
@@ -702,6 +703,31 @@ How the app works today, by topic: decisions and their reasons, endpoint and pro
 ### Open issues
 - Write/ping-failure reconnect is unconfirmed on device (the simulator doesn't suspend sockets)
 - Video and file downloads show a spinner, not progress; custom emoji show stills (the sticker renderers could draw them); `messageMediaUnsupported` (media newer than layer 225) shows as "Attachment"
+
+## Discord
+
+### Auth & requests
+- User tokens only (no OAuth for user clients). `DiscordLoginWebView` loads `https://discord.com/login` in a non-persistent store with a document-start script that reports the first `Authorization` header the web client sets (XHR or fetch) or `localStorage.token`; Discord hides `window.localStorage` from later scripts, so the script keeps its own reference. Closing the sheet doesn't log out, so the token stays valid. Dev mode takes a token by hand. The WebView login hasn't been run end to end yet; the manual token path was (2026-11-07).
+- Requests send discord.com's web client headers (`DiscordClient.headers`): Chrome 156 macOS user agent, `X-Super-Properties` with `client_build_number` 667580, `X-Discord-Locale`, `X-Discord-Timezone`, `X-Debug-Options: bugReporterEnabled`, Origin/Referer discord.com (captured from the web client 2026-11-07). 401 → `SourceError.notConfigured`; 429 waits out `retry_after` once when it is 5 s or less.
+- Endpoints: `GET /users/@me`; `GET /channels/{id}/messages?limit=50[&before|after|around]` (newest first); `POST /channels/{id}/messages {content, nonce, tts, flags, message_reference}`; `PATCH`/`DELETE /channels/{id}/messages/{mid}`; `PUT`/`DELETE /channels/{id}/messages/{mid}/reactions/{emoji or name:id}/@me?location=Message%20Reaction%20Picker&type=0`; `GET …/reactions/{emoji}?limit=100&type=0` (reactors, loaded when the reactor list opens); `POST /channels/{id}/messages/{mid}/ack {"token": null}`; `POST /channels/{id}/typing` (at most every 8 s while the draft changes).
+
+### Gateway
+- `wss://gateway.discord.gg/?encoding=json&v=9`, `Origin: https://discord.com`. Hello (op 10) → heartbeat (op 1 with the last sequence) every `heartbeat_interval`, the first at half; identify (op 2) with the token, `capabilities: 0`, the super properties plus `client_app_state`, `compress: false`, `client_state.guild_versions: {}`. Op 7 and op 9 reconnect and identify again (no resume).
+- `READY` with `capabilities: 0` (observed 2026-11-07, about 430 KB for 9 guilds and 84 DMs): `guilds[]` each with `channels`, `roles`, `members` (always including the user's own member), `emojis`; `private_channels[]` with `recipients`, `is_message_request`, `is_spam`; `read_state[]` `{id (channel), last_message_id, mention_count}`; `user_guild_settings[]` `{guild_id, muted, channel_overrides[{channel_id, muted}]}`. Guild channels in `READY` and `GUILD_CREATE` have **no `guild_id`**; `DiscordGuild.withGuildIds` sets it, since titles, permissions and mutes depend on it.
+- Every guild in `READY` was `lazy: true` (observed 2026-11-07). Opening a guild channel in the web client sends `op 37 {subscriptions: {<guild id>: {typing, threads, activities: true, members: [], member_updates: false, channels: {<channel id>: [[0, 99]]}, thread_member_lists: []}}}`; the adapter sends it without the member-list ranges. Whether unsubscribed lazy guilds still deliver `MESSAGE_CREATE` wasn't observed (nothing arrived in a quiet 45 s), so open chats also poll every 30 s.
+- `URLSessionWebSocketTask.maximumMessageSize` is 64 MiB; the default 1 MiB is close to a modest `READY`.
+
+### Chats list & chat
+- Rows: DMs and group DMs (not message requests or spam) and guild text (0) and announcement (5) channels whose computed permissions include `VIEW_CHANNEL`; channels without a `last_message_id` are skipped. Permissions: owner → all; else the `@everyone` role and the member's roles; `ADMINISTRATOR` → all; then the channel's `@everyone` overwrite, the member's roles' overwrites (deny then allow, combined), and the member's own overwrite.
+- Unread: a channel is unread when its `last_message_id` is past the read state's. Discord's `mention_count` counts every DM message but only mentions in guilds, so the count is the larger of it and others' messages past the read position in the fetched page; without a page, at least one.
+- Text: `<@id>` and `<@!id>` → `@id` (framework mention pattern `@(\d{15,21})`, names from authors, mentions and guild members, guild nicknames first); outgoing `@id` → `<@id>`. `<:name:id>` and `<a:name:id>` → `:id:` custom emoji (`cdn.discordapp.com/emojis/<id>.png|gif`), also as reaction keys; toggling one sends `name:id`. `<#id>` and `<@&id>` read as `#channel` and `@role`; `<t:unix:style>` as a formatted date. Messages are Markdown.
+- Media: attachments by `content_type` (images open the viewer, videos play, the rest are files); `gifv` embeds play as GIFs, `image` embeds as images, other embeds with a title or description as link cards; PNG, APNG and GIF stickers from `media.discordapp.net/stickers/<id>.png|gif`, Lottie stickers as cards. Attachment URLs are signed and expire (about 24 h), so a snapshot may show broken images until history reloads.
+- System messages (types other than 0 and 19) show as centered notices. Replies quote `referenced_message` when the original isn't loaded; `null` marks it unavailable.
+- Permissions gate the composer (no `SEND_MESSAGES` → `ChatReadOnlyAccess`) and reactions (`ADD_REACTIONS`).
+- There is no badge PNG yet: the badge falls back to "D" on Discord blurple.
+
+### Probe
+- `scripts/discord-web-client.py` (stdlib only) reads `DISCORD_TOKEN` from the environment or `.env.local` and never prints it. Commands: `me`, `guilds`, `channels --guild`, `dms`, `history` and `around` (summaries: author id, length, attachment types, reactions; `--show-text` prints only the user's own text), `ready [--shape]`, `follow [--shape]` (dispatch names and ids), `raw GET <path>` (JSON shape only). `send`, `edit`, `delete`, `react` and `typing` require `--expect-name` matching the channel's name; `ack` moves the read position. The mutations follow the documented request shapes but haven't been run live yet.
 
 ## Chats & chat screen
 

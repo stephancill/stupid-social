@@ -68,6 +68,11 @@ Build an iOS app with xtool that shows a combined social network notifications f
 - "Starred your repository" events (target repo owner equals the viewer username) route to the main notifications feed, not the stories bar. GitHub aggregates several people who starred the same owned repo into one card with `NAME</a> starred` rows; every such actor row surfaces as its own notification.
 - The OAuth `client_id` is `https://stupidtech.net/stupid-social/oauth/client-metadata.json`; login requires that exact public client metadata document to be hosted before authorization can complete.
 
+### Discord
+
+- User signs in through Discord's web login in an embedded WebView; the app keeps the user token the web client uses (Discord sessions are a token, not cookies). Dev mode can also take a token by hand.
+- Discord has no API for user clients, so the app sends what discord.com's web client sends. Discord's terms forbid automating user accounts; the user accepts that risk by connecting.
+
 ## Credential Storage
 
 - Store credentials in iCloud Keychain so they sync across the user's Apple devices.
@@ -165,6 +170,13 @@ Observed X behavior:
 - Chat needs the `transition:chat.bsky` OAuth scope, so accounts connected before chat support must sign in to Bluesky again; until then the Chats screen says so.
 - Not supported: message requests, starting chats, and sending posts or links as embeds (Bluesky chat has no replies or attachments).
 
+### Discord Chat
+
+- Discord chats appear on the Chats screen when Discord is connected: DMs and group DMs, and every text and announcement channel the user can see in each server, shown as Apron shows rooms ("Server / channel", with the server's icon). Message requests, spam, voice channels, threads and forums are left out. Channels and servers muted in Discord show a gray badge.
+- Each row has its latest message, time and unread count for the 25 most recent chats; older rows show their time until a message arrives. Discord reports only mention counts, so unread counts come from the newest page of messages (or one, for a row without a loaded page).
+- Opening a chat shows its history (older pages load on scroll) and live messages, edits, deletions, reactions and typing while it is open. The user can send text, reply, edit and delete their own messages, react (including with custom emoji already on messages), and @mention people. Reading moves Discord's read state, so the chat is read in Discord's own apps too. Attachments, embeds, stickers and custom emoji display; channel links, role mentions and timestamps read as text.
+- Not supported yet: sending attachments or stickers, threads and forums, starting DMs, message requests, and voice.
+
 ### Chat Title
 
 - Every chat's title shows its network's icon before the subtitle.
@@ -191,7 +203,7 @@ Observed X behavior:
 - Spotify listening activity is not shown in the main notifications list.
 - Spotify Messages chats appear on the Chats screen, not in the notifications feed.
 - Opening a Spotify Messages chat shows the full chat in the same chat screen as Apron: paged history, new messages polled while open, sending text, and the chat marked seen in Spotify once its newest incoming message is shown. Shared tracks show their artwork, artists, album, year and length, and play their 30-second preview inline; other shares open in Spotify.
-- Swiping right from the feed shows a Chats screen to the left of the feed listing every chat: all joined Apron rooms on every server, the latest 50 Spotify Messages chats, the latest 35 Instagram Direct threads, Telegram chats, X chats and the latest 50 Bluesky chats, newest first, each with its latest message, time and unread count. Small page dots at the bottom centre show which side is visible. The app reopens on whichever side it was left on. A search bar under the Chats title filters chats by name and latest message. Swiping between them is disabled while a screen is pushed on either side, and the dots are hidden then.
+- Swiping right from the feed shows a Chats screen to the left of the feed listing every chat: all joined Apron rooms on every server, the latest 50 Spotify Messages chats, the latest 35 Instagram Direct threads, Telegram chats, X chats, the latest 50 Bluesky chats and Discord DMs and channels, newest first, each with its latest message, time and unread count. Small page dots at the bottom centre show which side is visible. The app reopens on whichever side it was left on. A search bar under the Chats title filters chats by name and latest message. Swiping between them is disabled while a screen is pushed on either side, and the dots are hidden then.
 - In every chat, messages are grouped by day under a date chip ("Today", "Yesterday", "October 12", with the year when it isn't this one), as in Telegram. While scrolling, the current day's chip stays pinned at the top until the next day's pushes it away, and fades out a moment after scrolling stops.
 - Long-pressing a chat's title searches the chat, in every network: the app's search field opens focused, matches are highlighted in the messages, and a bar in place of the composer shows "N of M" with arrows to the previous and next match. Search covers the loaded messages and loads earlier history as the user goes back past the oldest match, or presses Search with nothing found (up to 10 pages at a time); "+" after the count means earlier history may hold more.
 - Instagram Direct threads appear on the Chats screen (newest 35). Opening one shows the same chat screen: paged history, new messages polled while open, sending text and replies, reacting to messages (one reaction per person, as in Instagram), and the thread marked read once its newest incoming message is shown. Photos open full screen; shared posts, reels and stories open in Instagram.

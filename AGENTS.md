@@ -34,6 +34,8 @@ Sources/
       SpotifyLoginWebView.swift     # Spotify WebView login
       GitHubConnectionView.swift    # GitHub credential setup
       GitHubLoginWebView.swift      # GitHub WebView login
+      DiscordConnectionView.swift   # Discord account setup
+      DiscordLoginWebView.swift     # Discord WebView login: captures the web client's token
       BlueskyConnectionView.swift   # Bluesky OAuth setup
       XConnectionView.swift         # X credential setup
       XLoginWebView.swift           # X WebView login
@@ -111,6 +113,10 @@ Sources/
       BlueskyClient.swift / BlueskyNotificationSource.swift
       BlueskyChat.swift             # Bluesky chat.bsky.convo models and calls (proxied through the PDS), Chats list rows
       BlueskyChatAdapter.swift      # Bluesky chat adapter: history, polling, send, reactions, read state
+      DiscordModels.swift           # Discord REST/gateway payloads, snowflakes, permission bits
+      DiscordClient.swift           # Discord REST client (web client headers) and DiscordGateway: READY state, live events
+      DiscordChat.swift             # Discord text tokens (mentions, emoji, channels) and DiscordChatList (Chats rows)
+      DiscordChatAdapter.swift      # Discord channel adapter: history, live events, send, replies, edit, delete, reactions, typing, read state
       DebugNotificationsClient.swift / DebugNotificationSource.swift
       DemoData.swift / DemoChats.swift  # Demo mode feed, story bar and chats (fake data, no credentials)
       ApronModels.swift / ApronClient.swift / ApronNotificationSource.swift  # Apron Chat Protocol WebSocket client
@@ -231,7 +237,7 @@ Chat is one framework with an adapter per network; `docs/TECHNICAL_DESIGN.md` §
 
 ## Network Integration
 
-- Always diagnose network behavior and validate the fix in the dependency-free Python client first, before implementing or changing the native Swift client. The probes (`scripts/x-web-client.py`, `scripts/instagram-web-client.py`, `scripts/github-web-client.py`, `scripts/spotify-web-client.py`, `scripts/bluesky-web-client.py`, `scripts/apron-web-client.py`, `scripts/telegram-client.py`, `scripts/xchat-client.py`) are the source of truth for endpoint behavior, auth/session freshness, redirects, and response shape. Reproduce the issue live with the probe (using simulator credentials where applicable), add or update a probe command that demonstrates the diagnosis, then port the validated behavior into Swift. Do not guess endpoint/auth behavior from Swift alone.
+- Always diagnose network behavior and validate the fix in the dependency-free Python client first, before implementing or changing the native Swift client. The probes (`scripts/x-web-client.py`, `scripts/instagram-web-client.py`, `scripts/github-web-client.py`, `scripts/spotify-web-client.py`, `scripts/bluesky-web-client.py`, `scripts/apron-web-client.py`, `scripts/telegram-client.py`, `scripts/xchat-client.py`, `scripts/discord-web-client.py`) are the source of truth for endpoint behavior, auth/session freshness, redirects, and response shape. Reproduce the issue live with the probe (using simulator credentials where applicable), add or update a probe command that demonstrates the diagnosis, then port the validated behavior into Swift. Do not guess endpoint/auth behavior from Swift alone.
 - Sticker rendering is checked the same way, against references: run `scripts/lottie-compare.py` (Telegram's rlottie) and `scripts/webm-compare.sh` (ffmpeg) on the sticker corpus after changing `Sources/StupidSocialCore/Stickers/`.
 - `scripts/xchat-client.py` is the one probe with dependencies: Python's standard library has no P-256 or libsodium, so it runs as a uv inline script (`uv run --script scripts/xchat-client.py --env-local …`, reading `DIAGNOSE_X_CREDS` from `.env.local`) and recovers keys through the official Juicebox JS SDK under bun (`scripts/xchat-juicebox-recover.ts`, PIN from `X_CHAT_PIN`). `recover-keys` uses a PIN guess when the PIN is wrong; it saves the keys to `logs/xchat-keys.json` (0600, gitignored) so decryption can be iterated without more guesses. Never print message text from other people (`--show-text` is for messages the agent sent), and send, react and mark read only in a conversation the user named for testing (`--expect-participant` guards the recipient).
 - Implement X as a native Swift client that sends what X's own web client sends. Take GraphQL query ids, variables and feature switches from the web client's `main.<hash>.js` bundle (`queryId:"…",operationName:"…",metadata:{featureSwitches:[…]}`, linked from the signed-in `https://x.com/home`) and the switch values from that page's `featureSwitch` config. Never use `twitter-cli` or other third-party clients as a reference for endpoints, ids or request shapes.

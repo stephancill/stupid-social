@@ -16,6 +16,8 @@ struct ChatsView: View {
     let xChat: (_ accountId: String, _ conversationId: String, _ title: String) -> (() -> ChatViewModel)?
     /// The chat for a Bluesky account's conversation and title; `nil` when the account is gone.
     let blueskyChat: (_ accountId: String, _ convoId: String, _ title: String) -> (() -> ChatViewModel)?
+    /// The chat for a Discord account's channel and title; `nil` when the account is gone.
+    let discordChat: (_ accountId: String, _ channelId: String, _ title: String) -> (() -> ChatViewModel)?
     /// An account's settings, opened from the connection errors; `nil` for a connection that isn't an account.
     let accountSettings: (_ accountId: String) -> AnyView?
     /// Whether a chat is pushed, so the home pager can stop paging.
@@ -67,7 +69,7 @@ struct ChatsView: View {
                 ContentUnavailableView.search(text: query)
             } else if viewModel.chats.isEmpty {
                 if viewModel.hasLoaded {
-                    ContentUnavailableView("No Chats", systemImage: "bubble.left.and.bubble.right", description: Text("Chats from Apron servers, Spotify, Instagram, Telegram, X and Bluesky appear here."))
+                    ContentUnavailableView("No Chats", systemImage: "bubble.left.and.bubble.right", description: Text("Chats from Apron servers, Spotify, Instagram, Telegram, X, Bluesky and Discord appear here."))
                 } else {
                     ProgressView()
                 }
@@ -236,6 +238,12 @@ struct ChatsView: View {
                 NetworkChatView(viewModel: opened(makeChat(), chat: chat))
             } else {
                 ContentUnavailableView("Bluesky Not Connected", systemImage: "bubble.left.and.bubble.right")
+            }
+        case let .discord(channelId):
+            if let makeChat = discordChat(chat.accountId, channelId, chat.title) {
+                NetworkChatView(viewModel: opened(makeChat(), chat: chat))
+            } else {
+                ContentUnavailableView("Discord Not Connected", systemImage: "bubble.left.and.bubble.right")
             }
         case let .demo(chatId):
             NetworkChatView(viewModel: opened(AdapterChatViewModel(adapter: DemoChatAdapter(chatId: chatId), accountId: chat.accountId), chat: chat))
