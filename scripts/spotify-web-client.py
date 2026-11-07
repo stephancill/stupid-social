@@ -234,7 +234,65 @@ class SpotifyWebClient:
         return float(value) if isinstance(value, int | float) else None
 
     def buddylist(self) -> dict[str, Any]:
+        """Legacy friend activity. Returns 200 `{"friends": []}` for every token since Spotify
+        moved friend activity to `listening-activity/v1/feed` (observed 2026-11-07)."""
         return self.spclient_get("presence-view/v1/buddylist")
+
+    def listening_activity(self, limit: int, resolve: bool) -> dict[str, Any]:
+        """Friend activity as the desktop app's Listening activity panel loads it:
+        `POST listening-activity/v1/feed` with `{"unused": true, "resultLimit": N}`.
+
+        Entries are `followEntity` or `userEntity`, each `{uri, activity: {entityUri,
+        contextUri?, isPlaying, timestamp}}` with an ISO timestamp and no names or artwork,
+        so `resolve` looks up each user's profile, each track's metadata and each context's
+        title (oEmbed) the way stories need them."""
+        body = json.dumps({"unused": True, "resultLimit": limit}).encode()
+        headers = {**self.spclient_headers(), "Content-Type": "application/json;charset=UTF-8"}
+        raw = self.request_json_with_refresh("POST", SPCLIENT_BASE_URL + "/listening-activity/v1/feed", headers, body)
+        friends = []
+        for entity in raw.get("entities") or []:
+            kind, value = next(iter(entity.items()))
+            activity = value.get("activity") or {}
+            friend = {
+                "kind": kind,
+                "user_uri": value.get("uri"),
+                "track_uri": activity.get("entityUri"),
+                "context_uri": activity.get("contextUri"),
+                "is_playing": activity.get("isPlaying"),
+                "timestamp": activity.get("timestamp"),
+            }
+            if resolve:
+                friend.update(self.resolve_listening_activity(friend))
+            friends.append(friend)
+        return {"status": "ok", "friend_count": len(friends), "friends": friends, "raw": raw}
+
+    def resolve_listening_activity(self, friend: dict[str, Any]) -> dict[str, Any]:
+        resolved: dict[str, Any] = {}
+        try:
+            profile = self.user_profile(friend["user_uri"] or "")
+            resolved["user_name"] = profile.get("name")
+            resolved["user_image_url"] = profile.get("image_url")
+        except SystemExit as exc:
+            resolved["user_error"] = str(exc).splitlines()[0]
+        track_uri = friend.get("track_uri") or ""
+        if track_uri.startswith("spotify:track:"):
+            try:
+                track = self.track_metadata(track_uri)
+                resolved.update({
+                    "track_name": track["name"],
+                    "artist_name": (track["artists"] or [None])[0],
+                    "album_name": track["album"],
+                    "image_url": track["cover_url"],
+                })
+            except SystemExit as exc:
+                resolved["track_error"] = str(exc).splitlines()[0]
+        context_uri = friend.get("context_uri") or ""
+        if context_uri.split(":")[1:2] in (["playlist"], ["album"], ["artist"], ["show"]):
+            try:
+                resolved["context_name"] = self.share_metadata(context_uri).get("title")
+            except SpotifyHTTPError as exc:
+                resolved["context_error"] = f"HTTP {exc.status_code}"
+        return resolved
 
     def user_profile(self, username: str) -> dict[str, Any]:
         username = username.strip().removeprefix("spotify:user:")
@@ -1247,7 +1305,10 @@ def build_parser() -> argparse.ArgumentParser:
     refresh.add_argument("--reason", choices=("transport", "init"), default="transport", help="Token reason to request.")
     subparsers.add_parser("server-time", help="Fetch Spotify server time.")
     subparsers.add_parser("totp", help="Print a current Spotify WebPlayer TOTP for debugging.")
-    subparsers.add_parser("buddylist", help="Fetch friend listening activity from presence-view/v1/buddylist.")
+    subparsers.add_parser("buddylist", help="Legacy friend activity (presence-view/v1/buddylist); now always empty.")
+    listening = subparsers.add_parser("listening-activity", help="Fetch friend listening activity from listening-activity/v1/feed, resolving users, tracks and contexts.")
+    listening.add_argument("--limit", type=int, default=100)
+    listening.add_argument("--no-resolve", action="store_true", help="Skip profile, track and context lookups.")
     subparsers.add_parser("validate-cookie-login", help="Validate login using only selected cookies, without captured WebPlayer tokens.")
     subparsers.add_parser("profile-attributes", help="Resolve the current user through api-partner profileAttributes.")
     subparsers.add_parser("resolve-username", help="Resolve the current user with a fresh session client-token.")
@@ -1322,18 +1383,20 @@ def main() -> None:
         result = {"totp": spotify_totp(), "totpVer": TOTP_VERSION, "selfTest": spotify_totp(1_777_993_436) == "031750"}
     elif args.command == "buddylist":
         result = client.buddylist()
+    elif args.command == "listening-activity":
+        result = client.listening_activity(args.limit, resolve=not args.no_resolve)
     elif args.command == "validate-cookie-login":
         client.credentials = {
             key: value for key, value in credentials.items()
             if key in {"spDC", "sp_dc", "spT", "sp_t", "spKey", "sp_key"}
         }
         token = client.refresh_web_player_token(reason="transport")
-        activity = client.buddylist()
+        activity = client.listening_activity(limit=100, resolve=False)
         result = {
             "status": "ok",
             "captured_player_tokens_required": False,
             "token": token,
-            "friend_count": len(activity.get("friends", [])),
+            "friend_count": activity["friend_count"],
         }
     elif args.command == "resolve-username":
         result = client.resolve_username()
