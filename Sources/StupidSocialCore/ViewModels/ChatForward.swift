@@ -31,8 +31,10 @@ public struct ChatForward: Identifiable, Hashable, Sendable {
     public let originName: String?
     /// The message's media as local or fetchable files, in order, for a copy.
     public let media: [ChatForwardMedia]
+    /// A link to the original (`ChatMessageLinking`), which a copy's "Forwarded" links to.
+    public let link: URL?
 
-    public init(message: ChatMessage, network: SocialNetwork, accountId: String, reference: String?, media: [ChatForwardMedia]) {
+    public init(message: ChatMessage, network: SocialNetwork, accountId: String, reference: String?, link: URL? = nil, media: [ChatForwardMedia]) {
         id = UUID()
         self.message = message
         self.network = network
@@ -40,6 +42,7 @@ public struct ChatForward: Identifiable, Hashable, Sendable {
         self.reference = reference
         originName = message.forwardedFrom.map(\.name) ?? (message.isOwn ? nil : message.sender.name)
         self.media = media
+        self.link = link
     }
 
     /// Whether anything of the message can be copied to another network: its text or a file.
@@ -98,20 +101,27 @@ public protocol ChatForwarding: ChatAdapter {
 }
 
 /// The messages that make up a copy of a forwarded message: "Forwarded" in italics (where the network formats
-/// text) and the text first, with the first file, then each other file on its own. The copy names neither the
+/// text), linking to the original where its network has message links, and the text first, with the first file, then each other file on its own. The copy names neither the
 /// sender nor the network it came from.
 enum ChatForwardCopy {
     struct Part {
         var text: String
         var media: ChatForwardMedia?
         var italics: [NSRange] = []
+        var links: [ChatOutgoingLink] = []
     }
 
     static let header = "Forwarded"
 
     static func parts(of forward: ChatForward) -> [Part] {
         let text = forward.message.text.map { $0.isEmpty ? header : "\(header)\n\n\($0)" } ?? header
-        var parts = [Part(text: text, media: forward.media.first, italics: [NSRange(location: 0, length: (header as NSString).length)])]
+        let headerRange = NSRange(location: 0, length: (header as NSString).length)
+        var parts = [Part(
+            text: text,
+            media: forward.media.first,
+            italics: [headerRange],
+            links: forward.link.map { [ChatOutgoingLink(range: headerRange, url: $0)] } ?? [],
+        )]
         for media in forward.media.dropFirst() {
             parts.append(Part(text: "", media: media))
         }

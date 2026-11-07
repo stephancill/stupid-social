@@ -8,7 +8,7 @@ import Foundation
 /// custom emoji in text and reactions draw as their images, and voice messages play in the chat. The user's
 /// messages show as seen once Telegram's outbox read cursor passes them.
 @MainActor
-public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, ChatReactionSending, ChatUnseenReactions, ChatReadReceipts, ChatLiveUpdating, ChatReferenceResolving, ChatMentioning, ChatTyping, ChatCustomEmojis, ChatAudioPreviewing, ChatReactionChoices, ChatButtonPressing, ChatStickerSending, ChatVoiceSending, ChatForwarding {
+public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, ChatReactionSending, ChatUnseenReactions, ChatReadReceipts, ChatLiveUpdating, ChatReferenceResolving, ChatMentioning, ChatTyping, ChatCustomEmojis, ChatAudioPreviewing, ChatReactionChoices, ChatButtonPressing, ChatStickerSending, ChatVoiceSending, ChatForwarding, ChatMessageLinking {
     public let network = SocialNetwork.telegram
     public let canReply = true
     public let acceptsAttachments = true
@@ -284,10 +284,11 @@ public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, 
                 caption: text,
                 mentions: mentions,
                 italics: message.italics,
+                links: message.links,
                 replyTo: replyTo,
             )
         } else {
-            try await client.send(peer: peer, text: text, mentions: mentions, italics: message.italics, replyTo: replyTo)
+            try await client.send(peer: peer, text: text, mentions: mentions, italics: message.italics, links: message.links, replyTo: replyTo)
         }
         if message.attachment == nil, let id {
             var sent = TelegramMessage(id: id, date: Date(), text: text, caption: text, mentions: mentions.isEmpty ? nil : mentions, senderId: nil, isOutgoing: true, replyToId: replyTo, isService: false)
@@ -333,6 +334,15 @@ public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, 
         let id = try await client.sendVoice(peer: peer, oggOpus: data, duration: voice.duration, waveform: voice.waveform, replyTo: replyToId.flatMap { Int32($0) })
         scheduleRefresh()
         return id.map(String.init)
+    }
+
+    // MARK: Links
+
+    /// Supergroups' and channels' messages have `t.me/c/<channel id>/<message id>` links, which open for members;
+    /// private chats and basic groups have none.
+    public func link(toMessage messageId: String) -> URL? {
+        guard peer.kind == .channel, let id = Int32(messageId) else { return nil }
+        return URL(string: "https://t.me/c/\(peer.id)/\(id)")
     }
 
     // MARK: Forwarding

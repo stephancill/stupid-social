@@ -6,7 +6,7 @@ import Foundation
 /// doesn't send. Files go through Discord's upload slots; stickers are the standard packs and the guild's own (any
 /// guild's with Nitro).
 @MainActor
-public final class DiscordChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditing, ChatDeleting, ChatReactionSending, ChatLiveUpdating, ChatReferenceResolving, ChatTyping, ChatMentioning, ChatCustomEmojis, ChatStickerSending, ChatForwarding, ChatVoiceSending, ChatAudioPreviewing {
+public final class DiscordChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditing, ChatDeleting, ChatReactionSending, ChatLiveUpdating, ChatReferenceResolving, ChatTyping, ChatMentioning, ChatCustomEmojis, ChatStickerSending, ChatForwarding, ChatVoiceSending, ChatAudioPreviewing, ChatMessageLinking {
     public let network = SocialNetwork.discord
     public let canReply = true
     /// Read again once connected: a guild channel may not allow files.
@@ -172,6 +172,14 @@ public final class DiscordChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEdit
         let sent = try await client.send(channelId: channelId, content: DiscordText.outgoing(message.markdownText()), replyTo: message.replyToId, nonce: DiscordSnowflake.now(), upload: upload)
         accept(sent)
         return sent.id
+    }
+
+    // MARK: Links
+
+    /// The link Discord's Copy Message Link gives: the guild (`@me` for DMs), the channel or thread, the message.
+    public func link(toMessage messageId: String) -> URL? {
+        guard loaded[messageId] != nil else { return nil }
+        return URL(string: "https://discord.com/channels/\(channel?.guildId ?? "@me")/\(channelId)/\(messageId)")
     }
 
     // MARK: Forwarding

@@ -466,7 +466,7 @@ final class AdapterChatViewModelTests: XCTestCase {
         chat.disconnect()
     }
 
-    func testAForwardFromAnotherNetworkOrAccountSendsACopyUnderAnItalicForwarded() async {
+    func testAForwardFromAnotherNetworkOrAccountSendsACopyUnderAnItalicForwarded() async throws {
         let adapter = FakeForwardingAdapter()
         adapter.pages = [[]]
         let chat = makeChat(adapter)
@@ -480,6 +480,12 @@ final class AdapterChatViewModelTests: XCTestCase {
         chat.stage(ChatForward(message: message(2), network: .telegram, accountId: "other", reference: "ref-2", media: []))
         await chat.send()
         XCTAssertEqual(adapter.sent.last?.text, "Forwarded\n\nMessage 2", "another account's message goes as a copy too")
+        XCTAssertEqual(adapter.sent.last?.links, [], "no link without one to the original")
+        let original = try XCTUnwrap(URL(string: "https://discord.com/channels/@me/1/3"))
+        chat.stage(ChatForward(message: message(3), network: .discord, accountId: "other", reference: nil, link: original, media: []))
+        await chat.send()
+        XCTAssertEqual(adapter.sent.last?.links, [ChatOutgoingLink(range: NSRange(location: 0, length: 9), url: original)])
+        XCTAssertEqual(adapter.sent.last?.markdownText(), "[*Forwarded*](https://discord.com/channels/@me/1/3)\n\nMessage 3")
         chat.disconnect()
     }
 

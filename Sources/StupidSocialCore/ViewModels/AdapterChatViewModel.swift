@@ -29,22 +29,48 @@ public struct ChatOutgoing {
     /// Parts of `text` to set in italics (UTF-16 ranges), such as a forwarded copy's "Forwarded". Networks with
     /// formatting apply them (Telegram's entities, Markdown with `markdownText`); plain-text networks leave them out.
     public var italics: [NSRange] = []
+    /// Parts of `text` that link somewhere (UTF-16 ranges), such as a forwarded copy's "Forwarded" to the original.
+    /// Networks with formatting apply them; plain-text networks leave them out.
+    public var links: [ChatOutgoingLink] = []
 
-    init(text: String, attachment: ChatAttachment?, replyToId: String?, italics: [NSRange] = []) {
+    init(text: String, attachment: ChatAttachment?, replyToId: String?, italics: [NSRange] = [], links: [ChatOutgoingLink] = []) {
         self.text = text
         self.attachment = attachment
         self.replyToId = replyToId
         self.italics = italics
+        self.links = links
     }
 
-    /// `text` with `italics` wrapped in `marker`, for networks whose messages are Markdown.
+    /// `text` with `italics` wrapped in `marker` and `links` as `[text](url)`, for networks whose messages are
+    /// Markdown. A link and italics on the same text read `[*text*](url)`.
     public func markdownText(marker: String = "*") -> String {
-        let text = NSMutableString(string: text)
-        for range in italics.sorted(by: { $0.location > $1.location }) where NSMaxRange(range) <= text.length {
-            text.insert(marker, at: NSMaxRange(range))
-            text.insert(marker, at: range.location)
+        let length = (text as NSString).length
+        var openings: [Int: String] = [:]
+        var closings: [Int: String] = [:]
+        for link in links where NSMaxRange(link.range) <= length {
+            openings[link.range.location, default: ""] += "["
+            closings[NSMaxRange(link.range), default: ""] = "](\(link.url.absoluteString))" + (closings[NSMaxRange(link.range)] ?? "")
         }
-        return text as String
+        for range in italics where NSMaxRange(range) <= length {
+            openings[range.location, default: ""] += marker
+            closings[NSMaxRange(range), default: ""] = marker + (closings[NSMaxRange(range)] ?? "")
+        }
+        let result = NSMutableString(string: text)
+        for position in Set(openings.keys).union(closings.keys).sorted(by: >) {
+            result.insert((closings[position] ?? "") + (openings[position] ?? ""), at: position)
+        }
+        return result as String
+    }
+}
+
+/// A link on part of an outgoing message's text.
+public struct ChatOutgoingLink: Equatable, Sendable {
+    public let range: NSRange
+    public let url: URL
+
+    public init(range: NSRange, url: URL) {
+        self.range = range
+        self.url = url
     }
 }
 
@@ -264,10 +290,16 @@ public protocol ChatCommanding: ChatAdapter {
     func sendCommand(_ text: String, replyToId: String?) async throws
 }
 
-/// Links to messages, and links in messages that point into the chat itself.
+/// Links to messages: Copy Link, and the link a forwarded copy's "Forwarded" goes to.
 @MainActor
-public protocol ChatLinking: ChatAdapter {
+public protocol ChatMessageLinking: ChatAdapter {
+    /// `nil` for a message the network has no link to.
     func link(toMessage messageId: String) -> URL?
+}
+
+/// Links in messages that point into the chat itself.
+@MainActor
+public protocol ChatLinking: ChatMessageLinking {
     func linkTarget(for url: URL) -> ChatLinkTarget?
     var linkBaseURL: URL? { get }
     /// How a link written as its URL reads, such as "Message in #general"; `nil` keeps the URL.
@@ -559,7 +591,7 @@ public final class AdapterChatViewModel<Adapter: ChatAdapter>: ChatViewModel {
             await self?.audioPreviewURL(for: previewId)
         }
         let reference = (adapter as? any ChatForwarding)?.forwardReference(for: message)
-        return ChatForward(message: message, network: network, accountId: accountId, reference: reference, media: media)
+        return ChatForward(message: message, network: network, accountId: accountId, reference: reference, link: link(toMessage: message.id), media: media)
     }
 
     /// Whether the forward goes natively: from a chat of this account on this network that gave a reference.
@@ -600,19 +632,19 @@ public final class AdapterChatViewModel<Adapter: ChatAdapter>: ChatViewModel {
         var lastId: String?
         for part in ChatForwardCopy.parts(of: forward) {
             guard let media = part.media else {
-                lastId = try await adapter.send(ChatOutgoing(text: part.text, attachment: nil, replyToId: nil, italics: part.italics))
+                lastId = try await adapter.send(ChatOutgoing(text: part.text, attachment: nil, replyToId: nil, italics: part.italics, links: part.links))
                 continue
             }
             if case .voice = media, let sending = adapter as? any ChatVoiceSending, let note = try await ChatForwardCopy.voiceNote(for: media) {
                 if !part.text.isEmpty {
-                    lastId = try await adapter.send(ChatOutgoing(text: part.text, attachment: nil, replyToId: nil, italics: part.italics))
+                    lastId = try await adapter.send(ChatOutgoing(text: part.text, attachment: nil, replyToId: nil, italics: part.italics, links: part.links))
                 }
                 lastId = try await sending.send(voice: note, replyToId: nil)
                 continue
             }
             guard adapter.acceptsAttachments else { throw ChatForwardError.noAttachments }
             let attachment = try await ChatForwardCopy.attachment(for: media)
-            lastId = try await adapter.send(ChatOutgoing(text: part.text, attachment: attachment, replyToId: nil, italics: part.italics))
+            lastId = try await adapter.send(ChatOutgoing(text: part.text, attachment: attachment, replyToId: nil, italics: part.italics, links: part.links))
         }
         return lastId
     }
@@ -724,7 +756,7 @@ public final class AdapterChatViewModel<Adapter: ChatAdapter>: ChatViewModel {
     // MARK: Links
 
     override public func link(toMessage messageId: String) -> URL? {
-        (adapter as? any ChatLinking)?.link(toMessage: messageId)
+        (adapter as? any ChatMessageLinking)?.link(toMessage: messageId)
     }
 
     override public func linkTarget(for url: URL) -> ChatLinkTarget? {
