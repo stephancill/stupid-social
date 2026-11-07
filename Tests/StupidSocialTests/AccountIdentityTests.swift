@@ -209,8 +209,9 @@ final class AccountIdentityTests: XCTestCase {
 
 private func spotifyResponse(request: URLRequest) -> (Int, String) {
     switch request.url?.path {
-    case "/presence-view/v1/buddylist":
-        return (200, #"{"friends":[]}"#)
+    case "/listening-activity/v1/feed":
+        XCTAssertEqual(request.httpMethod, "POST")
+        return (200, #"{"entities":[]}"#)
     case "/api/server-time":
         return (200, #"{"serverTime":1800000000}"#)
     case "/api/token":

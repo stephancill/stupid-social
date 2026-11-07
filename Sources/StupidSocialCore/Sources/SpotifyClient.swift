@@ -57,16 +57,21 @@ public struct SpotifyClient {
         return (creds, creds.bearerToken)
     }
 
-    private func makeRequest(_ path: String, protobufBody: Data? = nil) async throws -> (Data, HTTPURLResponse) {
-        let creds = try await credentialsForRequest()
-        return try await makeRequest(path, protobufBody: protobufBody, credentials: creds, allowsTokenRefresh: true)
+    enum RequestBody {
+        /// Spotify Messages (`speechless`) only accepts `application/x-protobuf`; `application/protobuf` returns HTTP 400.
+        case protobuf(Data)
+        case json(Data)
     }
 
-    /// Sends a GET, or a POST when `protobufBody` is set. Spotify Messages (`speechless`) only
-    /// accepts `application/x-protobuf`; `application/protobuf` returns HTTP 400.
+    private func makeRequest(_ path: String, body: RequestBody? = nil) async throws -> (Data, HTTPURLResponse) {
+        let creds = try await credentialsForRequest()
+        return try await makeRequest(path, body: body, credentials: creds, allowsTokenRefresh: true)
+    }
+
+    /// Sends a GET, or a POST when `body` is set.
     private func makeRequest(
         _ path: String,
-        protobufBody: Data? = nil,
+        body: RequestBody? = nil,
         credentials creds: SpotifyCredentials,
         allowsTokenRefresh: Bool,
     ) async throws -> (Data, HTTPURLResponse) {
@@ -75,12 +80,18 @@ public struct SpotifyClient {
         request.setValue(Self.appVersion, forHTTPHeaderField: "spotify-app-version")
         request.setValue("WebPlayer", forHTTPHeaderField: "app-platform")
         request.setValue(Self.acceptLanguageHeader, forHTTPHeaderField: "accept-language")
-        if let protobufBody {
+        switch body {
+        case let .protobuf(data):
             request.httpMethod = "POST"
-            request.httpBody = protobufBody
+            request.httpBody = data
             request.setValue("application/x-protobuf", forHTTPHeaderField: "content-type")
             request.setValue("application/x-protobuf", forHTTPHeaderField: "accept")
-        } else {
+        case let .json(data):
+            request.httpMethod = "POST"
+            request.httpBody = data
+            request.setValue("application/json;charset=UTF-8", forHTTPHeaderField: "content-type")
+            request.setValue("application/json", forHTTPHeaderField: "accept")
+        case nil:
             request.setValue("application/json", forHTTPHeaderField: "accept")
         }
 
@@ -92,7 +103,7 @@ public struct SpotifyClient {
         if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
             if allowsTokenRefresh {
                 let refreshed = try await refreshWebPlayerToken(existing: creds)
-                return try await makeRequest(path, protobufBody: protobufBody, credentials: refreshed, allowsTokenRefresh: false)
+                return try await makeRequest(path, body: body, credentials: refreshed, allowsTokenRefresh: false)
             }
             throw SourceError.serviceError("Invalid credentials")
         }
@@ -208,12 +219,11 @@ public struct SpotifyClient {
     }
 
     public func validateAccount() async throws -> String? {
-        // The buddy list is the authoritative account-validity check: it is the
-        // same spclient endpoint the activity feed reads and needs only the
-        // current bearer token (no `client-token`). If it returns 200, the
-        // account works regardless of anything below.
-        let (data, _) = try await makeRequest("presence-view/v1/buddylist")
-        _ = try JSONDecoder().decode(SpotifyBuddyListResponse.self, from: data)
+        // Friend activity is the authoritative account-validity check: it is the
+        // spclient endpoint stories read and needs only the current bearer token
+        // (no `client-token`). If it returns 200, the account works regardless of
+        // anything below.
+        _ = try await friendActivity()
 
         // The username is display-only (Settings row). Resolve it best-effort
         // and fall back to the stored username: the Pathfinder `profileAttributes`
@@ -329,10 +339,14 @@ public struct SpotifyClient {
         return minted
     }
 
-    func friendActivity() async throws -> [SpotifyFriend] {
-        let (data, _) = try await makeRequest("presence-view/v1/buddylist")
-        let response = try JSONDecoder().decode(SpotifyBuddyListResponse.self, from: data)
-        return response.friends
+    /// Friend activity as the desktop app's Listening activity panel loads it (validated with
+    /// `spotify-web-client.py listening-activity`). Entries carry only URIs and a timestamp; names
+    /// and artwork come from `userProfile`, `trackMetadata` and `shareMetadata`.
+    /// `presence-view/v1/buddylist`, used before, now returns no friends for any token (observed 2026-11-07).
+    func friendActivity() async throws -> [SpotifyFriendActivity] {
+        let body = try JSONSerialization.data(withJSONObject: ["unused": true, "resultLimit": 100])
+        let (data, _) = try await makeRequest("listening-activity/v1/feed", body: .json(body))
+        return try SpotifyListeningActivityParser.parse(data)
     }
 
     func userProfile(username: String) async throws -> SpotifyUserProfile {
@@ -377,27 +391,27 @@ public struct SpotifyClient {
 
     func latestChats(limit: Int) async throws -> [SpotifyChat] {
         let request = SpotifyMessagesParser.latestChatsRequest(limit: limit)
-        let (data, _) = try await makeRequest("speechless/v1/retrieve/chats-share-set/latest", protobufBody: request)
+        let (data, _) = try await makeRequest("speechless/v1/retrieve/chats-share-set/latest", body: .protobuf(request))
         return try SpotifyMessagesParser.parseLatestChats(data)
     }
 
     /// One page of a Spotify Messages chat, newest first.
     func chatHistory(chatId: String, pageSize: Int, pageToken: String?) async throws -> SpotifyChatPage {
         let request = SpotifyMessagesParser.chatHistoryRequest(chatId: chatId, pageSize: pageSize, pageToken: pageToken)
-        let (data, _) = try await makeRequest("speechless/v1/retrieve/hierarchy", protobufBody: request)
+        let (data, _) = try await makeRequest("speechless/v1/retrieve/hierarchy", body: .protobuf(request))
         return try SpotifyMessagesParser.parseChatHistory(data)
     }
 
     /// Sends a text message and returns the message the server created.
     func sendChatText(chatId: String, text: String) async throws -> SpotifyChatMessage? {
         let request = SpotifyMessagesParser.sendTextRequest(chatId: chatId, text: text)
-        let (data, _) = try await makeRequest("speechless/v1/submit/request", protobufBody: request)
+        let (data, _) = try await makeRequest("speechless/v1/submit/request", body: .protobuf(request))
         return try SpotifyMessagesParser.parseSubmitResponse(data).first
     }
 
     /// Marks every message in a chat seen, as opening it in Spotify does.
     func markChatSeen(chatId: String) async throws {
-        _ = try await makeRequest("speechless/v1/submit/request", protobufBody: SpotifyMessagesParser.markSeenRequest(chatId: chatId))
+        _ = try await makeRequest("speechless/v1/submit/request", body: .protobuf(SpotifyMessagesParser.markSeenRequest(chatId: chatId)))
     }
 
     /// Track details as the Spotify apps load them, from spclient `metadata/4/track/<gid>` (validated with
@@ -630,45 +644,73 @@ enum SpotifyWebPlayerToken {
 
 // MARK: - Response models
 
-struct SpotifyBuddyListResponse: Decodable {
-    let friends: [SpotifyFriend]
+/// One friend's latest play from `listening-activity/v1/feed`.
+struct SpotifyFriendActivity: Equatable {
+    let userURI: String
+    let trackURI: String
+    let contextURI: String?
+    let isPlaying: Bool
+    let timestamp: Date
+
+    var username: String {
+        userURI.hasPrefix("spotify:user:") ? String(userURI.dropFirst("spotify:user:".count)) : userURI
+    }
+
+    /// The base62 id of a `spotify:track:` entity; nil for anything else (an episode, say).
+    var trackId: String? {
+        let parts = trackURI.split(separator: ":")
+        guard parts.count == 3, parts[0] == "spotify", parts[1] == "track" else { return nil }
+        return String(parts[2])
+    }
 }
 
-struct SpotifyFriend: Decodable {
-    let timestamp: UInt64
-    let user: SpotifyFriendUser
-    let track: SpotifyFriendTrack
-}
+enum SpotifyListeningActivityParser {
+    /// `{"entities": [{"followEntity" | "userEntity": {uri, activity: {entityUri, contextUri?, isPlaying, timestamp}}}]}`.
+    /// Both entity kinds are friends; an entry of any other kind is skipped.
+    static func parse(_ data: Data) throws -> [SpotifyFriendActivity] {
+        let response = try JSONDecoder().decode(Response.self, from: data)
+        return try (response.entities ?? []).compactMap { entity in
+            guard let value = entity.followEntity ?? entity.userEntity else { return nil }
+            guard let timestamp = date(from: value.activity.timestamp) else {
+                throw SourceError.serviceError("Unreadable Spotify activity timestamp")
+            }
+            return SpotifyFriendActivity(
+                userURI: value.uri,
+                trackURI: value.activity.entityUri,
+                contextURI: value.activity.contextUri,
+                isPlaying: value.activity.isPlaying ?? false,
+                timestamp: timestamp,
+            )
+        }
+    }
 
-struct SpotifyFriendUser: Decodable {
-    let uri: String
-    let name: String
-    let imageUrl: String?
-}
+    /// ISO 8601 with milliseconds (`2026-11-07T13:26:31.053Z`), or without.
+    static func date(from value: String) -> Date? {
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return fractional.date(from: value) ?? ISO8601DateFormatter().date(from: value)
+    }
 
-struct SpotifyFriendTrack: Decodable {
-    let uri: String
-    let name: String
-    let imageUrl: String?
-    let album: SpotifyFriendAlbum?
-    let artist: SpotifyFriendArtist?
-    let context: SpotifyFriendContext?
-}
+    private struct Response: Decodable {
+        let entities: [Entity]?
+    }
 
-struct SpotifyFriendAlbum: Decodable {
-    let uri: String?
-    let name: String?
-}
+    private struct Entity: Decodable {
+        let followEntity: Value?
+        let userEntity: Value?
+    }
 
-struct SpotifyFriendArtist: Decodable {
-    let uri: String?
-    let name: String?
-}
+    private struct Value: Decodable {
+        let uri: String
+        let activity: Activity
+    }
 
-struct SpotifyFriendContext: Decodable {
-    let uri: String?
-    let name: String?
-    let index: Int?
+    private struct Activity: Decodable {
+        let entityUri: String
+        let contextUri: String?
+        let isPlaying: Bool?
+        let timestamp: String
+    }
 }
 
 struct SpotifyProfileAttributesResponse: Decodable {

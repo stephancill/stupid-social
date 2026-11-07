@@ -421,10 +421,14 @@ public final class StoryBarViewModel: ObservableObject {
     private func spotifyItems() async -> [SpotifyActivityItem] {
         var activity: [SpotifyActivityItem] = []
         for source in spotifyActivitySources() {
-            if let fetched = try? await RefreshTiming.measure("story-spotify-activity", {
-                try await source.fetchActivity(reason: .manual)
-            }) {
-                activity += fetched
+            do {
+                activity += try await RefreshTiming.measure("story-spotify-activity") {
+                    try await source.fetchActivity(reason: .manual)
+                }
+            } catch {
+                if !Task.isCancelled {
+                    AppMetrics.storySourceFailed(network: .spotify, error: error)
+                }
             }
         }
         var seenUserURIs = Set<String>()
