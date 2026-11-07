@@ -250,6 +250,11 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
             onClose: { [weak self] error in self?.connectionClosed(error) },
         )
         updateOthersRead(from: session.connection)
+        if !session.server.has("history") {
+            // The room's log is what the connection received before this chat observed it. Read in the same
+            // main-actor turn as observing, so no frame is missed.
+            apply(session.connection.keptPage(roomId: roomId), publishing: false)
+        }
 
         if session.server.has("rooms") {
             let listing = try await session.connection.joinedRooms()

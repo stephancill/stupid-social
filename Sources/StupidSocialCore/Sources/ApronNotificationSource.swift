@@ -74,8 +74,9 @@ public final class ApronNotificationSource: ChatListProvider {
     /// One server's rooms, or only `roomIds` among them, such as the rooms a new message arrived in; the live
     /// connection calls this on its open session.
     public func chatSummaries(in session: ApronSession, roomIds: Set<String>? = nil) async throws -> [ChatSummary] {
-        // Without `history` the latest message can't be read on a short-lived connection.
-        guard session.server.has("history") else { return [] }
+        // Without `history`, rooms are read from what the shared connection kept since sign-in.
+        let hasHistory = session.server.has("history")
+        guard hasHistory || session.server.has("rooms") else { return [] }
         let rooms: [ApronRoom]
         var users: [String: ApronUser] = [:]
         var firstPage: ApronHistoryResult?
@@ -95,7 +96,13 @@ public final class ApronNotificationSource: ChatListProvider {
         let serverAvatarURL = (session.connection.server ?? session.server).avatarURL
         var summaries: [ChatSummary] = []
         for room in rooms where roomIds?.contains(room.roomId) ?? true {
-            let page = if let firstPage { firstPage } else { try await session.connection.history(roomId: room.roomId, limit: historyLimit) }
+            let page = if let firstPage {
+                firstPage
+            } else if hasHistory {
+                try await session.connection.history(roomId: room.roomId, limit: historyLimit)
+            } else {
+                session.connection.keptPage(roomId: room.roomId)
+            }
             let latest = latestMessage(in: page)
             let preview = latest.map { preview(of: $0, isOwn: own.contains($0.from.userId)) }
             let unread = latest.flatMap { message in

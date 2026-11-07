@@ -98,6 +98,12 @@ public final class ApronConnection {
     /// connection received (§4.6). Servers that relay cursors to the room send each member's after `room_list`,
     /// before any chat observes the connection, so they are kept here.
     public private(set) var readCursors: [String: [String: Int64]] = [:]
+    /// On a server without capability `history`, every `message` and `reactions` frame since the connection
+    /// opened, oldest first: nothing can fetch them again, and such servers (archives, scripted scenes) push their
+    /// log right after sign-in, before a chat observes the connection. Chats start from these, as apron-web's
+    /// store does. Only the newest `keptRecordLimit` are kept.
+    private var keptRecords: [(method: String, params: Data)] = []
+    static let keptRecordLimit = 5000
 
     private let task: URLSessionWebSocketTask
     private let decoder = JSONDecoder()
@@ -273,9 +279,49 @@ public final class ApronConnection {
         if method == "activity", let activity = try? decoder.decode(ApronActivity.self, from: params) {
             applyReadCursor(activity)
         }
+        if let server, !server.has("history") {
+            keep(method: method, params: params)
+        }
         for observer in notificationObservers.values {
             observer(method, params)
         }
+    }
+
+    func keep(method: String, params: Data) {
+        guard method == "message" || method == "reactions" else { return }
+        keptRecords.append((method, params))
+        if keptRecords.count > Self.keptRecordLimit {
+            keptRecords.removeFirst(keptRecords.count - Self.keptRecordLimit)
+        }
+    }
+
+    /// A room's kept records shaped like a `history` page: each message's latest snapshot still in the room
+    /// (a later snapshot in another room is a move), and its reaction records.
+    public func keptPage(roomId: String) -> ApronHistoryResult {
+        let decoder = JSONDecoder()
+        var latest: [String: ApronMessage] = [:]
+        var reactions: [ApronReactionRecord] = []
+        for record in keptRecords {
+            if record.method == "message", let message = try? decoder.decode(ApronMessage.self, from: record.params),
+               let id = message.messageId, message.sortKey >= latest[id]?.sortKey ?? .min
+            {
+                latest[id] = message
+            } else if record.method == "reactions", let record = try? decoder.decode(ApronReactionRecord.self, from: record.params),
+                      record.roomId == roomId
+            {
+                reactions.append(record)
+            }
+        }
+        let messages = latest.values.filter { $0.roomId == roomId }.sorted { $0.sortKey < $1.sortKey }
+        let logIds = messages.map(\.sortKey) + reactions.compactMap { $0.logId.flatMap(Int64.init) }
+        return ApronHistoryResult(
+            rooms: nil,
+            messages: messages,
+            reactions: reactions,
+            firstLogId: logIds.min().map(String.init),
+            lastLogId: logIds.max().map(String.init),
+            more: false,
+        )
     }
 
     /// A room's `mute` is `true`, `false`, or seconds left; a missing field changes nothing (§4.5.3).
