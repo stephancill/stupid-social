@@ -3,9 +3,10 @@ import UIKit
 
 /// The sticker panel, in the keyboard's place as in Telegram's apps: every set in one grid under its title, a tab per
 /// set along the bottom that follows the scroll and jumps to its set, a row of emoji along the top that shows the
-/// stickers for one, and a press-and-hold preview that plays the sticker with a Send button. A tap sends. Sets load
-/// as they scroll into view; stickers in the grid show their first frame, so dozens don't play at once.
-final class ChatStickerPanel: UIInputView, UICollectionViewDataSource, UICollectionViewDelegate {
+/// stickers for one, and a press-and-hold preview that plays the sticker with a Send button. A tap sends. Stickers in
+/// the grid show their first frame, so dozens don't play at once. `preload` fetches the sets, their stickers, the
+/// emoji row's results and the first stills when the chat opens, so the panel shows complete.
+final class ChatStickerPanel: UIInputView, UICollectionViewDataSource, UICollectionViewDelegate, UICollectionViewDataSourcePrefetching {
     var loadSets: () async throws -> [ChatStickerSet] = { [] }
     var loadStickers: (String) async throws -> [ChatSticker] = { _ in [] }
     var stickersForEmoji: (String) async throws -> [ChatSticker] = { _ in [] }
@@ -19,7 +20,9 @@ final class ChatStickerPanel: UIInputView, UICollectionViewDataSource, UICollect
     private var selectedEmoji: String?
     private var emojiResults: [ChatSticker]?
     private var emojiTask: Task<Void, Never>?
-    private var hasLoaded = false
+    private var emojiCache: [String: [ChatSticker]] = [:]
+    private var setsTask: Task<Bool, Never>?
+    private var preloadTask: Task<Void, Never>?
 
     private let emojiBar = UIStackView()
     private let grid: UICollectionView
@@ -53,9 +56,18 @@ final class ChatStickerPanel: UIInputView, UICollectionViewDataSource, UICollect
 
     // MARK: Layout
 
+    private static func columns(width: CGFloat) -> Int {
+        max(4, Int(width / 76))
+    }
+
+    /// A grid cell's sticker side, in points, at a panel width.
+    static func stickerSide(width: CGFloat) -> CGFloat {
+        (width - 16) / CGFloat(columns(width: width)) - 6
+    }
+
     private static func gridLayout() -> UICollectionViewCompositionalLayout {
         UICollectionViewCompositionalLayout { _, environment in
-            let columns = max(4, Int(environment.container.effectiveContentSize.width / 76))
+            let columns = columns(width: environment.container.effectiveContentSize.width)
             let item = NSCollectionLayoutItem(layoutSize: NSCollectionLayoutSize(widthDimension: .fractionalWidth(1 / CGFloat(columns)), heightDimension: .fractionalWidth(1 / CGFloat(columns))))
             item.contentInsets = NSDirectionalEdgeInsets(top: 3, leading: 3, bottom: 3, trailing: 3)
             let group = NSCollectionLayoutGroup.horizontal(layoutSize: NSCollectionLayoutSize(widthDimension: .fractionalWidth(1), heightDimension: .fractionalWidth(1 / CGFloat(columns))), repeatingSubitem: item, count: columns)
@@ -96,6 +108,7 @@ final class ChatStickerPanel: UIInputView, UICollectionViewDataSource, UICollect
         grid.backgroundColor = .clear
         grid.dataSource = self
         grid.delegate = self
+        grid.prefetchDataSource = self
         grid.register(StickerCell.self, forCellWithReuseIdentifier: "sticker")
         grid.register(HeaderView.self, forSupplementaryViewOfKind: UICollectionView.elementKindSectionHeader, withReuseIdentifier: "header")
         let hold = UILongPressGestureRecognizer(target: self, action: #selector(held(_:)))
@@ -144,12 +157,59 @@ final class ChatStickerPanel: UIInputView, UICollectionViewDataSource, UICollect
 
     // MARK: Loading
 
-    /// Loads the sets the first time the panel shows.
+    /// Shows the sets, loading them if `preload` hasn't.
     func load() {
-        guard !hasLoaded else { return }
-        hasLoaded = true
-        statusLabel.text = "Loading…"
-        Task {
+        Task { await loadSetList() }
+    }
+
+    /// Everything the panel shows, before it shows: the sets, every set's stickers (for the grid and the tabs), the
+    /// emoji row's results, and stills for the first screens, every tab and each emoji's first rows. Stills are
+    /// cached on disk, so after the first time this mostly checks they're there.
+    func preload(width: CGFloat, scale: CGFloat) {
+        guard preloadTask == nil else { return }
+        let side = (Self.stickerSide(width: width) * scale).rounded()
+        preloadTask = Task {
+            guard await loadSetList() else {
+                preloadTask = nil
+                return
+            }
+            await forEach(Array(sets.indices), concurrently: 3) { await self.loadSet(at: $0) }
+            let ordered = sets.flatMap { stickers[$0.id] ?? [] }
+            await prepareStills(ordered.prefix(60), side: side, warm: true)
+            let covers = sets.compactMap { $0.cover ?? stickers[$0.id]?.first }
+            await prepareStills(covers, side: side, warm: true)
+            await prepareStills(ordered.prefix(160).dropFirst(60), side: side, warm: false)
+            for emoji in Self.emoji {
+                guard let results = try? await stickersForEmoji(emoji) else { continue }
+                emojiCache[emoji] = results
+                await prepareStills(results.prefix(15), side: side, warm: false)
+            }
+        }
+    }
+
+    private func prepareStills(_ stickers: some Sequence<ChatSticker>, side: CGFloat, warm: Bool) async {
+        await forEach(Array(stickers), concurrently: 4) { sticker in
+            await ChatStickerFiles.shared.prepareStill(for: sticker, side: side, warm: warm)
+        }
+    }
+
+    /// Runs `body` over `items`, at most `limit` at a time.
+    private func forEach<Item: Sendable>(_ items: [Item], concurrently limit: Int, _ body: @escaping @MainActor (Item) async -> Void) async {
+        await withTaskGroup(of: Void.self) { group in
+            for (index, item) in items.enumerated() {
+                if index >= limit {
+                    await group.next()
+                }
+                group.addTask { await body(item) }
+            }
+        }
+    }
+
+    /// Loads the sets once; a failure lets the next call try again. Returns whether they're loaded.
+    @discardableResult
+    private func loadSetList() async -> Bool {
+        if let setsTask { return await setsTask.value }
+        let task = Task<Bool, Never> {
             do {
                 let sets = try await loadSets()
                 self.sets = sets
@@ -162,32 +222,42 @@ final class ChatStickerPanel: UIInputView, UICollectionViewDataSource, UICollect
                 grid.reloadData()
                 tabs.reloadData()
                 selectTab(0)
+                return true
             } catch {
-                hasLoaded = false
                 statusLabel.text = "Couldn't load stickers. \(error.localizedDescription)"
+                return false
             }
         }
+        setsTask = task
+        let loaded = await task.value
+        if !loaded {
+            setsTask = nil
+        }
+        return loaded
     }
 
-    private func loadSet(at section: Int) {
+    private func loadSet(at section: Int) async {
         guard section < sets.count else { return }
         let id = sets[section].id
         guard stickers[id] == nil, !loadingSets.contains(id) else { return }
         loadingSets.insert(id)
-        Task {
-            defer { loadingSets.remove(id) }
-            guard let loaded = try? await loadStickers(id) else { return }
-            stickers[id] = loaded
-            guard selectedEmoji == nil, let index = sets.firstIndex(where: { $0.id == id }) else { return }
+        defer { loadingSets.remove(id) }
+        guard let loaded = try? await loadStickers(id) else { return }
+        stickers[id] = loaded
+        guard let index = sets.firstIndex(where: { $0.id == id }) else { return }
+        if selectedEmoji == nil {
             UIView.performWithoutAnimation {
                 grid.reloadSections([index])
             }
-            // Reloading a tab drops its selection.
-            let selected = tabs.indexPathsForSelectedItems?.first
+        }
+        // A set without a thumbnail of its own takes its first sticker's. Reloading a tab drops its selection.
+        guard sets[index].cover == nil else { return }
+        let selected = tabs.indexPathsForSelectedItems?.first
+        UIView.performWithoutAnimation {
             tabs.reloadItems(at: [IndexPath(item: index, section: 0)])
-            if let selected {
-                tabs.selectItem(at: selected, animated: false, scrollPosition: [])
-            }
+        }
+        if let selected {
+            tabs.selectItem(at: selected, animated: false, scrollPosition: [])
         }
     }
 
@@ -200,13 +270,17 @@ final class ChatStickerPanel: UIInputView, UICollectionViewDataSource, UICollect
             button.configuration?.background.backgroundColor = button.configuration?.title == selectedEmoji ? .secondarySystemFill : .clear
         }
         statusLabel.text = nil
+        if let selectedEmoji, let cached = emojiCache[selectedEmoji] {
+            emojiResults = cached
+            statusLabel.text = cached.isEmpty ? "No stickers for \(selectedEmoji)" : nil
+        }
         grid.reloadData()
         grid.setContentOffset(.zero, animated: false)
-        guard let selectedEmoji else { return }
-        statusLabel.text = "Loading…"
+        guard let selectedEmoji, emojiResults == nil else { return }
         emojiTask = Task {
             let results = await (try? stickersForEmoji(selectedEmoji)) ?? []
             guard !Task.isCancelled, self.selectedEmoji == selectedEmoji else { return }
+            emojiCache[selectedEmoji] = results
             emojiResults = results
             statusLabel.text = results.isEmpty ? "No stickers for \(selectedEmoji)" : nil
             grid.reloadData()
@@ -269,9 +343,19 @@ final class ChatStickerPanel: UIInputView, UICollectionViewDataSource, UICollect
 
     func collectionView(_ collectionView: UICollectionView, willDisplay _: UICollectionViewCell, forItemAt indexPath: IndexPath) {
         guard collectionView === grid, selectedEmoji == nil else { return }
-        // This set and the next, so scrolling on finds it loaded.
-        loadSet(at: indexPath.section)
-        loadSet(at: indexPath.section + 1)
+        // This set and the next, should the preload not have reached them.
+        Task {
+            await loadSet(at: indexPath.section)
+            await loadSet(at: indexPath.section + 1)
+        }
+    }
+
+    /// Stills for the rows about to scroll in, past what the preload drew.
+    func collectionView(_ collectionView: UICollectionView, prefetchItemsAt indexPaths: [IndexPath]) {
+        guard collectionView === grid else { return }
+        let side = (Self.stickerSide(width: bounds.width) * (window?.screen.scale ?? traitCollection.displayScale)).rounded()
+        let upcoming = indexPaths.compactMap(sticker(at:))
+        Task { await prepareStills(upcoming, side: side, warm: true) }
     }
 
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
@@ -319,7 +403,7 @@ final class ChatStickerPanel: UIInputView, UICollectionViewDataSource, UICollect
         tabsFollowScroll = false
         selectTab(section)
         grid.setContentOffset(CGPoint(x: 0, y: min(header.frame.minY - grid.adjustedContentInset.top, maxOffset)), animated: true)
-        loadSet(at: section)
+        Task { await loadSet(at: section) }
     }
 
     // MARK: Preview

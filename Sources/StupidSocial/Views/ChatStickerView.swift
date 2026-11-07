@@ -1,4 +1,5 @@
 import Compression
+import CryptoKit
 import StupidSocialCore
 import UIKit
 
@@ -35,7 +36,9 @@ final class ChatStickerView: UIView {
         isAccessibilityElement = true
         accessibilityLabel = sticker.label
         accessibilityTraits = .image
-        if let still = ChatStickerFiles.shared.still(for: sticker) {
+        if sticker.format == .image, let image = ChatMediaImageCache.shared.image(for: sticker.url) {
+            imageView.image = image
+        } else if let still = ChatStickerFiles.shared.still(for: sticker) {
             imageView.image = still
         } else if let posterURL = sticker.posterURL {
             imageView.image = ChatMediaImageCache.shared.image(for: posterURL)
@@ -107,9 +110,15 @@ final class ChatStickerView: UIView {
             displayLink = link
             nextDue = 0
             fill()
-        } else if !plays, displayLink == nil, nextRequest == 0 {
+        } else if !plays, displayLink == nil, nextRequest == 0, !showsSharpStill(for: size) {
             request()
         }
+    }
+
+    /// A still already drawn at this size or larger needs no frame 0 of its own.
+    private func showsSharpStill(for size: CGSize) -> Bool {
+        guard let image = imageView.image else { return false }
+        return max(image.size.width, image.size.height) * image.scale >= max(size.width, size.height) * 0.9
     }
 
     private func stop() {
@@ -368,19 +377,118 @@ final class ChatStickerFiles {
     private let files = NSCache<NSURL, Entry>()
     private let stills = NSCache<NSString, UIImage>()
     private var loading: [URL: Task<ChatStickerFile?, Never>] = [:]
+    private var preparing: [String: Task<Void, Never>] = [:]
+    /// First frames as PNGs, so stickers show at once on later launches too.
+    private let stillsDirectory = URL.cachesDirectory.appending(path: "sticker-stills", directoryHint: .isDirectory)
+    /// Stills smaller than this (a tab's icon) stay in memory only, so they never stand in for a grid's on disk.
+    private static let minimumStoredSide: CGFloat = 150
 
     private init() {
         files.countLimit = 60
-        stills.totalCostLimit = 40 * 1024 * 1024
+        stills.totalCostLimit = 80 * 1024 * 1024
+        try? FileManager.default.createDirectory(at: stillsDirectory, withIntermediateDirectories: true)
     }
 
+    /// By host and path: a Telegram URL's query carries a file reference that changes while the file doesn't.
+    private static func stillKey(_ sticker: ChatSticker) -> String {
+        "\(sticker.url.scheme ?? "")://\(sticker.url.host ?? "")\(sticker.url.path)"
+    }
+
+    private func stillFile(_ key: String) -> URL {
+        let name = SHA256.hash(data: Data(key.utf8)).map { String(format: "%02x", $0) }.joined()
+        return stillsDirectory.appending(path: "\(name).png")
+    }
+
+    private static func side(_ image: UIImage) -> CGFloat {
+        max(image.size.width, image.size.height) * image.scale
+    }
+
+    /// The sticker's first frame from memory, or from disk (a small PNG, decoded here).
     func still(for sticker: ChatSticker) -> UIImage? {
-        stills.object(forKey: sticker.url.absoluteString as NSString)
+        let key = Self.stillKey(sticker)
+        if let image = stills.object(forKey: key as NSString) { return image }
+        guard let data = try? Data(contentsOf: stillFile(key)), let image = UIImage(data: data)?.preparingForDisplay() else { return nil }
+        remember(image, key: key)
+        return image
     }
 
-    func setStill(_ image: UIImage, for sticker: ChatSticker) {
+    private func remember(_ image: UIImage, key: String) {
         let pixels = image.size.width * image.size.height * image.scale * image.scale
-        stills.setObject(image, forKey: sticker.url.absoluteString as NSString, cost: Int(pixels) * 4)
+        stills.setObject(image, forKey: key as NSString, cost: Int(pixels) * 4)
+    }
+
+    /// Keeps the larger of this and the still already there.
+    func setStill(_ image: UIImage, for sticker: ChatSticker) {
+        let key = Self.stillKey(sticker)
+        if let existing = stills.object(forKey: key as NSString), Self.side(existing) >= Self.side(image) { return }
+        remember(image, key: key)
+        guard Self.side(image) >= Self.minimumStoredSide else { return }
+        let file = stillFile(key)
+        Task.detached(priority: .utility) {
+            try? image.pngData()?.write(to: file, options: .atomic)
+        }
+    }
+
+    /// Draws the sticker's first frame at `side` pixels ahead of showing it, so the picker never shows a blank
+    /// cell. `warm` also brings a still on disk into memory, for what shows first.
+    func prepareStill(for sticker: ChatSticker, side: CGFloat, warm: Bool) async {
+        let key = Self.stillKey(sticker)
+        if let existing = stills.object(forKey: key as NSString), Self.side(existing) >= side * 0.9 { return }
+        let file = stillFile(key)
+        if FileManager.default.fileExists(atPath: file.path) {
+            guard warm, stills.object(forKey: key as NSString) == nil else { return }
+            if let image = await Task.detached(priority: .utility, operation: { () -> UIImage? in
+                (try? Data(contentsOf: file)).flatMap(UIImage.init(data:))?.preparingForDisplay()
+            }).value {
+                remember(image, key: key)
+            }
+            return
+        }
+        if let task = preparing[key] { return await task.value }
+        let task = Task { [weak self] in
+            guard let self, let image = await render(sticker, side: side) else { return }
+            setStill(image, for: sticker)
+        }
+        preparing[key] = task
+        await task.value
+        preparing[key] = nil
+    }
+
+    private func render(_ sticker: ChatSticker, side: CGFloat) async -> UIImage? {
+        switch sticker.format {
+        case .image:
+            guard let data = try? await URLSession.shared.data(from: sticker.url).0 else { return nil }
+            return await Task.detached(priority: .utility) { Self.downsample(data, side: side) }.value
+        case .lottie, .video:
+            if let player = await player(for: sticker), player.frameCount > 0 {
+                let image = await Task.detached(priority: .utility) { Self.firstFrame(player, side: Int(side)) }.value
+                if let image { return image }
+            }
+            // A video sticker without a VP9 decoder (the simulator) shows its poster.
+            guard let posterURL = sticker.posterURL else { return nil }
+            return await ChatMediaImageCache.shared.load(posterURL)
+        }
+    }
+
+    private nonisolated static func downsample(_ data: Data, side: CGFloat) -> UIImage? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                  kCGImageSourceCreateThumbnailFromImageAlways: true,
+                  kCGImageSourceThumbnailMaxPixelSize: side,
+                  kCGImageSourceCreateThumbnailWithTransform: true,
+              ] as CFDictionary)
+        else { return UIImage(data: data) }
+        return UIImage(cgImage: image)
+    }
+
+    private nonisolated static func firstFrame(_ player: any ChatStickerPlaying, side: Int) -> UIImage? {
+        guard side > 0, let context = CGContext(
+            data: nil, width: side, height: side, bitsPerComponent: 8, bytesPerRow: side * 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue,
+        ) else { return nil }
+        player.draw(0, in: context, size: CGSize(width: side, height: side))
+        return context.makeImage().map { UIImage(cgImage: $0) }
     }
 
     /// A Lottie animation is shared; a video gets a decoder of its own over the shared file.

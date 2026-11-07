@@ -315,6 +315,9 @@ public actor TelegramClient: ChatListProvider {
     /// Installed sets' access hashes, for loading their stickers.
     private var stickerSetHashes: [Int64: Int64] = [:]
     private var stickerSetStickers: [Int64: [ChatSticker]] = [:]
+    /// The picker's sets, reused for a few minutes so each chat's panel opens complete; sending a sticker clears it,
+    /// since Recent changes.
+    private var stickerSetsCache: (sets: [ChatStickerSet], at: Date)?
     /// How to name each user seen in a history, member list or lookup to Telegram (`InputUser`), for profiles and
     /// name mentions: with their access hash, or through a message they sent when Telegram gave a "min" user.
     private var inputUsers: [Int64: TLObject] = [:]
@@ -1498,6 +1501,12 @@ public actor TelegramClient: ChatListProvider {
     /// loads (probe `stickers`, observed 2026-11-03).
     public func stickerSets() async throws -> [ChatStickerSet] {
         try requireAccount()
+        if let cache = stickerSetsCache, Date().timeIntervalSince(cache.at) < 600 {
+            return cache.sets.map { set in
+                guard let id = Int64(set.id), let stickers = stickerSetStickers[id] else { return set }
+                return ChatStickerSet(id: set.id, title: set.title, cover: set.cover, count: set.count, stickers: stickers)
+            }
+        }
         var sets: [ChatStickerSet] = []
         for (method, id, title) in [("messages.getRecentStickers", "recent", "Recent"), ("messages.getFavedStickers", "favorites", "Favorites")] {
             let documents = try await invoke(TLObject(method, ["hash": .long(0)])).object?.objects("stickers") ?? []
@@ -1511,6 +1520,7 @@ public actor TelegramClient: ChatListProvider {
             stickerSetHashes[id] = accessHash
             sets.append(ChatStickerSet(id: String(id), title: set["title"]?.string ?? "Stickers", cover: Self.stickerSetCover(set), count: Int(set["count"]?.int ?? 0), stickers: stickerSetStickers[id]))
         }
+        stickerSetsCache = (sets, Date())
         return sets
     }
 
@@ -1582,6 +1592,7 @@ public actor TelegramClient: ChatListProvider {
         guard let documentId = Int64(sticker.id), let document = stickerDocuments[documentId],
               let accessHash = document["access_hash"]?.long, let reference = document["file_reference"]?.bytes
         else { throw TelegramError.protocolViolation("sticker not in the user's sets") }
+        stickerSetsCache = nil
         let input = TLObject("inputDocument", ["id": .long(documentId), "access_hash": .long(accessHash), "file_reference": .bytes(reference)])
         let randomId = Int64.random(in: 1 ... .max)
         var method = TLObject("messages.sendMedia", [

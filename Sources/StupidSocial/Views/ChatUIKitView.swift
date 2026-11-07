@@ -223,6 +223,15 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         bind()
     }
 
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        // The stickers are ready before the panel opens.
+        if viewModel.offersStickers, !isReadOnly {
+            let width = ProcessInfo.processInfo.isiOSAppOnMac ? 420 : view.bounds.width
+            makeStickerPanel().preload(width: width, scale: view.window?.screen.scale ?? traitCollection.displayScale)
+        }
+    }
+
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
         audioPlayer.stop()
@@ -467,13 +476,15 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         sendButton.addAction(UIAction { [weak self] _ in self?.send() }, for: .primaryActionTriggered)
 
         var stickerConfiguration = UIButton.Configuration.plain()
-        stickerConfiguration.image = UIImage(systemName: "face.smiling", withConfiguration: UIImage.SymbolConfiguration(pointSize: 20))
+        stickerConfiguration.image = Self.stickerButtonImage(showsKeyboard: false)
         stickerConfiguration.baseForegroundColor = .secondaryLabel
         // 2 points at the bottom lift the symbol 1 point, which centres it in the pill (measured on screen).
         stickerConfiguration.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 2, bottom: 2, trailing: 2)
         stickerButton.configuration = stickerConfiguration
         // As tall as one line of text, so the icon centres on the line it sits beside (the row aligns to the bottom).
         stickerButton.heightAnchor.constraint(equalToConstant: minimumTextHeight).isActive = true
+        // Wide enough for the keyboard symbol too, so swapping the icons doesn't resize the button mid-animation.
+        stickerButton.widthAnchor.constraint(equalToConstant: 32).isActive = true
         stickerButton.accessibilityLabel = "Stickers"
         stickerButton.isHidden = !viewModel.offersStickers
         stickerButton.setContentHuggingPriority(.required, for: .horizontal)
@@ -486,7 +497,8 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillChangeFrame(_:)), name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
 
         var voiceConfiguration = UIButton.Configuration.plain()
-        voiceConfiguration.image = UIImage(systemName: "mic", withConfiguration: UIImage.SymbolConfiguration(pointSize: 20))
+        // The microphone is a tall symbol: smaller, it stands as high as the smiley beside it.
+        voiceConfiguration.image = UIImage(systemName: "mic", withConfiguration: UIImage.SymbolConfiguration(pointSize: 17))
         voiceConfiguration.baseForegroundColor = .secondaryLabel
         voiceConfiguration.contentInsets = stickerConfiguration.contentInsets
         voiceButton.configuration = voiceConfiguration
@@ -1037,8 +1049,12 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         }
         let isRecording = voiceRecorder.isRecording
         if textRow.isHidden != isRecording {
-            textRow.isHidden = isRecording
-            recordingRow.isHidden = !isRecording
+            // Laid out in place: a row shown for the first time would otherwise grow from the pill's corner.
+            UIView.performWithoutAnimation {
+                textRow.isHidden = isRecording
+                recordingRow.isHidden = !isRecording
+                inputPill.layoutIfNeeded()
+            }
         }
         // An edit changes only the text.
         let attaches = canAttach && editingMessage == nil && !isRecording
@@ -1614,8 +1630,19 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         updateStickerButton()
     }
 
+    /// An outline face, as the microphone is: iOS 27's symbols swapped the two faces, so `face.smiling` is the
+    /// filled one there and `face.smiling.inverse` the outline (observed 2026-11-07).
+    private static func stickerButtonImage(showsKeyboard: Bool) -> UIImage? {
+        let face = if #available(iOS 27.0, *) { "face.smiling.inverse" } else { "face.smiling" }
+        return UIImage(systemName: showsKeyboard ? "keyboard" : face, withConfiguration: UIImage.SymbolConfiguration(pointSize: 20))
+    }
+
+    /// Swapped outside the input view's animation, which would otherwise squeeze the old icon into the new one's frame.
     private func updateStickerButton() {
-        stickerButton.configuration?.image = UIImage(systemName: showsStickerPanel ? "keyboard" : "face.smiling", withConfiguration: UIImage.SymbolConfiguration(pointSize: 20))
+        UIView.performWithoutAnimation {
+            stickerButton.configuration?.image = Self.stickerButtonImage(showsKeyboard: showsStickerPanel)
+            stickerButton.layoutIfNeeded()
+        }
         stickerButton.accessibilityLabel = showsStickerPanel ? "Keyboard" : "Stickers"
     }
 
