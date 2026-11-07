@@ -257,6 +257,14 @@ public struct DiscordAttachment: Codable, Hashable, Sendable {
     let height: Int?
     let contentType: String?
     let size: Int?
+    /// On a voice message's audio.
+    var durationSecs: Double? = nil
+    /// A voice message's levels: base64 of up to 256 bytes, each 0–255.
+    var waveform: String? = nil
+
+    var waveformLevels: [Double]? {
+        waveform.flatMap { Data(base64Encoded: $0) }.map { $0.map { Double($0) / 255 } }
+    }
 }
 
 public struct DiscordEmbed: Codable, Hashable, Sendable {
@@ -381,6 +389,13 @@ struct DiscordNonce: Codable, Hashable {
     }
 }
 
+/// The message a forward names: its channel, and the channel's guild for a server channel.
+struct DiscordForwardReference: Codable, Hashable {
+    let channelId: String
+    let messageId: String
+    let guildId: String?
+}
+
 /// A message's `referenced_message`, boxed since a message can't hold itself.
 public final class DiscordReferencedMessage: Codable, Hashable, @unchecked Sendable {
     let message: DiscordMessage
@@ -410,7 +425,27 @@ public struct DiscordMessage: Codable, Hashable, Sendable {
     struct Reference: Codable, Hashable {
         let messageId: String?
         let channelId: String?
+        /// 0 a reply, 1 a forward (`message_snapshots` then has the content).
+        var type: Int? = nil
     }
+
+    /// What a forward copied of the original (observed 2026-11-07): no author or id of its own.
+    struct Snapshot: Codable, Hashable {
+        struct Message: Codable, Hashable {
+            var content: String
+            var attachments: [DiscordAttachment]
+            var embeds: [DiscordEmbed]
+            var stickerItems: [DiscordStickerItem]? = nil
+            var flags: Int? = nil
+        }
+
+        let message: Message
+    }
+
+    /// `IS_VOICE_MESSAGE`.
+    static let voiceMessageFlag = 1 << 13
+    /// `HAS_SNAPSHOT`: a forward.
+    static let snapshotFlag = 1 << 14
 
     struct Member: Codable, Hashable {
         let nick: String?
@@ -433,6 +468,13 @@ public struct DiscordMessage: Codable, Hashable, Sendable {
     let nonce: DiscordNonce?
     let guildId: String?
     let member: Member?
+    var flags: Int? = nil
+    var messageSnapshots: [Snapshot]? = nil
+
+    /// The forwarded message, on a forward.
+    var forwarded: Snapshot.Message? {
+        messageReference?.type == 1 || (flags ?? 0) & Self.snapshotFlag != 0 ? messageSnapshots?.first?.message : nil
+    }
 
     var date: Date? {
         DiscordSnowflake.date(id)

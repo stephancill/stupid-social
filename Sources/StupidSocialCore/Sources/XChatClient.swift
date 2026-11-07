@@ -145,6 +145,8 @@ public struct XChatMessageContents: Equatable, Sendable {
     let attachments: [Attachment]
     /// Forwarded from another conversation (`forwarded_message`).
     var isForwarded = false
+    /// A forward's text (`ForwardedMessage {1 text, 2 entities}`); its own text is left out (observed 2026-11-07).
+    var forwardedText: String?
 
     init(text: String?, reply: Reply? = nil, attachments: [Attachment] = []) {
         self.text = text
@@ -155,6 +157,7 @@ public struct XChatMessageContents: Equatable, Sendable {
     init(_ message: ThriftStruct) {
         text = message.string(1)
         isForwarded = message.structure(6) != nil
+        forwardedText = message.structure(6)?.string(1)
         reply = message.structure(4).map { Reply(sequenceId: $0.string(6), senderId: $0.int(1).map(String.init), senderName: $0.string(5), text: $0.string(2)) }
         attachments = message.structures(3).compactMap { attachment in
             if let media = attachment.structure(1) {
@@ -172,14 +175,14 @@ public struct XChatMessageContents: Equatable, Sendable {
 
     /// One line for previews.
     var preview: String {
-        if let text, !text.isEmpty { return text }
+        if let text = text ?? forwardedText, !text.isEmpty { return text }
         switch attachments.first {
         case let .media(media):
             switch media.kind {
             case .image, .svg, nil: return "Photo"
             case .gif: return "GIF"
             case .video: return "Video"
-            case .audio: return "Audio"
+            case .audio: return "Voice message"
             case .file: return media.filename ?? "File"
             }
         case .post: return "Shared a post"
@@ -264,6 +267,8 @@ public actor XChatClient: ChatListProvider {
     private static let signatureVersion = "7"
     /// `MessageSentFrom.ConversationScreenComposer`, as X's own composer sends.
     private static let sentFromComposer: Int32 = 1
+    /// `MESSAGE_FORWARD_SHEET`.
+    private static let sentFromForwardSheet: Int32 = 5
     /// dm-core's `SegmentSizesDecider` on a poor or unknown connection.
     private static let uploadPartSize = 1024 * 1024
     /// GetConversationPageQuery returns events older than `min_local_sequence_id`.
@@ -632,6 +637,26 @@ public actor XChatClient: ChatListProvider {
             message[4] = try .structure(replyPreview(replyTo))
         }
         message[7] = .i32(Self.sentFromComposer)
+        return try await send(entry: [1: .structure(message)], conversationId: conversationId, token: token, messageId: messageId, mediaHashes: mediaHashes)
+    }
+
+    /// A forward as X's web client sends it from its forward sheet (probe `forward-message`, observed 2026-11-07):
+    /// no text of its own, `forwarded_message` (6) with the original's text, the original's files downloaded and
+    /// uploaded again here (media is encrypted per conversation), and `sent_from` 5. X records no original sender.
+    func sendForward(text: String?, media: [XChatOutgoingMedia], conversationId: String, token: String?) async throws -> XChatEvent {
+        let messageId = UUID().uuidString.lowercased()
+        var message = ThriftStruct()
+        message[2] = .structs([])
+        var attachments: [ThriftStruct] = []
+        var mediaHashes: [Data] = []
+        for item in media {
+            let attachment = try await upload(item, messageId: messageId, conversationId: conversationId)
+            attachments.append(ThriftStruct([1: .structure(attachment)]))
+            mediaHashes += attachment.data(11).map { [$0] } ?? []
+        }
+        message[3] = .structs(attachments)
+        message[6] = .structure(ThriftStruct([1: .string(text ?? ""), 2: .structs([])]))
+        message[7] = .i32(Self.sentFromForwardSheet)
         return try await send(entry: [1: .structure(message)], conversationId: conversationId, token: token, messageId: messageId, mediaHashes: mediaHashes)
     }
 

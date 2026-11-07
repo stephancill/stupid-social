@@ -28,6 +28,11 @@ Commands:
   edit-chat --peer K [--title T] [--about A]   rename a group or replace its description (only in a group you
                               named for testing)
   send-photo --peer K --file F [--caption T]   upload.saveFilePart + messages.sendMedia
+  forward --from-peer K --ids N [N …] --to-peer K [--drop-author]   messages.forwardMessages: a native forward,
+                              printed with the new messages' ids, media and fwd_from header fields (no text); only
+                              to self (Saved Messages) or a chat the user named for testing
+  forwards [--dialogs N] [--limit N]   which messageFwdHeader fields received forwards carry, per kind of origin
+                              (user, hidden user, channel post), across recent dialogs; no names or text
   send-voice --peer K --file F.ogg --duration S [--levels 0,31,...]   a voice message: an Ogg Opus document with
                               documentAttributeAudio (voice, duration, 5-bit waveform); only to self (Saved Messages)
                               or a chat the user named for testing
@@ -1148,6 +1153,23 @@ def message_line(message: dict, users: dict, chats: dict) -> str:
     return f"{message['id']:>8} {when} {sender}{reply}: {text}"
 
 
+def fwd_header_shape(header: dict | None) -> dict | None:
+    """A messageFwdHeader with peers as their type and names as their presence, so nothing identifying prints."""
+    if not header:
+        return None
+    shape = {}
+    for key, value in header.items():
+        if key in ("_", "flags"):
+            continue
+        if isinstance(value, dict):
+            shape[key] = value.get("_")
+        elif key in ("from_name", "post_author", "saved_from_name"):
+            shape[key] = "<present>"
+        else:
+            shape[key] = value
+    return shape
+
+
 def sticker_set_documents(client: "Client", name: str, access_hash: int | None = None) -> list[dict]:
     """messages.getStickerSet by id (with its access hash, else looked up among installed sets) or short name."""
     if name.lstrip("-").isdigit():
@@ -1257,6 +1279,14 @@ def main():
     send_photo.add_argument("--peer", required=True)
     send_photo.add_argument("--file", required=True)
     send_photo.add_argument("--caption", default="")
+    forward = sub.add_parser("forward", help="messages.forwardMessages: forward messages natively")
+    forward.add_argument("--from-peer", required=True)
+    forward.add_argument("--ids", type=int, nargs="+", required=True)
+    forward.add_argument("--to-peer", required=True)
+    forward.add_argument("--drop-author", action="store_true")
+    forwards = sub.add_parser("forwards", help="messageFwdHeader fields on received forwards, without names or text")
+    forwards.add_argument("--dialogs", type=int, default=30)
+    forwards.add_argument("--limit", type=int, default=100)
     send_voice = sub.add_parser("send-voice")
     send_voice.add_argument("--peer", required=True)
     send_voice.add_argument("--file", required=True)
@@ -1684,6 +1714,62 @@ def main():
         })
         sent = [u for u in result.get("updates", []) if u["_"] == "updateMessageID"]
         print(f"{result['_']}: uploaded {len(data)} bytes in {len(parts)} parts, message id {sent[0]['id'] if sent else '?'}")
+    elif args.command == "forward":
+        method = {
+            "_": "messages.forwardMessages",
+            "from_peer": client.input_peer(args.from_peer),
+            "id": args.ids,
+            "random_id": [secrets.randbits(63) for _ in args.ids],
+            "to_peer": client.input_peer(args.to_peer),
+        }
+        if args.drop_author:
+            method["drop_author"] = True
+        result = client.call(method)
+        # Updates: updateMessageID per random_id, then updateNewMessage (updateNewChannelMessage in supergroups and
+        # channels) with the forwarded copy and its fwd_from header.
+        print(result["_"], [u["_"] for u in result.get("updates", [])])
+        for update in result.get("updates", []):
+            message = update.get("message")
+            if not isinstance(message, dict):
+                continue
+            media = message.get("media") or {}
+            print(json.dumps({
+                "update": update["_"],
+                "id": message["id"],
+                "fwd_from": fwd_header_shape(message.get("fwd_from")),
+                "media": media.get("_"),
+                "voice": bool(media.get("voice")),
+                "has_text": bool(message.get("message")),
+            }, indent=1))
+    elif args.command == "forwards":
+        dialogs = client.call({"_": "messages.getDialogs", "offset_date": 0, "offset_id": 0, "offset_peer": {"_": "inputPeerEmpty"}, "limit": args.dialogs, "hash": 0})
+        client.remember_peers(dialogs["users"], dialogs["chats"])
+        kinds: dict = {}
+        for dialog in dialogs["dialogs"]:
+            key = peer_key(dialog["peer"])
+            try:
+                history = client.call({"_": "messages.getHistory", "peer": client.input_peer(key), "offset_id": 0, "offset_date": 0, "add_offset": 0, "limit": args.limit, "max_id": 0, "min_id": 0, "hash": 0})
+            except Exception as error:  # noqa: BLE001 — a chat that can't be read is skipped
+                print(f"skip {key.split(':')[0]}: {type(error).__name__}")
+                continue
+            for message in history.get("messages", []):
+                header = message.get("fwd_from")
+                if not header:
+                    continue
+                origin = (header.get("from_id") or {}).get("_", "none")
+                kind = f"from_id={origin}" + (" +channel_post" if "channel_post" in header else "") + (" +from_name" if "from_name" in header else "")
+                entry = kinds.setdefault(kind, {"count": 0, "fields": set(), "chats": set(), "named": 0})
+                entry["count"] += 1
+                # Whether the origin's name comes in the same response, so a client can show it without a lookup.
+                origin_peer = header.get("from_id") or {}
+                known = {("peerUser", u["id"]) for u in history.get("users", [])} | {("peerChannel", c["id"]) for c in history.get("chats", [])} | {("peerChat", c["id"]) for c in history.get("chats", [])}
+                origin_id = origin_peer.get("user_id") or origin_peer.get("channel_id") or origin_peer.get("chat_id")
+                if (origin_peer.get("_"), origin_id) in known or "from_name" in header:
+                    entry["named"] += 1
+                entry["fields"].update(k for k in header if k not in ("_", "flags"))
+                entry["chats"].add(key.split(":")[0])
+        for kind, entry in sorted(kinds.items()):
+            print(f"{kind}: {entry['count']} ({entry['named']} named in the response) in {sorted(entry['chats'])} chats, fields {sorted(entry['fields'])}")
     elif args.command == "send-voice":
         data = pathlib.Path(args.file).read_bytes()
         file_id = secrets.randbits(63)

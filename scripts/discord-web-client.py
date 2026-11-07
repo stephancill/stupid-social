@@ -38,6 +38,8 @@ Examples:
   scripts/discord-web-client.py upload --channel 456 --expect-name probe --file photo.png [--text "hi"]
   scripts/discord-web-client.py send-sticker --channel 456 --expect-name probe --sticker 789
   scripts/discord-web-client.py open-dm --user 123           # the DM with a user, created if needed (no message)
+  scripts/discord-web-client.py forward --from-channel 456 --message 789 --to-channel 456 --expect-name probe
+  scripts/discord-web-client.py send-voice --channel 456 --expect-name probe --file logs/test-voice.ogg --duration 2.0
 """
 
 from __future__ import annotations
@@ -87,6 +89,8 @@ CHANNEL_TYPES = {
     16: "media",
 }
 TEXT_TYPES = {0, 1, 3, 5}
+# Message flags (https://discord.com/developers/docs/resources/message#message-object-message-flags)
+VOICE_MESSAGE_FLAG = 1 << 13
 
 
 def env(name: str) -> str | None:
@@ -192,8 +196,16 @@ def summarize_message(message: dict[str, Any], me: str | None, show_text: bool) 
         ],
         "mentions": len(message.get("mentions", [])),
     }
-    if message.get("message_reference"):
-        summary["reply_to"] = message["message_reference"].get("message_id")
+    reference = message.get("message_reference")
+    if reference and reference.get("type", 0) == 1:
+        summary["forward_of"] = {k: reference.get(k) for k in ("channel_id", "message_id", "guild_id")}
+        summary["snapshots"] = [shape(s) for s in message.get("message_snapshots", [])]
+    elif reference:
+        summary["reply_to"] = reference.get("message_id")
+    if message.get("flags"):
+        summary["flags"] = message["flags"]
+    if message.get("flags", 0) & VOICE_MESSAGE_FLAG:
+        summary["voice"] = [{k: a.get(k) for k in ("content_type", "duration_secs", "filename")} | {"waveform_bytes": len(base64.b64decode(a.get("waveform") or ""))} for a in message.get("attachments", [])]
     if show_text and mine:
         summary["text"] = message.get("content")
     return summary
@@ -558,6 +570,66 @@ def cmd_upload(args: argparse.Namespace) -> Any:
     return {"reserve_keys": sorted(attachment.keys()), "put_status": put_status, "id": message["id"], "attachments": [a.get("content_type") for a in message.get("attachments", [])]}
 
 
+def nonce() -> str:
+    return str((int(time.time() * 1000) - 1420070400000) << 22)
+
+
+def cmd_forward(args: argparse.Namespace) -> Any:
+    """A native forward: a message whose message_reference has type 1 (FORWARD) and no content of its own."""
+    guard(args.to_channel, args.expect_name)
+    me = api("GET", "/users/@me")["id"]
+    source = api("GET", f"/channels/{args.from_channel}/messages?around={args.message}&limit=1")
+    if not source or source[0]["id"] != args.message or (source[0].get("author") or {}).get("id") != me:
+        raise SystemExit("refusing: only forward your own messages while probing")
+    origin = api("GET", f"/channels/{args.from_channel}")
+    reference: dict[str, Any] = {"type": 1, "channel_id": args.from_channel, "message_id": args.message}
+    if origin.get("guild_id"):
+        reference["guild_id"] = origin["guild_id"]
+    body = {"content": "", "nonce": nonce(), "tts": False, "flags": 0, "message_reference": reference}
+    message = api("POST", f"/channels/{args.to_channel}/messages", body)
+    return summarize_message(message, me, False) | {"request": body}
+
+
+def voice_waveform(path: Path, levels: int = 64) -> str:
+    """Base64 of up to 256 bytes of 0-255 loudness, as Discord's apps send; a flat ramp when ffmpeg is missing."""
+    import shutil
+    import subprocess
+
+    if not shutil.which("ffmpeg"):
+        return base64.b64encode(bytes(128 for _ in range(levels))).decode()
+    pcm = subprocess.run(["ffmpeg", "-v", "quiet", "-i", str(path), "-f", "s16le", "-ac", "1", "-ar", "8000", "-"], capture_output=True, check=True).stdout
+    samples = struct.unpack(f"<{len(pcm) // 2}h", pcm[: len(pcm) // 2 * 2])
+    step = max(1, len(samples) // levels)
+    peaks = [max((abs(x) for x in samples[i : i + step]), default=0) for i in range(0, step * levels, step)]
+    loudest = max(peaks) or 1
+    return base64.b64encode(bytes(round(255 * p / loudest) for p in peaks)).decode()
+
+
+def cmd_send_voice(args: argparse.Namespace) -> Any:
+    """A voice message: an Ogg Opus upload named voice-message.ogg, posted with flags IS_VOICE_MESSAGE and the
+    attachment's duration_secs and waveform."""
+    guard(args.channel, args.expect_name)
+    me = api("GET", "/users/@me")["id"]
+    path = Path(args.file)
+    data = path.read_bytes()
+    reserved = api("POST", f"/channels/{args.channel}/attachments", {"files": [{"filename": "voice-message.ogg", "file_size": len(data), "id": "0", "is_clip": False}]})
+    attachment = reserved["attachments"][0]
+    put = urllib.request.Request(attachment["upload_url"], data=data, method="PUT", headers={"Content-Type": "audio/ogg", "User-Agent": USER_AGENT})
+    with urllib.request.urlopen(put, timeout=60) as response:
+        put_status = response.status
+    body = {
+        "content": "",
+        "nonce": nonce(),
+        "channel_id": args.channel,
+        "type": 0,
+        "flags": VOICE_MESSAGE_FLAG,
+        "sticker_ids": [],
+        "attachments": [{"id": "0", "filename": "voice-message.ogg", "uploaded_filename": attachment["upload_filename"], "duration_secs": args.duration, "waveform": voice_waveform(path)}],
+    }
+    message = api("POST", f"/channels/{args.channel}/messages", body)
+    return {"put_status": put_status} | summarize_message(message, me, False)
+
+
 def cmd_send_sticker(args: argparse.Namespace) -> Any:
     guard(args.channel, args.expect_name)
     body = {"content": "", "nonce": str((int(time.time() * 1000) - 1420070400000) << 22), "tts": False, "flags": 0, "sticker_ids": [args.sticker]}
@@ -644,6 +716,16 @@ def main() -> None:
     p.add_argument("--channel", required=True)
     p.add_argument("--expect-name", required=True)
     p.add_argument("--sticker", required=True)
+    p = sub.add_parser("forward")
+    p.add_argument("--from-channel", required=True)
+    p.add_argument("--message", required=True)
+    p.add_argument("--to-channel", required=True)
+    p.add_argument("--expect-name", required=True, help="The target channel's name")
+    p = sub.add_parser("send-voice")
+    p.add_argument("--channel", required=True)
+    p.add_argument("--expect-name", required=True)
+    p.add_argument("--file", required=True, help="Ogg Opus")
+    p.add_argument("--duration", type=float, required=True, help="Seconds")
     p = sub.add_parser("open-dm")
     p.add_argument("--user", required=True)
     p = sub.add_parser("profile")

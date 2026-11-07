@@ -8,7 +8,7 @@ import Foundation
 /// custom emoji in text and reactions draw as their images, and voice messages play in the chat. The user's
 /// messages show as seen once Telegram's outbox read cursor passes them.
 @MainActor
-public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, ChatReactionSending, ChatUnseenReactions, ChatReadReceipts, ChatLiveUpdating, ChatReferenceResolving, ChatMentioning, ChatTyping, ChatCustomEmojis, ChatAudioPreviewing, ChatReactionChoices, ChatButtonPressing, ChatStickerSending, ChatVoiceSending {
+public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, ChatReactionSending, ChatUnseenReactions, ChatReadReceipts, ChatLiveUpdating, ChatReferenceResolving, ChatMentioning, ChatTyping, ChatCustomEmojis, ChatAudioPreviewing, ChatReactionChoices, ChatButtonPressing, ChatStickerSending, ChatVoiceSending, ChatForwarding {
     public let network = SocialNetwork.telegram
     public let canReply = true
     public let acceptsAttachments = true
@@ -330,6 +330,30 @@ public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, 
         let fileURL = voice.fileURL
         let data = try await Task.detached { try OggOpusEncoder.encode(fileAt: fileURL) }.value
         let id = try await client.sendVoice(peer: peer, oggOpus: data, duration: voice.duration, waveform: voice.waveform, replyTo: replyToId.flatMap { Int32($0) })
+        scheduleRefresh()
+        return id.map(String.init)
+    }
+
+    // MARK: Forwarding
+
+    /// This chat and the message's ids, an album's every message among them, as `messages.forwardMessages` takes them.
+    struct ForwardReference: Codable {
+        let peer: TelegramPeer
+        let ids: [Int32]
+    }
+
+    public func forwardReference(for message: ChatMessage) -> String? {
+        guard let id = Int32(message.id) else { return nil }
+        let ids = [id] + albumIds.filter { $0.value == id }.map(\.key).sorted()
+        guard let data = try? JSONEncoder().encode(ForwardReference(peer: peer, ids: ids)) else { return nil }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    /// `messages.forwardMessages`, which marks the copy forwarded from the original sender (probe `forward`).
+    public func forward(reference: String) async throws -> String? {
+        let reference = try JSONDecoder().decode(ForwardReference.self, from: Data(reference.utf8))
+        typingSentAt = nil
+        let id = try await client.forward(from: reference.peer, ids: reference.ids, to: peer)
         scheduleRefresh()
         return id.map(String.init)
     }
@@ -820,6 +844,7 @@ public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, 
                     return ChatMessageButton(id: "\(row).\(column)", title: button.text, action: action)
                 }
             },
+            forwardedFrom: message.forward.map { ChatForwardOrigin(name: $0.name ?? $0.fromId.flatMap { names[$0] }) },
         )
     }
 

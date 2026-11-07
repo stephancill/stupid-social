@@ -302,6 +302,8 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
     }
 
     private let nameLabel = UILabel()
+    /// "Forwarded from …" on a message the network marks as forwarded.
+    private let forwardLabel = UILabel()
     /// "Due in …" on a message with a reminder.
     private let reminderLabel = UILabel()
     private let replyView = ChatReplyQuoteView()
@@ -418,7 +420,9 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
 
         // Header (name, quote), media, then content (text, other embeds, reactions); each section sets its own
         // margins in `configure`, so images can run to the bubble's edges while text keeps its padding.
-        for (section, views) in [(headerStack, [reminderLabel, nameLabel, replyView]), (contentStack, [bodyLabel, embedsStack, reactionsContainer, timeSpacer])] {
+        forwardLabel.font = UIFont.preferredFont(forTextStyle: .footnote).withTraits(.traitItalic)
+        forwardLabel.lineBreakMode = .byTruncatingTail
+        for (section, views) in [(headerStack, [reminderLabel, nameLabel, forwardLabel, replyView]), (contentStack, [bodyLabel, embedsStack, reactionsContainer, timeSpacer])] {
             views.forEach(section.addArrangedSubview)
             section.axis = .vertical
             section.spacing = 4
@@ -714,6 +718,10 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
         nameLabel.isHidden = !layout.showsName
         nameLabel.text = DebugRedaction.name(message.sender.name)
         nameLabel.textColor = accent
+        let forwardedFrom = message.isDeleted ? nil : message.forwardedFrom
+        forwardLabel.isHidden = forwardedFrom == nil
+        forwardLabel.text = forwardedFrom.map { origin in ChatForwardOrigin(name: origin.name.map { DebugRedaction.name($0) }).label }
+        forwardLabel.textColor = layout.isOwn && !isSticker ? UIColor.white.withAlphaComponent(0.85) : .secondaryLabel
 
         if let reply {
             replyView.isHidden = false
@@ -775,7 +783,7 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
         embedsStack.isHidden = otherEmbeds == 0
         configureReactions(reactions, messageId: message.id)
 
-        let hasHeader = layout.showsName || reply != nil || reminderDue != nil
+        let hasHeader = layout.showsName || reply != nil || reminderDue != nil || !forwardLabel.isHidden
         let hasMedia = !mediaStack.arrangedSubviews.isEmpty
         let hasContent = text != nil || otherEmbeds > 0 || !reactions.isEmpty || !hasMedia
         // After cards the time needs its own line; reactions leave it room beside them, and on a lone image it sits on it.
@@ -828,6 +836,7 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
             isOwn: layout.isOwn,
             parts: [
                 nameLabel.isHidden ? nil : nameLabel.intrinsicContentSize.width,
+                forwardLabel.isHidden ? nil : forwardLabel.intrinsicContentSize.width,
                 reminderLabel.isHidden ? nil : reminderLabel.intrinsicContentSize.width,
                 replyView.isHidden ? nil : replyView.naturalWidth,
                 bodyLabel.attributedText.map { Self.textWidth($0, max: Self.maxContentWidth(availableWidth: availableWidth, isOwn: layout.isOwn)) },
@@ -1431,7 +1440,11 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
         siteLabel.font = UIFont.preferredFont(forTextStyle: .caption1).withWeight(.semibold)
         siteLabel.textColor = color
         siteLabel.isHidden = site == nil
-        let header = UIStackView(arrangedSubviews: [symbol, siteLabel])
+        siteLabel.setContentHuggingPriority(.defaultLow + 1, for: .horizontal)
+        // The spacer lets the row stretch. Without a site (a card with no link) the symbol alone, which hugs at
+        // required priority, set the row's width, and the column's fill alignment held the whole card, and so the
+        // bubble, to it: such cards showed one letter wide.
+        let header = UIStackView(arrangedSubviews: [symbol, siteLabel, UIView()])
         header.spacing = 4
         header.alignment = .center
 

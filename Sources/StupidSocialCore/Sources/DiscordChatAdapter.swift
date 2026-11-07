@@ -6,7 +6,7 @@ import Foundation
 /// doesn't send. Files go through Discord's upload slots; stickers are the standard packs and the guild's own (any
 /// guild's with Nitro).
 @MainActor
-public final class DiscordChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditing, ChatDeleting, ChatReactionSending, ChatLiveUpdating, ChatReferenceResolving, ChatTyping, ChatMentioning, ChatCustomEmojis, ChatStickerSending {
+public final class DiscordChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditing, ChatDeleting, ChatReactionSending, ChatLiveUpdating, ChatReferenceResolving, ChatTyping, ChatMentioning, ChatCustomEmojis, ChatStickerSending, ChatForwarding, ChatVoiceSending, ChatAudioPreviewing {
     public let network = SocialNetwork.discord
     public let canReply = true
     /// Read again once connected: a guild channel may not allow files.
@@ -172,6 +172,40 @@ public final class DiscordChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEdit
         let sent = try await client.send(channelId: channelId, content: DiscordText.outgoing(message.text), replyTo: message.replyToId, nonce: DiscordSnowflake.now(), upload: upload)
         accept(sent)
         return sent.id
+    }
+
+    // MARK: Forwarding
+
+    public func forwardReference(for message: ChatMessage) -> String? {
+        guard loaded[message.id] != nil,
+              let data = try? JSONEncoder().encode(DiscordForwardReference(channelId: channelId, messageId: message.id, guildId: channel?.guildId))
+        else { return nil }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    public func forward(reference: String) async throws -> String? {
+        let source = try JSONDecoder().decode(DiscordForwardReference.self, from: Data(reference.utf8))
+        let sent = try await client.forward(channelId: channelId, from: source, nonce: DiscordSnowflake.now())
+        accept(sent)
+        return sent.id
+    }
+
+    // MARK: Voice messages
+
+    /// Ogg Opus, as Discord's apps send them, with 64 levels (as the probe's `send-voice` sent, observed 2026-11-07).
+    public func send(voice: ChatVoiceNote, replyToId: String?) async throws -> String? {
+        let fileURL = voice.fileURL
+        let data = try await Task.detached { try OggOpusEncoder.encode(fileAt: fileURL) }.value
+        let upload = try await client.upload(channelId: channelId, data: data, mimeType: "audio/ogg", filename: "voice-message.ogg")
+        let waveform = Data(voice.levels(64).map { UInt8(($0 * 255).rounded()) })
+        let sent = try await client.sendVoice(channelId: channelId, upload: upload, duration: voice.duration, waveform: waveform, replyTo: replyToId, nonce: DiscordSnowflake.now())
+        accept(sent)
+        return sent.id
+    }
+
+    public func audioPreviewURL(for previewId: String) async -> URL? {
+        guard let url = URL(string: previewId), url.scheme == "https" else { return nil }
+        return try? await ChatMediaFiles.shared.file(for: url, filename: "voice-message.ogg")
     }
 
     /// The network's copy of a message the user sent, which also reads the channel up to it.
@@ -534,31 +568,43 @@ public final class DiscordChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEdit
         if let system = DiscordText.systemText(message) {
             return ChatMessage(id: message.id, sender: ChatUser(id: "discord", name: "Discord", avatarURL: nil, isSystem: true), timestamp: message.date, text: system, isOwn: false)
         }
-        let (text, emojis) = DiscordText.display(message.content, context: context)
+        // A forward's content is in its snapshot; its own is empty.
+        let forwarded = message.forwarded
+        let (text, emojis) = DiscordText.display(forwarded?.content ?? message.content, context: context)
         for emoji in emojis {
             register(emoji)
         }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let embeds = if let forwarded {
+            Self.embeds(attachments: forwarded.attachments, stickers: forwarded.stickerItems, embeds: forwarded.embeds, flags: forwarded.flags, hasText: !trimmed.isEmpty)
+        } else {
+            Self.embeds(attachments: message.attachments, stickers: message.stickerItems, embeds: message.embeds, flags: message.flags, hasText: !trimmed.isEmpty)
+        }
         return ChatMessage(
             id: message.id,
             sender: person(message.author.id, fallback: message.author),
             timestamp: message.date,
             text: trimmed.isEmpty ? nil : text,
             isMarkdown: true,
-            embeds: Self.embeds(of: message, hasText: !trimmed.isEmpty),
+            embeds: embeds,
             replyToId: message.type == 19 ? message.messageReference?.messageId : nil,
             isOwn: isOwn,
             isEdited: message.editedTimestamp != nil,
+            // The snapshot doesn't say who wrote the original.
+            forwardedFrom: forwarded == nil ? nil : ChatForwardOrigin(name: nil),
         )
     }
 
-    static func embeds(of message: DiscordMessage, hasText: Bool) -> [ChatEmbed] {
+    static func embeds(attachments: [DiscordAttachment], stickers: [DiscordStickerItem]?, embeds messageEmbeds: [DiscordEmbed], flags: Int?, hasText: Bool) -> [ChatEmbed] {
         var embeds: [ChatEmbed] = []
-        for attachment in message.attachments {
+        let isVoice = (flags ?? 0) & DiscordMessage.voiceMessageFlag != 0
+        for attachment in attachments {
             guard let url = URL(string: attachment.url) else { continue }
             let aspect = attachment.width.flatMap { width in attachment.height.map { Double(width) / Double(max($0, 1)) } }
             let type = attachment.contentType ?? ""
-            if type.hasPrefix("image/") {
+            if isVoice || attachment.waveform != nil {
+                embeds.append(.voice(previewId: url.absoluteString, duration: attachment.durationSecs, waveform: attachment.waveformLevels ?? []))
+            } else if type.hasPrefix("image/") {
                 embeds.append(.image(url: url, aspectRatio: aspect, alt: attachment.filename, link: nil, opensViewer: true))
             } else if type.hasPrefix("video/") {
                 embeds.append(.video(url: url, posterURL: attachment.proxyUrl.flatMap { URL(string: "\($0)\($0.contains("?") ? "&" : "?")format=jpeg") }, aspectRatio: aspect, duration: nil, isGIF: false))
@@ -567,14 +613,14 @@ public final class DiscordChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEdit
                 embeds.append(.file(url: url, filename: attachment.filename, subtitle: size, thumbnailURL: nil))
             }
         }
-        for item in message.stickerItems ?? [] {
+        for item in stickers ?? [] {
             if let sticker = sticker(id: item.id, formatType: item.formatType, alt: item.name) {
                 embeds.append(.sticker(sticker))
             } else {
                 embeds.append(.card(title: item.name, subtitle: "Sticker", systemImage: "face.smiling", imageURL: nil, link: nil))
             }
         }
-        for embed in message.embeds {
+        for embed in messageEmbeds {
             let thumbnail = (embed.thumbnail?.proxyUrl ?? embed.thumbnail?.url ?? embed.image?.proxyUrl ?? embed.image?.url).flatMap(URL.init(string:))
             let link = embed.url.flatMap(URL.init(string:))
             switch embed.type {

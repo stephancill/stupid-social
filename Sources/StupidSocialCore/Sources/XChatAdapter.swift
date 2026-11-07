@@ -5,7 +5,7 @@ import Foundation
 /// Reactions, edits and deletes are events of their own, applied to the messages they name by sequence id.
 /// The user's messages show as seen once someone else's read marker passes them.
 @MainActor
-public final class XChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, ChatLiveUpdating, ChatReferenceResolving, ChatReadReceipts {
+public final class XChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, ChatLiveUpdating, ChatReferenceResolving, ChatReadReceipts, ChatForwarding, ChatVoiceSending, ChatAudioPreviewing {
     public let network = SocialNetwork.x
     public let canReply = true
     public let acceptsAttachments = true
@@ -132,6 +132,73 @@ public final class XChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, 
         return event.sequenceId
     }
 
+    // MARK: Forwarding
+
+    /// What a forward copies: X's forwards carry the original's text and its files uploaded again, since media
+    /// is encrypted per conversation.
+    struct ForwardReference: Codable {
+        struct Media: Codable {
+            let url: URL
+            let filename: String
+            let kind: Int64
+            let durationMillis: Int64?
+        }
+
+        let text: String?
+        let media: [Media]
+    }
+
+    public func forwardReference(for message: ChatMessage) -> String? {
+        guard let event = events[message.id], !deletedIds.contains(message.id), case let .some(.some(.message(contents))) = entries[message.id] else { return nil }
+        var media: [ForwardReference.Media] = []
+        for attachment in contents.attachments {
+            guard case let .media(item) = attachment else { continue }
+            guard let hashKey = item.hashKey, let keyVersion = event.messageCreate?.string(101), let kind = item.kind else { return nil }
+            let filename = item.filename ?? "Attachment"
+            let reference = XChatMediaReference(conversationId: conversationId, hashKey: hashKey, keyVersion: keyVersion, fileExtension: (filename as NSString).pathExtension.lowercased())
+            guard let url = XChatMediaURL.make(reference) else { return nil }
+            media.append(ForwardReference.Media(url: url, filename: filename, kind: kind.rawValue, durationMillis: item.durationMillis))
+        }
+        let text = editedTexts[message.id] ?? contents.text ?? contents.forwardedText
+        guard !(text ?? "").isEmpty || !media.isEmpty,
+              let data = try? JSONEncoder().encode(ForwardReference(text: text, media: media))
+        else { return nil }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    public func forward(reference: String) async throws -> String? {
+        let reference = try JSONDecoder().decode(ForwardReference.self, from: Data(reference.utf8))
+        var media: [XChatOutgoingMedia] = []
+        for item in reference.media {
+            let file = try await ChatMediaFiles.shared.file(for: item.url, filename: item.filename)
+            let data = try Data(contentsOf: file)
+            await media.append(.forwarded(data: data, filename: item.filename, kind: XChatMessageContents.Media.Kind(rawValue: item.kind) ?? .file, durationMillis: item.durationMillis))
+        }
+        let event = try await client.sendForward(text: reference.text, media: media, conversationId: conversationId, token: conversationToken)
+        await merge([event])
+        return event.sequenceId
+    }
+
+    // MARK: Voice messages
+
+    /// AAC in MP4, as X's web recorder sends voice messages.
+    public func send(voice: ChatVoiceNote, replyToId: String?) async throws -> String? {
+        let replyTo = try replyToId.map { id in
+            guard let event = events[id] else { throw SourceError.serviceError("The message you're replying to isn't loaded.") }
+            return XChatReplyTarget(event: event, senderName: event.senderId == viewerId ? nil : people[event.senderId]?.name, text: editedTexts[id])
+        }
+        let file = try await ChatVoiceFile.attachment(for: voice)
+        let media = XChatOutgoingMedia(voiceNote: file.data, durationMillis: Int64((voice.duration * 1000).rounded()))
+        let event = try await client.sendMessage("", media: media, replyTo: replyTo, conversationId: conversationId, token: conversationToken)
+        await merge([event])
+        return event.sequenceId
+    }
+
+    public func audioPreviewURL(for previewId: String) async -> URL? {
+        guard let url = URL(string: previewId), XChatMediaURL.parse(url) != nil else { return nil }
+        return try? await ChatMediaFiles.shared.file(for: url)
+    }
+
     // MARK: Editing
 
     /// The user's encrypted messages, as X's web client allows: not legacy DMs sent unencrypted, and not forwards
@@ -243,12 +310,14 @@ public final class XChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, 
                     id: event.sequenceId,
                     sender: person(event.senderId),
                     timestamp: event.createdAt,
-                    text: deleted.contains(event.sequenceId) ? nil : edits[event.sequenceId] ?? contents.text,
+                    text: deleted.contains(event.sequenceId) ? nil : edits[event.sequenceId] ?? contents.text ?? contents.forwardedText.flatMap { $0.isEmpty ? nil : $0 },
                     embeds: deleted.contains(event.sequenceId) ? [] : contents.attachments.map { embed($0, event: event) },
                     replyToId: contents.reply?.sequenceId,
                     isDeleted: deleted.contains(event.sequenceId),
                     isOwn: isOwn,
                     isEdited: edits[event.sequenceId] != nil,
+                    // X records no original sender.
+                    forwardedFrom: contents.isForwarded ? ChatForwardOrigin(name: nil) : nil,
                 ))
             case .some(.none):
                 // Shown rather than hidden, so a message is never silently missing.
@@ -315,7 +384,9 @@ public final class XChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, 
             return .video(url: url, posterURL: nil, aspectRatio: media.aspectRatio, duration: nil, isGIF: true)
         case .video:
             return .video(url: url, posterURL: nil, aspectRatio: media.aspectRatio, duration: media.durationMillis.map(Self.duration), isGIF: false)
-        case .audio, .file, .svg:
+        case .audio:
+            return .voice(previewId: url.absoluteString, duration: media.durationMillis.map { Double($0) / 1000 }, waveform: [])
+        case .file, .svg:
             let size = media.byteCount.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) }
             return .file(url: url, filename: filename, subtitle: size, thumbnailURL: nil)
         }
