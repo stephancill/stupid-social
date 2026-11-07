@@ -37,9 +37,11 @@ struct HomePager<Chats: View, Social: View>: UIViewControllerRepresentable {
         coordinator.chats.rootView = chats
         coordinator.social.rootView = social
         controller.setPagingEnabled(isPagingEnabled)
-        // A page set from outside, such as by a tapped notification, and not by a swipe.
+        // A page set from outside, such as by a tapped notification, and not by a swipe. Never mid-swipe: the page
+        // controller switches its current page before the swipe settles and `page` catches up, and setting
+        // pages during the transition raises an exception (a crash in build 190).
         let target = coordinator.controller(for: page)
-        if controller.pageController.viewControllers?.first !== target {
+        if !coordinator.isTransitioning, controller.pageController.viewControllers?.first !== target {
             controller.show(target)
         }
     }
@@ -48,6 +50,8 @@ struct HomePager<Chats: View, Social: View>: UIViewControllerRepresentable {
         var page: Binding<HomePage>
         let chats: UIHostingController<Chats>
         let social: UIHostingController<Social>
+        /// From the start of a swipe's transition until it finishes, completed or not.
+        var isTransitioning = false
 
         init(page: Binding<HomePage>, chats: UIHostingController<Chats>, social: UIHostingController<Social>) {
             self.page = page
@@ -71,7 +75,12 @@ struct HomePager<Chats: View, Social: View>: UIViewControllerRepresentable {
             viewController === chats ? social : chats
         }
 
+        func pageViewController(_: UIPageViewController, willTransitionTo _: [UIViewController]) {
+            isTransitioning = true
+        }
+
         func pageViewController(_ controller: UIPageViewController, didFinishAnimating _: Bool, previousViewControllers _: [UIViewController], transitionCompleted completed: Bool) {
+            isTransitioning = false
             guard completed, let current = controller.viewControllers?.first else { return }
             page.wrappedValue = current === chats ? .chats : .social
         }
