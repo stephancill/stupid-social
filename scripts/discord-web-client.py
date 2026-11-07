@@ -31,13 +31,22 @@ Examples:
   scripts/discord-web-client.py ready                       # gateway READY summary: guilds, channels, read states
   scripts/discord-web-client.py follow --seconds 60         # gateway dispatch event names and channel ids
   scripts/discord-web-client.py raw GET /users/@me/guilds   # any GET, JSON shape only (keys and types)
+  scripts/discord-web-client.py threads                     # channel types, forums and READY threads per guild
+  scripts/discord-web-client.py forum-threads --channel 456 # a forum's newest posts
+  scripts/discord-web-client.py stickers                    # standard packs and guild stickers by format
+  scripts/discord-web-client.py profile --user 123 [--shape]
+  scripts/discord-web-client.py upload --channel 456 --expect-name probe --file photo.png [--text "hi"]
+  scripts/discord-web-client.py send-sticker --channel 456 --expect-name probe --sticker 789
+  scripts/discord-web-client.py open-dm --user 123           # the DM with a user, created if needed (no message)
 """
 
 from __future__ import annotations
 
 import argparse
 import base64
+import collections
 import json
+import mimetypes
 import os
 import secrets
 import select
@@ -476,6 +485,98 @@ def cmd_follow(args: argparse.Namespace) -> Any:
     return None
 
 
+def ready_payload() -> dict[str, Any]:
+    gateway = Gateway(0)
+    for name, data in gateway.events(30):
+        if name == "READY":
+            return data
+    raise SystemExit("no READY within 30 s")
+
+
+def cmd_threads(args: argparse.Namespace) -> Any:
+    """Threads READY lists per guild (active ones the user joined), and each guild's channel types."""
+    data = ready_payload()
+    result = []
+    for guild in data.get("guilds", []):
+        threads = guild.get("threads", [])
+        result.append({
+            "guild": guild["id"],
+            "channel_types": dict(sorted(collections.Counter(CHANNEL_TYPES.get(c["type"], c["type"]) for c in guild.get("channels", [])).items())),
+            "threads": [
+                {"id": t["id"], "type": CHANNEL_TYPES.get(t["type"], t["type"]), "parent": t.get("parent_id"), "joined": bool(t.get("member")), "archived": (t.get("thread_metadata") or {}).get("archived"), "last_message_id": t.get("last_message_id")}
+                for t in threads
+            ],
+            "forums": [c["id"] for c in guild.get("channels", []) if c["type"] in (15, 16)],
+            "thread_shape": shape(threads[0]) if threads and args.shape else None,
+        })
+    return result
+
+
+def cmd_forum_threads(args: argparse.Namespace) -> Any:
+    """A forum's posts as its web client lists them: newest activity first."""
+    query = urllib.parse.urlencode({"archived": "true", "sort_by": "last_message_time", "sort_order": "desc", "limit": args.limit, "tag_setting": "match_some", "offset": 0})
+    page = api("GET", f"/channels/{args.channel}/threads/search?{query}")
+    if args.shape:
+        return shape(page)
+    return {
+        "total": page.get("total_results"),
+        "has_more": page.get("has_more"),
+        "threads": [{"id": t["id"], "type": t["type"], "name_length": len(t.get("name") or ""), "joined": any(m.get("id") == t["id"] for m in page.get("members", [])), "last_message_id": t.get("last_message_id"), "archived": (t.get("thread_metadata") or {}).get("archived")} for t in page.get("threads", [])],
+    }
+
+
+def cmd_stickers(args: argparse.Namespace) -> Any:
+    """Standard sticker packs and each guild's stickers, by format (1 PNG, 2 APNG, 3 Lottie, 4 GIF)."""
+    packs = api("GET", "/sticker-packs").get("sticker_packs", [])
+    data = ready_payload()
+    return {
+        "standard_packs": [{"id": p["id"], "name": p["name"], "count": len(p["stickers"]), "formats": dict(collections.Counter(s["format_type"] for s in p["stickers"]))} for p in packs],
+        "guild_stickers": {g["id"]: dict(collections.Counter(s["format_type"] for s in g.get("stickers", []))) for g in data.get("guilds", [])},
+        "sticker_shape": shape(packs[0]["stickers"][0]) if packs and args.shape else None,
+    }
+
+
+def cmd_upload(args: argparse.Namespace) -> Any:
+    """The web client's upload: reserve an upload URL, PUT the bytes there, then post a message naming it."""
+    guard(args.channel, args.expect_name)
+    path = Path(args.file)
+    data = path.read_bytes()
+    reserved = api("POST", f"/channels/{args.channel}/attachments", {"files": [{"filename": path.name, "file_size": len(data), "id": "0", "is_clip": False}]})
+    attachment = reserved["attachments"][0]
+    put = urllib.request.Request(attachment["upload_url"], data=data, method="PUT", headers={"Content-Type": mimetypes.guess_type(path.name)[0] or "application/octet-stream", "User-Agent": USER_AGENT})
+    with urllib.request.urlopen(put, timeout=60) as response:
+        put_status = response.status
+    body = {
+        "content": args.text or "",
+        "nonce": str((int(time.time() * 1000) - 1420070400000) << 22),
+        "channel_id": args.channel,
+        "type": 0,
+        "sticker_ids": [],
+        "attachments": [{"id": "0", "filename": path.name, "uploaded_filename": attachment["upload_filename"]}],
+    }
+    message = api("POST", f"/channels/{args.channel}/messages", body)
+    return {"reserve_keys": sorted(attachment.keys()), "put_status": put_status, "id": message["id"], "attachments": [a.get("content_type") for a in message.get("attachments", [])]}
+
+
+def cmd_send_sticker(args: argparse.Namespace) -> Any:
+    guard(args.channel, args.expect_name)
+    body = {"content": "", "nonce": str((int(time.time() * 1000) - 1420070400000) << 22), "tts": False, "flags": 0, "sticker_ids": [args.sticker]}
+    message = api("POST", f"/channels/{args.channel}/messages", body)
+    return {"id": message["id"], "stickers": [s.get("format_type") for s in message.get("sticker_items", [])]}
+
+
+def cmd_open_dm(args: argparse.Namespace) -> Any:
+    """The DM channel with a user, created if there is none (sends no message)."""
+    channel = api("POST", "/users/@me/channels", {"recipients": [args.user]})
+    return {"id": channel["id"], "type": channel["type"], "recipients": [r.get("username") for r in channel.get("recipients", [])], "last_message_id": channel.get("last_message_id")}
+
+
+def cmd_profile(args: argparse.Namespace) -> Any:
+    """A user's profile as the web client's profile popout loads it."""
+    profile = api("GET", f"/users/{args.user}/profile?with_mutual_guilds=true&with_mutual_friends=true")
+    return shape(profile) if args.shape else {"user": {k: profile.get("user", {}).get(k) for k in ("id", "username", "global_name")}, "mutual_guilds": len(profile.get("mutual_guilds", [])), "bio_length": len((profile.get("user_profile") or {}).get("bio") or "")}
+
+
 def cmd_raw(args: argparse.Namespace) -> Any:
     if args.method != "GET":
         raise SystemExit("raw is GET only")
@@ -526,12 +627,34 @@ def main() -> None:
     p.add_argument("--capabilities", type=int, default=0)
     p.add_argument("--seconds", type=float, default=60)
     p.add_argument("--shape", action="store_true")
+    p = sub.add_parser("threads")
+    p.add_argument("--shape", action="store_true")
+    p = sub.add_parser("forum-threads")
+    p.add_argument("--channel", required=True)
+    p.add_argument("--limit", type=int, default=25)
+    p.add_argument("--shape", action="store_true")
+    p = sub.add_parser("stickers")
+    p.add_argument("--shape", action="store_true")
+    p = sub.add_parser("upload")
+    p.add_argument("--channel", required=True)
+    p.add_argument("--expect-name", required=True)
+    p.add_argument("--file", required=True)
+    p.add_argument("--text")
+    p = sub.add_parser("send-sticker")
+    p.add_argument("--channel", required=True)
+    p.add_argument("--expect-name", required=True)
+    p.add_argument("--sticker", required=True)
+    p = sub.add_parser("open-dm")
+    p.add_argument("--user", required=True)
+    p = sub.add_parser("profile")
+    p.add_argument("--user", required=True)
+    p.add_argument("--shape", action="store_true")
     p = sub.add_parser("raw")
     p.add_argument("method")
     p.add_argument("path")
 
     args = parser.parse_args()
-    result = globals()[f"cmd_{args.command}"](args)
+    result = globals()[f"cmd_{args.command.replace('-', '_')}"](args)
     if result is not None:
         print(json.dumps(result, indent=2, ensure_ascii=False))
 

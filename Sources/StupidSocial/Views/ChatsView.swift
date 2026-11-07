@@ -16,8 +16,9 @@ struct ChatsView: View {
     let xChat: (_ accountId: String, _ conversationId: String, _ title: String) -> (() -> ChatViewModel)?
     /// The chat for a Bluesky account's conversation and title; `nil` when the account is gone.
     let blueskyChat: (_ accountId: String, _ convoId: String, _ title: String) -> (() -> ChatViewModel)?
-    /// The chat for a Discord account's channel and title; `nil` when the account is gone.
-    let discordChat: (_ accountId: String, _ channelId: String, _ title: String) -> (() -> ChatViewModel)?
+    /// The chat for a Discord account's channel and title, profiles from it, and the other person in a DM; `nil`
+    /// when the account is gone.
+    let discordChat: (_ accountId: String, _ channelId: String, _ title: String) -> (chat: () -> ChatViewModel, profile: (String) -> DiscordProfileViewModel, dmRecipient: String?)?
     /// An account's settings, opened from the connection errors; `nil` for a connection that isn't an account.
     let accountSettings: (_ accountId: String) -> AnyView?
     /// Whether a chat is pushed, so the home pager can stop paging.
@@ -240,8 +241,8 @@ struct ChatsView: View {
                 ContentUnavailableView("Bluesky Not Connected", systemImage: "bubble.left.and.bubble.right")
             }
         case let .discord(channelId):
-            if let makeChat = discordChat(chat.accountId, channelId, chat.title) {
-                NetworkChatView(viewModel: opened(makeChat(), chat: chat))
+            if let make = discordChat(chat.accountId, channelId, chat.title) {
+                DiscordChatView(viewModel: opened(make.chat(), chat: chat), channelId: channelId, dmRecipient: make.dmRecipient, profile: make.profile)
             } else {
                 ContentUnavailableView("Discord Not Connected", systemImage: "bubble.left.and.bubble.right")
             }

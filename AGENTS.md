@@ -36,6 +36,7 @@ Sources/
       GitHubLoginWebView.swift      # GitHub WebView login
       DiscordConnectionView.swift   # Discord account setup
       DiscordLoginWebView.swift     # Discord WebView login: captures the web client's token
+      DiscordChatView.swift         # Discord chat: profiles from avatars, mentions and a DM's title; DiscordProfileView
       BlueskyConnectionView.swift   # Bluesky OAuth setup
       XConnectionView.swift         # X credential setup
       XLoginWebView.swift           # X WebView login
@@ -116,7 +117,7 @@ Sources/
       DiscordModels.swift           # Discord REST/gateway payloads, snowflakes, permission bits
       DiscordClient.swift           # Discord REST client (web client headers) and DiscordGateway: READY state, live events
       DiscordChat.swift             # Discord text tokens (mentions, emoji, channels) and DiscordChatList (Chats rows)
-      DiscordChatAdapter.swift      # Discord channel adapter: history, live events, send, replies, edit, delete, reactions, typing, read state
+      DiscordChatAdapter.swift      # Discord channel and thread adapter: history, live events, send (files, stickers), replies, edit, delete, reactions, typing, read state
       DebugNotificationsClient.swift / DebugNotificationSource.swift
       DemoData.swift / DemoChats.swift  # Demo mode feed, story bar and chats (fake data, no credentials)
       ApronModels.swift / ApronClient.swift / ApronNotificationSource.swift  # Apron Chat Protocol WebSocket client
@@ -174,6 +175,7 @@ Sources/
       TelegramProfileViewModel.swift # Telegram profile by user id or @username
       TelegramConnectionViewModel.swift # Telegram sign-in steps
       XChatUnlockViewModel.swift     # X Chat PIN unlock and Forget Keys
+      DiscordProfileViewModel.swift  # Discord profile and the DM its Message button opens or starts
 ```
 
 Outside `Sources/`: `NotificationService/` holds the extension's Info.plist and entitlements, `workers/push-relay/` the Apron push relay Worker (`bun run push-relay:test`, `bun run push-relay:deploy`), and `Vendor/JuiceboxSdk/` the vendored Juicebox SDK (Swift wrapper and static-library XCFramework) that X Chat key recovery uses; regenerate it with `scripts/vendor-juicebox.sh`, never edit it by hand. `cli/` is the `stupid-social` command line for chats on a Mac, its own macOS SwiftPM package (`swift build -c release` in `cli/`) that talks to `ChatControlServer`. `skills/stupid-social/SKILL.md` is the agent skill for using it; keep it in step with the CLI's commands and errors. `Vendor/StupidMetrics/` is the vendored StupidMetrics Swift package (usage metrics); update it with `scripts/vendor-stupid-metrics.sh <tag>`, never edit it by hand.

@@ -172,10 +172,11 @@ Observed X behavior:
 
 ### Discord Chat
 
-- Discord chats appear on the Chats screen when Discord is connected: DMs and group DMs, and every text and announcement channel the user can see in each server, shown as Apron shows rooms ("Server / channel", with the server's icon). Message requests, spam, voice channels, threads and forums are left out. Channels and servers muted in Discord show a gray badge.
+- Discord chats appear on the Chats screen when Discord is connected: DMs and group DMs, and every text and announcement channel the user can see in each server, shown as Apron shows rooms ("Server / channel", with the server's icon). Threads the user has joined and each forum's 10 most recently active posts are chats too, named under their channel ("Server / channel" before the thread's name). Message requests, spam and voice channels are left out. Channels and servers muted in Discord show a gray badge.
 - Each row has its latest message, time and unread count for the 25 most recent chats; older rows show their time until a message arrives. Discord reports only mention counts, so unread counts come from the newest page of messages (or one, for a row without a loaded page).
-- Opening a chat shows its history (older pages load on scroll) and live messages, edits, deletions, reactions and typing while it is open. The user can send text, reply, edit and delete their own messages, react (including with custom emoji already on messages), and @mention people. Reading moves Discord's read state, so the chat is read in Discord's own apps too. Attachments, embeds, stickers and custom emoji display; channel links, role mentions and timestamps read as text.
-- Not supported yet: sending attachments or stickers, threads and forums, starting DMs, message requests, and voice.
+- Opening a chat shows its history (older pages load on scroll) and live messages, edits, deletions, reactions and typing while it is open. The user can send text, photos and files, and stickers (Discord's standard packs and the server's own; any server's with Nitro), reply, edit and delete their own messages, react (including with custom emoji already on messages), and @mention people. Reading moves Discord's read state, so the chat is read in Discord's own apps too. Attachments, embeds, stickers and custom emoji display; channel links, role mentions and timestamps read as text.
+- Tapping someone's picture or mention, or a DM's title, opens their profile (picture, name, username, pronouns, bio, mutual servers) with a Message button that opens your DM with them, starting one if there is none.
+- Not supported: message requests, voice messages, and voice.
 
 ### Chat Title
 

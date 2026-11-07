@@ -401,7 +401,8 @@ final class ChatStickerFiles {
             guard let data = try? await URLSession.shared.data(from: url).0 else { return nil }
             return await Task.detached(priority: .userInitiated) { () -> ChatStickerFile? in
                 switch format {
-                case .lottie: (try? LottieAnimation(tgs: data)).map(ChatStickerFile.lottie)
+                // Telegram's are gzipped (TGS); Discord's are plain JSON.
+                case .lottie: ((try? LottieAnimation(tgs: data)) ?? (try? LottieAnimation(json: data))).map(ChatStickerFile.lottie)
                 case .video: WebMSticker(data: data).map(ChatStickerFile.video)
                 case .image: nil
                 }

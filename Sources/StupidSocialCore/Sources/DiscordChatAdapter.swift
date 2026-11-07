@@ -3,12 +3,14 @@ import Foundation
 /// One Discord channel (a DM, group DM or guild text channel): pages its history over REST, follows the gateway's
 /// events for it, and sends, replies, edits, deletes, reacts, types and moves the read position as the web client
 /// does. A guild channel subscribes to its guild's events when it opens; a poll catches what a large guild
-/// doesn't send. Sending attachments isn't supported yet.
+/// doesn't send. Files go through Discord's upload slots; stickers are the standard packs and the guild's own (any
+/// guild's with Nitro).
 @MainActor
-public final class DiscordChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditing, ChatDeleting, ChatReactionSending, ChatLiveUpdating, ChatReferenceResolving, ChatTyping, ChatMentioning, ChatCustomEmojis {
+public final class DiscordChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditing, ChatDeleting, ChatReactionSending, ChatLiveUpdating, ChatReferenceResolving, ChatTyping, ChatMentioning, ChatCustomEmojis, ChatStickerSending {
     public let network = SocialNetwork.discord
     public let canReply = true
-    public let acceptsAttachments = false
+    /// Read again once connected: a guild channel may not allow files.
+    public private(set) var acceptsAttachments = true
     /// Events arrive on the gateway; the poll covers guilds that send them only to some sessions.
     public let pollInterval: Duration? = .seconds(30)
     public var onChange: (() -> Void)?
@@ -79,6 +81,8 @@ public final class DiscordChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEdit
             info.avatarURL = others.first?.avatarURL
         } else if channel.type == DiscordChannel.groupDM {
             info.subtitle = "\((channel.recipients ?? []).count + 1) members"
+        } else if channel.isThread, let parent = gateway.channel(id: channel.parentId ?? "") {
+            info.subtitle = [guild?.name, parent.name.map { "#\($0)" }].compactMap(\.self).joined(separator: " / ")
         } else {
             info.subtitle = guild?.name ?? "Discord"
         }
@@ -92,8 +96,10 @@ public final class DiscordChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEdit
                 register(emoji)
             }
             let permissions = gateway.permissions(in: channel)
-            isReadOnly = permissions & DiscordPermissions.sendMessages == 0
+            let send = channel.isThread ? DiscordPermissions.sendMessagesInThreads : DiscordPermissions.sendMessages
+            isReadOnly = permissions & send == 0 || channel.threadMetadata?.locked == true
             acceptsReactions = permissions & DiscordPermissions.addReactions != 0
+            acceptsAttachments = permissions & DiscordPermissions.attachFiles != 0
         }
     }
 
@@ -162,12 +168,85 @@ public final class DiscordChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEdit
     }
 
     public func send(_ message: ChatOutgoing) async throws -> String? {
-        let sent = try await client.send(channelId: channelId, content: DiscordText.outgoing(message.text), replyTo: message.replyToId, nonce: DiscordSnowflake.now())
+        let upload = if let attachment = message.attachment { try await client.upload(channelId: channelId, data: attachment.data, mimeType: attachment.mimeType, filename: attachment.filename) } else { DiscordUploaded?.none }
+        let sent = try await client.send(channelId: channelId, content: DiscordText.outgoing(message.text), replyTo: message.replyToId, nonce: DiscordSnowflake.now(), upload: upload)
+        accept(sent)
+        return sent.id
+    }
+
+    /// The network's copy of a message the user sent, which also reads the channel up to it.
+    private func accept(_ sent: DiscordMessage) {
         loaded[sent.id] = sent
         gateway.setRead(channelId: channelId, messageId: sent.id)
         readId = sent.id
         publish()
+    }
+
+    // MARK: Stickers
+
+    /// The guild's own stickers first (without Nitro only this guild's can be sent here, and none in DMs), then
+    /// Discord's standard packs.
+    public func stickerSets() async throws -> [ChatStickerSet] {
+        var sets: [ChatStickerSet] = []
+        for guild in sendableGuildStickers() {
+            let stickers = (guild.stickers ?? []).filter { $0.available != false }.compactMap(Self.sticker)
+            guard !stickers.isEmpty else { continue }
+            sets.append(ChatStickerSet(id: "guild:\(guild.id)", title: guild.name, cover: stickers.first, count: stickers.count, stickers: stickers))
+        }
+        for pack in try await gateway.standardStickerPacks() {
+            let stickers = pack.stickers.compactMap(Self.sticker)
+            let cover = pack.coverStickerId.flatMap { id in stickers.first { $0.id == id } } ?? stickers.first
+            sets.append(ChatStickerSet(id: "pack:\(pack.id)", title: pack.name, cover: cover, count: stickers.count, stickers: stickers))
+        }
+        return sets
+    }
+
+    public func stickers(inSet id: String) async throws -> [ChatSticker] {
+        try await stickerSets().first { $0.id == id }?.stickers ?? []
+    }
+
+    /// Stickers tagged with the emoji: a guild sticker's tag is the emoji it stands for.
+    public func stickers(forEmoji emoji: String) async throws -> [ChatSticker] {
+        let guildStickers = sendableGuildStickers().flatMap { $0.stickers ?? [] }
+        let standard = try await gateway.standardStickerPacks().flatMap(\.stickers)
+        return (guildStickers + standard)
+            .filter { ($0.tags ?? "").split(separator: ",").contains { $0.trimmingCharacters(in: .whitespaces) == emoji } }
+            .compactMap(Self.sticker)
+    }
+
+    public func send(sticker: ChatSticker, replyToId: String?) async throws -> String? {
+        let sent = try await client.send(channelId: channelId, content: "", replyTo: replyToId, nonce: DiscordSnowflake.now(), stickerIds: [sticker.id])
+        accept(sent)
         return sent.id
+    }
+
+    private func sendableGuildStickers() -> [DiscordGuild] {
+        if gateway.me?.premiumType ?? 0 > 0 {
+            return gateway.guilds.values.sorted { $0.id == channel?.guildId && $1.id != channel?.guildId }
+        }
+        return gateway.guild(id: channel?.guildId).map { [$0] } ?? []
+    }
+
+    /// PNG, APNG and GIF stickers as images, Lottie ones as plain Lottie JSON.
+    static func sticker(_ sticker: DiscordSticker) -> ChatSticker? {
+        Self.sticker(id: sticker.id, formatType: sticker.formatType, alt: sticker.name)
+    }
+
+    static func sticker(id: String, formatType: Int, alt: String?) -> ChatSticker? {
+        let poster = URL(string: "https://media.discordapp.net/stickers/\(id).png?size=160&passthrough=false")
+        switch formatType {
+        case 1, 2:
+            guard let url = URL(string: "https://media.discordapp.net/stickers/\(id).png?size=320") else { return nil }
+            return ChatSticker(id: id, url: url, format: .image, posterURL: nil, aspectRatio: 1, alt: alt)
+        case 4:
+            guard let url = URL(string: "https://media.discordapp.net/stickers/\(id).gif?size=320") else { return nil }
+            return ChatSticker(id: id, url: url, format: .image, posterURL: nil, aspectRatio: 1, alt: alt)
+        case 3:
+            guard let url = URL(string: "https://discord.com/stickers/\(id).json") else { return nil }
+            return ChatSticker(id: id, url: url, format: .lottie, posterURL: poster, aspectRatio: 1, alt: alt)
+        default:
+            return nil
+        }
     }
 
     // MARK: Live
@@ -488,14 +567,11 @@ public final class DiscordChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEdit
                 embeds.append(.file(url: url, filename: attachment.filename, subtitle: size, thumbnailURL: nil))
             }
         }
-        for sticker in message.stickerItems ?? [] {
-            switch sticker.formatType {
-            case 1, 2, 4:
-                let ext = sticker.formatType == 4 ? "gif" : "png"
-                guard let url = URL(string: "https://media.discordapp.net/stickers/\(sticker.id).\(ext)?size=320") else { continue }
-                embeds.append(.sticker(ChatSticker(id: sticker.id, url: url, format: .image, posterURL: nil, aspectRatio: 1, alt: sticker.name)))
-            default:
-                embeds.append(.card(title: sticker.name, subtitle: "Sticker", systemImage: "face.smiling", imageURL: nil, link: nil))
+        for item in message.stickerItems ?? [] {
+            if let sticker = sticker(id: item.id, formatType: item.formatType, alt: item.name) {
+                embeds.append(.sticker(sticker))
+            } else {
+                embeds.append(.card(title: item.name, subtitle: "Sticker", systemImage: "face.smiling", imageURL: nil, link: nil))
             }
         }
         for embed in message.embeds {

@@ -147,9 +147,13 @@ final class AppContainer {
     }
 
     /// `nil` when the Discord account is gone.
-    func discordChatFactory(accountId: String, channelId: String, title: String) -> (() -> ChatViewModel)? {
+    func discordChatFactory(accountId: String, channelId: String, title: String) -> (chat: () -> ChatViewModel, profile: (String) -> DiscordProfileViewModel, dmRecipient: String?)? {
         guard let gateway = services.component(id: accountId)?.discordGateway else { return nil }
-        return { AdapterChatViewModel(adapter: DiscordChatAdapter(gateway: gateway, channelId: channelId, title: title), accountId: accountId) }
+        return (
+            chat: { AdapterChatViewModel(adapter: DiscordChatAdapter(gateway: gateway, channelId: channelId, title: title), accountId: accountId) },
+            profile: { DiscordProfileViewModel(gateway: gateway, userId: $0) },
+            dmRecipient: DiscordProfileViewModel.dmRecipient(channelId: channelId, gateway: gateway),
+        )
     }
 
     /// `nil` until the X Chat PIN has unlocked the account's keys.
@@ -197,7 +201,7 @@ final class AppContainer {
         case let .bluesky(convoId):
             blueskyChatFactory(accountId: chat.accountId, convoId: convoId, title: chat.title)?()
         case let .discord(channelId):
-            discordChatFactory(accountId: chat.accountId, channelId: channelId, title: chat.title)?()
+            discordChatFactory(accountId: chat.accountId, channelId: channelId, title: chat.title)?.chat()
         case let .demo(chatId):
             AdapterChatViewModel(adapter: DemoChatAdapter(chatId: chatId), accountId: chat.accountId)
         }

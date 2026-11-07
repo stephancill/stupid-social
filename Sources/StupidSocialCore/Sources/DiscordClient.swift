@@ -67,12 +67,69 @@ public final class DiscordClient: @unchecked Sendable {
         return try await request("GET", "/channels/\(channelId)/messages", query: query)
     }
 
-    func send(channelId: String, content: String, replyTo: String?, nonce: String) async throws -> DiscordMessage {
+    /// A message with text, an uploaded file (`upload(channelId:attachment:)`) and stickers, as the web client
+    /// sends them.
+    func send(channelId: String, content: String, replyTo: String?, nonce: String, upload: DiscordUploaded? = nil, stickerIds: [String] = []) async throws -> DiscordMessage {
         var body: [String: Any] = ["content": content, "nonce": nonce, "tts": false, "flags": 0]
         if let replyTo {
             body["message_reference"] = ["channel_id": channelId, "message_id": replyTo]
         }
+        if let upload {
+            body["attachments"] = [["id": "0", "filename": upload.filename, "uploaded_filename": upload.uploadedFilename]]
+        }
+        if !stickerIds.isEmpty {
+            body["sticker_ids"] = stickerIds
+        }
         return try await request("POST", "/channels/\(channelId)/messages", body: body)
+    }
+
+    /// Uploads a file as the web client does: Discord names a storage URL for it (`POST /channels/{id}/attachments`),
+    /// the bytes go there with a `PUT`, and the message then names the uploaded file.
+    func upload(channelId: String, data: Data, mimeType: String, filename: String) async throws -> DiscordUploaded {
+        let slots: DiscordUploadSlots = try await request("POST", "/channels/\(channelId)/attachments", body: [
+            "files": [["filename": filename, "file_size": data.count, "id": "0", "is_clip": false]],
+        ])
+        guard let slot = slots.attachments.first, let url = URL(string: slot.uploadUrl) else { throw SourceError.invalidResponse }
+        var put = URLRequest(url: url)
+        put.httpMethod = "PUT"
+        put.setValue(mimeType, forHTTPHeaderField: "Content-Type")
+        put.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
+        let (_, response) = try await session.upload(for: put, from: data)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard (200 ..< 300).contains(status) else { throw DiscordError.http(status: status, message: "The upload failed.") }
+        return DiscordUploaded(filename: filename, uploadedFilename: slot.uploadFilename)
+    }
+
+    func stickerPacks() async throws -> [DiscordStickerPack] {
+        struct Page: Decodable {
+            let stickerPacks: [DiscordStickerPack]
+        }
+        let page: Page = try await request("GET", "/sticker-packs")
+        return page.stickerPacks
+    }
+
+    /// The DM channel with the user, which Discord creates if there is none; no message is sent.
+    func openDM(userId: String) async throws -> DiscordChannel {
+        try await request("POST", "/users/@me/channels", body: ["recipients": [userId]])
+    }
+
+    func profile(userId: String) async throws -> DiscordProfile {
+        try await request("GET", "/users/\(userId)/profile", query: [
+            URLQueryItem(name: "with_mutual_guilds", value: "true"),
+            URLQueryItem(name: "with_mutual_friends_count", value: "true"),
+        ])
+    }
+
+    /// A forum's posts with the newest activity first, archived ones included, as the forum view lists them.
+    func forumThreads(channelId: String, limit: Int) async throws -> DiscordThreadSearch {
+        try await request("GET", "/channels/\(channelId)/threads/search", query: [
+            URLQueryItem(name: "archived", value: "true"),
+            URLQueryItem(name: "sort_by", value: "last_message_time"),
+            URLQueryItem(name: "sort_order", value: "desc"),
+            URLQueryItem(name: "limit", value: String(limit)),
+            URLQueryItem(name: "tag_setting", value: "match_some"),
+            URLQueryItem(name: "offset", value: "0"),
+        ])
     }
 
     func edit(channelId: String, messageId: String, content: String) async throws -> DiscordMessage {
@@ -201,6 +258,7 @@ public final class DiscordGateway {
     private var hasConnected = false
     /// The last dispatch's sequence number, which heartbeats carry.
     private var sequence: Int?
+    private var stickerPacks: [DiscordStickerPack]?
     /// Why the last connection failed to identify, such as a token Discord no longer takes.
     private var identifyError: Error?
 
@@ -242,6 +300,14 @@ public final class DiscordGateway {
         }
         defer { timer.cancel() }
         try await withCheckedThrowingContinuation { readyWaiters.append($0) }
+    }
+
+    /// Discord's standard sticker packs, loaded once.
+    func standardStickerPacks() async throws -> [DiscordStickerPack] {
+        if let stickerPacks { return stickerPacks }
+        let packs = try await client.stickerPacks()
+        stickerPacks = packs
+        return packs
     }
 
     func observe(_ handler: @escaping (Event) -> Void) -> UUID {
@@ -480,6 +546,50 @@ public final class DiscordGateway {
         let id: String
     }
 
+    private struct ThreadListSync: Decodable {
+        let guildId: String
+        let threads: [DiscordChannel]
+        let members: [DiscordThreadMemberEntry]?
+    }
+
+    private struct ThreadMemberUpdate: Decodable {
+        /// The thread's id.
+        let id: String
+        let guildId: String
+        let userId: String?
+    }
+
+    private struct ThreadMembersUpdate: Decodable {
+        struct Added: Decodable {
+            let userId: String?
+        }
+
+        let id: String
+        let guildId: String
+        let addedMembers: [Added]?
+        let removedMemberIds: [String]?
+    }
+
+    /// Adds or replaces a channel, such as a DM the user started or a forum's post, so chats can open it. A thread
+    /// keeps the membership it had when the update doesn't say.
+    func remember(_ channel: DiscordChannel) {
+        guard let guildId = channel.guildId else {
+            privateChannels[channel.id] = channel
+            return
+        }
+        var channel = channel
+        if channel.member == nil {
+            channel.member = guilds[guildId]?.channels.first { $0.id == channel.id }?.member
+        }
+        guilds[guildId]?.channels.removeAll { $0.id == channel.id }
+        guilds[guildId]?.channels.append(channel)
+    }
+
+    private func setThreadMember(threadId: String, guildId: String, joined: Bool) {
+        guard let index = guilds[guildId]?.channels.firstIndex(where: { $0.id == threadId }) else { return }
+        guilds[guildId]?.channels[index].member = joined ? DiscordChannel.ThreadMember(userId: me?.id) : nil
+    }
+
     /// Applies an event to the state and hands it to observers.
     func dispatch(_ name: String, data: Data) {
         let decoder = JSONDecoder.discord
@@ -508,13 +618,29 @@ public final class DiscordGateway {
             guard let event = try? decoder.decode(Payload<AckEvent>.self, from: data).d else { return }
             setRead(channelId: event.channelId, messageId: event.messageId)
             deliver(.ack(channelId: event.channelId, messageId: event.messageId))
-        case "CHANNEL_CREATE", "CHANNEL_UPDATE":
+        case "CHANNEL_CREATE", "CHANNEL_UPDATE", "THREAD_CREATE", "THREAD_UPDATE":
             guard let channel = try? decoder.decode(Payload<DiscordChannel>.self, from: data).d else { return }
-            if let guildId = channel.guildId {
-                guilds[guildId]?.channels.removeAll { $0.id == channel.id }
-                guilds[guildId]?.channels.append(channel)
-            } else {
-                privateChannels[channel.id] = channel
+            remember(channel)
+        case "THREAD_DELETE":
+            guard let channel = try? decoder.decode(Payload<DiscordChannel>.self, from: data).d, let guildId = channel.guildId else { return }
+            guilds[guildId]?.channels.removeAll { $0.id == channel.id }
+        case "THREAD_LIST_SYNC":
+            guard let sync = try? decoder.decode(Payload<ThreadListSync>.self, from: data).d else { return }
+            let joined = Set((sync.members ?? []).filter { $0.userId == me?.id }.map(\.id))
+            for var thread in sync.threads {
+                thread.guildId = sync.guildId
+                if joined.contains(thread.id) { thread.member = DiscordChannel.ThreadMember(userId: me?.id) }
+                remember(thread)
+            }
+        case "THREAD_MEMBER_UPDATE":
+            guard let member = try? decoder.decode(Payload<ThreadMemberUpdate>.self, from: data).d, member.userId == me?.id else { return }
+            setThreadMember(threadId: member.id, guildId: member.guildId, joined: true)
+        case "THREAD_MEMBERS_UPDATE":
+            guard let update = try? decoder.decode(Payload<ThreadMembersUpdate>.self, from: data).d, let me = me?.id else { return }
+            if update.addedMembers?.contains(where: { $0.userId == me }) == true {
+                setThreadMember(threadId: update.id, guildId: update.guildId, joined: true)
+            } else if update.removedMemberIds?.contains(me) == true {
+                setThreadMember(threadId: update.id, guildId: update.guildId, joined: false)
             }
         case "CHANNEL_DELETE":
             guard let channel = try? decoder.decode(Payload<DiscordChannel>.self, from: data).d else { return }

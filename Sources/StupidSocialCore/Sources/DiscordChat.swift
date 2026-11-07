@@ -123,6 +123,8 @@ public final class DiscordChatList: ChatListProvider {
     public nonisolated let network = SocialNetwork.discord
     /// Rows past this many, newest first, show no preview until a message arrives while the app is open.
     static let previewLimit = 25
+    /// Posts listed per forum, newest activity first.
+    static let forumPostLimit = 10
 
     let gateway: DiscordGateway
     private let accountId: String
@@ -130,6 +132,8 @@ public final class DiscordChatList: ChatListProvider {
     private var observation: UUID?
     /// Channel id → its newest page as of a last message id.
     private var pages: [String: (lastMessageId: String, messages: [DiscordMessage])] = [:]
+    /// Forum id → the posts listed for it, as of the forum's last post id.
+    private var forumPosts: [String: (lastPostId: String?, postIds: [String])] = [:]
 
     public init(gateway: DiscordGateway, accountId: String, chatList: ChatListViewModel?) {
         self.gateway = gateway
@@ -144,6 +148,7 @@ public final class DiscordChatList: ChatListProvider {
 
     private func rows() async throws -> ChatListPage {
         try await gateway.waitUntilReady()
+        await loadForumPosts()
         let channels = listedChannels().sorted { DiscordSnowflake.isAfter($0.lastMessageId ?? "0", $1.lastMessageId) }
         let recent = channels.prefix(Self.previewLimit).filter { channel in
             pages[channel.id]?.lastMessageId != channel.lastMessageId
@@ -170,11 +175,31 @@ public final class DiscordChatList: ChatListProvider {
         return ChatListPage(chats: channels.map(summary), archived: [])
     }
 
-    /// Channels with messages the user can see, without message requests and spam.
+    /// Channels with messages the user can see, without message requests and spam. Threads are listed once the user
+    /// has joined them, and forums' newest posts (`loadForumPosts`) whether joined or not.
     func listedChannels() -> [DiscordChannel] {
+        let posts = Set(forumPosts.values.flatMap(\.postIds))
         let privates = gateway.privateChannels.values.filter { $0.isListed && $0.isMessageRequest != true && $0.isSpam != true }
-        let guildChannels = gateway.guilds.values.flatMap(\.channels).filter { $0.isListed && gateway.canView($0) }
+        let guildChannels = gateway.guilds.values.flatMap(\.channels).filter { channel in
+            channel.isListed && (!channel.isThread || channel.member != nil || posts.contains(channel.id)) && gateway.canView(channel)
+        }
         return (privates + guildChannels).filter { $0.lastMessageId != nil }
+    }
+
+    /// Each visible forum's newest posts, fetched again only when the forum has a newer post. A forum the user can't
+    /// read keeps none.
+    private func loadForumPosts() async {
+        let forums = gateway.guilds.values.flatMap(\.channels).filter { $0.isForum && gateway.canView($0) }
+        for forum in forums where forumPosts[forum.id] == nil || forumPosts[forum.id]?.lastPostId != forum.lastMessageId {
+            guard let search = try? await gateway.client.forumThreads(channelId: forum.id, limit: Self.forumPostLimit) else { continue }
+            let joined = Set((search.members ?? []).map(\.id))
+            for var post in search.threads {
+                post.guildId = forum.guildId
+                if joined.contains(post.id) { post.member = DiscordChannel.ThreadMember(userId: gateway.me?.id) }
+                gateway.remember(post)
+            }
+            forumPosts[forum.id] = (forum.lastMessageId, search.threads.map(\.id))
+        }
     }
 
     func context(guildId: String?) -> DiscordText.Context {
@@ -193,7 +218,8 @@ public final class DiscordChatList: ChatListProvider {
         let page = pages[channel.id]?.messages
         let latest = page?.first
         var unread = 0
-        if isUnread {
+        // A thread the user never opened has no read state, and Discord doesn't count it as unread.
+        if isUnread, read != nil || !channel.isThread {
             let counted = page.map { $0.count(where: { $0.author.id != me && DiscordSnowflake.isAfter($0.id, read?.lastMessageId) }) } ?? 1
             unread = max(read?.mentionCount ?? 0, counted)
         }
@@ -203,13 +229,14 @@ public final class DiscordChatList: ChatListProvider {
             preview = latest.author.id == me ? "You: \(body)" : (channel.type == DiscordChannel.dm ? body : "\(latest.author.name): \(body)")
         }
         let guild = gateway.guild(id: channel.guildId)
+        let parent = channel.isThread ? gateway.channel(id: channel.parentId ?? "") : nil
         let others = (channel.recipients ?? []).filter { $0.id != me }
         let isDM = channel.type == DiscordChannel.dm
         return ChatSummary(
             id: Self.chatId(channelId: channel.id),
             network: .discord,
             title: channel.title,
-            titlePrefix: guild?.name,
+            titlePrefix: guild.map { guild in parent?.name.map { "\(guild.name) / \($0)" } ?? guild.name },
             subtitle: channel.topic,
             avatarURL: isDM ? others.first?.avatarURL : (guild?.iconURL ?? channel.icon.flatMap { URL(string: "https://cdn.discordapp.com/channel-icons/\(channel.id)/\($0).png?size=128") }),
             avatarColorKey: isDM ? others.first?.id : channel.guildId ?? channel.id,
@@ -226,7 +253,18 @@ public final class DiscordChatList: ChatListProvider {
     static func chatId(channelId: String) -> String {
         "discord:channel:\(channelId)"
     }
+}
 
+extension DiscordChatList: ChatListResolving {
+    /// A channel the list leaves out, such as a DM just started from a profile (no messages yet) or a thread the
+    /// user hasn't joined, as a row built from the gateway's state.
+    public func chat(for destination: ChatSummary.Destination, in _: [ChatSummary]) -> ChatSummary? {
+        guard case let .discord(channelId) = destination, let channel = gateway.channel(id: channelId) else { return nil }
+        return summary(channel)
+    }
+}
+
+extension DiscordChatList {
     // MARK: Live rows
 
     private func handle(_ event: DiscordGateway.Event) {
