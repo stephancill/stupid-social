@@ -644,6 +644,8 @@ public class ChatViewModel: ObservableObject {
     /// Confirmed message id → the image the user picked. The message keeps showing it, so the swap from the
     /// sending copy doesn't reload the image or change its size.
     private var pickedImages: [String: ChatEmbed] = [:]
+    /// A sending voice message's id → its recording, which its bubble plays until the network's copy shows.
+    var sendingVoiceFiles: [String: URL] = [:]
     /// What the composer held when an edit began, back once the edit is saved or cancelled.
     private var composerBeforeEdit: (draft: String, attachment: ChatAttachment?, replyingTo: ChatMessage?)?
     /// Message id → the text of an edit that is saving, shown in place of the message's own until `history`
@@ -852,28 +854,41 @@ public class ChatViewModel: ObservableObject {
     /// Sends a sticker optimistically, as a reply when one is being written.
     public func send(sticker _: ChatSticker) async {}
 
+    // MARK: Voice messages
+
+    /// Whether the composer offers recording a voice message; networks that send them override this.
+    public var offersVoiceNotes: Bool {
+        false
+    }
+
+    /// Sends a recorded voice message optimistically, as a reply when one is being written.
+    public func send(voice _: ChatVoiceNote) async {}
+
     /// The optimistic send every network shares: the message shows at once as sending and the composer clears;
     /// `deliver` sends it and returns the network's id for it (nil when unknown). The sending copy stays until a
     /// message with that id is in `history`, so it never blinks out; without an id it goes when `deliver`
     /// returns, which should first load the sent message. A failure takes it away and puts the text and
-    /// attachment back in the composer, if the user hasn't started another message. A sticker shows as itself and
-    /// leaves the draft as it is.
-    func sendOptimistically(text: String, attachment: ChatAttachment?, sticker: ChatSticker? = nil, replyToId: String?, deliver: () async throws -> String?) async {
+    /// attachment back in the composer, if the user hasn't started another message. A sticker or voice message shows
+    /// as itself and leaves the draft as it is; a voice message that fails is lost, like a sticker.
+    func sendOptimistically(text: String, attachment: ChatAttachment?, sticker: ChatSticker? = nil, voice: ChatVoiceNote? = nil, replyToId: String?, deliver: () async throws -> String?) async {
         errorMessage = nil
         let localId = "sending-\(UUID().uuidString)"
         historyAtSend[localId] = Set(history.map(\.id))
         let image = attachment.flatMap { Self.localImage(attachment: $0, id: localId) }
+        let voiceEmbed = voice.map { ChatEmbed.voice(previewId: localId, duration: $0.duration, waveform: $0.waveform) }
+        sendingVoiceFiles[localId] = voice?.fileURL
         outgoing.append(ChatMessage(
             id: localId,
             sender: ChatUser(id: "you", name: "You", avatarURL: nil),
             timestamp: Date(),
             text: text.isEmpty ? nil : text,
-            embeds: sticker.map { [.sticker($0)] } ?? image.map { [$0] } ?? attachment.map { [.pending(title: $0.filename)] } ?? [],
+            embeds: sticker.map { [.sticker($0)] } ?? voiceEmbed.map { [$0] } ?? image.map { [$0] } ?? attachment.map { [.pending(title: $0.filename)] } ?? [],
             replyToId: replyToId,
             isOwn: true,
             isSending: true,
         ))
-        if sticker == nil {
+        let keepsDraft = sticker != nil || voice != nil
+        if !keepsDraft {
             draft = ""
             self.attachment = nil
         }
@@ -886,14 +901,16 @@ public class ChatViewModel: ObservableObject {
                 awaitingHistory[id] = localId
             } else {
                 historyAtSend[localId] = nil
+                sendingVoiceFiles[localId] = nil
                 outgoing.removeAll { $0.id == localId }
             }
-            AppMetrics.messageSent(network: network, hasAttachment: attachment != nil, isReply: replyToId != nil, error: nil)
+            AppMetrics.messageSent(network: network, hasAttachment: attachment != nil, isVoice: voice != nil, isReply: replyToId != nil, error: nil)
         } catch {
-            AppMetrics.messageSent(network: network, hasAttachment: attachment != nil, isReply: replyToId != nil, error: error)
+            AppMetrics.messageSent(network: network, hasAttachment: attachment != nil, isVoice: voice != nil, isReply: replyToId != nil, error: error)
             historyAtSend[localId] = nil
+            sendingVoiceFiles[localId] = nil
             outgoing.removeAll { $0.id == localId }
-            if sticker == nil, draft.isEmpty, self.attachment == nil {
+            if !keepsDraft, draft.isEmpty, self.attachment == nil {
                 draft = text
                 self.attachment = attachment
             }
@@ -1067,6 +1084,7 @@ public class ChatViewModel: ObservableObject {
             awaitingHistory[id] = nil
             sentLocalIds[id] = localId
             historyAtSend[localId] = nil
+            sendingVoiceFiles[localId] = nil
             outgoing.removeAll { $0.id == localId }
         }
         // A saved edit shows until history has the new version, which may read differently, such as with mentions.

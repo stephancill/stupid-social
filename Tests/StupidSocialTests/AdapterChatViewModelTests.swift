@@ -383,6 +383,40 @@ final class AdapterChatViewModelTests: XCTestCase {
         chat.disconnect()
     }
 
+    func testVoiceMessagesAreOfferedOnlyWhereTheAdapterSendsThem() {
+        XCTAssertFalse(makeChat(FakeAdapter()).offersVoiceNotes)
+        XCTAssertTrue(makeChat(FakeVoiceAdapter()).offersVoiceNotes)
+    }
+
+    func testASentVoiceMessagePlaysItsRecordingWhileSendingAndKeepsTheDraft() async {
+        let adapter = FakeVoiceAdapter()
+        adapter.pages = [[message(1)]]
+        let chat = makeChat(adapter)
+        await chat.connect()
+        chat.draft = "Half written"
+        chat.startReply(to: message(1))
+        let note = ChatVoiceNote(fileURL: URL(fileURLWithPath: "/tmp/voice.caf"), duration: 2.5, waveform: [0, 1])
+        var whileSending: (embeds: [ChatEmbed]?, preview: URL?)?
+        adapter.onSend = {
+            let sending = chat.messages.last
+            let previewId = sending?.embeds.first.flatMap { embed -> String? in
+                if case let .voice(id, _, _) = embed { return id }
+                return nil
+            }
+            whileSending = await (sending?.embeds, chat.audioPreviewURL(for: previewId ?? ""))
+        }
+        await chat.send(voice: note)
+        guard case .voice(_, 2.5, [0, 1])? = whileSending?.embeds?.first else { return XCTFail("\(String(describing: whileSending))") }
+        XCTAssertEqual(whileSending?.preview, note.fileURL)
+        XCTAssertEqual(adapter.sentVoices, [note])
+        XCTAssertEqual(adapter.sentVoiceReplies, ["1"])
+        XCTAssertEqual(chat.messages.last?.id, "voice-1")
+        XCTAssertFalse(chat.messages.contains(where: \.isSending))
+        XCTAssertEqual(chat.draft, "Half written", "a voice message leaves the draft")
+        XCTAssertNil(chat.replyingTo)
+        chat.disconnect()
+    }
+
     func testCancellingOrKeepingTheTextSavesNothing() async {
         let adapter = FakeEditingAdapter()
         adapter.pages = [[message(2, own: true)]]
@@ -711,6 +745,22 @@ private final class FakeStickerAdapter: FakeAdapter, ChatStickerSending {
         sentStickerReplies.append(replyToId)
         let id = "sticker-\(sentStickers.count)"
         append(ChatMessage(id: id, sender: ChatUser(id: "you", name: "You", avatarURL: nil), timestamp: Date(), text: nil, embeds: [.sticker(sticker)], isOwn: true))
+        return id
+    }
+}
+
+@MainActor
+private final class FakeVoiceAdapter: FakeAdapter, ChatVoiceSending {
+    var onSend: (() async -> Void)?
+    private(set) var sentVoices: [ChatVoiceNote] = []
+    private(set) var sentVoiceReplies: [String?] = []
+
+    func send(voice: ChatVoiceNote, replyToId: String?) async throws -> String? {
+        await onSend?()
+        sentVoices.append(voice)
+        sentVoiceReplies.append(replyToId)
+        let id = "voice-\(sentVoices.count)"
+        append(ChatMessage(id: id, sender: ChatUser(id: "you", name: "You", avatarURL: nil), timestamp: Date(), text: nil, embeds: [.voice(previewId: id, duration: voice.duration, waveform: voice.waveform)], isOwn: true))
         return id
     }
 }

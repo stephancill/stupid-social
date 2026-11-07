@@ -1402,10 +1402,41 @@ public actor TelegramClient: ChatListProvider {
         return nil
     }
 
-    /// Uploads a photo or file in 512 KB parts and sends it with `caption`, returning the new message's id
-    /// (validated with the probe's `send-photo`).
+    /// Uploads a photo or file and sends it with `caption`, returning the new message's id (validated with the
+    /// probe's `send-photo`).
     public func sendMedia(peer: TelegramPeer, data: Data, mimeType: String, filename: String, isImage: Bool, caption: String, mentions: [TelegramMention] = [], replyTo: Int32?) async throws -> Int32? {
         try requireAccount()
+        let file = try await upload(data, filename: filename)
+        let media = isImage
+            ? TLObject("inputMediaUploadedPhoto", ["file": .object(file)])
+            : TLObject("inputMediaUploadedDocument", [
+                "file": .object(file),
+                "mime_type": .string(mimeType),
+                "attributes": .vector([.object(TLObject("documentAttributeFilename", ["file_name": .string(filename)]))]),
+            ])
+        return try await sendMedia(peer: peer, media: media, caption: caption, mentions: mentions, replyTo: replyTo)
+    }
+
+    /// Sends Ogg Opus audio as a voice message: a document with `documentAttributeAudio` marked voice, with its
+    /// length in whole seconds and its waveform (validated with the probe's `send-voice`).
+    public func sendVoice(peer: TelegramPeer, oggOpus data: Data, duration: Double, waveform: [Double], replyTo: Int32?) async throws -> Int32? {
+        try requireAccount()
+        let file = try await upload(data, filename: "voice.ogg")
+        let audio = TLObject("documentAttributeAudio", [
+            "voice": .bool(true),
+            "duration": .int(Int32(max(1, duration.rounded()))),
+            "waveform": .bytes(TelegramMediaParser.packedWaveform(waveform)),
+        ])
+        let media = TLObject("inputMediaUploadedDocument", [
+            "file": .object(file),
+            "mime_type": .string("audio/ogg"),
+            "attributes": .vector([.object(audio)]),
+        ])
+        return try await sendMedia(peer: peer, media: media, caption: "", replyTo: replyTo)
+    }
+
+    /// Uploads a file in 512 KB parts, returning the `InputFile` that names it.
+    private func upload(_ data: Data, filename: String) async throws -> TLObject {
         let fileId = Int64.random(in: 1 ... .max)
         let partSize = 512 * 1024
         let parts = (data.count + partSize - 1) / partSize
@@ -1418,16 +1449,12 @@ public actor TelegramClient: ChatListProvider {
                 : TLObject("upload.saveFilePart", ["file_id": .long(fileId), "file_part": .int(Int32(part)), "bytes": .bytes(bytes)])
             guard try await invoke(method).bool == true else { throw TelegramError.protocolViolation("upload part refused") }
         }
-        let file = isBig
+        return isBig
             ? TLObject("inputFileBig", ["id": .long(fileId), "parts": .int(Int32(parts)), "name": .string(filename)])
             : TLObject("inputFile", ["id": .long(fileId), "parts": .int(Int32(parts)), "name": .string(filename), "md5_checksum": .string("")])
-        let media = isImage
-            ? TLObject("inputMediaUploadedPhoto", ["file": .object(file)])
-            : TLObject("inputMediaUploadedDocument", [
-                "file": .object(file),
-                "mime_type": .string(mimeType),
-                "attributes": .vector([.object(TLObject("documentAttributeFilename", ["file_name": .string(filename)]))]),
-            ])
+    }
+
+    private func sendMedia(peer: TelegramPeer, media: TLObject, caption: String, mentions: [TelegramMention] = [], replyTo: Int32?) async throws -> Int32? {
         let randomId = Int64.random(in: 1 ... .max)
         var method = TLObject("messages.sendMedia", ["peer": .object(peer.inputPeer), "media": .object(media), "message": .string(caption), "random_id": .long(randomId)])
         if let replyTo {

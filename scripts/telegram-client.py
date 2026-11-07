@@ -28,6 +28,9 @@ Commands:
   edit-chat --peer K [--title T] [--about A]   rename a group or replace its description (only in a group you
                               named for testing)
   send-photo --peer K --file F [--caption T]   upload.saveFilePart + messages.sendMedia
+  send-voice --peer K --file F.ogg --duration S [--levels 0,31,...]   a voice message: an Ogg Opus document with
+                              documentAttributeAudio (voice, duration, 5-bit waveform); only to self (Saved Messages)
+                              or a chat the user named for testing
   react --peer K --msg-id N [--emoji E]        messages.sendReaction; no emoji removes yours
   buttons --peer K [--limit N]  the inline keyboards (replyInlineMarkup) in a chat's history: each button's
                               constructor, label and data or URL, without message text
@@ -1172,6 +1175,22 @@ def sticker_formats(documents: list[dict]) -> dict:
     return counts
 
 
+def pack_waveform(levels: list[int]) -> bytes:
+    """5-bit levels packed least significant bit first, as documentAttributeAudio.waveform carries them."""
+    packed = bytearray((len(levels) * 5 + 7) // 8)
+    for index, level in enumerate(levels):
+        bit = index * 5
+        value = (min(max(level, 0), 31) << (bit % 8))
+        packed[bit // 8] |= value & 0xFF
+        if bit // 8 + 1 < len(packed):
+            packed[bit // 8 + 1] |= value >> 8
+    return bytes(packed)
+
+
+def unpack_waveform(data: bytes) -> list[int]:
+    return [((data[i * 5 // 8] | (data[i * 5 // 8 + 1] << 8 if i * 5 // 8 + 1 < len(data) else 0)) >> (i * 5 % 8)) & 31 for i in range(len(data) * 8 // 5)]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1238,6 +1257,11 @@ def main():
     send_photo.add_argument("--peer", required=True)
     send_photo.add_argument("--file", required=True)
     send_photo.add_argument("--caption", default="")
+    send_voice = sub.add_parser("send-voice")
+    send_voice.add_argument("--peer", required=True)
+    send_voice.add_argument("--file", required=True)
+    send_voice.add_argument("--duration", type=int, required=True)
+    send_voice.add_argument("--levels", default="", help="comma-separated waveform levels from 0 to 31")
     push_register = sub.add_parser("push-register")
     push_register.add_argument("--endpoint", help="Web Push endpoint (token_type 10)")
     push_register.add_argument("--apns", help="APNs device token in hex (token_type 1)")
@@ -1659,6 +1683,32 @@ def main():
             "random_id": secrets.randbits(63),
         })
         sent = [u for u in result.get("updates", []) if u["_"] == "updateMessageID"]
+        print(f"{result['_']}: uploaded {len(data)} bytes in {len(parts)} parts, message id {sent[0]['id'] if sent else '?'}")
+    elif args.command == "send-voice":
+        data = pathlib.Path(args.file).read_bytes()
+        file_id = secrets.randbits(63)
+        part_size = 512 * 1024
+        parts = [data[i : i + part_size] for i in range(0, len(data), part_size)]
+        for index, part in enumerate(parts):
+            assert client.call({"_": "upload.saveFilePart", "file_id": file_id, "file_part": index, "bytes": part}) is True
+        uploaded = {"_": "inputFile", "id": file_id, "parts": len(parts), "name": pathlib.Path(args.file).name, "md5_checksum": ""}
+        audio = {"_": "documentAttributeAudio", "voice": True, "duration": args.duration}
+        if args.levels:
+            audio["waveform"] = pack_waveform([int(level) for level in args.levels.split(",")])
+        result = client.call({
+            "_": "messages.sendMedia",
+            "peer": client.input_peer(args.peer),
+            "media": {"_": "inputMediaUploadedDocument", "file": uploaded, "mime_type": "audio/ogg", "attributes": [audio]},
+            "message": "",
+            "random_id": secrets.randbits(63),
+        })
+        sent = [u for u in result.get("updates", []) if u["_"] == "updateMessageID"]
+        for update in result.get("updates", []):
+            message = update.get("message") or {}
+            document = (message.get("media") or {}).get("document")
+            if document:
+                attributes = [{k: v for k, v in a.items() if k != "waveform"} | ({"waveform_levels": unpack_waveform(a["waveform"])} if "waveform" in a else {}) for a in document["attributes"]]
+                print("media", message["media"]["_"], "voice" if message["media"].get("voice") else "not voice", document["mime_type"], document["size"], attributes)
         print(f"{result['_']}: uploaded {len(data)} bytes in {len(parts)} parts, message id {sent[0]['id'] if sent else '?'}")
     elif args.command == "push-register":
         token_type, token = (1, args.apns) if args.apns else (10, webpush_token(client.store, args.endpoint))

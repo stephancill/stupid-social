@@ -1,14 +1,14 @@
 import Foundation
 
 /// One Telegram chat: pages its history, refreshes when Telegram pushes an update on the open session (with a
-/// slow poll as a fallback), sends text, replies, photos and files, reacts, and moves the read cursor as
+/// slow poll as a fallback), sends text, replies, photos, files and voice messages, reacts, and moves the read cursor as
 /// messages are read. Media, avatars and link previews load lazily through `tgfile:` URLs. In groups it offers
 /// members to mention: `@username`, or for someone without one a name mention. Shows who is typing and shares
 /// the user's own typing. An album, which Telegram sends as one message per photo or video, shows as one message;
 /// custom emoji in text and reactions draw as their images, and voice messages play in the chat. The user's
 /// messages show as seen once Telegram's outbox read cursor passes them.
 @MainActor
-public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, ChatReactionSending, ChatUnseenReactions, ChatReadReceipts, ChatLiveUpdating, ChatReferenceResolving, ChatMentioning, ChatTyping, ChatCustomEmojis, ChatAudioPreviewing, ChatReactionChoices, ChatButtonPressing, ChatStickerSending {
+public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, ChatReactionSending, ChatUnseenReactions, ChatReadReceipts, ChatLiveUpdating, ChatReferenceResolving, ChatMentioning, ChatTyping, ChatCustomEmojis, ChatAudioPreviewing, ChatReactionChoices, ChatButtonPressing, ChatStickerSending, ChatVoiceSending {
     public let network = SocialNetwork.telegram
     public let canReply = true
     public let acceptsAttachments = true
@@ -318,6 +318,18 @@ public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, 
     public func send(sticker: ChatSticker, replyToId: String?) async throws -> String? {
         typingSentAt = nil
         let id = try await client.send(peer: peer, sticker: sticker, replyTo: replyToId.flatMap { Int32($0) })
+        scheduleRefresh()
+        return id.map(String.init)
+    }
+
+    // MARK: Voice messages
+
+    /// Sent as Ogg Opus, as Telegram's apps send them; encoded off the main thread.
+    public func send(voice: ChatVoiceNote, replyToId: String?) async throws -> String? {
+        typingSentAt = nil
+        let fileURL = voice.fileURL
+        let data = try await Task.detached { try OggOpusEncoder.encode(fileAt: fileURL) }.value
+        let id = try await client.sendVoice(peer: peer, oggOpus: data, duration: voice.duration, waveform: voice.waveform, replyTo: replyToId.flatMap { Int32($0) })
         scheduleRefresh()
         return id.map(String.init)
     }
