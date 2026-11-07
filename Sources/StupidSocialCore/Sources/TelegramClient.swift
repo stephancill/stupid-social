@@ -1380,27 +1380,32 @@ public actor TelegramClient: ChatListProvider {
 
     /// Sends text, returning the new message's id. `mentions` are name mentions of users this device can name;
     /// Telegram marks `@username`s in the text by itself (both validated with the probe's `send`).
-    public func send(peer: TelegramPeer, text: String, mentions: [TelegramMention] = [], replyTo: Int32?) async throws -> Int32? {
+    public func send(peer: TelegramPeer, text: String, mentions: [TelegramMention] = [], italics: [NSRange] = [], replyTo: Int32?) async throws -> Int32? {
         try requireAccount()
         let randomId = Int64.random(in: 1 ... .max)
         var method = TLObject("messages.sendMessage", ["peer": .object(peer.inputPeer), "message": .string(text), "random_id": .long(randomId)])
         if let replyTo {
             method["reply_to"] = .object(TLObject("inputReplyToMessage", ["reply_to_msg_id": .int(replyTo)]))
         }
-        if let entities = mentionEntities(mentions) {
+        if let entities = mentionEntities(mentions, italics: italics) {
             method["entities"] = entities
         }
         return try await Self.sentMessageId(invoke(method).object, randomId: randomId)
     }
 
-    /// `inputMessageEntityMentionName`s for the name mentions whose users this device can name.
-    private func mentionEntities(_ mentions: [TelegramMention]) -> TLValue? {
-        let entities: [TLValue] = mentions.compactMap { mention in
+    /// `inputMessageEntityMentionName`s for the name mentions whose users this device can name, then
+    /// `messageEntityItalic`s (UTF-16 ranges, as Telegram's offsets are).
+    private func mentionEntities(_ mentions: [TelegramMention], italics: [NSRange] = []) -> TLValue? {
+        let names: [TLValue] = mentions.compactMap { mention in
             guard let userId = mention.userId, let user = inputUsers[userId] else { return nil }
             return .object(TLObject("inputMessageEntityMentionName", [
                 "offset": .int(Int32(mention.offset)), "length": .int(Int32(mention.length)), "user_id": .object(user),
             ]))
         }
+        let italic: [TLValue] = italics.map { range in
+            .object(TLObject("messageEntityItalic", ["offset": .int(Int32(range.location)), "length": .int(Int32(range.length))]))
+        }
+        let entities = italic + names
         return entities.isEmpty ? nil : .vector(entities)
     }
 
@@ -1432,7 +1437,7 @@ public actor TelegramClient: ChatListProvider {
 
     /// Uploads a photo or file and sends it with `caption`, returning the new message's id (validated with the
     /// probe's `send-photo`).
-    public func sendMedia(peer: TelegramPeer, data: Data, mimeType: String, filename: String, isImage: Bool, caption: String, mentions: [TelegramMention] = [], replyTo: Int32?) async throws -> Int32? {
+    public func sendMedia(peer: TelegramPeer, data: Data, mimeType: String, filename: String, isImage: Bool, caption: String, mentions: [TelegramMention] = [], italics: [NSRange] = [], replyTo: Int32?) async throws -> Int32? {
         try requireAccount()
         let file = try await upload(data, filename: filename)
         let media = isImage
@@ -1442,7 +1447,7 @@ public actor TelegramClient: ChatListProvider {
                 "mime_type": .string(mimeType),
                 "attributes": .vector([.object(TLObject("documentAttributeFilename", ["file_name": .string(filename)]))]),
             ])
-        return try await sendMedia(peer: peer, media: media, caption: caption, mentions: mentions, replyTo: replyTo)
+        return try await sendMedia(peer: peer, media: media, caption: caption, mentions: mentions, italics: italics, replyTo: replyTo)
     }
 
     /// Sends Ogg Opus audio as a voice message: a document with `documentAttributeAudio` marked voice, with its
@@ -1482,13 +1487,13 @@ public actor TelegramClient: ChatListProvider {
             : TLObject("inputFile", ["id": .long(fileId), "parts": .int(Int32(parts)), "name": .string(filename), "md5_checksum": .string("")])
     }
 
-    private func sendMedia(peer: TelegramPeer, media: TLObject, caption: String, mentions: [TelegramMention] = [], replyTo: Int32?) async throws -> Int32? {
+    private func sendMedia(peer: TelegramPeer, media: TLObject, caption: String, mentions: [TelegramMention] = [], italics: [NSRange] = [], replyTo: Int32?) async throws -> Int32? {
         let randomId = Int64.random(in: 1 ... .max)
         var method = TLObject("messages.sendMedia", ["peer": .object(peer.inputPeer), "media": .object(media), "message": .string(caption), "random_id": .long(randomId)])
         if let replyTo {
             method["reply_to"] = .object(TLObject("inputReplyToMessage", ["reply_to_msg_id": .int(replyTo)]))
         }
-        if let entities = mentionEntities(mentions) {
+        if let entities = mentionEntities(mentions, italics: italics) {
             method["entities"] = entities
         }
         return try await Self.sentMessageId(invoke(method).object, randomId: randomId)

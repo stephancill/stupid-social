@@ -169,7 +169,7 @@ public final class DiscordChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEdit
 
     public func send(_ message: ChatOutgoing) async throws -> String? {
         let upload = if let attachment = message.attachment { try await client.upload(channelId: channelId, data: attachment.data, mimeType: attachment.mimeType, filename: attachment.filename) } else { DiscordUploaded?.none }
-        let sent = try await client.send(channelId: channelId, content: DiscordText.outgoing(message.text), replyTo: message.replyToId, nonce: DiscordSnowflake.now(), upload: upload)
+        let sent = try await client.send(channelId: channelId, content: DiscordText.outgoing(message.markdownText()), replyTo: message.replyToId, nonce: DiscordSnowflake.now(), upload: upload)
         accept(sent)
         return sent.id
     }

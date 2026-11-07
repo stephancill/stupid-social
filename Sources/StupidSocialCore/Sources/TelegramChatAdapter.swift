@@ -283,10 +283,11 @@ public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, 
                 isImage: attachment.isImage,
                 caption: text,
                 mentions: mentions,
+                italics: message.italics,
                 replyTo: replyTo,
             )
         } else {
-            try await client.send(peer: peer, text: text, mentions: mentions, replyTo: replyTo)
+            try await client.send(peer: peer, text: text, mentions: mentions, italics: message.italics, replyTo: replyTo)
         }
         if message.attachment == nil, let id {
             var sent = TelegramMessage(id: id, date: Date(), text: text, caption: text, mentions: mentions.isEmpty ? nil : mentions, senderId: nil, isOutgoing: true, replyToId: replyTo, isService: false)

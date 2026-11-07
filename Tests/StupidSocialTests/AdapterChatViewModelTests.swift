@@ -466,7 +466,7 @@ final class AdapterChatViewModelTests: XCTestCase {
         chat.disconnect()
     }
 
-    func testAForwardFromAnotherNetworkOrAccountSendsACopyNamingItsOrigin() async {
+    func testAForwardFromAnotherNetworkOrAccountSendsACopyUnderAnItalicForwarded() async {
         let adapter = FakeForwardingAdapter()
         adapter.pages = [[]]
         let chat = makeChat(adapter)
@@ -474,13 +474,12 @@ final class AdapterChatViewModelTests: XCTestCase {
         chat.stage(ChatForward(message: message(1), network: .discord, accountId: "other", reference: "discord-ref", media: []))
         await chat.send()
         XCTAssertEqual(adapter.forwarded, [])
-        XCTAssertEqual(adapter.sent.map(\.text), ["Forwarded from Ada on Discord\n\nMessage 1"])
+        XCTAssertEqual(adapter.sent.map(\.text), ["Forwarded\n\nMessage 1"], "no sender or network")
+        XCTAssertEqual(adapter.sent.last?.italics, [NSRange(location: 0, length: 9)])
+        XCTAssertEqual(adapter.sent.last?.markdownText(), "*Forwarded*\n\nMessage 1")
         chat.stage(ChatForward(message: message(2), network: .telegram, accountId: "other", reference: "ref-2", media: []))
         await chat.send()
-        XCTAssertEqual(adapter.sent.last?.text, "Forwarded from Ada\n\nMessage 2")
-        chat.stage(ChatForward(message: message(3, own: true), network: .discord, accountId: "other", reference: nil, media: []))
-        await chat.send()
-        XCTAssertEqual(adapter.sent.last?.text, "Forwarded from Discord\n\nMessage 3", "the user's own message names no one")
+        XCTAssertEqual(adapter.sent.last?.text, "Forwarded\n\nMessage 2", "another account's message goes as a copy too")
         chat.disconnect()
     }
 

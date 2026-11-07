@@ -42,17 +42,6 @@ public struct ChatForward: Identifiable, Hashable, Sendable {
         self.media = media
     }
 
-    /// The header a copy's text starts with, naming the network when the copy goes to another one.
-    public func copyHeader(to network: SocialNetwork) -> String {
-        let place = network == self.network ? nil : self.network.displayName
-        return switch (originName, place) {
-        case let (name?, place?): "Forwarded from \(name) on \(place)"
-        case let (name?, nil): "Forwarded from \(name)"
-        case let (nil, place?): "Forwarded from \(place)"
-        case (nil, nil): "Forwarded"
-        }
-    }
-
     /// Whether anything of the message can be copied to another network: its text or a file.
     public var isCopyable: Bool {
         !(message.text ?? "").isEmpty || !media.isEmpty
@@ -108,18 +97,21 @@ public protocol ChatForwarding: ChatAdapter {
     func forward(reference: String) async throws -> String?
 }
 
-/// The messages that make up a copy of a forwarded message: the header and text first, with the first file, then
-/// each other file on its own.
+/// The messages that make up a copy of a forwarded message: "Forwarded" in italics (where the network formats
+/// text) and the text first, with the first file, then each other file on its own. The copy names neither the
+/// sender nor the network it came from.
 enum ChatForwardCopy {
     struct Part {
         var text: String
         var media: ChatForwardMedia?
+        var italics: [NSRange] = []
     }
 
-    static func parts(of forward: ChatForward, to network: SocialNetwork) -> [Part] {
-        let header = forward.copyHeader(to: network)
+    static let header = "Forwarded"
+
+    static func parts(of forward: ChatForward) -> [Part] {
         let text = forward.message.text.map { $0.isEmpty ? header : "\(header)\n\n\($0)" } ?? header
-        var parts = [Part(text: text, media: forward.media.first)]
+        var parts = [Part(text: text, media: forward.media.first, italics: [NSRange(location: 0, length: (header as NSString).length)])]
         for media in forward.media.dropFirst() {
             parts.append(Part(text: "", media: media))
         }

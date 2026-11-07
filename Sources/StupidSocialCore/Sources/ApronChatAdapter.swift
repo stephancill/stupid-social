@@ -932,7 +932,9 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
         if let attachment = message.attachment, let limit = session.server.ext?.uploadLimits[attachment.mimeType], attachment.data.count > limit {
             throw SourceError.serviceError("\(attachment.filename) is larger than this server's \(ByteCountFormatter.string(fromByteCount: Int64(limit), countStyle: .file)) limit.")
         }
-        let bodyText = message.text.hasPrefix("//") ? String(message.text.dropFirst()) : message.text
+        // Apron messages are Markdown.
+        let markdown = message.markdownText()
+        let bodyText = markdown.hasPrefix("//") ? String(markdown.dropFirst()) : markdown
         // The server refuses longer text, and three refusals in a minute close the connection.
         if bodyText.utf8.count > ApronConnection.maxTextBytes {
             throw SourceError.serviceError("This message is too long; Apron messages can be at most \(ApronConnection.maxTextBytes) bytes.")

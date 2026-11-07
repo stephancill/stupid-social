@@ -26,6 +26,26 @@ public struct ChatOutgoing {
     public let text: String
     public let attachment: ChatAttachment?
     public let replyToId: String?
+    /// Parts of `text` to set in italics (UTF-16 ranges), such as a forwarded copy's "Forwarded". Networks with
+    /// formatting apply them (Telegram's entities, Markdown with `markdownText`); plain-text networks leave them out.
+    public var italics: [NSRange] = []
+
+    init(text: String, attachment: ChatAttachment?, replyToId: String?, italics: [NSRange] = []) {
+        self.text = text
+        self.attachment = attachment
+        self.replyToId = replyToId
+        self.italics = italics
+    }
+
+    /// `text` with `italics` wrapped in `marker`, for networks whose messages are Markdown.
+    public func markdownText(marker: String = "*") -> String {
+        let text = NSMutableString(string: text)
+        for range in italics.sorted(by: { $0.location > $1.location }) where NSMaxRange(range) <= text.length {
+            text.insert(marker, at: NSMaxRange(range))
+            text.insert(marker, at: range.location)
+        }
+        return text as String
+    }
 }
 
 /// One conversation on one network, as the chat framework drives it. An adapter only translates: it loads and
@@ -578,21 +598,21 @@ public final class AdapterChatViewModel<Adapter: ChatAdapter>: ChatViewModel {
             throw ChatForwardError.noAttachments
         }
         var lastId: String?
-        for part in ChatForwardCopy.parts(of: forward, to: network) {
+        for part in ChatForwardCopy.parts(of: forward) {
             guard let media = part.media else {
-                lastId = try await adapter.send(ChatOutgoing(text: part.text, attachment: nil, replyToId: nil))
+                lastId = try await adapter.send(ChatOutgoing(text: part.text, attachment: nil, replyToId: nil, italics: part.italics))
                 continue
             }
             if case .voice = media, let sending = adapter as? any ChatVoiceSending, let note = try await ChatForwardCopy.voiceNote(for: media) {
                 if !part.text.isEmpty {
-                    lastId = try await adapter.send(ChatOutgoing(text: part.text, attachment: nil, replyToId: nil))
+                    lastId = try await adapter.send(ChatOutgoing(text: part.text, attachment: nil, replyToId: nil, italics: part.italics))
                 }
                 lastId = try await sending.send(voice: note, replyToId: nil)
                 continue
             }
             guard adapter.acceptsAttachments else { throw ChatForwardError.noAttachments }
             let attachment = try await ChatForwardCopy.attachment(for: media)
-            lastId = try await adapter.send(ChatOutgoing(text: part.text, attachment: attachment, replyToId: nil))
+            lastId = try await adapter.send(ChatOutgoing(text: part.text, attachment: attachment, replyToId: nil, italics: part.italics))
         }
         return lastId
     }
