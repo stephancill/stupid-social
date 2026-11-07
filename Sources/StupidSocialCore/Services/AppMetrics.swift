@@ -55,10 +55,11 @@ public enum AppMetrics {
         StupidMetrics.track("chat_search", properties: ["network": network.rawValue])
     }
 
-    static func messageSent(network: SocialNetwork, hasAttachment: Bool, isReply: Bool, error: (any Error)?) {
+    static func messageSent(network: SocialNetwork, hasAttachment: Bool, isVoice: Bool, isReply: Bool, error: (any Error)?) {
         StupidMetrics.track("message_send", properties: [
             "network": network.rawValue,
             "attachment": hasAttachment ? "yes" : "no",
+            "voice": isVoice ? "yes" : "no",
             "reply": isReply ? "yes" : "no",
             "outcome": error == nil ? "ok" : "error",
         ])

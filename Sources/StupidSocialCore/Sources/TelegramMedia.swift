@@ -255,6 +255,20 @@ enum TelegramMediaParser {
         }
     }
 
+    /// Levels from 0 to 1 packed as `waveform` reads them.
+    static func packedWaveform(_ levels: [Double]) -> Data {
+        var bytes = [UInt8](repeating: 0, count: (levels.count * 5 + 7) / 8)
+        for (index, level) in levels.enumerated() {
+            let bit = index * 5
+            let value = Int((min(max(level, 0), 1) * 31).rounded()) << (bit % 8)
+            bytes[bit / 8] |= UInt8(value & 0xFF)
+            if bit / 8 + 1 < bytes.count {
+                bytes[bit / 8 + 1] |= UInt8(value >> 8)
+            }
+        }
+        return Data(bytes)
+    }
+
     /// A file name with the extension the MIME type implies, for documents sent without a name.
     static func filename(of document: TLObject, fallback: String) -> String {
         if let name = document.objects("attributes").first(where: { $0.name == "documentAttributeFilename" })?["file_name"]?.string, !name.isEmpty {

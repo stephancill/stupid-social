@@ -325,6 +325,48 @@ final class TelegramTests: XCTestCase {
         XCTAssertEqual(TelegramMediaParser.waveform(Data(count: 63)).count, 100)
     }
 
+    /// What a sent voice message carries reads back as the same levels, to Telegram's 5 bits.
+    func testPacksVoiceWaveformAsItsDecoderReadsIt() {
+        XCTAssertEqual(TelegramMediaParser.packedWaveform([1, 0, 16.0 / 31, 1.0 / 31]), Data([0x1F, 0xC0, 0x00]))
+        let levels = (0 ..< 100).map { Double($0 % 32) / 31 }
+        let packed = TelegramMediaParser.packedWaveform(levels)
+        XCTAssertEqual(packed.count, 63)
+        XCTAssertEqual(TelegramMediaParser.waveform(packed).map { Int(($0 * 31).rounded()) }, levels.map { Int(($0 * 31).rounded()) })
+    }
+
+    /// Ogg pages as RFC 7845 lays them out: the header pages, then audio ending at the trimmed sample count.
+    func testOggOpusStreamPages() {
+        let packets = (0 ..< 120).map { Data(repeating: UInt8($0), count: $0 == 5 ? 300 : 40) }
+        let stream = OggOpusEncoder.pages(packets: packets, preSkip: 312, samples: 115_000)
+        var pages: [(flags: UInt8, granule: Int64, sequence: UInt32, body: Data)] = []
+        var offset = 0
+        while offset < stream.count {
+            let page = stream.subdata(in: offset ..< stream.count)
+            XCTAssertEqual(page.prefix(4), Data("OggS".utf8))
+            let segments = Int(page[26])
+            let bodyLength = page[27 ..< 27 + segments].reduce(0) { $0 + Int($1) }
+            let length = 27 + segments + bodyLength
+            var unchecked = page.prefix(length)
+            let checksum = unchecked[22 ..< 26].enumerated().reduce(UInt32(0)) { $0 | UInt32($1.element) << (8 * $1.offset) }
+            unchecked.replaceSubrange(22 ..< 26, with: Data(count: 4))
+            XCTAssertEqual(OggPage.crc(Data(unchecked)), checksum)
+            let granule = page[6 ..< 14].enumerated().reduce(Int64(0)) { $0 | Int64($1.element) << (8 * $1.offset) }
+            let sequence = page[18 ..< 22].enumerated().reduce(UInt32(0)) { $0 | UInt32($1.element) << (8 * $1.offset) }
+            pages.append((page[5], granule, sequence, page.subdata(in: 27 + segments ..< length)))
+            offset += length
+        }
+        XCTAssertEqual(pages.map(\.sequence), Array(0 ..< UInt32(pages.count)))
+        XCTAssertEqual(pages.first?.flags, 0x02)
+        XCTAssertEqual(pages.first?.body.prefix(8), Data("OpusHead".utf8))
+        XCTAssertEqual(pages[0].body[10 ..< 12], Data([0x38, 0x01]), "pre-skip 312")
+        XCTAssertEqual(pages[1].body.prefix(8), Data("OpusTags".utf8))
+        XCTAssertEqual(pages.count, 5, "120 packets, 50 to a page")
+        XCTAssertEqual(pages[2].granule, 50 * 960)
+        XCTAssertEqual(pages.last?.flags, 0x04)
+        XCTAssertEqual(pages.last?.granule, 312 + 115_000)
+        XCTAssertEqual(pages[2...].reduce(0) { $0 + $1.body.count }, packets.reduce(0) { $0 + $1.count })
+    }
+
     func testCustomEmojiEntitiesAndAlbumIdsParse() {
         let message = TelegramClient.message(TLObject("message", [
             "id": .int(9), "date": .int(0), "message": .string("hi 💙"), "grouped_id": .long(77),

@@ -172,6 +172,28 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     /// Swaps the keyboard for the sticker panel and back, where the network sends stickers.
     private let stickerButton = UIButton(configuration: .plain())
     private var stickerPanel: ChatStickerPanel?
+    /// Records a voice message where the network sends them, in the send button's place while there's nothing to
+    /// send, as in Messages. Hold to record, release to send and slide left to cancel, as in Telegram; with
+    /// VoiceOver, a tap starts recording and the row's buttons delete or send it.
+    private let voiceButton = UIButton(configuration: .plain())
+    private let voiceRecorder = ChatVoiceRecorder()
+    /// On the composer rather than the button, which hides with the text row while recording.
+    private lazy var holdToRecordGesture = UILongPressGestureRecognizer(target: self, action: #selector(holdToRecord(_:)))
+    /// While the finger that started recording is down; it ends with a send, or a cancel once slid far enough.
+    private var isHoldingToRecord = false
+    private var holdStartX: CGFloat = 0
+    private let voiceHaptic = UIImpactFeedbackGenerator(style: .medium)
+    /// Takes the text row's place while recording: the time so far, then "Slide to cancel" under a held finger, or
+    /// delete and send buttons.
+    private let recordingRow = UIStackView()
+    private let recordingDot = UIView()
+    private let recordingTimeLabel = UILabel()
+    private let slideToCancelLabel = UILabel()
+    private let recordingDeleteButton = UIButton(configuration: .plain())
+    private let recordingSendButton = UIButton(configuration: .plain())
+    private let holdingMicView = UIImageView(image: UIImage(systemName: "mic.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 20)))
+    private var recordingTimer: Timer?
+    private let textRow = UIStackView()
     private var showsStickerPanel = false
     /// The last on-screen keyboard's height, which the sticker panel takes.
     private var keyboardHeight: CGFloat = 0
@@ -204,6 +226,9 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
         audioPlayer.stop()
+        if voiceRecorder.isRecording {
+            cancelRecording()
+        }
     }
 
     override func viewDidLayoutSubviews() {
@@ -407,6 +432,9 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         textView.backgroundColor = .clear
         textView.textContainerInset = UIEdgeInsets(top: 8, left: 0, bottom: 8, right: 0)
         textView.isScrollEnabled = false
+        // Without scrolling the text view's intrinsic width is its longest line; a long line would otherwise
+        // squeeze the buttons beside it (it ties with their default resistance) rather than wrap.
+        textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         textView.delegate = self
         textView.onReturn = { [weak self] in
             guard let self, sendButton.isEnabled else { return }
@@ -457,13 +485,32 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         textView.addGestureRecognizer(typeTap)
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillChangeFrame(_:)), name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
 
-        let textRow = UIStackView(arrangedSubviews: [textView, stickerButton, sendButton])
+        var voiceConfiguration = UIButton.Configuration.plain()
+        voiceConfiguration.image = UIImage(systemName: "mic", withConfiguration: UIImage.SymbolConfiguration(pointSize: 20))
+        voiceConfiguration.baseForegroundColor = .secondaryLabel
+        voiceConfiguration.contentInsets = stickerConfiguration.contentInsets
+        voiceButton.configuration = voiceConfiguration
+        voiceButton.heightAnchor.constraint(equalToConstant: minimumTextHeight).isActive = true
+        voiceButton.accessibilityLabel = "Record Voice Message"
+        voiceButton.isHidden = !viewModel.offersVoiceNotes
+        voiceButton.setContentHuggingPriority(.required, for: .horizontal)
+        voiceButton.addAction(UIAction { [weak self] _ in self?.voiceButtonTapped() }, for: .primaryActionTriggered)
+        holdToRecordGesture.minimumPressDuration = 0.15
+        // A finger already sliding when the hold registers still records, and the slide counts from there.
+        holdToRecordGesture.allowableMovement = .greatestFiniteMagnitude
+        holdToRecordGesture.delegate = self
+
+        for view in [textView, stickerButton, sendButton, voiceButton] {
+            textRow.addArrangedSubview(view)
+        }
         textRow.alignment = .bottom
         textRow.spacing = 6
         configureReplyPreview()
+        configureRecordingRow(sendConfiguration: sendConfiguration)
         pillStack.addArrangedSubview(replyPreview)
         pillStack.addArrangedSubview(attachmentPreview)
         pillStack.addArrangedSubview(textRow)
+        pillStack.addArrangedSubview(recordingRow)
         pillStack.axis = .vertical
         pillStack.spacing = 4
         pillStack.isLayoutMarginsRelativeArrangement = true
@@ -482,6 +529,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         composer.addArrangedSubview(inputRow)
         composer.addArrangedSubview(configureSearchBar())
         composer.translatesAutoresizingMaskIntoConstraints = false
+        composer.addGestureRecognizer(holdToRecordGesture)
         view.addSubview(composer)
         // One drop target for the whole chat: the composer's own text drop would otherwise take drops over it, and
         // the message list has a drop interaction of its own that takes drops over the messages.
@@ -987,8 +1035,13 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         } else {
             replyPreview.isHidden = true
         }
+        let isRecording = voiceRecorder.isRecording
+        if textRow.isHidden != isRecording {
+            textRow.isHidden = isRecording
+            recordingRow.isHidden = !isRecording
+        }
         // An edit changes only the text.
-        let attaches = canAttach && editingMessage == nil
+        let attaches = canAttach && editingMessage == nil && !isRecording
         attachButton.isEnabled = attaches
         attachButton.alpha = attaches ? 1 : 0.35
         stickerButton.isHidden = !viewModel.offersStickers || editingMessage != nil || isReadOnly
@@ -1022,14 +1075,22 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         let hasContent = attachment != nil || !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         // The send button appears only once there is something to send, like Messages.
         let showsSend = hasContent || isSending
-        if sendButton.isHidden == showsSend {
+        let showsVoice = !showsSend && viewModel.offersVoiceNotes && editingMessage == nil && !isReadOnly
+        let trailingMargin: CGFloat = showsSend || isRecording ? 4 : 14
+        if sendButton.isHidden == showsSend || voiceButton.isHidden == showsVoice || pillStack.directionalLayoutMargins.trailing != trailingMargin {
             UIView.animate(withDuration: 0.2) { [self] in
-                sendButton.isHidden = !showsSend
-                sendButton.alpha = showsSend ? 1 : 0
-                pillStack.directionalLayoutMargins.trailing = showsSend ? 4 : 14
+                if sendButton.isHidden == showsSend {
+                    sendButton.isHidden = !showsSend
+                    sendButton.alpha = showsSend ? 1 : 0
+                }
+                if voiceButton.isHidden == showsVoice {
+                    voiceButton.isHidden = !showsVoice
+                }
+                pillStack.directionalLayoutMargins.trailing = trailingMargin
                 inputPill.layoutIfNeeded()
             }
         }
+        voiceButton.isEnabled = state == .connected
         sendButton.isEnabled = state == .connected && !isSending && !isReadOnly && hasContent
         sendButton.configuration?.showsActivityIndicator = isSending
         view.setNeedsLayout()
@@ -1326,6 +1387,183 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
             UIAction(title: "Photo Library", image: UIImage(systemName: "photo.on.rectangle")) { [weak self] _ in self?.presentPhotoPicker() },
             UIAction(title: "Files", image: UIImage(systemName: "folder")) { [weak self] _ in self?.presentDocumentPicker() },
         ])
+    }
+
+    // MARK: - Voice messages
+
+    private func configureRecordingRow(sendConfiguration: UIButton.Configuration) {
+        var deleteConfiguration = UIButton.Configuration.plain()
+        deleteConfiguration.image = UIImage(systemName: "trash", withConfiguration: UIImage.SymbolConfiguration(pointSize: 18))
+        deleteConfiguration.baseForegroundColor = .systemRed
+        deleteConfiguration.contentInsets = .zero
+        let delete = recordingDeleteButton
+        delete.configuration = deleteConfiguration
+        delete.accessibilityLabel = "Delete Recording"
+        delete.addAction(UIAction { [weak self] _ in self?.cancelRecording() }, for: .primaryActionTriggered)
+        let send = recordingSendButton
+        send.configuration = sendConfiguration
+        send.accessibilityLabel = "Send Voice Message"
+        send.addAction(UIAction { [weak self] _ in self?.sendRecording() }, for: .primaryActionTriggered)
+        let slideText = NSMutableAttributedString(attachment: NSTextAttachment(image: UIImage(systemName: "chevron.left") ?? UIImage()))
+        slideText.append(NSAttributedString(string: " Slide to cancel"))
+        slideToCancelLabel.attributedText = slideText
+        slideToCancelLabel.font = .preferredFont(forTextStyle: .subheadline)
+        slideToCancelLabel.textColor = .secondaryLabel
+        slideToCancelLabel.accessibilityLabel = "Slide left to cancel"
+        holdingMicView.tintColor = .systemRed
+        holdingMicView.contentMode = .center
+        recordingDot.backgroundColor = .systemRed
+        recordingDot.layer.cornerRadius = 4
+        recordingDot.isAccessibilityElement = false
+        recordingTimeLabel.font = .preferredFont(forTextStyle: .body).monospacedDigits()
+        recordingTimeLabel.textColor = .label
+        let spacer = UIView()
+        let trailingSpacer = UIView()
+        for view in [delete, recordingDot, recordingTimeLabel, spacer, slideToCancelLabel, trailingSpacer, send, holdingMicView] {
+            recordingRow.addArrangedSubview(view)
+        }
+        recordingRow.alignment = .center
+        recordingRow.spacing = 10
+        recordingRow.setCustomSpacing(16, after: delete)
+        recordingRow.setCustomSpacing(6, after: recordingDot)
+        recordingRow.isHidden = true
+        NSLayoutConstraint.activate([
+            recordingRow.heightAnchor.constraint(equalToConstant: minimumTextHeight),
+            recordingDot.widthAnchor.constraint(equalToConstant: 8),
+            recordingDot.heightAnchor.constraint(equalToConstant: 8),
+            send.widthAnchor.constraint(equalToConstant: minimumTextHeight),
+            send.heightAnchor.constraint(equalToConstant: minimumTextHeight),
+            holdingMicView.widthAnchor.constraint(equalToConstant: minimumTextHeight),
+            // Centres "Slide to cancel" between the time and the end of the row.
+            trailingSpacer.widthAnchor.constraint(equalTo: spacer.widthAnchor),
+        ])
+    }
+
+    /// A tap is too short to record, except with VoiceOver, where holding isn't practical.
+    private func voiceButtonTapped() {
+        if UIAccessibility.isVoiceOverRunning {
+            startRecording()
+        } else {
+            showToast("Hold to record, release to send.")
+        }
+    }
+
+    @objc private func holdToRecord(_ gesture: UILongPressGestureRecognizer) {
+        switch gesture.state {
+        case .began:
+            isHoldingToRecord = true
+            holdStartX = gesture.location(in: composer).x
+            voiceHaptic.impactOccurred()
+            startRecording()
+        case .changed:
+            guard isHoldingToRecord, voiceRecorder.isRecording else { return }
+            let distance = min(0, gesture.location(in: composer).x - holdStartX)
+            let cancelDistance = min(120, inputPill.bounds.width * 0.4)
+            if -distance >= cancelDistance {
+                isHoldingToRecord = false
+                voiceHaptic.impactOccurred()
+                cancelRecording()
+                return
+            }
+            // It follows the finger up to the time, fading as it goes.
+            let room = slideToCancelLabel.frame.minX - recordingTimeLabel.frame.maxX - 8
+            slideToCancelLabel.transform = CGAffineTransform(translationX: max(distance, -max(room, 0)), y: 0)
+            slideToCancelLabel.alpha = 1 + distance / cancelDistance
+        case .ended:
+            guard isHoldingToRecord else { return }
+            isHoldingToRecord = false
+            // Released before the microphone started, such as at the permission prompt: nothing to send.
+            if voiceRecorder.isRecording {
+                sendRecording()
+            }
+        case .cancelled, .failed:
+            guard isHoldingToRecord else { return }
+            isHoldingToRecord = false
+            cancelRecording()
+        default:
+            break
+        }
+    }
+
+    private func startRecording() {
+        guard !voiceRecorder.isRecording else { return }
+        audioPlayer.stop()
+        let holding = isHoldingToRecord
+        Task {
+            do {
+                try await voiceRecorder.start()
+            } catch {
+                isHoldingToRecord = false
+                showToast(error.localizedDescription)
+                return
+            }
+            // The finger lifted while the microphone was starting.
+            if holding, !isHoldingToRecord {
+                voiceRecorder.cancel()
+                return
+            }
+            recordingStateChanged()
+        }
+    }
+
+    private func sendRecording() {
+        let note = voiceRecorder.finish()
+        recordingStateChanged()
+        guard let note else { return }
+        Task {
+            await viewModel.send(voice: note)
+            if viewModel.errorMessage == nil {
+                await viewModel.jumpToLatest()
+            }
+        }
+    }
+
+    private func cancelRecording() {
+        voiceRecorder.cancel()
+        recordingStateChanged()
+    }
+
+    private func recordingStateChanged() {
+        recordingTimer?.invalidate()
+        recordingTimer = nil
+        recordingDot.layer.removeAllAnimations()
+        recordingDot.alpha = 1
+        slideToCancelLabel.transform = .identity
+        slideToCancelLabel.alpha = 1
+        if voiceRecorder.isRecording {
+            let holding = isHoldingToRecord
+            for view in [slideToCancelLabel, holdingMicView] where view.isHidden == holding {
+                view.isHidden = !holding
+            }
+            for view in [recordingDeleteButton, recordingSendButton] where view.isHidden != holding {
+                view.isHidden = holding
+            }
+            updateRecordingTime()
+            recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.updateRecordingTime() }
+            }
+            if !UIAccessibility.isReduceMotionEnabled {
+                UIView.animate(withDuration: 0.7, delay: 0, options: [.autoreverse, .repeat, .allowUserInteraction]) { [recordingDot] in
+                    recordingDot.alpha = 0.2
+                }
+            }
+        }
+        refreshComposer()
+        if voiceRecorder.isRecording {
+            UIAccessibility.post(notification: .layoutChanged, argument: recordingTimeLabel)
+        }
+    }
+
+    private func updateRecordingTime() {
+        let elapsed = voiceRecorder.elapsed
+        if elapsed >= ChatVoiceRecorder.maximumDuration {
+            isHoldingToRecord = false
+            sendRecording()
+            return
+        }
+        let seconds = Int(elapsed)
+        recordingTimeLabel.text = String(format: "%d:%02d", seconds / 60, seconds % 60)
+        recordingTimeLabel.accessibilityLabel = "Recording, " + (Duration.seconds(seconds).formatted(.units(allowed: [.minutes, .seconds], width: .wide)))
     }
 
     // MARK: - Stickers
@@ -2733,6 +2971,14 @@ extension UIFont {
 }
 
 extension ChatViewController: UIGestureRecognizerDelegate {
+    /// Holding to record starts only on the microphone button while it shows.
+    func gestureRecognizerShouldBegin(_ gesture: UIGestureRecognizer) -> Bool {
+        guard gesture === holdToRecordGesture else { return true }
+        let button = voiceButton
+        return !button.isHidden && button.isEnabled && !textRow.isHidden && !voiceRecorder.isRecording
+            && button.bounds.insetBy(dx: -6, dy: -6).contains(gesture.location(in: button))
+    }
+
     /// The tap that brings the keyboard back alongside the text view's own.
     func gestureRecognizer(_: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith _: UIGestureRecognizer) -> Bool {
         true

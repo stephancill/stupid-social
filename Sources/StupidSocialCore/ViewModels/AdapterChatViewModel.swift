@@ -34,7 +34,7 @@ public struct ChatOutgoing {
 /// the divider, read-marker debouncing, snapshots, drafts and optimistic sending.
 ///
 /// Optional abilities are separate protocols (editing, deleting, reactions, unseen reactions, read receipts, audio previews, live updates,
-/// quoted messages, windows of older history, typing, mentions, custom emoji, commands, links), so a chat offers an action exactly when its adapter
+/// quoted messages, windows of older history, typing, mentions, custom emoji, stickers, voice messages, commands, links), so a chat offers an action exactly when its adapter
 /// implements it.
 @MainActor
 public protocol ChatAdapter: AnyObject {
@@ -228,6 +228,13 @@ public protocol ChatStickerSending: ChatAdapter {
     func stickers(forEmoji emoji: String) async throws -> [ChatSticker]
     /// Returns the sent message's id, as `send(_:)` does.
     func send(sticker: ChatSticker, replyToId: String?) async throws -> String?
+}
+
+/// Voice messages the user records in the composer.
+@MainActor
+public protocol ChatVoiceSending: ChatAdapter {
+    /// Returns the sent message's id, as `send(_:)` does.
+    func send(voice: ChatVoiceNote, replyToId: String?) async throws -> String?
 }
 
 /// Text that runs a command rather than posting a message, which may post nothing.
@@ -490,6 +497,20 @@ public final class AdapterChatViewModel<Adapter: ChatAdapter>: ChatViewModel {
         }
     }
 
+    override public var offersVoiceNotes: Bool {
+        adapter is any ChatVoiceSending
+    }
+
+    override public func send(voice: ChatVoiceNote) async {
+        guard let sending = adapter as? any ChatVoiceSending, state == .connected, !isReadOnly else { return }
+        let replyToId = canReply ? replyingTo?.id : nil
+        await sendOptimistically(text: "", attachment: nil, voice: voice, replyToId: replyToId) { [weak self] in
+            let id = try await sending.send(voice: voice, replyToId: replyToId)
+            self?.adapterDidChange()
+            return id
+        }
+    }
+
     /// Editing a message isn't typing a new one.
     override public func draftDidChange() {
         guard editingMessage == nil else { return }
@@ -588,7 +609,10 @@ public final class AdapterChatViewModel<Adapter: ChatAdapter>: ChatViewModel {
     }
 
     override public func audioPreviewURL(for previewId: String) async -> URL? {
-        await (adapter as? any ChatAudioPreviewing)?.audioPreviewURL(for: previewId)
+        if let recording = sendingVoiceFiles[previewId] {
+            return recording
+        }
+        return await (adapter as? any ChatAudioPreviewing)?.audioPreviewURL(for: previewId)
     }
 
     // MARK: Links

@@ -153,7 +153,8 @@ Observed X behavior:
 - Telegram's notifications reach the app through APNs for unmuted chats, worded like Telegram's own ("Name @ Group: text"), and tapping one opens the chat. The app asks for notification permission when the user signs in to Telegram.
 - Each device signs in as its own Telegram session; the session stays on the device and is not synced through iCloud. Signing out ends that session on Telegram.
 - The app connects to Telegram directly with MTProto; there is no backend. Telegram is available only in builds that include the app's Telegram API credentials.
-- Not supported: secret chats, starting new chats, playing videos and voice messages, and Premium reactions.
+- Voice messages: where nothing is typed, a microphone button takes the send button's place, as in Messages. Holding it records (the app asks for the microphone the first time), as in Telegram: the composer shows the time so far and "Slide to cancel"; releasing sends, and sliding left far enough discards the recording. A tap alone shows how to record. With VoiceOver a tap starts recording instead, and the composer offers delete and send buttons. Sending posts it as a Telegram voice message with its waveform (as a reply when one is being written), shows it at once and leaves the draft as it was. Recordings under half a second are dropped; at 15 minutes it sends. Leaving the chat while recording discards it.
+- Not supported: secret chats, starting new chats, and Premium reactions.
 
 ### X Chat
 
