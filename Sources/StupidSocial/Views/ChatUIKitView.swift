@@ -432,6 +432,9 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         textView.backgroundColor = .clear
         textView.textContainerInset = UIEdgeInsets(top: 8, left: 0, bottom: 8, right: 0)
         textView.isScrollEnabled = false
+        // Without scrolling the text view's intrinsic width is its longest line; a long line would otherwise
+        // squeeze the buttons beside it (it ties with their default resistance) rather than wrap.
+        textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         textView.delegate = self
         textView.onReturn = { [weak self] in
             guard let self, sendButton.isEnabled else { return }
