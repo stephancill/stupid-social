@@ -462,6 +462,15 @@ Discord chat is a native client of discord.com's web client protocol: REST v9 fo
 - **Sending files and stickers:** files go to an upload URL Discord hands out, and the message names the uploaded file; stickers are sent by id.
 - **Chat (`DiscordChatAdapter`):** REST pages of 50 (`before` for older), gateway events for the channel, an `op 37` subscription to the guild on open (as the web client does), and a 30 s poll as a fallback for guilds that send events only to subscribed sessions. Discord's tokens become the framework's forms: `<@id>` ↔ `@id` (`mentionPattern`), `<:name:id>` → `:id:` custom emoji keys, channel and role mentions and timestamps as text. Text is Markdown. The read position is the read state's message id; `markRead` sends the ack.
 
+## LinkedIn
+
+LinkedIn notifications and chats are a native client of www.linkedin.com's web client: Voyager REST for the Notifications tab and the messaging SDK's GraphQL queries and Rest.li actions for chats. `scripts/linkedin-web-client.py` is the source of truth.
+
+- **Auth:** the `li_at` and `JSESSIONID` cookies from the web login (`LinkedInLoginWebView`), stored per account in the Keychain (`saveLinkedInCredentials`). Requests send both cookies, JSESSIONID as `csrf-token`, and Rest.li protocol 2.0; redirects aren't followed, since an expired session redirects to the login page.
+- **Notifications (`LinkedInNotificationSource`):** one request for the newest 20 cards, mapped to feed items with LinkedIn's sentence as text; the card kind picks the type.
+- **Chats list (`LinkedInClient: ChatListProvider`):** two pages of the primary inbox; rows from each conversation's participants, newest message and unread count.
+- **Chat (`LinkedInChatAdapter`):** the sync query for the newest messages (polled every 10 s), the by-timestamp query for older pages, Rest.li actions for sending (replies quote the original in `repliedMessageContent`), reactions, edits, unsending (`recall`) and typing. Read state is the conversation's, so `markRead` sends only once the newest message from others is read. Replies carry their quoted message, which `ChatReferenceResolving` shows when it isn't loaded.
+
 ## Stickers
 
 Stickers are drawn in the app, with no dependency (`StupidSocialCore/Stickers`):
@@ -472,7 +481,7 @@ Stickers are drawn in the app, with no dependency (`StupidSocialCore/Stickers`):
 
 ## Chat Framework
 
-Chat is one framework with an adapter per chat network (Apron, Telegram, Instagram Direct, Spotify Messages, X Chat, Bluesky, Discord). The framework owns everything a user would expect to behave the same in every chat; an adapter only translates between its network and the framework's models. The rules for working on it are in AGENTS.md § Chat Framework. This section is written without platform specifics so another client of the same networks can follow it.
+Chat is one framework with an adapter per chat network (Apron, Telegram, Instagram Direct, Spotify Messages, X Chat, Bluesky, Discord, LinkedIn). The framework owns everything a user would expect to behave the same in every chat; an adapter only translates between its network and the framework's models. The rules for working on it are in AGENTS.md § Chat Framework. This section is written without platform specifics so another client of the same networks can follow it.
 
 **Framework (shared):**
 

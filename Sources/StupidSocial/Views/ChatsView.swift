@@ -19,6 +19,8 @@ struct ChatsView: View {
     /// The chat for a Discord account's channel and title, profiles from it, and the other person in a DM; `nil`
     /// when the account is gone.
     let discordChat: (_ accountId: String, _ channelId: String, _ title: String) -> (chat: () -> ChatViewModel, profile: (String) -> DiscordProfileViewModel, dmRecipient: String?)?
+    /// The chat for a LinkedIn account's conversation and title; `nil` when the account is gone.
+    let linkedinChat: (_ accountId: String, _ conversationUrn: String, _ title: String) -> (() -> ChatViewModel)?
     /// An account's settings, opened from the connection errors; `nil` for a connection that isn't an account.
     let accountSettings: (_ accountId: String) -> AnyView?
     /// Whether a chat is pushed, so the home pager can stop paging.
@@ -73,7 +75,7 @@ struct ChatsView: View {
                 ContentUnavailableView.search(text: query)
             } else if viewModel.chats.isEmpty {
                 if viewModel.hasLoaded {
-                    ContentUnavailableView("No Chats", systemImage: "bubble.left.and.bubble.right", description: Text("Chats from Apron servers, Spotify, Instagram, Telegram, X, Bluesky and Discord appear here."))
+                    ContentUnavailableView("No Chats", systemImage: "bubble.left.and.bubble.right", description: Text("Chats from Apron servers, Spotify, Instagram, Telegram, X, Bluesky, Discord and LinkedIn appear here."))
                 } else {
                     ProgressView()
                 }
@@ -263,6 +265,12 @@ struct ChatsView: View {
                 DiscordChatView(viewModel: opened(make.chat(), chat: chat), channelId: channelId, dmRecipient: make.dmRecipient, profile: make.profile)
             } else {
                 ContentUnavailableView("Discord Not Connected", systemImage: "bubble.left.and.bubble.right")
+            }
+        case let .linkedin(conversationUrn):
+            if let makeChat = linkedinChat(chat.accountId, conversationUrn, chat.title) {
+                NetworkChatView(viewModel: opened(makeChat(), chat: chat))
+            } else {
+                ContentUnavailableView("LinkedIn Not Connected", systemImage: "bubble.left.and.bubble.right")
             }
         case let .demo(chatId):
             NetworkChatView(viewModel: opened(AdapterChatViewModel(adapter: DemoChatAdapter(chatId: chatId), accountId: chat.accountId), chat: chat))

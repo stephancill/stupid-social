@@ -213,6 +213,16 @@ public final class KeychainCredentialStore: @unchecked Sendable {
         return try decoder.decode(DiscordCredentials.self, from: data)
     }
 
+    public func saveLinkedInCredentials(_ credentials: LinkedInCredentials) throws -> CredentialSaveResult {
+        let data = try encoder.encode(credentials)
+        return try save(data: data, account: key("linkedin"))
+    }
+
+    public func loadLinkedInCredentials() throws -> LinkedInCredentials? {
+        guard let data = try load(account: key("linkedin")) else { return nil }
+        return try decoder.decode(LinkedInCredentials.self, from: data)
+    }
+
     /// Apron bearer tokens are keyed per server URL (§3.2.1); the latest token replaces earlier ones.
     public func saveApronToken(_ token: String, serverURL: URL) throws -> CredentialSaveResult {
         try save(data: Data(token.utf8), account: apronAccount(serverURL))

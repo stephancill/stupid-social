@@ -1185,11 +1185,23 @@ private struct NotificationRow: View {
             summaryInlineText
                 .font(.body)
                 .lineLimit(2)
+        } else if displayItem.item.actors.first != nil {
+            // Text a network writes itself, such as LinkedIn's "Congratulate … on a new position", still names its network.
+            badgedText
+                .font(.body)
+                .lineLimit(2)
         } else {
             Text(summaryText)
                 .font(.body)
                 .lineLimit(2)
         }
+    }
+
+    private var badgedText: Text {
+        if let image = networkBadgeImage(named: displayItem.item.network.badgeAssetName) {
+            return Text("\(Text(image).baselineOffset(-1)) \(Text(summaryText))")
+        }
+        return Text("\(Text(displayItem.item.network.badgeFallbackText).bold()) \(Text(summaryText))")
     }
 
     private var summaryInlineText: Text {

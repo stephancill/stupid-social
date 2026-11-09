@@ -51,6 +51,8 @@ extension SocialNetwork {
             "TelegramBadge"
         case .discord:
             "DiscordBadge"
+        case .linkedin:
+            "LinkedInBadge"
         case .debug:
             "DebugBadge"
         }
@@ -76,6 +78,8 @@ extension SocialNetwork {
             "T"
         case .discord:
             "D"
+        case .linkedin:
+            "in"
         case .debug:
             "D"
         }
@@ -100,6 +104,8 @@ extension SocialNetwork {
         case .telegram:
             .white
         case .discord:
+            .white
+        case .linkedin:
             .white
         case .debug:
             .white
@@ -126,6 +132,8 @@ extension SocialNetwork {
             Color(red: 0.16, green: 0.63, blue: 0.89)
         case .discord:
             Color(red: 0.35, green: 0.40, blue: 0.95)
+        case .linkedin:
+            Color(red: 0.04, green: 0.40, blue: 0.76)
         case .debug:
             .orange
         }

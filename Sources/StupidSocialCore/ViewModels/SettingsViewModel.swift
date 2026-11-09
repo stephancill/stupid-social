@@ -222,6 +222,8 @@ public final class SettingsViewModel: ObservableObject {
             return try? await services.component(id: account.id)?.telegramClient?.ownAvatarURL()
         case .discord:
             return try? await DiscordClient(credentialStore: credentials).currentUser().avatarURL
+        case .linkedin:
+            return try? await LinkedInClient(credentialStore: credentials).me().avatarURL
         case .debug:
             return nil
         }
@@ -231,6 +233,17 @@ public final class SettingsViewModel: ObservableObject {
         guard let url = await avatarURL(for: account) else { return }
         store.update(id: account.id) { $0.avatarURL = url }
         loadStatuses()
+    }
+
+    /// Adds a LinkedIn account from the cookies its web login set, or gives a listed one the new cookies.
+    @discardableResult
+    public func addLinkedIn(_ credentials: LinkedInCredentials, reconnecting accountId: String? = nil) async -> Account? {
+        await connect(.linkedin, reconnecting: accountId) { store in
+            _ = try store.saveLinkedInCredentials(credentials)
+        } identify: { store in
+            let me = try await LinkedInClient(credentialStore: store).me()
+            return Identity(remoteId: me.profileUrn, handle: me.publicIdentifier, displayName: me.name, avatarURL: me.avatarURL)
+        }
     }
 
     /// Adds a Discord account from the token its web login used, or gives a listed one the new token.

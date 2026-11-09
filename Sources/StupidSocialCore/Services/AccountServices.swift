@@ -30,6 +30,7 @@ public final class AccountComponents {
     public private(set) var telegramConnection: TelegramConnectionViewModel?
     public private(set) var discordGateway: DiscordGateway?
     public private(set) var discordChatList: DiscordChatList?
+    public private(set) var linkedinClient: LinkedInClient?
 
     init(account: Account, store: AccountStore, keychain: KeychainCredentialStore, farcasterClient: FarcasterClient, chatList: ChatListViewModel?, onTelegramChange: (() -> Void)?, onXChatChange: (() -> Void)?) {
         accountId = account.id
@@ -119,6 +120,10 @@ public final class AccountComponents {
             let gateway = DiscordGateway(client: DiscordClient(credentialStore: credentials))
             discordGateway = gateway
             discordChatList = DiscordChatList(gateway: gateway, accountId: account.id, chatList: chatList)
+        case .linkedin:
+            let client = LinkedInClient(credentialStore: credentials)
+            linkedinClient = client
+            notificationSource = LinkedInNotificationSource(client: client, metadataStore: metadata)
         case .apron, .debug:
             break
         }
@@ -139,7 +144,7 @@ public final class AccountComponents {
 
     /// The account's chats, when its network has any. Apron servers list through one shared source instead.
     public var chatListProvider: (any ChatListProvider)? {
-        spotifyMessagesSource ?? instagramClient ?? telegramClient ?? xChatClient ?? blueskyClient ?? discordChatList
+        spotifyMessagesSource ?? instagramClient ?? telegramClient ?? xChatClient ?? blueskyClient ?? discordChatList ?? linkedinClient
     }
 
     /// Stops what runs in the background, when the account goes away.

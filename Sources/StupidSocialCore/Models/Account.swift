@@ -9,7 +9,7 @@ public struct Account: Codable, Hashable, Identifiable, Sendable {
     public let id: String
     public let network: SocialNetwork
     /// The network's own id for the account (X user id, Instagram pk, Bluesky DID, Farcaster fid, GitHub or
-    /// Spotify username, Telegram user id, Discord user id, Apron user id), so adding the same account twice updates it.
+    /// Spotify username, Telegram user id, Discord user id, LinkedIn profile urn, Apron user id), so adding the same account twice updates it.
     public var remoteId: String?
     /// Username without "@".
     public var handle: String?
@@ -94,7 +94,7 @@ public struct AccountPreferences: Codable, Hashable, Sendable {
 
 public extension SocialNetwork {
     /// Networks the user can add accounts for, in the order Add Account lists them.
-    static let addable: [SocialNetwork] = [.x, .farcaster, .instagram, .bluesky, .spotify, .github, .telegram, .discord, .apron]
+    static let addable: [SocialNetwork] = [.x, .farcaster, .instagram, .bluesky, .spotify, .github, .telegram, .discord, .linkedin, .apron]
 }
 
 public extension NotificationItem {

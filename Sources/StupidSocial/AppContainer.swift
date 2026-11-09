@@ -156,6 +156,12 @@ final class AppContainer {
         )
     }
 
+    /// `nil` when the LinkedIn account is gone.
+    func linkedinChatFactory(accountId: String, conversationUrn: String, title: String) -> (() -> ChatViewModel)? {
+        guard let client = services.component(id: accountId)?.linkedinClient else { return nil }
+        return { AdapterChatViewModel(adapter: LinkedInChatAdapter(client: client, conversationUrn: conversationUrn, title: title), accountId: accountId) }
+    }
+
     /// `nil` until the X Chat PIN has unlocked the account's keys.
     func xChatFactory(accountId: String, conversationId: String, title: String) -> (() -> ChatViewModel)? {
         guard let component = services.component(id: accountId), component.credentials.hasXChatKeys(),
@@ -202,6 +208,8 @@ final class AppContainer {
             blueskyChatFactory(accountId: chat.accountId, convoId: convoId, title: chat.title)?()
         case let .discord(channelId):
             discordChatFactory(accountId: chat.accountId, channelId: channelId, title: chat.title)?.chat()
+        case let .linkedin(conversationUrn):
+            linkedinChatFactory(accountId: chat.accountId, conversationUrn: conversationUrn, title: chat.title)?()
         case let .demo(chatId):
             AdapterChatViewModel(adapter: DemoChatAdapter(chatId: chatId), accountId: chat.accountId)
         }
