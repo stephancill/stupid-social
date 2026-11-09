@@ -233,6 +233,85 @@ final class LinkedInTests: XCTestCase {
         XCTAssertEqual(quote["originalSendAt"] as? Int, 1000)
     }
 
+    // MARK: Realtime
+
+    /// A `DecoratedEvent` as the stream sends it: the topic and the decorated query's `result`.
+    private func decorated(_ topic: String, field: String, result: String) -> Data {
+        Data("""
+        {"com.linkedin.realtimefrontend.DecoratedEvent": {"topic": "urn:li-realtime:\(topic):urn:li-realtime:myself",
+          "payload": {"data": {"_type": "x", "\(field)": {"result": \(result)}}}}}
+        """.utf8)
+    }
+
+    private func liveMessage(_ n: Int, from sender: String, text: String, at ms: Int64, format: String = "DEFAULT") -> String {
+        let plain = message(n, from: sender, text: text, at: ms, format: format)
+        return String(plain.dropLast()) + #", "conversation": {"entityUrn": "\#(conversation)"}}"#
+    }
+
+    func testRealtimeEventsParse() {
+        XCTAssertNotNil(LinkedInLiveFeed.parse(Data(#"{"com.linkedin.realtimefrontend.ClientConnection": {"id": "c", "personalTopics": []}}"#.utf8)).flatMap {
+            if case .opened = $0 { true } else { nil }
+        })
+        XCTAssertNil(LinkedInLiveFeed.parse(Data(#"{"com.linkedin.realtimefrontend.Heartbeat": {}}"#.utf8)))
+        XCTAssertNil(LinkedInLiveFeed.parse(decorated("tabBadgeUpdateTopic", field: "value", result: "{}")))
+
+        guard case let .event(.message(conversationUrn, parsedMessage)) = LinkedInLiveFeed.parse(decorated(
+            "messagesTopic", field: "doDecorateMessageMessengerRealtimeDecoration", result: liveMessage(7, from: friend, text: "hi", at: 7000),
+        )) else { return XCTFail("message") }
+        XCTAssertEqual(conversationUrn, conversation)
+        XCTAssertEqual(parsedMessage.entityUrn, messageUrn(7))
+
+        guard case let .event(.reaction(reacted, summary)) = LinkedInLiveFeed.parse(decorated(
+            "messageReactionSummariesTopic", field: "doDecorateRealtimeReactionSummaryMessengerRealtimeDecoration",
+            result: #"{"reactionAdded": true, "actor": \#(participant(friend, first: "Pat", last: "Friend")), "message": {"entityUrn": "\#(messageUrn(7))"}, "reactionSummary": {"count": 2, "firstReactedAt": 1, "emoji": "👍", "viewerReacted": false}}"#,
+        )) else { return XCTFail("reaction") }
+        XCTAssertEqual(reacted, messageUrn(7))
+        XCTAssertEqual(summary.count, 2)
+
+        guard case let .event(.typing(typingIn, person)) = LinkedInLiveFeed.parse(decorated(
+            "typingIndicatorsTopic", field: "doDecorateTypingIndicatorMessengerRealtimeDecoration",
+            result: #"{"conversation": {"entityUrn": "\#(conversation)"}, "typingParticipant": \#(participant(friend, first: "Pat", last: "Friend"))}"#,
+        )) else { return XCTFail("typing") }
+        XCTAssertEqual(typingIn, conversation)
+        XCTAssertEqual(person.name, "Pat Friend")
+
+        guard case let .event(.conversation(updated)) = LinkedInLiveFeed.parse(decorated(
+            "conversationsTopic", field: "doDecorateConversationMessengerRealtimeDecoration",
+            result: conversationJSON(unread: 0, lastReadAt: 9000, lastActivityAt: 9000, last: message(1, from: me, text: "x", at: 1000)),
+        )) else { return XCTFail("conversation") }
+        XCTAssertEqual(updated.unreadCount, 0)
+    }
+
+    func testAdapterAppliesLiveEvents() async throws {
+        let messages = [message(1, from: friend, text: "question", at: 1000)]
+        LinkedInURLProtocol.reset()
+        LinkedInURLProtocol.handler = routes(conversation: conversationJSON(unread: 0, lastReadAt: 1000, lastActivityAt: 1000, last: messages[0]), messages: messages)
+        let adapter = LinkedInChatAdapter(client: stubbedClient(), conversationUrn: conversation, title: "Pat Friend")
+        try await adapter.loadNewest()
+        XCTAssertEqual(adapter.pollInterval, .seconds(10), "without a live feed it polls quickly")
+
+        let participant = try JSONDecoder().decode(LinkedInParticipant.self, from: Data(participant(friend, first: "Pat", last: "Friend").utf8))
+        adapter.handle(.typing(conversationUrn: conversation, participant))
+        XCTAssertEqual(adapter.typingNames, ["Pat Friend"])
+        adapter.handle(.typing(conversationUrn: "urn:li:msg_conversation:(other)", participant))
+        XCTAssertEqual(adapter.typingNames, ["Pat Friend"])
+
+        let live = try JSONDecoder().decode(LinkedInMessage.self, from: Data(message(2, from: friend, text: "answer", at: 2000).utf8))
+        adapter.handle(.message(conversationUrn: conversation, live))
+        XCTAssertEqual(adapter.messages.map(\.id), [messageUrn(1), messageUrn(2)])
+        XCTAssertEqual(adapter.typingNames, [], "a message ends its sender's typing")
+        XCTAssertTrue(adapter.isAfterReadPosition(adapter.messages[1]))
+
+        adapter.handle(.reaction(messageUrn: messageUrn(2), LinkedInMessage.ReactionSummary(emoji: "🎉", count: 1, viewerReacted: false)))
+        XCTAssertEqual(adapter.reactions[messageUrn(2)], [ChatReaction(emoji: "🎉", count: 1, includesYou: false)])
+        adapter.handle(.reaction(messageUrn: messageUrn(2), LinkedInMessage.ReactionSummary(emoji: "🎉", count: 0, viewerReacted: false)))
+        XCTAssertNil(adapter.reactions[messageUrn(2)])
+
+        let recalled = try JSONDecoder().decode(LinkedInMessage.self, from: Data(message(2, from: friend, text: "", at: 2000, format: "RECALLED").utf8))
+        adapter.handle(.message(conversationUrn: conversation, recalled))
+        XCTAssertTrue(adapter.messages[1].isDeleted)
+    }
+
     func testRedirectToLoginReadsAsSignedOut() async throws {
         LinkedInURLProtocol.reset()
         LinkedInURLProtocol.handler = { _, _ in (302, "") }

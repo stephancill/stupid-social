@@ -1,18 +1,19 @@
 import Foundation
 
-/// One LinkedIn conversation: pages its history, is polled for new messages (LinkedIn's realtime stream isn't
-/// used), sends text and replies, reacts, edits and unsends the user's messages, shows typing to the others, and
-/// marks the conversation read. LinkedIn keeps read state per conversation, so it is marked read only once the
-/// newest message from someone else has been seen.
+/// One LinkedIn conversation: pages its history, follows the account's realtime stream (`LinkedInLiveFeed`) for
+/// new and changed messages, reactions, typing and read state, sends text and replies, reacts, edits and unsends
+/// the user's messages, shows typing both ways, and marks the conversation read. LinkedIn keeps read state per
+/// conversation, so it is marked read only once the newest message from someone else has been seen.
 @MainActor
-public final class LinkedInChatAdapter: ChatAdapter, ChatReactionSending, ChatEditing, ChatDeleting, ChatTyping, ChatReferenceResolving {
+public final class LinkedInChatAdapter: ChatAdapter, ChatReactionSending, ChatEditing, ChatDeleting, ChatTyping, ChatReferenceResolving, ChatLiveUpdating {
     public let network = SocialNetwork.linkedin
     public let canReply = true
     public let acceptsAttachments = false
-    public let pollInterval: Duration? = .seconds(10)
     public var onChange: (() -> Void)?
+    public var onConnectionLost: ((Error?) -> Void)?
+    public var onError: ((Error) -> Void)?
+    public var onCatchUp: (() -> Void)?
     public let acceptsReactions = true
-    public let typingNames: [String] = []
     public private(set) var info: ChatInfo
     public private(set) var messages: [ChatMessage] = []
     public private(set) var reactions: [String: [ChatReaction]] = [:]
@@ -31,11 +32,22 @@ public final class LinkedInChatAdapter: ChatAdapter, ChatReactionSending, ChatEd
     /// Whether the chat came from LinkedIn this visit; until then the messages are the cached snapshot.
     private var hasLoadedHistory = false
     private var lastTypingSent: Date?
+    private let liveFeed: LinkedInLiveFeed?
+    private var observation: UUID?
+    /// Host identity urn → name and when their typing indication ends.
+    private var typing: [String: (name: String, until: Date)] = [:]
+    private var typingExpiry: Task<Void, Never>?
 
-    public init(client: LinkedInClient, conversationUrn: String, title: String) {
+    public init(client: LinkedInClient, conversationUrn: String, title: String, liveFeed: LinkedInLiveFeed? = nil) {
         self.client = client
         self.conversationUrn = conversationUrn
+        self.liveFeed = liveFeed
         info = ChatInfo(title: title, subtitle: "LinkedIn", showsSenderNames: false, titleIsMemberNames: true)
+    }
+
+    /// The stream pushes changes; a slow poll covers anything it misses. Without it, a quicker one.
+    public var pollInterval: Duration? {
+        liveFeed == nil ? .seconds(10) : .seconds(60)
     }
 
     public var key: String {
@@ -172,7 +184,70 @@ public final class LinkedInChatAdapter: ChatAdapter, ChatReactionSending, ChatEd
         try await merge(client.messages(conversationUrn: conversationUrn))
     }
 
+    // MARK: Live
+
+    public func startFollowing() async {
+        guard observation == nil, let connection = liveFeed?.connection else { return }
+        observation = connection.observe { [weak self] update in
+            guard let self else { return }
+            switch update {
+            case let .event(event): handle(event)
+            case .catchUp: onCatchUp?()
+            }
+        }
+    }
+
+    public func stopFollowing() {
+        observation.map { liveFeed?.connection.removeObserver($0) }
+        observation = nil
+        typingExpiry?.cancel()
+        typing = [:]
+    }
+
+    func handle(_ event: LinkedInLiveEvent) {
+        switch event {
+        case let .message(conversation, message) where conversation == conversationUrn:
+            typing[message.sender.hostIdentityUrn] = nil
+            merge([message])
+        case let .reaction(messageUrn, summary) where loaded[messageUrn] != nil:
+            var summaries = loaded[messageUrn]?.reactionSummaries ?? []
+            summaries.removeAll { $0.emoji == summary.emoji }
+            if summary.count > 0 {
+                summaries.append(summary)
+            }
+            setReactions(summaries, on: messageUrn)
+        case let .conversation(conversation) where conversation.entityUrn == conversationUrn:
+            // Read elsewhere, renamed, or members changed.
+            if let viewerUrn {
+                apply(conversation: conversation, viewerUrn: viewerUrn)
+                onChange?()
+            }
+        case let .typing(conversation, participant) where conversation == conversationUrn && participant.hostIdentityUrn != viewerUrn:
+            typing[participant.hostIdentityUrn] = (participant.name, Date().addingTimeInterval(5))
+            scheduleTypingExpiry()
+            onChange?()
+        default:
+            break
+        }
+    }
+
     // MARK: Typing
+
+    public var typingNames: [String] {
+        typing.values.filter { $0.until > Date() }.sorted { $0.until < $1.until }.map(\.name)
+    }
+
+    private func scheduleTypingExpiry() {
+        typingExpiry?.cancel()
+        guard let next = typing.values.map(\.until).min() else { return }
+        typingExpiry = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(max(0, next.timeIntervalSinceNow) + 0.05))
+            guard let self, !Task.isCancelled else { return }
+            typing = typing.filter { $0.value.until > Date() }
+            scheduleTypingExpiry()
+            onChange?()
+        }
+    }
 
     /// The web client sends `typing` at most every few seconds while the draft changes.
     public func draftDidChange(_ draft: String) {

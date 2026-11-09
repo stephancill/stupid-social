@@ -164,6 +164,7 @@ public final class LiveConnection<Event>: LiveConnecting {
                 failures = 0
             }
             var minimum = Duration.zero
+            let name = name
             if let closing {
                 switch outcome(closing) {
                 case .stop:

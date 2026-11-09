@@ -214,6 +214,64 @@ public final class LinkedInClient: @unchecked Sendable {
         _ = try await send("POST", "/voyager/api/voyagerMessagingDashMessengerConversations", query: "action=typing", body: ["conversationUrn": conversationUrn])
     }
 
+    // MARK: Realtime
+
+    /// The messaging topics' realtime decorations, from the web client's `x-li-query-map` header (observed
+    /// 2026-11-09): LinkedIn decorates each event with the named GraphQL query before sending it.
+    static let realtimeQueryMap: [String: String] = {
+        let decorations = [
+            "conversations": "f855048b390b286e513d7b23c59efee3",
+            "conversationDeletes": "282abe5fa1a242cb76825c32dbbfaede",
+            "messageReactionSummaries": "85ff5a1aabf7c52f40aa85ccc84e3bf5",
+            "messageSeenReceipts": "e23d3971dc83a115b03584cf2381256c",
+            "messages": "db0f1d3f53747f49f3fd87b139df9eda",
+            "typingIndicators": "234ce03cd062b2438dae060ca854a6d2",
+        ]
+        var map: [String: String] = [:]
+        for (topic, hash) in decorations {
+            let query = "voyagerMessagingDashMessengerRealtimeDecoration.\(hash)"
+            map["\(topic)Topic"] = query
+            map["\(topic)BroadcastTopic"] = query
+        }
+        return map
+    }()
+
+    /// Opens `/realtime/connect`, LinkedIn's server-sent event stream for the signed-in member (probe `stream`).
+    /// Without `mpName` in `x-li-track` it answers 400; a signed-out session redirects like other calls.
+    func realtimeStream(sessionId: String) async throws -> URLSession.AsyncBytes {
+        let credentials = try credentials()
+        var request = URLRequest(url: URL(string: "/realtime/connect?rc=1", relativeTo: Self.baseURL)!)
+        request.httpShouldHandleCookies = false
+        request.timeoutInterval = .infinity
+        for (name, value) in Self.headers(credentials: credentials, accept: "text/event-stream") {
+            request.setValue(value, forHTTPHeaderField: name)
+        }
+        let queryMap = Self.realtimeQueryMap.mapValues { ["queryId": $0, "variables": [String: String](), "extensions": [String: String]()] }
+        let headers: [String: Any] = [
+            "x-li-query-map": ["topicToGraphQLQueryParams": queryMap],
+            "x-li-track": ["clientVersion": "1.13.47699", "mpVersion": "1.13.47699", "osName": "web", "mpName": "voyager-web", "deviceFormFactor": "DESKTOP"],
+        ]
+        for (name, value) in headers {
+            let data = try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
+            request.setValue(String(decoding: data, as: UTF8.self), forHTTPHeaderField: name)
+        }
+        request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        request.setValue(Self.normalizedJSON, forHTTPHeaderField: "x-li-accept")
+        request.setValue("application/graphql", forHTTPHeaderField: "x-li-query-accept")
+        request.setValue(Self.normalizedJSON, forHTTPHeaderField: "x-li-recipe-accept")
+        request.setValue(sessionId, forHTTPHeaderField: "x-li-realtime-session")
+        let (bytes, response) = try await session.bytes(for: request, delegate: LinkedInNoRedirects.shared)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        switch status {
+        case 200 ..< 300:
+            return bytes
+        case 300 ..< 400, 401:
+            throw SourceError.notConfigured
+        default:
+            throw LinkedInError.http(status: status)
+        }
+    }
+
     // MARK: Transport
 
     private func graphQL<T: Decodable>(_ queryId: String, variables: String) async throws -> T {

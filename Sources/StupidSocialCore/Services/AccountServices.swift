@@ -31,6 +31,7 @@ public final class AccountComponents {
     public private(set) var discordGateway: DiscordGateway?
     public private(set) var discordChatList: DiscordChatList?
     public private(set) var linkedinClient: LinkedInClient?
+    public private(set) var linkedinLiveFeed: LinkedInLiveFeed?
 
     init(account: Account, store: AccountStore, keychain: KeychainCredentialStore, farcasterClient: FarcasterClient, chatList: ChatListViewModel?, onTelegramChange: (() -> Void)?, onXChatChange: (() -> Void)?) {
         accountId = account.id
@@ -125,6 +126,7 @@ public final class AccountComponents {
             let client = LinkedInClient(credentialStore: credentials)
             linkedinClient = client
             notificationSource = LinkedInNotificationSource(client: client, metadataStore: metadata)
+            linkedinLiveFeed = LinkedInLiveFeed(client: client, accountId: account.id, chatList: chatList)
         case .apron, .debug:
             break
         }
@@ -150,7 +152,7 @@ public final class AccountComponents {
 
     /// The connection the account keeps open while the app is in the foreground, when its network pushes updates.
     public var liveConnection: (any LiveConnecting)? {
-        xChatLiveFeed ?? discordGateway
+        xChatLiveFeed ?? discordGateway ?? linkedinLiveFeed
     }
 
     /// Stops what runs in the background, when the account goes away.

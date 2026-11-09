@@ -157,8 +157,9 @@ final class AppContainer {
 
     /// `nil` when the LinkedIn account is gone.
     func linkedinChatFactory(accountId: String, conversationUrn: String, title: String) -> (() -> ChatViewModel)? {
-        guard let client = services.component(id: accountId)?.linkedinClient else { return nil }
-        return { AdapterChatViewModel(adapter: LinkedInChatAdapter(client: client, conversationUrn: conversationUrn, title: title), accountId: accountId) }
+        guard let component = services.component(id: accountId), let client = component.linkedinClient else { return nil }
+        let liveFeed = component.linkedinLiveFeed
+        return { AdapterChatViewModel(adapter: LinkedInChatAdapter(client: client, conversationUrn: conversationUrn, title: title, liveFeed: liveFeed), accountId: accountId) }
     }
 
     /// `nil` until the X Chat PIN has unlocked the account's keys.
