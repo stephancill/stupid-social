@@ -1,6 +1,6 @@
 # Third-party notices
 
-## Emoji data (`Sources/StupidChatKit/Resources/Emoji.json`)
+## Emoji data (in the StupidChatKit package, `Sources/StupidChatKit/Resources/Emoji.json`)
 
 Emoji, names, categories and keywords from [Elegant Emoji Picker](https://github.com/Finalet/Elegant-Emoji-Picker) (`Emoji Unicode 17.0.json` at commit `ceff7eb`), reduced to the fields the app uses.
 
@@ -28,9 +28,9 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## rlottie (`Sources/StupidChatKit/Stickers/`)
+## rlottie (in the StupidChatKit package, `Sources/StupidChatKit/Stickers/`)
 
-The Lottie sticker renderer is written for this app, but reproduces how [rlottie](https://github.com/Samsung/rlottie) draws, so stickers look as they do in Telegram: its bezier length and `tAtLength` search, approximate line length, trim segments, keyframe evaluation, gradient stops and colour packing are ported from rlottie's sources (and from Telegram's fork, [TelegramMessenger/rlottie](https://github.com/TelegramMessenger/rlottie), where it differs).
+The Lottie sticker renderer is written for StupidChatKit, but reproduces how [rlottie](https://github.com/Samsung/rlottie) draws, so stickers look as they do in Telegram: its bezier length and `tAtLength` search, approximate line length, trim segments, keyframe evaluation, gradient stops and colour packing are ported from rlottie's sources (and from Telegram's fork, [TelegramMessenger/rlottie](https://github.com/TelegramMessenger/rlottie), where it differs).
 
 ```
 Copyright 2020 (see AUTHORS: https://github.com/Samsung/rlottie/blob/master/AUTHORS)

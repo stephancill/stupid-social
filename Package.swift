@@ -13,30 +13,24 @@ let package = Package(
             name: "StupidSocial",
             targets: ["StupidSocial"]
         ),
-        // The chat framework, for use in other apps (docs/TECHNICAL_DESIGN.md § Chat Framework).
-        .library(
-            name: "StupidChatKit",
-            targets: ["StupidChatKit"]
-        ),
         .library(
             name: "StupidSocialNotificationService",
             targets: ["StupidSocialNotificationService"]
         ),
     ],
+    dependencies: [
+        // The chat framework (docs/TECHNICAL_DESIGN.md § Chat Framework).
+        .package(url: "https://github.com/stephancill/stupid-chatkit", from: "0.1.0"),
+    ],
     targets: [
         .target(
             name: "StupidSocial",
-            dependencies: ["StupidSocialCore", "StupidSocialPush", "StupidChatKit"]
-        ),
-        // Chat models, view models, storage and UI; knows no network.
-        .target(
-            name: "StupidChatKit",
-            resources: [.process("Resources")]
+            dependencies: ["StupidSocialCore", "StupidSocialPush", .product(name: "StupidChatKit", package: "stupid-chatkit")]
         ),
         .target(
             name: "StupidSocialCore",
             dependencies: [
-                "StupidChatKit",
+                .product(name: "StupidChatKit", package: "stupid-chatkit"),
                 "StupidSocialPush",
                 "JuiceboxSdk",
                 "StupidMetrics",
@@ -46,7 +40,7 @@ let package = Package(
         ),
         .target(
             name: "StupidSocialPush",
-            dependencies: ["StupidChatKit"]
+            dependencies: [.product(name: "StupidChatKit", package: "stupid-chatkit")]
         ),
         // XChat key recovery. Vendored by scripts/vendor-juicebox.sh; don't edit these by hand.
         .target(
@@ -67,10 +61,6 @@ let package = Package(
         .target(
             name: "StupidSocialNotificationService",
             dependencies: ["StupidSocialPush"]
-        ),
-        .testTarget(
-            name: "StupidChatKitTests",
-            dependencies: ["StupidChatKit"]
         ),
         .testTarget(
             name: "StupidSocialTests",

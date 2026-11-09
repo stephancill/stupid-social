@@ -55,48 +55,6 @@ Sources/
       TelegramConnectionView.swift  # Telegram sign-in: phone, code, 2FA password
       TelegramChatView.swift        # Telegram chat: the group's details and members, or the person's profile, from the title
       TelegramProfileView.swift     # Telegram user profile from mentions, avatars and members: bio, last seen, Message
-  StupidChatKit/                    # The chat framework as a library: knows no network, imports nothing of the app
-    ChatKit.swift                   # What an app sets at launch (events, network icons, its own links); ChatNetwork, ChatReminders, ChatRedaction
-    Models/
-      ChatViewModel.swift           # Shared chat models (ChatMessage, ChatUser, ChatEmbed) and base view model: drafts, polling, unread, read markers, sending
-      AdapterChatViewModel.swift    # ChatAdapter protocol and its optional abilities, and the view model that drives one (every network)
-      ChatVoiceNote.swift           # A recorded voice message: its file, length and waveform
-      ChatForward.swift             # Forwarding: ChatForward, ChatForwarding, cross-network copies, voice notes as M4A files
-      ChatEmojiSearch.swift         # Emoji offered for a typed `:word`: custom emoji, then Unicode emoji by name
-      ChatReactionGrid.swift        # EmojiCatalog (Resources/Emoji.json, see THIRD_PARTY_NOTICES.md) and the reaction grid's sections and search
-      ChatListViewModel.swift       # Chats list: ChatSummary, ChatListProvider (one per network), merged list, opening a destination
-      SpoilerText.swift             # Spoiler masking for previews and notifications
-    Storage/
-      ChatDraftStore.swift          # Unsent composer text per chat (by chatKey), every network
-      ChatSnapshotCache.swift       # Last messages and metadata per adapter chat (by chatKey) for instant open
-      ChatMediaFiles.swift          # Chat videos, voice and files downloaded to local files for the player and Quick Look
-    Stickers/                       # Sticker renderers, no dependencies (docs/TECHNICAL_DESIGN.md § Stickers)
-      LottieModel.swift             # TGS/Lottie parsing: layers, shapes, keyframes, easing, motion curves
-      LottiePath.swift              # Bezier paths, rlottie's lengths and trims
-      LottieRenderer.swift          # Core Graphics frames matching Telegram's rlottie fork, quirks included
-      WebMSticker.swift             # WebM (VP9 + alpha) reader and VideoToolbox decoder
-    Resources/
-      Emoji.json                    # Every emoji by category with names and keywords (THIRD_PARTY_NOTICES.md)
-    Views/
-      ChatView.swift                # Shared chat screen: title pill, connection lifecycle; NetworkChatView for networks without screens of their own
-      ChatUIKitView.swift           # Shared chat UIKit view controller: message list, floating composer, attachments
-      ChatMessageCell.swift         # Chat message cell, unread divider, typing bubble, avatar and reply quote views
-      ChatTextViews.swift           # Chat composer text view, link/mention label and tap gestures
-      ChatAttributedText.swift      # Inline Markdown to UIKit attributes for chat messages
-      ChatReactionPicker.swift      # "More Reactions" sheet for the right-click context menu (Mac)
-      ChatReactionGridView.swift    # The grid a lifted message's reaction row expands into: search, custom emoji, every emoji
-      ChatMessageFocusView.swift    # Long-press menu model, the focus overlay that lifts a message, reminder date picker
-      ChatCustomEmojiImages.swift   # Custom emoji images (downsampled, cached) for text, chips, picker and the composer strip
-      ChatAudioPreview.swift        # Inline audio preview player and track card for chat messages
-      ChatImageViewer.swift         # Full-screen chat image viewer: zoom, swipe to dismiss, save to Photos; full-screen profile photos
-      ChatMediaViews.swift          # Chat videos (poster, looping GIFs, full-screen player) and the Quick Look file source
-      ChatStickerView.swift         # A sticker: still, image or looping animation (Lottie, WebM) rendered off the main thread
-      ChatStickerPanel.swift        # Sticker panel in the keyboard's place: every set in one grid, set tabs, emoji filter, hold to preview, tap to send
-      ChatVoiceRecorder.swift       # Records a voice message from the composer: microphone permission, PCM to a temporary file
-      ChatAvatarImage.swift         # A chat's picture or its initials, for Chats rows and the chat title
-      ChatUserColor.swift           # Per-user accent colors and the initials avatar, for chats and notifications
-      CachedAsyncImage.swift        # An image from a URL through ImageCache, drawn at once when cached
-      ImageCache.swift              # Downloaded images by URL and key, shared by the chat and the rest of the app
   StupidSocialPush/                 # Shared with the notification extension: Web Push decryption, push store, notification content
     WebPushDecryptor.swift
     ApronPushStore.swift
@@ -202,7 +160,7 @@ Sources/
       DiscordProfileViewModel.swift  # Discord profile and the DM its Message button opens or starts
 ```
 
-Outside `Sources/`: `NotificationService/` holds the extension's Info.plist and entitlements, `workers/push-relay/` the Apron push relay Worker (`bun run push-relay:test`, `bun run push-relay:deploy`), and `Vendor/JuiceboxSdk/` the vendored Juicebox SDK (Swift wrapper and static-library XCFramework) that X Chat key recovery uses; regenerate it with `scripts/vendor-juicebox.sh`, never edit it by hand. `cli/` is the `stupid-social` command line for chats on a Mac, its own macOS SwiftPM package (`swift build -c release` in `cli/`) that talks to `ChatControlServer`. `skills/stupid-social/SKILL.md` is the agent skill for using it; keep it in step with the CLI's commands and errors. `Vendor/StupidMetrics/` is the vendored StupidMetrics Swift package (usage metrics); update it with `scripts/vendor-stupid-metrics.sh <tag>`, never edit it by hand.
+Outside `Sources/`: `NotificationService/` holds the extension's Info.plist and entitlements, `workers/push-relay/` the Apron push relay Worker (`bun run push-relay:test`, `bun run push-relay:deploy`), and `Vendor/JuiceboxSdk/` the vendored Juicebox SDK (Swift wrapper and static-library XCFramework) that X Chat key recovery uses; regenerate it with `scripts/vendor-juicebox.sh`, never edit it by hand. The chat framework is the `StupidChatKit` package, a dependency from its own public repository (`https://github.com/stephancill/stupid-chatkit`, pinned in `Package.resolved`); see § Chat Framework. `cli/` is the `stupid-social` command line for chats on a Mac, its own macOS SwiftPM package (`swift build -c release` in `cli/`) that talks to `ChatControlServer`. `skills/stupid-social/SKILL.md` is the agent skill for using it; keep it in step with the CLI's commands and errors. `Vendor/StupidMetrics/` is the vendored StupidMetrics Swift package (usage metrics); update it with `scripts/vendor-stupid-metrics.sh <tag>`, never edit it by hand.
 
 - Keep `## Project Structure` in sync when files are added, moved, or renamed.
 
@@ -259,12 +217,13 @@ Chat is one framework with an adapter per network; `docs/TECHNICAL_DESIGN.md` §
 - Each account contributes its `ChatListProvider` through `AccountComponents.chatListProvider`, and the list scopes rows to that account. Live row changes use `updateChats(_:accountId:)` or `replaceChats(where:with:)`.
 - Adding a network takes its adapter, its `ChatListProvider` (and its line in `AccountComponents.chatListProvider`), a `ChatDestination` case and its case in `ChatsView`'s switch. If it needs more, extend the framework first.
 - Every chat has a `chatKey` (`<account id>|<adapter key>`), used for drafts and snapshots; two accounts can share a chat, so keys always include the account.
-- Framework behavior is covered in `Tests/StupidChatKitTests` (`ChatViewModelTests`, `AdapterChatViewModelTests` with fake adapters, `ChatListViewModelTests`); network mapping is tested against recorded pages without the UI.
+- Framework behavior is tested in the kit's repository (`ChatViewModelTests`, `AdapterChatViewModelTests` with fake adapters, `ChatListViewModelTests`); network mapping is tested here against recorded pages without the UI.
+- The framework lives in `stupid-chatkit` (local checkout `../stupid-chatkit`; read its `README.md` and `docs/DESIGN.md` before changing it). Change it there, never in `.build/checkouts`. To work on both at once, point the dependency at the checkout (`.package(path: "../stupid-chatkit")`) and never commit that; to ship a change, tag a kit release (`git tag -a X.Y.Z`), push the tag, then bump the version here (`swift package update stupid-chatkit`, raising `from:` when the app needs the new API) and commit `Package.resolved`.
 
 ## Network Integration
 
 - Always diagnose network behavior and validate the fix in the dependency-free Python client first, before implementing or changing the native Swift client. The probes (`scripts/x-web-client.py`, `scripts/instagram-web-client.py`, `scripts/github-web-client.py`, `scripts/spotify-web-client.py`, `scripts/bluesky-web-client.py`, `scripts/apron-web-client.py`, `scripts/telegram-client.py`, `scripts/xchat-client.py`, `scripts/discord-web-client.py`, `scripts/farcaster-client.py`, `scripts/linkedin-web-client.py`) are the source of truth for endpoint behavior, auth/session freshness, redirects, and response shape. Reproduce the issue live with the probe (using simulator credentials where applicable), add or update a probe command that demonstrates the diagnosis, then port the validated behavior into Swift. Do not guess endpoint/auth behavior from Swift alone.
-- Sticker rendering is checked the same way, against references: run `scripts/lottie-compare.py` (Telegram's rlottie) and `scripts/webm-compare.sh` (ffmpeg) on the sticker corpus after changing `Sources/StupidChatKit/Stickers/`.
+- Sticker rendering is checked the same way, against references: after changing the kit's `Sources/StupidChatKit/Stickers/`, run its `scripts/lottie-compare.py` (Telegram's rlottie) and `scripts/webm-compare.sh` (ffmpeg) on the sticker corpus from `scripts/telegram-client.py sticker-corpus` here.
 - `scripts/xchat-client.py` is the one probe with dependencies: Python's standard library has no P-256 or libsodium, so it runs as a uv inline script (`uv run --script scripts/xchat-client.py --env-local …`, reading `DIAGNOSE_X_CREDS` from `.env.local`) and recovers keys through the official Juicebox JS SDK under bun (`scripts/xchat-juicebox-recover.ts`, PIN from `X_CHAT_PIN`). `recover-keys` uses a PIN guess when the PIN is wrong; it saves the keys to `logs/xchat-keys.json` (0600, gitignored) so decryption can be iterated without more guesses. Never print message text from other people (`--show-text` is for messages the agent sent), and send, react and mark read only in a conversation the user named for testing (`--expect-participant` guards the recipient).
 - Implement X as a native Swift client that sends what X's own web client sends. Take GraphQL query ids, variables and feature switches from the web client's `main.<hash>.js` bundle (`queryId:"…",operationName:"…",metadata:{featureSwitches:[…]}`, linked from the signed-in `https://x.com/home`) and the switch values from that page's `featureSwitch` config. Never use `twitter-cli` or other third-party clients as a reference for endpoints, ids or request shapes.
 - X background polling must use count-only behavior to avoid marking notifications read server-side.
