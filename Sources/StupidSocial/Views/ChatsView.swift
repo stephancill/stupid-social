@@ -64,6 +64,7 @@ struct ChatsView: View {
                     ChatRow(chat: chat)
                 }
                 .buttonStyle(.plain)
+                .chatQuickLook(open: { selection = chat }, preview: { quickLook(chat) })
                 // Only the line above the first row; lower rows share theirs with the row above.
                 .listRowSeparator(chat.id == filteredChats.first?.id && !showsArchiveRow ? .hidden : .automatic, edges: .top)
                 .compactListRowInsets()
@@ -124,7 +125,7 @@ struct ChatsView: View {
             }
         }
         .navigationDestination(isPresented: $isShowingArchive) {
-            ArchivedChatsView(viewModel: viewModel) { AnyView(destination(for: $0)) }
+            ArchivedChatsView(viewModel: viewModel, destination: { AnyView(destination(for: $0)) }, quickLook: { AnyView(quickLook($0)) })
         }
         .navigationDestination(item: $settingsAccountId) { accountId in
             accountSettings(accountId)
@@ -182,12 +183,23 @@ struct ChatsView: View {
         }
     }
 
+    /// A long-pressed row's preview: the chat as it opens, read-only and without marking anything read.
+    private func quickLook(_ chat: ChatSummary) -> some View {
+        NavigationStack {
+            destination(for: chat, quickLook: true)
+        }
+        .frame(idealWidth: 390, idealHeight: 560)
+    }
+
     /// A network chat opening from its row, which says whether there are unread messages to wait for.
-    private func opened<ViewModel: ChatViewModel>(_ chatViewModel: ViewModel, chat: ChatSummary) -> ViewModel {
+    private func opened<ViewModel: ChatViewModel>(_ chatViewModel: ViewModel, chat: ChatSummary, quickLook: Bool = false) -> ViewModel {
+        chatViewModel.isQuickLook = quickLook
         chatViewModel.showRowAvatar(url: chat.avatarURL, colorKey: chat.avatarColorKey)
         if chat.unreadCount > 0 {
             chatViewModel.expectUnread()
         }
+        // A quick look only reads, so the focus and a staged forward wait for the chat itself.
+        guard !quickLook else { return viewModel.follow(chatViewModel, chatId: chat.id) }
         chatViewModel.reminderTarget = ChatReminderTarget(destination: chat.destination, accountId: chat.accountId, network: chat.network, chatTitle: chat.title)
         if focus?.destination == chat.destination, let messageId = focus?.focus.messageId {
             chatViewModel.focusMessageId = messageId
@@ -204,7 +216,7 @@ struct ChatsView: View {
     }
 
     @ViewBuilder
-    private func destination(for chat: ChatSummary) -> some View {
+    private func destination(for chat: ChatSummary, quickLook: Bool = false) -> some View {
         switch chat.destination {
         case let .apron(serverURL, roomId):
             let focus = focus?.destination == chat.destination ? focus?.focus : nil
@@ -216,7 +228,7 @@ struct ChatsView: View {
                         snapshotCache: apronService.snapshotCache,
                         draftStore: apronService.draftStore,
                     )
-                    return opened(room, chat: chat)
+                    return opened(room, chat: chat, quickLook: quickLook)
                 }(),
                 profileUserId: focus?.userId,
             )
@@ -229,40 +241,41 @@ struct ChatsView: View {
                     draftStore: apronService.draftStore,
                 ),
                 chat: chat,
+                quickLook: quickLook,
             ))
         case let .spotify(chatId):
             if let makeChat = spotifyChat(chat.accountId, chatId, chat.title) {
-                NetworkChatView(viewModel: opened(makeChat(), chat: chat))
+                NetworkChatView(viewModel: opened(makeChat(), chat: chat, quickLook: quickLook))
             } else {
                 ContentUnavailableView("Spotify Not Connected", systemImage: "music.note")
             }
         case let .instagram(threadFbid):
             if let makeChat = instagramChat(chat.accountId, threadFbid, chat.title) {
-                NetworkChatView(viewModel: opened(makeChat(), chat: chat))
+                NetworkChatView(viewModel: opened(makeChat(), chat: chat, quickLook: quickLook))
             } else {
                 ContentUnavailableView("Instagram Not Connected", systemImage: "camera")
             }
         case let .telegram(peer):
             if let make = telegramChat(chat.accountId, peer, chat.title, chat.presence, chat.avatarURL) {
-                TelegramChatView(viewModel: opened(make.chat(), chat: chat), members: make.members())
+                TelegramChatView(viewModel: opened(make.chat(), chat: chat, quickLook: quickLook), members: make.members())
             } else {
                 ContentUnavailableView("Telegram Not Connected", systemImage: "paperplane")
             }
         case let .x(conversationId):
             if let makeChat = xChat(chat.accountId, conversationId, chat.title) {
-                NetworkChatView(viewModel: opened(makeChat(), chat: chat))
+                NetworkChatView(viewModel: opened(makeChat(), chat: chat, quickLook: quickLook))
             } else {
                 ContentUnavailableView("X Chat Locked", systemImage: "lock", description: Text("Enter your X Chat PIN in this X account's settings."))
             }
         case let .bluesky(convoId):
             if let makeChat = blueskyChat(chat.accountId, convoId, chat.title) {
-                NetworkChatView(viewModel: opened(makeChat(), chat: chat))
+                NetworkChatView(viewModel: opened(makeChat(), chat: chat, quickLook: quickLook))
             } else {
                 ContentUnavailableView("Bluesky Not Connected", systemImage: "bubble.left.and.bubble.right")
             }
         case let .discord(channelId):
             if let make = discordChat(chat.accountId, channelId, chat.title) {
-                DiscordChatView(viewModel: opened(make.chat(), chat: chat), channelId: channelId, dmRecipient: make.dmRecipient, profile: make.profile)
+                DiscordChatView(viewModel: opened(make.chat(), chat: chat, quickLook: quickLook), channelId: channelId, dmRecipient: make.dmRecipient, profile: make.profile)
             } else {
                 ContentUnavailableView("Discord Not Connected", systemImage: "bubble.left.and.bubble.right")
             }
@@ -273,7 +286,18 @@ struct ChatsView: View {
                 ContentUnavailableView("LinkedIn Not Connected", systemImage: "bubble.left.and.bubble.right")
             }
         case let .demo(chatId):
-            NetworkChatView(viewModel: opened(AdapterChatViewModel(adapter: DemoChatAdapter(chatId: chatId), accountId: chat.accountId), chat: chat))
+            NetworkChatView(viewModel: opened(AdapterChatViewModel(adapter: DemoChatAdapter(chatId: chatId), accountId: chat.accountId), chat: chat, quickLook: quickLook))
+        }
+    }
+}
+
+private extension View {
+    /// Long-pressing (or right-clicking) a chat's row previews it, as in Messages, without marking it read.
+    func chatQuickLook(open: @escaping () -> Void, preview: @escaping () -> some View) -> some View {
+        contextMenu {
+            Button("Open Chat", systemImage: "bubble.left.and.bubble.right", action: open)
+        } preview: {
+            preview()
         }
     }
 }
@@ -330,6 +354,7 @@ private struct ChatForwardPicker: View {
 private struct ArchivedChatsView: View {
     @ObservedObject var viewModel: ChatListViewModel
     let destination: (ChatSummary) -> AnyView
+    let quickLook: (ChatSummary) -> AnyView
     @State private var selection: ChatSummary?
 
     var body: some View {
@@ -340,6 +365,7 @@ private struct ArchivedChatsView: View {
                 ChatRow(chat: chat)
             }
             .buttonStyle(.plain)
+            .chatQuickLook(open: { selection = chat }, preview: { quickLook(chat) })
             .listRowSeparator(chat.id == viewModel.archivedChats.first?.id ? .hidden : .automatic, edges: .top)
             .compactListRowInsets()
         }

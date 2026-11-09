@@ -710,6 +710,7 @@ public final class AdapterChatViewModel<Adapter: ChatAdapter>: ChatViewModel {
 
     /// The read position moves at once (the count follows it); the network hears shortly after.
     override public func markRead(upTo message: ChatMessage) {
+        guard !isQuickLook else { return }
         let send = adapter.markRead(upTo: message)
         updateUnreadCount()
         if let send {
@@ -739,7 +740,7 @@ public final class AdapterChatViewModel<Adapter: ChatAdapter>: ChatViewModel {
 
     /// Only once connected, like the read position: cached messages shown before then may be out of date.
     override public func reactionsSeen(on messageIds: Set<String>) {
-        guard isOpen, let unseen = adapter as? any ChatUnseenReactions else { return }
+        guard isOpen, !isQuickLook, let unseen = adapter as? any ChatUnseenReactions else { return }
         let ids = messageIds.intersection(unseenReactionMessageIds)
         guard !ids.isEmpty else { return }
         let send = unseen.markReactionsSeen(on: ids)

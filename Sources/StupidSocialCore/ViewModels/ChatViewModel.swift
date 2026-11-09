@@ -628,6 +628,9 @@ public class ChatViewModel: ObservableObject {
     public var reminderTarget: ChatReminderTarget?
     /// A message to show once the chat loads, such as from a link or a reminder.
     public var focusMessageId: String?
+    /// A quick look from the Chats list: the chat shows read-only and tells the network nothing it saw, so
+    /// messages stay unread and reactions unseen. Set before the chat's screen appears.
+    public var isQuickLook = false
 
     public static let quickReactions = ["👍", "❤️", "😂", "🔥", "😮", "🙏"]
 

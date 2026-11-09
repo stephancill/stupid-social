@@ -303,7 +303,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
                 embeds: message.isDeleted ? [] : message.embeds,
                 reactions: message.isDeleted ? [] : reactionTotals[id] ?? [],
                 actions: ChatMessageCell.Actions(
-                    canReply: viewModel.canReply && message.isUserMessage && !message.isDeleted,
+                    canReply: viewModel.canReply && !viewModel.isQuickLook && message.isUserMessage && !message.isDeleted,
                     reply: { [weak self] in self?.beginReply(to: id) },
                     toggleReaction: { [weak self] emoji in self?.toggleReaction(emoji, on: id) },
                     showReplyTarget: { [weak self] in
@@ -535,6 +535,8 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         inputRow = UIStackView(arrangedSubviews: [attachGlass, inputPill])
         inputRow.alignment = .bottom
         inputRow.spacing = 8
+        // A quick look only reads the chat.
+        inputRow.isHidden = viewModel.isQuickLook
 
         composer.axis = .vertical
         composer.spacing = 8
@@ -615,7 +617,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
 
     private func updateSearchBar() {
         let isSearching = viewModel.searchQuery != nil
-        inputRow.isHidden = isSearching
+        inputRow.isHidden = isSearching || viewModel.isQuickLook
         searchBar.isHidden = !isSearching
         guard isSearching else { return }
         let count = viewModel.searchMatchIds.count
@@ -2195,7 +2197,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     }
 
     private func messageMenu(for id: String) -> ChatMessageMenu? {
-        guard let message = messagesById[id], message.isUserMessage else { return nil }
+        guard let message = messagesById[id], message.isUserMessage, !viewModel.isQuickLook else { return nil }
         let text = message.isDeleted ? "" : message.text ?? ""
         var menu = ChatMessageMenu()
         if viewModel.canReact, !message.isDeleted {
@@ -2821,7 +2823,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     }
 
     private func toggleReaction(_ emoji: String, on id: String) {
-        guard viewModel.canReact, let message = messagesById[id], !message.isNotice, !message.isDeleted else { return }
+        guard viewModel.canReact, !viewModel.isQuickLook, let message = messagesById[id], !message.isNotice, !message.isDeleted else { return }
         reactionHaptic.selectionChanged()
         Task { await viewModel.toggleReaction(emoji, on: id) }
     }
