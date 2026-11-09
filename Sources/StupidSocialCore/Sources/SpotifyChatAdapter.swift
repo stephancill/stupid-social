@@ -38,7 +38,7 @@ public final class SpotifyChatAdapter: ChatAdapter, ChatAudioPreviewing {
         self.client = client
         self.chatId = chatId
         self.viewerUsername = viewerUsername
-        info = ChatInfo(title: title, subtitle: "Spotify")
+        info = ChatInfo(title: title, subtitle: "")
     }
 
     public var key: String {

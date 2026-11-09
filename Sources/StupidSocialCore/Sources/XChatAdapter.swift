@@ -46,7 +46,7 @@ public final class XChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, 
         self.client = client
         self.liveFeed = liveFeed
         self.conversationId = conversationId
-        info = ChatInfo(title: title, subtitle: "X")
+        info = ChatInfo(title: title, subtitle: "")
     }
 
     public var key: String {

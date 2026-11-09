@@ -50,7 +50,7 @@ public final class DiscordChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEdit
         self.gateway = gateway
         client = gateway.client
         self.channelId = channelId
-        info = ChatInfo(title: title, subtitle: "Discord")
+        info = ChatInfo(title: title, subtitle: "")
         applyChannel()
     }
 
@@ -77,7 +77,7 @@ public final class DiscordChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEdit
         info.titleIsMemberNames = channel.isPrivate && channel.name?.isEmpty != false
         if channel.type == DiscordChannel.dm {
             info.showsSenderNames = false
-            info.subtitle = others.first?.username.map { "@\($0)" } ?? "Discord"
+            info.subtitle = others.first?.username.map { "@\($0)" } ?? ""
             info.avatarUserId = others.first?.id
             info.avatarURL = others.first?.avatarURL
         } else if channel.type == DiscordChannel.groupDM {
@@ -85,7 +85,7 @@ public final class DiscordChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEdit
         } else if channel.isThread, let parent = gateway.channel(id: channel.parentId ?? "") {
             info.subtitle = [guild?.name, parent.name.map { "#\($0)" }].compactMap(\.self).joined(separator: " / ")
         } else {
-            info.subtitle = guild?.name ?? "Discord"
+            info.subtitle = guild?.name ?? ""
         }
         if let guild {
             for member in guild.members ?? [] {

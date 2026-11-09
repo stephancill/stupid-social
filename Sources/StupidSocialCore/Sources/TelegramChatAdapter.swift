@@ -87,7 +87,7 @@ public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, 
         self.peer = peer
         listedStatus = userStatus
         self.userStatus = userStatus
-        info = ChatInfo(title: title, subtitle: userStatus?.text ?? "Telegram", showsSenderNames: peer.kind != .user)
+        info = ChatInfo(title: title, subtitle: userStatus?.text ?? "", showsSenderNames: peer.kind != .user)
         if peer.kind == .user {
             // The id the person's messages carry, so the initials match their bubbles' color.
             info.avatarUserId = String(peer.id)
@@ -193,7 +193,7 @@ public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, 
         readOutboxMaxId = max(readOutboxMaxId, dialog.readOutboxMaxId)
         isSavedMessages = dialog.isSavedMessages
         userStatus = dialog.userStatus
-        info.subtitle = dialog.memberCount.map { "\($0) members" } ?? (dialog.isBot ? "Bot" : userStatus?.text ?? "Telegram")
+        info.subtitle = dialog.memberCount.map { "\($0) members" } ?? (dialog.isBot ? "Bot" : userStatus?.text ?? "")
     }
 
     public func startFollowing() async {

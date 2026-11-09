@@ -31,7 +31,7 @@ public final class BlueskyChatAdapter: ChatAdapter, ChatReactionSending {
     public init(client: BlueskyClient, convoId: String, title: String) {
         self.client = client
         self.convoId = convoId
-        info = ChatInfo(title: title, subtitle: "Bluesky", showsSenderNames: false, titleIsMemberNames: true)
+        info = ChatInfo(title: title, subtitle: "", showsSenderNames: false, titleIsMemberNames: true)
     }
 
     public var key: String {
@@ -100,7 +100,7 @@ public final class BlueskyChatAdapter: ChatAdapter, ChatReactionSending {
         let others = convo.others(viewerDid: viewerDid)
         info.title = convo.title(viewerDid: viewerDid)
         info.showsSenderNames = convo.isGroup(viewerDid: viewerDid)
-        info.subtitle = info.showsSenderNames ? "\(convo.members.count) members" : others.first?.handle.map { "@\($0)" } ?? "Bluesky"
+        info.subtitle = info.showsSenderNames ? "\(convo.members.count) members" : others.first?.handle.map { "@\($0)" } ?? ""
     }
 
     public func loadEarlier() async throws {

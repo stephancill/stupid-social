@@ -153,9 +153,15 @@ private struct ChatTitlePill: View {
                     }
             }
             VStack(spacing: 0) {
-                Text(title)
-                    .font(.headline)
-                    .lineLimit(1)
+                HStack(spacing: 4) {
+                    // Without an avatar or subtitle to carry it, the network icon leads the title.
+                    if avatar == nil, subtitle.isEmpty {
+                        NetworkBadgeIcon(network: network, size: 14)
+                    }
+                    Text(title)
+                        .font(.headline)
+                        .lineLimit(1)
+                }
                 if !subtitle.isEmpty {
                     HStack(spacing: 4) {
                         // Without an avatar to carry it, the network icon leads the subtitle.

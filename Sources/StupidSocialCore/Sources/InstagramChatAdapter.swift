@@ -35,7 +35,7 @@ public final class InstagramChatAdapter: ChatAdapter, ChatReactionSending, ChatR
     public init(client: InstagramClient, threadFbid: String, title: String) {
         self.client = client
         self.threadFbid = threadFbid
-        info = ChatInfo(title: title, subtitle: "Instagram")
+        info = ChatInfo(title: title, subtitle: "")
     }
 
     public var key: String {
@@ -112,7 +112,7 @@ public final class InstagramChatAdapter: ChatAdapter, ChatReactionSending, ChatR
         if let threadTitle = thread.threadTitle, !threadTitle.isEmpty {
             info.title = threadTitle
         }
-        info.subtitle = thread.isGroup == true ? "\(thread.others.count + 1) members" : "Instagram"
+        info.subtitle = thread.isGroup == true ? "\(thread.others.count + 1) members" : ""
     }
 
     public func loadEarlier() async throws {

@@ -42,7 +42,7 @@ public final class LinkedInChatAdapter: ChatAdapter, ChatReactionSending, ChatEd
         self.client = client
         self.conversationUrn = conversationUrn
         self.liveFeed = liveFeed
-        info = ChatInfo(title: title, subtitle: "LinkedIn", showsSenderNames: false, titleIsMemberNames: true)
+        info = ChatInfo(title: title, subtitle: "", showsSenderNames: false, titleIsMemberNames: true)
     }
 
     /// The stream pushes changes; a slow poll covers anything it misses. Without it, a quicker one.
@@ -119,7 +119,7 @@ public final class LinkedInChatAdapter: ChatAdapter, ChatReactionSending, ChatEd
         info.title = conversation.displayTitle(viewerUrn: viewerUrn)
         info.titleIsMemberNames = conversation.title?.isEmpty != false
         info.showsSenderNames = isGroup
-        info.subtitle = isGroup ? "\(conversation.conversationParticipants.count) members" : "LinkedIn"
+        info.subtitle = isGroup ? "\(conversation.conversationParticipants.count) members" : ""
         info.avatarUserId = isGroup ? nil : others.first?.hostIdentityUrn
         info.avatarURL = isGroup ? nil : others.first?.avatarURL
         // `lastReadAt` can trail the newest message by a moment even when the chat reads as read.
