@@ -119,6 +119,93 @@ final class ChatVideoView: UIView {
 }
 
 /// A label with room around its text, for badges on media.
+/// A link preview's media, paged across in place: one page per photo or video, with a page control when there are
+/// several. The pages keep their own taps (the viewer, the player); the preview's ratio is its first page's.
+final class ChatMediaPager: UIView, UIScrollViewDelegate {
+    private let scrollView = ChatMediaPagerScrollView()
+    private let pageControl = UIPageControl()
+    private let pageCount: Int
+
+    init(pages: [UIView], aspectRatio: CGFloat) {
+        pageCount = pages.count
+        super.init(frame: .zero)
+        clipsToBounds = true
+        layer.cornerRadius = 6
+        layer.cornerCurve = .continuous
+        translatesAutoresizingMaskIntoConstraints = false
+
+        scrollView.isPagingEnabled = true
+        scrollView.showsHorizontalScrollIndicator = false
+        scrollView.showsVerticalScrollIndicator = false
+        scrollView.alwaysBounceVertical = false
+        scrollView.contentInsetAdjustmentBehavior = .never
+        scrollView.scrollsToTop = false
+        scrollView.delegate = self
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(scrollView)
+
+        let row = UIStackView(arrangedSubviews: pages)
+        row.axis = .horizontal
+        row.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.addSubview(row)
+
+        pageControl.numberOfPages = pages.count
+        pageControl.hidesForSinglePage = true
+        pageControl.backgroundStyle = .prominent
+        pageControl.translatesAutoresizingMaskIntoConstraints = false
+        pageControl.addAction(UIAction { [weak self] _ in self?.showPage(animated: true) }, for: .valueChanged)
+        addSubview(pageControl)
+
+        NSLayoutConstraint.activate([
+            scrollView.topAnchor.constraint(equalTo: topAnchor),
+            scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            heightAnchor.constraint(equalTo: widthAnchor, multiplier: 1 / aspectRatio),
+            row.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor),
+            row.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor),
+            row.trailingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.trailingAnchor),
+            row.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor),
+            row.heightAnchor.constraint(equalTo: scrollView.frameLayoutGuide.heightAnchor),
+            pageControl.centerXAnchor.constraint(equalTo: centerXAnchor),
+            pageControl.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -4),
+        ])
+        for page in pages {
+            page.widthAnchor.constraint(equalTo: scrollView.frameLayoutGuide.widthAnchor).isActive = true
+        }
+    }
+
+    @available(*, unavailable)
+    required init?(coder _: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        guard scrollView.bounds.width > 0 else { return }
+        pageControl.currentPage = min(max(Int((scrollView.contentOffset.x / scrollView.bounds.width).rounded()), 0), pageCount - 1)
+    }
+
+    private func showPage(animated: Bool) {
+        scrollView.setContentOffset(CGPoint(x: CGFloat(pageControl.currentPage) * scrollView.bounds.width, y: 0), animated: animated)
+    }
+}
+
+/// The pager's scroll view takes a horizontal drag only while there's a page that way, so a leftward drag on the last
+/// page still swipes to reply and a rightward one on the first still goes back.
+final class ChatMediaPagerScrollView: UIScrollView {
+    /// Whether a leftward drag would show another page; the cell's swipe to reply waits until it wouldn't.
+    var canPageForward: Bool {
+        contentOffset.x < contentSize.width - bounds.width - 1
+    }
+
+    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard gestureRecognizer === panGestureRecognizer else { return super.gestureRecognizerShouldBegin(gestureRecognizer) }
+        let velocity = panGestureRecognizer.velocity(in: self)
+        guard abs(velocity.x) > abs(velocity.y) else { return false }
+        return velocity.x < 0 ? canPageForward : contentOffset.x > 1
+    }
+}
+
 private final class PaddedLabel: UILabel {
     private let insets = UIEdgeInsets(top: 2, left: 6, bottom: 2, right: 6)
 

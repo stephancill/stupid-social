@@ -24,48 +24,11 @@ struct NotificationDetailView: View {
                 )
             }
 
-            if let parentTarget = displayItem.item.parentTarget,
-               let target = displayItem.item.target,
-               let threads
-            {
+            if let target = displayItem.item.target, let threads, showsThread {
                 PostThreadSections(
-                    parent: parentTarget,
+                    parent: displayItem.item.parentTarget,
                     parentDetails: parentTargetDetails,
                     isLoadingParentDetails: isLoadingParentTargetDetails,
-                    focal: target,
-                    focalDetails: targetDetails,
-                    isLoadingFocalDetails: isLoadingTargetDetails,
-                    network: displayItem.item.network,
-                    fallbackActors: displayItem.item.actors,
-                    engaging: engaging,
-                    threads: threads,
-                )
-            } else if let parentTarget = displayItem.item.parentTarget,
-                      let target = displayItem.item.target
-            {
-                Section("Thread") {
-                    ReplyThreadView(
-                        parentTarget: parentTarget,
-                        replyTarget: target,
-                        network: displayItem.item.network,
-                        actors: displayItem.item.actors,
-                        parentDetails: parentTargetDetails,
-                        replyDetails: targetDetails,
-                        isLoadingParentDetails: isLoadingParentTargetDetails,
-                        isLoadingReplyDetails: displayItem.item.type == .message ? false : isLoadingTargetDetails,
-                        parentURL: postURL(for: parentTarget),
-                        replyURL: targetURL,
-                    ) { url in
-                        openURL(url)
-                    }
-                }
-            } else if let target = displayItem.item.target, let threads,
-                      displayItem.item.type != .post, displayItem.item.type != .message
-            {
-                PostThreadSections(
-                    parent: nil,
-                    parentDetails: nil,
-                    isLoadingParentDetails: false,
                     focal: target,
                     focalDetails: targetDetails,
                     isLoadingFocalDetails: isLoadingTargetDetails,
@@ -111,7 +74,6 @@ struct NotificationDetailView: View {
                                     isLoadingDetails: false,
                                     targetURL: postURL(for: relatedTarget),
                                     hidesMediaFallbackText: false,
-                                    showsFallbackWhileLoading: false,
                                     showsInlineLoadingRow: true,
                                 ) { url in
                                     openURL(url)
@@ -136,7 +98,6 @@ struct NotificationDetailView: View {
                             isLoadingDetails: isLoadingTargetDetails,
                             targetURL: targetURL,
                             hidesMediaFallbackText: displayItem.item.type == .message,
-                            showsFallbackWhileLoading: false,
                             showsInlineLoadingRow: true,
                         ) { url in
                             openURL(url)
@@ -190,6 +151,8 @@ struct NotificationDetailView: View {
                 return "Starred"
             } else if text.contains("retweet") {
                 return "Retweet"
+            } else if text.contains("recast") {
+                return "Recast"
             }
             return "Like"
         case .follow:
@@ -221,6 +184,16 @@ struct NotificationDetailView: View {
     /// Liking, reposting, replying and quoting, where the notification's account supports them.
     private var engaging: (any PostEngaging)? {
         feedService.postEngagement(network: displayItem.item.network, accountId: displayItem.item.accountId)
+    }
+
+    /// Replies and anything about a post (mentions, quotes, reactions) show its thread; a post of someone's only
+    /// when it replies to another.
+    private var showsThread: Bool {
+        switch displayItem.item.type {
+        case .message: false
+        case .post: displayItem.item.parentTarget != nil
+        default: true
+        }
     }
 
     /// Loading the whole conversation, where the notification's account supports it.
@@ -487,66 +460,6 @@ private struct PersonRow: View {
     }
 }
 
-private struct ReplyThreadView: View {
-    let parentTarget: NotificationTarget
-    let replyTarget: NotificationTarget
-    let network: SocialNetwork
-    let actors: [NotificationActor]
-    let parentDetails: NotificationTargetDetails?
-    let replyDetails: NotificationTargetDetails?
-    let isLoadingParentDetails: Bool
-    let isLoadingReplyDetails: Bool
-    let parentURL: URL?
-    let replyURL: URL?
-    let openURL: (URL) -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            TargetPostView(
-                target: parentTarget,
-                fallbackNetwork: network,
-                fallbackActors: actors,
-                details: parentDetails,
-                isLoadingDetails: isLoadingParentDetails,
-                targetURL: parentURL,
-                hidesMediaFallbackText: false,
-                showsFallbackWhileLoading: true,
-                showsInlineLoadingRow: false,
-                openURL: openURL,
-            )
-
-            ThreadConnector()
-
-            TargetPostView(
-                target: replyTarget,
-                fallbackNetwork: network,
-                fallbackActors: actors,
-                details: replyDetails,
-                isLoadingDetails: isLoadingReplyDetails,
-                targetURL: replyURL,
-                hidesMediaFallbackText: false,
-                showsFallbackWhileLoading: true,
-                showsInlineLoadingRow: false,
-                openURL: openURL,
-            )
-        }
-    }
-}
-
-private struct ThreadConnector: View {
-    var body: some View {
-        HStack(spacing: 10) {
-            Rectangle()
-                .fill(Color.secondary.opacity(0.28))
-                .frame(width: 2, height: 18)
-                .padding(.leading, 17)
-
-            Spacer(minLength: 0)
-        }
-        .padding(.vertical, 2)
-    }
-}
-
 private struct TargetPostView: View {
     let target: NotificationTarget
     let fallbackNetwork: SocialNetwork
@@ -555,7 +468,6 @@ private struct TargetPostView: View {
     let isLoadingDetails: Bool
     let targetURL: URL?
     let hidesMediaFallbackText: Bool
-    let showsFallbackWhileLoading: Bool
     let showsInlineLoadingRow: Bool
     let openURL: (URL) -> Void
 
@@ -563,7 +475,7 @@ private struct TargetPostView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if isLoadingDetails, details == nil, !showsFallbackWhileLoading {
+            if isLoadingDetails, details == nil {
                 ProgressView()
                     .frame(maxWidth: .infinity, minHeight: 72)
             } else {

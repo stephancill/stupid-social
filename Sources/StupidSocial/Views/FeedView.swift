@@ -1161,9 +1161,9 @@ private struct NotificationRow: View {
     private var summaryText: String {
         switch displayItem.item.type {
         case .mention:
-            "\(actorSummary) mentioned you"
+            "\(actorSummary)\(itemTextAfterActors ?? " mentioned you")"
         case .reply:
-            "\(actorSummary) replied to you"
+            "\(actorSummary)\(itemTextAfterActors ?? " replied to you")"
         case .reaction:
             sanitizedItemText
         case .follow:
@@ -1237,6 +1237,20 @@ private struct NotificationRow: View {
             return text.replacingOccurrences(of: "@\(username)", with: username)
         }
         return DebugRedaction.text(sanitized, actors: displayItem.item.actors, enabled: redactionEnabled)
+    }
+
+    /// What the source's text says the actors did ("quoted your cast", "replied to your tweet"): the text after the
+    /// first actor's handle or name and any " and N others", or nil when it doesn't start with them.
+    private var itemTextAfterActors: String? {
+        guard let first = displayItem.item.actors.first else { return nil }
+        let text = displayItem.item.text
+        let names = [first.username.map { "@\($0)" }, first.username, first.displayName].compactMap(\.self)
+        guard let name = names.first(where: { !$0.isEmpty && text.hasPrefix("\($0) ") }) else { return nil }
+        var rest = text.dropFirst(name.count)
+        if let others = rest.prefixMatch(of: /^ and \d+ others?/) {
+            rest = rest[others.range.upperBound...]
+        }
+        return rest.isEmpty ? nil : String(rest)
     }
 
     private var actorSummary: String {

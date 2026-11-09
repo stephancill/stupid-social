@@ -638,7 +638,7 @@ private struct ChatControlMessage: Encodable {
             switch embed {
             case let .image(url, _, alt, _, _): Embed(type: "image", title: alt, url: url.isFileURL ? nil : url)
             case let .pending(title): Embed(type: "pending", title: title)
-            case let .card(title, subtitle, _, _, link): Embed(type: "card", title: title, text: subtitle, url: link)
+            case let .card(title, subtitle, _, _, link), let .linkPreview(title, subtitle, link, _): Embed(type: "card", title: title, text: subtitle, url: link)
             case let .audio(_, title, subtitle, _, _, link): Embed(type: "audio", title: title, text: subtitle, url: link)
             case let .message(title, text, link): Embed(type: "message", title: title, text: text, url: link)
             case let .video(url, _, _, duration, isGIF): Embed(type: isGIF ? "gif" : "video", text: duration, url: Self.webURL(url))

@@ -577,6 +577,13 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
             return super.gestureRecognizerShouldBegin(gestureRecognizer)
         }
         guard actions.canReply else { return false }
+        // On a link preview's media the drag pages through it first.
+        if let hit = contentView.hitTest(pan.location(in: contentView), with: nil),
+           let pager = sequence(first: hit, next: \.superview).lazy.compactMap({ $0 as? ChatMediaPagerScrollView }).first,
+           pager.canPageForward
+        {
+            return false
+        }
         let velocity = pan.velocity(in: contentView)
         return velocity.x < 0 && abs(velocity.x) > abs(velocity.y) * 1.2
     }
@@ -1285,6 +1292,8 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
             )
         case let .card(title, subtitle, systemImage, imageURL, link):
             return linkCard(title: title, subtitle: subtitle, systemImage: systemImage, imageURL: imageURL, link: link)
+        case let .linkPreview(title, subtitle, link, media):
+            return linkCard(title: title, subtitle: subtitle, systemImage: "link", imageURL: nil, link: link, media: mediaPager(media, index: index))
         case let .message(title, text, link):
             return messageCard(title: title, text: text, link: link, index: index)
         case let .video(url, posterURL, aspectRatio, duration, isGIF):
@@ -1360,14 +1369,8 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
             rest = rest.dropFirst(2)
         }
         let grid = UIStackView(arrangedSubviews: rows.map { row in
-            let tiles = row.map { item in
-                let tile = makeView(for: item.element, index: item.offset)
-                // The tile's own size gives way to the grid's.
-                tile.constraints.filter { $0.firstItem === tile && [.width, .height].contains($0.firstAttribute) }.forEach { $0.isActive = false }
-                // Only the grid's outer corners are rounded.
-                tile.layer.cornerRadius = 0
-                return tile
-            }
+            // Only the grid's outer corners are rounded.
+            let tiles = row.map { item in tile(for: item.element, index: item.offset) }
             let stack = UIStackView(arrangedSubviews: tiles)
             stack.axis = .horizontal
             stack.spacing = spacing
@@ -1383,13 +1386,32 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
         return grid
     }
 
-    private static func tileRatio(_ embed: ChatEmbed) -> CGFloat {
-        let ratio: Double? = switch embed {
+    /// A photo or video sized by its container (a grid or a pager) rather than by itself, with square corners.
+    private func tile(for embed: ChatEmbed, index: Int) -> UIView {
+        let tile = makeView(for: embed, index: index)
+        tile.constraints.filter { $0.firstItem === tile && [.width, .height].contains($0.firstAttribute) }.forEach { $0.isActive = false }
+        tile.layer.cornerRadius = 0
+        return tile
+    }
+
+    /// A link preview's media across the card, paged through in place when there are several. Its height follows
+    /// the first item, between 4:3 portrait and 2:1 landscape.
+    private func mediaPager(_ media: [ChatEmbed], index: Int) -> UIView? {
+        guard let first = media.first else { return nil }
+        let ratio = CGFloat(min(max(Self.aspectRatio(of: first) ?? 16 / 9, 0.75), 2))
+        return ChatMediaPager(pages: media.map { tile(for: $0, index: index) }, aspectRatio: ratio)
+    }
+
+    private static func aspectRatio(of embed: ChatEmbed) -> Double? {
+        switch embed {
         case let .image(_, aspectRatio, _, _, _): aspectRatio
         case let .video(_, _, aspectRatio, _, _): aspectRatio
         default: nil
         }
-        return CGFloat(min(max(ratio ?? 4 / 3, 1), 2))
+    }
+
+    private static func tileRatio(_ embed: ChatEmbed) -> CGFloat {
+        CGFloat(min(max(aspectRatio(of: embed) ?? 4 / 3, 1), 2))
     }
 
     /// A message from elsewhere, drawn like a reply quote: who sent it where, then its text, three lines until
@@ -1428,7 +1450,9 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
     /// A link preview or shared item, like Telegram's: a bar in the accent beside the site (or a symbol saying
     /// what it is), a bold title and a few lines of description, with a thumbnail at the trailing edge, on a faint
     /// wash of the accent. Tapping it opens the link.
-    private func linkCard(title: String, subtitle: String?, systemImage: String, imageURL: URL?, link: URL?) -> UIView {
+    /// A link's card: its site, title and description beside an accent bar, with a thumbnail, or `media` (a link
+    /// preview's photos and videos) across the card under the text. With media, only the text opens the link.
+    private func linkCard(title: String, subtitle: String?, systemImage: String, imageURL: URL?, link: URL?, media: UIView? = nil) -> UIView {
         let color = isOwn ? UIColor.white : accent
         let site = link.flatMap { $0.host() }.map { $0.hasPrefix("www.") ? String($0.dropFirst(4)) : $0 }
         let symbol = UIImageView(image: UIImage(systemName: systemImage, withConfiguration: UIImage.SymbolConfiguration(textStyle: .caption1, scale: .small)))
@@ -1459,12 +1483,16 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
         subtitleLabel.textColor = isOwn ? UIColor.white.withAlphaComponent(0.85) : .secondaryLabel
         subtitleLabel.numberOfLines = 3
         subtitleLabel.isHidden = subtitle == nil
-        let text = UIStackView(arrangedSubviews: [header, titleLabel, subtitleLabel])
-        text.axis = .vertical
-        text.spacing = 2
+        let labels = UIStackView(arrangedSubviews: [header, titleLabel, subtitleLabel])
+        labels.axis = .vertical
+        labels.spacing = 2
         // Fill, so the labels take the column's width by constraint. Leading let them keep the width they wrapped
         // at, and the cell lays its embeds out once at a zero frame when it is configured, so a card configured
         // before the cell had its width (a message arriving in an open chat) stayed one character wide.
+        labels.alignment = .fill
+        let text = UIStackView(arrangedSubviews: [labels] + [media].compactMap(\.self))
+        text.axis = .vertical
+        text.spacing = 6
         text.alignment = .fill
         text.isLayoutMarginsRelativeArrangement = true
         text.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0)
@@ -1505,11 +1533,13 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
         row.layer.cornerRadius = 6
         row.layer.cornerCurve = .continuous
         row.clipsToBounds = true
-        row.isAccessibilityElement = true
-        row.accessibilityLabel = [site, title, subtitle].compactMap(\.self).joined(separator: ", ")
+        // With media the text alone is the link, so the media keeps its own taps and VoiceOver reaches it.
+        let linkTarget = media == nil ? row : labels
+        linkTarget.isAccessibilityElement = true
+        linkTarget.accessibilityLabel = [site, title, subtitle].compactMap(\.self).joined(separator: ", ")
         if let link {
-            row.accessibilityTraits = .link
-            row.addGestureRecognizer(ChatLinkTapGesture(link: link))
+            linkTarget.accessibilityTraits = .link
+            linkTarget.addGestureRecognizer(ChatLinkTapGesture(link: link))
         }
         return row
     }

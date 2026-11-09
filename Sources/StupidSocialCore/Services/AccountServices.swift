@@ -68,6 +68,7 @@ public final class AccountComponents {
             notificationSource = source
             profileFetcher = source
             targetDetailFetcher = source
+            threadLoader = source
         case .instagram:
             let client = InstagramClient(credentialStore: credentials)
             let source = InstagramNotificationSource(client: client, metadataStore: metadata)

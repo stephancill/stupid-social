@@ -80,6 +80,16 @@ enum DemoChats {
                     message("m5c", you, now, minutes: 80, "and the route for sunday https://trailguide.io/cliff-path-loop", embeds: [
                         .card(title: "Cliff path loop", subtitle: "11.4 km · 3h 40m · moderate, with a swim stop halfway", systemImage: "link", imageURL: nil, link: URL(string: "https://trailguide.io/cliff-path-loop")),
                     ]),
+                    message("m5d", maya, now, minutes: 72, "the tide pools from last year https://pinboard.social/maya/posts/1182", embeds: [
+                        .linkPreview(title: "Maya Chen (@maya)", subtitle: "low tide at the point, every pool full of anemones", link: URL(string: "https://pinboard.social/maya/posts/1182"), media: [
+                            picture(1011, 960, 1280), picture(1043, 960, 1280), picture(1036, 960, 1280), picture(1039, 960, 1280),
+                        ]),
+                    ]),
+                    message("m5e", nova, now, minutes: 66, "https://pinboard.social/nova/posts/77", embeds: [
+                        .linkPreview(title: "Nova (@nova)", subtitle: "how the cliff path looked in spring", link: URL(string: "https://pinboard.social/nova/posts/77"), media: [
+                            .video(url: URL(string: "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4")!, posterURL: DemoData.photo(152, 1280, 720), aspectRatio: 16 / 9, duration: "0:05", isGIF: false),
+                        ]),
+                    ]),
                     message("m6", theo, now, minutes: 60, "", embeds: [
                         .file(url: URL(string: "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf")!, filename: "packing list.pdf", subtitle: "13 KB", thumbnailURL: nil),
                     ]),

@@ -628,9 +628,20 @@ public final class DiscordChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEdit
                 embeds.append(.card(title: item.name, subtitle: "Sticker", systemImage: "face.smiling", imageURL: nil, link: nil))
             }
         }
-        for embed in messageEmbeds {
+        for group in groupedByURL(messageEmbeds) {
+            let embed = group[0]
             let thumbnail = (embed.thumbnail?.proxyUrl ?? embed.thumbnail?.url ?? embed.image?.proxyUrl ?? embed.image?.url).flatMap(URL.init(string:))
             let link = embed.url.flatMap(URL.init(string:))
+            let media = group.flatMap { linkMedia($0, link: link) }
+            if !media.isEmpty, embed.type != "gifv", embed.type != "image" {
+                embeds.append(.linkPreview(
+                    title: embed.title ?? embed.author?.name ?? embed.provider?.name ?? link?.host() ?? "Link",
+                    subtitle: embed.description.map { String($0.prefix(300)) } ?? (embed.title == nil ? nil : embed.author?.name ?? embed.provider?.name),
+                    link: link,
+                    media: media,
+                ))
+                continue
+            }
             switch embed.type {
             case "gifv":
                 if let video = (embed.video?.proxyUrl ?? embed.video?.url).flatMap(URL.init(string:)) {
@@ -655,5 +666,40 @@ public final class DiscordChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEdit
             }
         }
         return embeds
+    }
+
+    /// Discord shows a link's several images, such as a post's photos, as one embed: embeds after the first that
+    /// share its `url` carry only an `image`. Embeds without a URL stand alone.
+    static func groupedByURL(_ embeds: [DiscordEmbed]) -> [[DiscordEmbed]] {
+        var groups: [[DiscordEmbed]] = []
+        for embed in embeds {
+            if let url = embed.url, let last = groups.last, last[0].url == url {
+                groups[groups.count - 1].append(embed)
+            } else {
+                groups.append([embed])
+            }
+        }
+        return groups
+    }
+
+    /// A link embed's large media: a video file Discord proxies (with its image or thumbnail as the poster), else
+    /// its `image`. A video without a proxied file, such as YouTube's player, shows its thumbnail, which opens the
+    /// link. A `thumbnail` beside the text stays a card's thumbnail.
+    private static func linkMedia(_ embed: DiscordEmbed, link: URL?) -> [ChatEmbed] {
+        func aspect(_ media: DiscordEmbed.Media?) -> Double? {
+            media?.width.flatMap { width in media?.height.map { Double(width) / Double(max($0, 1)) } }
+        }
+        let image = embed.image.flatMap { media in (media.proxyUrl ?? media.url).flatMap(URL.init(string:)).map { ($0, aspect(media)) } }
+        let thumbnail = embed.thumbnail.flatMap { media in (media.proxyUrl ?? media.url).flatMap(URL.init(string:)).map { ($0, aspect(media)) } }
+        if let video = embed.video, let url = video.proxyUrl.flatMap(URL.init(string:)) {
+            return [.video(url: url, posterURL: (image ?? thumbnail)?.0, aspectRatio: aspect(video) ?? (image ?? thumbnail)?.1, duration: nil, isGIF: false)]
+        }
+        if embed.video != nil, embed.type == "video", let poster = image ?? thumbnail {
+            return [.image(url: poster.0, aspectRatio: aspect(embed.video) ?? poster.1, alt: nil, link: link, opensViewer: false)]
+        }
+        if let image {
+            return [.image(url: image.0, aspectRatio: image.1, alt: nil, link: nil, opensViewer: true)]
+        }
+        return []
     }
 }

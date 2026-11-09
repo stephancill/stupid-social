@@ -12,6 +12,8 @@ public enum TelegramEmbed: Codable, Hashable, Sendable {
     /// A voice message, with its waveform (levels from 0 to 1).
     case voice(url: URL, duration: Double?, waveform: [Double]?)
     case sticker(ChatSticker)
+    /// A link preview with large media (`.image` and `.video` embeds), shown as `ChatEmbed.linkPreview`.
+    case linkPreview(title: String, subtitle: String?, link: URL?, media: [TelegramEmbed])
 }
 
 /// One emoji's total on a message; `isMine` when the user chose it.
@@ -310,12 +312,17 @@ enum TelegramMediaParser {
             guard let page = media["webpage"]?.object, page.name == "webPage" else { return (nil, []) }
             let title = [page["title"]?.string, page["site_name"]?.string, page["display_url"]?.string].compactMap(\.self).first { !$0.isEmpty } ?? "Link"
             let subtitle = [page["description"]?.string, page["site_name"]?.string].compactMap(\.self).first { !$0.isEmpty && $0 != title }
+            let link = page["url"]?.string.flatMap(URL.init)
+            let media = page.flag("has_large_media") ? webPageMedia(page) : []
+            if !media.isEmpty {
+                return (nil, [.linkPreview(title: title, subtitle: subtitle.map { String($0.prefix(300)) }, link: link, media: media)])
+            }
             return (nil, [.card(
                 title: title,
                 subtitle: subtitle.map { String($0.prefix(160)) },
                 systemImage: "link",
                 imageURL: page["photo"]?.object.flatMap { photoURL($0, maxSide: 320)?.url },
-                link: page["url"]?.string.flatMap(URL.init),
+                link: link,
             )])
         case "messageMediaGeo", "messageMediaGeoLive", "messageMediaVenue":
             let point = media["geo"]?.object
@@ -342,6 +349,62 @@ enum TelegramMediaParser {
         case "messageMediaEmpty": return (nil, [])
         default: return ("Attachment", [])
         }
+    }
+
+    /// A large-media link preview's photos and videos (probe `webpage-preview`): its own video or GIF, else its
+    /// Instant View page's photos and videos in page order (a multi-photo post's own photos, where the preview's
+    /// photo is a collage of them), else its photo.
+    static func webPageMedia(_ page: TLObject) -> [TelegramEmbed] {
+        func isMedia(_ embed: TelegramEmbed) -> Bool {
+            switch embed {
+            case .image, .video: true
+            default: false
+            }
+        }
+        // A video too large to download is left out, and the page's photo shown instead.
+        if let document = page["document"]?.object, case let media = documentContent(document).embeds.filter(isMedia), !media.isEmpty {
+            // The page's photo is the larger poster: a document's thumbnail is at most 320 px (observed 2026-11-09).
+            let poster = page["photo"]?.object.flatMap { photoURL($0, maxSide: 1280)?.url }
+            return media.map { embed in
+                guard case let .video(url, posterURL, aspectRatio, duration, isGIF) = embed else { return embed }
+                return .video(url: url, posterURL: poster ?? posterURL, aspectRatio: aspectRatio, duration: duration, isGIF: isGIF)
+            }
+        }
+        var media: [TelegramEmbed] = []
+        if let cached = page["cached_page"]?.object {
+            let photos = Dictionary(cached.objects("photos").compactMap { photo in photo["id"]?.long.map { ($0, photo) } }) { first, _ in first }
+            let documents = Dictionary(cached.objects("documents").compactMap { document in document["id"]?.long.map { ($0, document) } }) { first, _ in first }
+            /// A divider ends the page's body: after it come footers such as fxtwitter's "About author" with the
+            /// author's photo (observed 2026-11-09).
+            func walk(_ blocks: [TLObject]) -> Bool {
+                for block in blocks {
+                    switch block.name {
+                    case "pageBlockDivider":
+                        return false
+                    case "pageBlockPhoto":
+                        if let photo = block["photo_id"]?.long.flatMap({ photos[$0] }), let image = photoURL(photo) {
+                            media.append(.image(url: image.url, aspectRatio: image.aspectRatio))
+                        }
+                    case "pageBlockVideo":
+                        if let document = block["video_id"]?.long.flatMap({ documents[$0] }) {
+                            media += documentContent(document).embeds.filter(isMedia)
+                        }
+                    case "pageBlockCollage", "pageBlockSlideshow":
+                        if !walk(block.objects("items")) { return false }
+                    case "pageBlockCover":
+                        if let cover = block["cover"]?.object, !walk([cover]) { return false }
+                    default:
+                        break
+                    }
+                }
+                return true
+            }
+            _ = walk(cached.objects("blocks"))
+        }
+        if media.isEmpty, let photo = page["photo"]?.object, let image = photoURL(photo) {
+            media.append(.image(url: image.url, aspectRatio: image.aspectRatio))
+        }
+        return media
     }
 
     private static func documentContent(_ document: TLObject) -> (label: String?, embeds: [TelegramEmbed]) {

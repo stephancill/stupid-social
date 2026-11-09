@@ -115,6 +115,8 @@ public struct FarcasterClient {
         components.queryItems = [
             URLQueryItem(name: "fid", value: String(fid)),
             URLQueryItem(name: "limit", value: String(limit)),
+            // Without it Hypersnap leaves out quotes, recasts and replies deeper in the user's threads.
+            URLQueryItem(name: "include_quotes_and_deep_replies", value: "true"),
         ]
 
         if let cursor {

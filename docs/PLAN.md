@@ -108,11 +108,8 @@ Observed X behavior:
 - Fetch notifications with `GET /v2/farcaster/notifications`.
 - Manual refresh should make only this single Farcaster notifications request; do not enrich each notification with extra cast/feed requests during refresh.
 - Query by resolved `fid`.
-- Supported notification types include:
-  - `cast-mention`
-  - `cast-reply`
-  - `reaction`
-  - `follow`
+- Supported notifications: mentions, replies (including replies deeper in the user's threads), quotes, likes, recasts and follows. Request them with `include_quotes_and_deep_replies=true`.
+- A cast's detail shows its thread: every cast above it, then the cast.
 - Hypersnap returns aggregated notification entries.
 - Hypersnap seen/write endpoints are not available for this use case because `POST /v2/farcaster/notifications/seen` and `POST /v2/farcaster/notifications/mark_seen` return `501 Not Implemented`.
 - The app does not track separate Farcaster read state.

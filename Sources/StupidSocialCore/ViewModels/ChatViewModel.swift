@@ -130,6 +130,10 @@ public enum ChatEmbed: Hashable, Sendable {
     case voice(previewId: String, duration: Double?, waveform: [Double])
     /// A sticker, drawn without a bubble and animated when its format allows.
     case sticker(ChatSticker)
+    /// A link's preview with large media, such as a post's photos or video: drawn like a `.card`, with the media
+    /// across it to page through in place. `media` holds `.image` (with `opensViewer`) and `.video` embeds, in order;
+    /// tapping one opens it as in a message, and tapping the title opens `link`.
+    case linkPreview(title: String, subtitle: String?, link: URL?, media: [ChatEmbed])
 }
 
 /// A custom emoji a network marks by position over fallback text, such as a Telegram custom emoji entity, rather
@@ -273,7 +277,7 @@ public struct ChatMessage: Hashable, Identifiable, Sendable {
             case let .file(_, filename, _, _): return filename
             case .voice: return "Voice message"
             case let .sticker(sticker): return sticker.label
-            case let .card(title, _, _, _, _), let .message(title, _, _): return title
+            case let .card(title, _, _, _, _), let .message(title, _, _), let .linkPreview(title, _, _, _): return title
             case let .audio(_, title, _, _, _, _): return title
             case let .pending(title): return title
             }
@@ -1213,7 +1217,7 @@ public class ChatViewModel: ObservableObject {
             return showingMentionNames(SpoilerText.mask(text, ranges: message.spoilers)).replacingOccurrences(of: "\n", with: " ")
         }
         switch message.embeds.first {
-        case let .audio(_, title, _, _, _, _), let .card(title, _, _, _, _), let .message(title, _, _):
+        case let .audio(_, title, _, _, _, _), let .card(title, _, _, _, _), let .message(title, _, _), let .linkPreview(title, _, _, _):
             return "Shared “\(title)”"
         case .image:
             return "Photo"
@@ -1433,7 +1437,7 @@ public class ChatViewModel: ObservableObject {
         var parts = [showingMentionNames(String(renderedText(for: message).characters))]
         for embed in message.embeds {
             switch embed {
-            case let .card(title, subtitle, _, _, _): parts += [title, subtitle ?? ""]
+            case let .card(title, subtitle, _, _, _), let .linkPreview(title, subtitle, _, _): parts += [title, subtitle ?? ""]
             case let .audio(_, title, subtitle, _, _, _): parts += [title, subtitle ?? ""]
             case let .message(title, text, _): parts += [title, text]
             case let .image(_, _, alt, _, _): parts.append(alt ?? "")

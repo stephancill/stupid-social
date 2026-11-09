@@ -1,7 +1,7 @@
 import StupidSocialCore
 import SwiftUI
 
-/// A post laid out like it is on its network (X): author line, text, media, and an action bar to reply,
+/// A post laid out like it is on its network (X, Farcaster): author line, text, media, and an action bar to reply,
 /// repost, quote, like and share when the account's source supports engaging.
 struct PostCardView: View {
     let target: NotificationTarget
@@ -61,9 +61,10 @@ struct PostCardView: View {
                 if engaging != nil, postURL != nil {
                     actionBar
                 } else if let likeCount = details?.likeCount ?? target.likeCount {
-                    Label(Self.compactCount(likeCount), systemImage: "heart")
+                    countLabel(systemImage: "heart", count: likeCount)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .accessibilityLabel("\(likeCount) likes")
                 }
             }
             .padding(.bottom, continuesThread ? 16 : 0)

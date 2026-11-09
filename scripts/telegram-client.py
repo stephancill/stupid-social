@@ -23,6 +23,9 @@ Commands:
   read --peer user:1 --max-id N
   listen [--seconds N]        print updates pushed on the connection
   download --peer K --msg-id N [--size x] -o FILE   a message's photo or document (a size type, or "full")
+  webpage-preview --url U [--download-dir D]   messages.getWebPagePreview: a link preview's type, has_large_media
+                              and media (its document, or its Instant View page's photos and videos in page order,
+                              or its photo), downloading each at the size the app shows with --download-dir
   avatar --peer K -o FILE [--big]   a user's or chat's profile photo (small, or big with --big)
   chat-info --peer K          a group's full info: title, about, member count, and whether you may edit it
   edit-chat --peer K [--title T] [--about A]   rename a group or replace its description (only in a group you
@@ -1271,6 +1274,9 @@ def main():
     download.add_argument("--msg-id", type=int, required=True)
     download.add_argument("--size", default="x", help='photo or thumbnail size type such as m, x, y; "full" for a whole document')
     download.add_argument("-o", "--output", required=True)
+    webpage_preview = sub.add_parser("webpage-preview", help="a link preview's media, as the chat's link previews show it")
+    webpage_preview.add_argument("--url", required=True)
+    webpage_preview.add_argument("--download-dir")
     avatar = sub.add_parser("avatar")
     avatar.add_argument("--big", action="store_true", help="the 640px photo instead of the 160px one")
     avatar.add_argument("--peer", required=True)
@@ -1678,6 +1684,70 @@ def main():
         data = client.download(location, dc)
         pathlib.Path(args.output).write_bytes(data)
         print(f"{len(data)} bytes from DC {dc} in {time.time() - started:.1f}s -> {args.output}")
+    elif args.command == "webpage-preview":
+        # The preview is webPagePending until Telegram has fetched the page; ask again until it isn't.
+        for _ in range(10):
+            page = client.call({"_": "messages.getWebPagePreview", "message": args.url})["media"].get("webpage") or {}
+            if page.get("_") != "webPagePending":
+                break
+            time.sleep(2)
+        print(f"{page.get('_')} type={page.get('type')} has_large_media={bool(page.get('has_large_media'))} site={page.get('site_name')!r}")
+        if page.get("_") != "webPage":
+            return
+
+        def best(sizes, max_side=1280):
+            sized = [s for s in sizes if s.get("_") in ("photoSize", "photoSizeProgressive", "photoCachedSize")]
+            fitting = [s for s in sized if max(s["w"], s["h"]) <= max_side]
+            return max(fitting, key=lambda s: s["w"] * s["h"]) if fitting else min(sized, key=lambda s: s["w"] * s["h"], default=None)
+
+        def photo_item(photo):
+            size = best(photo.get("sizes", []))
+            location = {"_": "inputPhotoFileLocation", "id": photo["id"], "access_hash": photo["access_hash"], "file_reference": photo["file_reference"], "thumb_size": size["type"]}
+            return ("photo", f"{size['w']}x{size['h']}", location, photo["dc_id"])
+
+        def document_item(doc):
+            video = next((a for a in doc.get("attributes", []) if a.get("_") == "documentAttributeVideo"), None)
+            # The poster: the document's largest thumbnail, as a message's video shows it.
+            thumb = best(doc.get("thumbs", []), 640)
+            location = {"_": "inputDocumentFileLocation", "id": doc["id"], "access_hash": doc["access_hash"], "file_reference": doc["file_reference"], "thumb_size": thumb["type"] if thumb else ""}
+            shape = f"{video['w']}x{video['h']} {video.get('duration', 0):.0f}s" if video else ""
+            return (f"document {doc.get('mime_type')} {doc.get('size')} bytes (poster)", shape, location, doc["dc_id"])
+
+        items = []
+        cached = page.get("cached_page") or {}
+        photos = {p["id"]: p for p in cached.get("photos", [])}
+        documents = {d["id"]: d for d in cached.get("documents", [])}
+
+        # A divider ends the page's body: after it come footers such as fxtwitter's "About author" with its avatar.
+        def walk(blocks):
+            for block in blocks:
+                if block.get("_") == "pageBlockDivider":
+                    return
+                if block.get("_") == "pageBlockPhoto" and block.get("photo_id") in photos:
+                    items.append(photo_item(photos[block["photo_id"]]))
+                elif block.get("_") == "pageBlockVideo" and block.get("video_id") in documents:
+                    items.append(document_item(documents[block["video_id"]]))
+                elif block.get("_") in ("pageBlockCollage", "pageBlockSlideshow"):
+                    walk(block.get("items", []))
+
+        walk(cached.get("blocks", []))
+        print(f"cached_page: {len(items)} media in page order")
+        if page.get("document"):
+            items = [document_item(page["document"])]
+            print("document: the preview's own media (a video or GIF)")
+        elif page.get("photo") and not items:
+            items.append(photo_item(page["photo"]))
+            print("photo: the preview's own image")
+        for index, (kind, shape, location, dc) in enumerate(items):
+            line = f"  {index}: {kind} {shape} dc={dc}"
+            if args.download_dir:
+                started = time.time()
+                data = client.download(location, dc)
+                path = pathlib.Path(args.download_dir) / f"{index}.jpg"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(data)
+                line += f" -> {len(data)} bytes in {time.time() - started:.1f}s"
+            print(line)
     elif args.command == "avatar":
         if args.peer == "self":
             # The signed-in account's own photo, as Settings shows it: users.getUsers([inputUserSelf]),
