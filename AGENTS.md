@@ -160,7 +160,7 @@ Sources/
       DiscordProfileViewModel.swift  # Discord profile and the DM its Message button opens or starts
 ```
 
-Outside `Sources/`: `NotificationService/` holds the extension's Info.plist and entitlements, `workers/push-relay/` the Apron push relay Worker (`bun run push-relay:test`, `bun run push-relay:deploy`), and `Vendor/JuiceboxSdk/` the vendored Juicebox SDK (Swift wrapper and static-library XCFramework) that X Chat key recovery uses; regenerate it with `scripts/vendor-juicebox.sh`, never edit it by hand. The chat framework is the `StupidChatKit` package, a dependency from its own public repository (`https://github.com/stephancill/stupid-chatkit`, pinned in `Package.resolved`); see § Chat Framework. `cli/` is the `stupid-social` command line for chats on a Mac, its own macOS SwiftPM package (`swift build -c release` in `cli/`) that talks to `ChatControlServer`. `skills/stupid-social/SKILL.md` is the agent skill for using it; keep it in step with the CLI's commands and errors. `Vendor/StupidMetrics/` is the vendored StupidMetrics Swift package (usage metrics); update it with `scripts/vendor-stupid-metrics.sh <tag>`, never edit it by hand.
+Outside `Sources/`: `NotificationService/` holds the extension's Info.plist and entitlements, `workers/push-relay/` the Apron push relay Worker (`bun run push-relay:test`, `bun run push-relay:deploy`), and `Vendor/JuiceboxSdk/` the vendored Juicebox SDK (Swift wrapper and static-library XCFramework) that X Chat key recovery uses; regenerate it with `scripts/vendor-juicebox.sh`, never edit it by hand. The chat framework is the `StupidChatKit` package, a dependency from its own public repository (`https://github.com/stephancill/stupid-chatkit`, pinned in `Package.resolved`); see § Chat Framework. `cli/` is the `stupid-social` command line for chats on a Mac, its own macOS SwiftPM package (`swift build -c release` in `cli/`) that talks to `ChatControlServer`. `skills/stupid-social/SKILL.md` is the agent skill for using it; keep it in step with the CLI's commands and errors.
 
 - Keep `## Project Structure` in sync when files are added, moved, or renamed.
 
@@ -199,10 +199,10 @@ Outside `Sources/`: `NotificationService/` holds the extension's Info.plist and 
 
 ## Usage Metrics
 
-- The app reports anonymous usage and errors to stupid metrics (`metrics.stupidtech.net`, source in `../stupid-metrics`). `docs/PLAN.md` § Usage Metrics has the requirements.
+- The app reports anonymous usage and errors to stupid metrics (`metrics.stupidtech.net`, service source in `../stupid-metrics`). `docs/PLAN.md` § Usage Metrics has the requirements.
 - Every event and error goes through `AppMetrics` (`StupidSocialCore/Services/AppMetrics.swift`); call sites never use `StupidMetrics` directly. Add new events there, and list them in `docs/IMPLEMENTATION.md` § Usage metrics.
 - Properties are only networks, triggers, outcomes and similar low-cardinality values: never account names, handles, message or notification text, URLs, ids or tokens. Report errors with `StupidMetrics.error(_:error:)`, which sends only the type and case, never `localizedDescription`.
-- `Vendor/StupidMetrics` is a copy of a tagged release: change the package in `../stupid-metrics`, tag it, then run `scripts/vendor-stupid-metrics.sh <tag>`.
+- `StupidMetrics` is a package dependency from its own public repository (`https://github.com/stephancill/stupid-metrics-swift`, local checkout `../stupid-metrics-swift`), pinned in `Package.resolved`: change it there, tag a release, then `swift package update stupid-metrics-swift` here and commit `Package.resolved`.
 - Dashboard: `https://metrics.stupidtech.net/dashboard/apps/tech.stupid.StupidSocial`.
 
 ## Chat Framework

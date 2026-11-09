@@ -21,6 +21,8 @@ let package = Package(
     dependencies: [
         // The chat framework (docs/TECHNICAL_DESIGN.md § Chat Framework).
         .package(url: "https://github.com/stephancill/stupid-chatkit", from: "0.1.0"),
+        // Anonymous usage metrics (AGENTS.md § Usage Metrics).
+        .package(url: "https://github.com/stephancill/stupid-metrics-swift", from: "0.2.1"),
     ],
     targets: [
         .target(
@@ -33,7 +35,7 @@ let package = Package(
                 .product(name: "StupidChatKit", package: "stupid-chatkit"),
                 "StupidSocialPush",
                 "JuiceboxSdk",
-                "StupidMetrics",
+                .product(name: "StupidMetrics", package: "stupid-metrics-swift"),
             ],
             // TelegramSchema.tl, and TelegramAPI.json when scripts/telegram-api-config.py has written it.
             resources: [.process("Resources")]
@@ -48,11 +50,6 @@ let package = Package(
             dependencies: ["JuiceboxSdkFfi"],
             path: "Vendor/JuiceboxSdk/Sources/JuiceboxSdk",
             swiftSettings: [.swiftLanguageMode(.v5)]
-        ),
-        // Anonymous usage metrics. Vendored by scripts/vendor-stupid-metrics.sh; don't edit these by hand.
-        .target(
-            name: "StupidMetrics",
-            path: "Vendor/StupidMetrics/Sources/StupidMetrics"
         ),
         .binaryTarget(
             name: "JuiceboxSdkFfi",

@@ -1,5 +1,5 @@
 {
-  "originHash" : "dca47053df6b3ac9dd8d60f3866674b6e5c0936d1c77c58c21758cbd2b4af6e5",
+  "originHash" : "2fc5d9c5cdbd687691a536f49d7a16cca76af43a3c56b7a8bab7ea6d545417c5",
   "pins" : [
     {
       "identity" : "stupid-chatkit",
@@ -8,6 +8,15 @@
       "state" : {
         "revision" : "674f65dc9f03f2cc4eb8568c63ed9eb27132b42c",
         "version" : "0.1.0"
+      }
+    },
+    {
+      "identity" : "stupid-metrics-swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/stephancill/stupid-metrics-swift",
+      "state" : {
+        "revision" : "3e19b90d798295edd839d41ae435e68280e6699e",
+        "version" : "0.2.1"
       }
     }
   ],
