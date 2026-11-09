@@ -1,3 +1,4 @@
+import StupidChatKit
 import SwiftUI
 
 /// The top of a chat's member list: its photo, which opens full screen, its title and a line such as the member

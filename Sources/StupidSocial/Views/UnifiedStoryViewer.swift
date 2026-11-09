@@ -1071,7 +1071,7 @@ struct UnifiedStoryViewer: View {
     private func preloadInstagramSlide(itemIndex: Int, slideIndex: Int) {
         guard viewerItems.indices.contains(itemIndex), case let .instagram(reel) = viewerItems[itemIndex] else { return }
         guard reel.slides.indices.contains(slideIndex) else { return }
-        StoryImageCache.shared.preload(url: reel.slides[slideIndex].imageURL)
+        ImageCache.shared.preload(url: reel.slides[slideIndex].imageURL)
     }
 
     // MARK: - GitHub slide pre-warm
@@ -1097,9 +1097,9 @@ struct UnifiedStoryViewer: View {
         // ready. The original owner avatar is also kicked off when the fork is
         // resolved in `GitHubOriginalCache`.
         if activity.kind == .forkedRepository, let owner = GitHubOriginalCache.originalOwnerName(forFork: activity.targetName) {
-            githubOwnerAvatarURL(for: owner).map(StoryImageCache.shared.preload)
+            githubOwnerAvatarURL(for: owner).map(ImageCache.shared.preload)
         }
-        activity.targetAvatarURL.map(StoryImageCache.shared.preload)
+        activity.targetAvatarURL.map(ImageCache.shared.preload)
     }
 
     private func githubOwnerAvatarURL(for owner: String) -> URL? {
@@ -1309,7 +1309,7 @@ private enum GitHubOriginalCache {
               !owner.isEmpty,
               let url = URL(string: "https://github.com/\(owner).png?size=192")
         else { return }
-        StoryImageCache.shared.preload(url: url)
+        ImageCache.shared.preload(url: url)
     }
 }
 

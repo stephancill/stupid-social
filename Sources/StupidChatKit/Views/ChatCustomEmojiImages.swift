@@ -1,5 +1,4 @@
 import ImageIO
-import StupidSocialCore
 import UIKit
 
 /// Custom emoji images for chats, loaded once and scaled down: they only ever show at text and chip size, and

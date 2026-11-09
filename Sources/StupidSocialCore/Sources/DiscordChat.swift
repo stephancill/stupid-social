@@ -122,7 +122,7 @@ enum DiscordText {
 /// unread channels count their unread messages in that page, or show one.
 @MainActor
 public final class DiscordChatList: ChatListProvider {
-    public nonisolated let network = SocialNetwork.discord
+    public nonisolated let chatNetwork = ChatNetwork.discord
     /// Rows past this many, newest first, show no preview until a message arrives while the app is open.
     static let previewLimit = 25
     /// Posts listed per forum, newest activity first.
@@ -265,7 +265,7 @@ public final class DiscordChatList: ChatListProvider {
 extension DiscordChatList: ChatListResolving {
     /// A channel the list leaves out, such as a DM just started from a profile (no messages yet) or a thread the
     /// user hasn't joined, as a row built from the gateway's state.
-    public func chat(for destination: ChatSummary.Destination, in _: [ChatSummary]) -> ChatSummary? {
+    public func chat(for destination: ChatDestination, in _: [ChatSummary]) -> ChatSummary? {
         guard case let .discord(channelId) = destination, let channel = gateway.channel(id: channelId) else { return nil }
         return summary(channel)
     }

@@ -3,7 +3,7 @@ import Foundation
 /// Preview chats across networks for demo mode, so the Chats list and chat screen can be browsed without
 /// credentials. Nothing is sent: messages and reactions change only in memory.
 public struct DemoChatListProvider: ChatListProvider {
-    public let network = SocialNetwork.debug
+    public let chatNetwork = ChatNetwork.debug
 
     public init() {}
 
@@ -16,7 +16,7 @@ public struct DemoChatListProvider: ChatListProvider {
 enum DemoChats {
     struct Chat {
         let id: String
-        let network: SocialNetwork
+        let network: ChatNetwork
         let title: String
         var titlePrefix: String?
         var avatarURL: URL?
@@ -244,7 +244,7 @@ enum DemoChats {
 /// One preview chat. Sending and reacting only change what it shows.
 @MainActor
 public final class DemoChatAdapter: ChatReactionSending, ChatCustomEmojis, ChatAudioPreviewing, ChatReadReceipts {
-    public let network: SocialNetwork
+    public let network: ChatNetwork
     public let key: String
     public let canReply = true
     public let acceptsAttachments = false

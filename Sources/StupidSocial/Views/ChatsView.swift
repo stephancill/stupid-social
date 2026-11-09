@@ -26,13 +26,13 @@ struct ChatsView: View {
     /// Whether a chat is pushed, so the home pager can stop paging.
     @Binding var isShowingChat: Bool
     /// A chat to open, such as from a tapped notification; cleared once opened.
-    @Binding var openRequest: ChatSummary.Destination?
+    @Binding var openRequest: ChatDestination?
     @State private var selection: ChatSummary?
     /// A requested chat the list doesn't have yet, such as a Telegram chat from a notification at launch; it
     /// opens once a load lists it.
-    @State private var waitingRequest: ChatSummary.Destination?
+    @State private var waitingRequest: ChatDestination?
     /// What a link asked to show in the chat it opened.
-    @State private var focus: (destination: ChatSummary.Destination, focus: NotificationRouter.ChatFocus)?
+    @State private var focus: (destination: ChatDestination, focus: NotificationRouter.ChatFocus)?
     @State private var isShowingArchive = false
     @State private var settingsAccountId: String?
     @State private var query = ""
@@ -200,7 +200,7 @@ struct ChatsView: View {
         }
         // A quick look only reads, so the focus and a staged forward wait for the chat itself.
         guard !quickLook else { return viewModel.follow(chatViewModel, chatId: chat.id) }
-        chatViewModel.reminderTarget = ChatReminderTarget(destination: chat.destination, accountId: chat.accountId, network: chat.network, chatTitle: chat.title)
+        chatViewModel.reminders = ChatReminderTarget(destination: chat.destination, accountId: chat.accountId, network: chat.network.socialNetwork, chatTitle: chat.title)
         if focus?.destination == chat.destination, let messageId = focus?.focus.messageId {
             chatViewModel.focusMessageId = messageId
         }
@@ -468,7 +468,7 @@ private struct ConnectionErrorsButton: View {
     }
 
     /// Each network with a failed connection, once, in list order.
-    private var failedNetworks: [SocialNetwork] {
+    private var failedNetworks: [ChatNetwork] {
         viewModel.connections.compactMap { $0.error == nil ? nil : $0.network }.reduce(into: []) { networks, network in
             if !networks.contains(network) {
                 networks.append(network)
@@ -633,49 +633,5 @@ private struct ChatSummaryAvatar: View {
                     .background(Color(uiColor: .systemBackground), in: Circle())
                     .offset(x: 2, y: 2)
             }
-    }
-}
-
-/// A chat's picture, or in its place the initials of its (already redacted) title on the chat color of
-/// `colorKey` (as on Apron profiles), else its initial on gray. The Chats row and the chat's title show the same one.
-struct ChatAvatarImage: View {
-    let url: URL?
-    let title: String
-    let size: CGFloat
-    var colorKey: String?
-    @AppStorage("redactionEnabled") private var redactionEnabled = false
-
-    var body: some View {
-        Group {
-            // Profile photos identify people as names do, so redaction shows the initial instead.
-            if let url, !redactionEnabled {
-                CachedAsyncImage(url: url) { fallback } failure: { fallback }
-            } else {
-                fallback
-            }
-        }
-        .frame(width: size, height: size)
-        .clipShape(Circle())
-    }
-
-    private var fallback: some View {
-        Group {
-            if let colorKey {
-                ZStack {
-                    Color(uiColor: ChatUserColor.color(for: colorKey))
-                    Text(InitialsAvatar.initials(of: title))
-                        .font(.system(size: size * 0.39, weight: .semibold))
-                        .foregroundStyle(.white)
-                }
-            } else {
-                ZStack {
-                    Circle().fill(Color.secondary.opacity(0.18))
-                    Text(title.first.map { String($0).uppercased() } ?? "?")
-                        .font(.headline)
-                        .foregroundStyle(.secondary)
-                }
-            }
-        }
-        .accessibilityHidden(true)
     }
 }

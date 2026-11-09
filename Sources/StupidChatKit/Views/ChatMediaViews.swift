@@ -1,7 +1,6 @@
 import AVFoundation
 import AVKit
 import QuickLook
-import StupidSocialCore
 import UIKit
 
 /// A video in a bubble: its poster with a play symbol and its length; tapping plays it full screen. A GIF plays

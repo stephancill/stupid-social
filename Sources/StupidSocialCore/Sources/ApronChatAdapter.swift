@@ -4,7 +4,7 @@ import Foundation
 /// room's members, typing indications and read cursor.
 @MainActor
 public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditing, ChatDeleting, ChatReactionSending, ChatUnseenReactions, ChatLiveUpdating, ChatReferenceResolving, ChatWindowing, ChatTyping, ChatMentioning, ChatCustomEmojis, ChatCommanding, ChatLinking, ChatReadReceipts {
-    public let network = SocialNetwork.apron
+    public let network = ChatNetwork.apron
     public let canReply = true
     public let pollInterval: Duration? = nil
     public var onChange: (() -> Void)?

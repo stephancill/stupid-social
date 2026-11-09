@@ -1,4 +1,3 @@
-import StupidSocialCore
 import UIKit
 
 /// Converts parsed inline Markdown into UIKit attributes; `AttributedString`'s presentation intents carry no fonts.

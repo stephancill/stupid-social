@@ -6,7 +6,7 @@ import Foundation
 /// The user's messages show as seen once someone else's read marker passes them.
 @MainActor
 public final class XChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, ChatLiveUpdating, ChatReferenceResolving, ChatReadReceipts, ChatForwarding, ChatVoiceSending, ChatAudioPreviewing {
-    public let network = SocialNetwork.x
+    public let network = ChatNetwork.x
     public let canReply = true
     public let acceptsAttachments = true
     public let pollInterval: Duration? = nil

@@ -6,6 +6,7 @@ import OSLog
 @MainActor
 public final class ApronNotificationSource: ChatListProvider {
     public let network: SocialNetwork = .apron
+    public let chatNetwork: ChatNetwork = .apron
 
     private let service: ApronService
     private let logger = Logger(subsystem: "tech.stupid.StupidSocial", category: "Apron")
@@ -224,7 +225,7 @@ public extension ChatSummary {
 extension ApronNotificationSource: ChatListResolving {
     /// A room the list doesn't have yet is titled by its id, and a direct chat with no room yet by the other
     /// person, until the list loads them.
-    public func chat(for destination: ChatSummary.Destination, in _: [ChatSummary]) -> ChatSummary? {
+    public func chat(for destination: ChatDestination, in _: [ChatSummary]) -> ChatSummary? {
         switch destination {
         case let .apron(serverURL, roomId):
             ChatSummary(

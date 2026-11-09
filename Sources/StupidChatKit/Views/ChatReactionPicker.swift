@@ -1,4 +1,3 @@
-import StupidSocialCore
 import UIKit
 
 /// The "More Reactions" sheet: the chat's custom emoji, a section per category, then a grid of common emoji, or just

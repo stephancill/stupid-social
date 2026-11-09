@@ -10,6 +10,10 @@ struct StupidSocialApp: App {
 
     init() {
         AppMetrics.configure()
+        ChatKit.onEvent = AppMetrics.chat
+        ChatKit.networkIcon = { network, size in AnyView(NetworkBadgeIcon(network: network, size: size)) }
+        // Apron links open in the app, never in a browser.
+        ChatKit.openAppLink = { url, contentServer in NotificationRouter.shared.open(url, contentServer: contentServer) }
         do {
             // Kept out of the App Group: iOS kills a suspending app that holds a SQLite lock in a shared
             // container (0xdead10cc), and the notification extension never reads the cache.

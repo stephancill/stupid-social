@@ -278,7 +278,7 @@ struct TelegramAPIConfig: Decodable {
 /// The signed-in Telegram account over MTProto: one session on the account's home DC, following
 /// `*_MIGRATE_X` to another DC during sign-in, with the auth keys kept in this device's Keychain.
 public actor TelegramClient: ChatListProvider {
-    public nonisolated let network: SocialNetwork = .telegram
+    public nonisolated let chatNetwork: ChatNetwork = .telegram
 
     private struct Stored: Codable {
         var homeDC = 2
@@ -1891,7 +1891,7 @@ extension TelegramClient: ChatListResolving {
     /// A notification names the chat without its access hash, so it matches on kind and id. A private chat opened
     /// from a profile, with its access hash, opens even before you've messaged them: it's titled by the name the
     /// profile showed until it loads.
-    public nonisolated func chat(for destination: ChatSummary.Destination, in chats: [ChatSummary]) -> ChatSummary? {
+    public nonisolated func chat(for destination: ChatDestination, in chats: [ChatSummary]) -> ChatSummary? {
         guard case let .telegram(peer) = destination else { return nil }
         if let listed = chats.first(where: { chat in
             guard case let .telegram(listed) = chat.destination else { return false }

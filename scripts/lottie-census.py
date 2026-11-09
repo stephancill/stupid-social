@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Which Lottie features a corpus of Telegram stickers (.tgs, gzipped Lottie JSON) uses.
 
-Prints, for each feature, how many stickers use it, so the app's renderer (StupidSocialCore/Stickers) supports the
+Prints, for each feature, how many stickers use it, so the app's renderer (StupidChatKit/Stickers) supports the
 common ones first. With --cover, prints a small set of stickers that together use every feature seen, for the
 reference-image comparison (scripts/lottie-compare.py).
 

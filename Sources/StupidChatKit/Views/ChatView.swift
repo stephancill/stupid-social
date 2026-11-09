@@ -1,24 +1,30 @@
-import StupidSocialCore
 import SwiftUI
 import UIKit
 
 /// The shared chat screen: the UIKit chat full-bleed under a transparent bar, with the title in a floating
 /// pill. It connects while visible and again when the app becomes active.
-struct ChatView: View {
+public struct ChatView: View {
     @ObservedObject var viewModel: ChatViewModel
     /// Tapping the title pill, such as to list members; `nil` leaves the pill inert.
     var onTitleTap: (() -> Void)?
-    var showProfile: (ChatUser) -> Void = { _ in }
+    var showProfile: (ChatUser) -> Void
     /// While a screen pushed on top reads the chat's live state, leaving doesn't disconnect.
-    var keepsConnection = false
+    var keepsConnection: Bool
 
-    @AppStorage("redactionEnabled") private var redactionEnabled = false
+    public init(viewModel: ChatViewModel, onTitleTap: (() -> Void)? = nil, showProfile: @escaping (ChatUser) -> Void = { _ in }, keepsConnection: Bool = false) {
+        self.viewModel = viewModel
+        self.onTitleTap = onTitleTap
+        self.showProfile = showProfile
+        self.keepsConnection = keepsConnection
+    }
+
+    @AppStorage(ChatRedaction.defaultsKey) private var redactionEnabled = false
     @Environment(\.dismiss) private var dismiss
 
     /// Like the feed, "Redact names" hides people's names: the title of a chat named for people, and an
     /// `@username` subtitle.
     private var displayTitle: String {
-        viewModel.titleNamesPeople ? DebugRedaction.name(viewModel.title, enabled: redactionEnabled) : viewModel.title
+        viewModel.titleNamesPeople ? ChatRedaction.name(viewModel.title, enabled: redactionEnabled) : viewModel.title
     }
 
     private var displaySubtitle: String {
@@ -59,7 +65,7 @@ struct ChatView: View {
         .hidden()
     }
 
-    var body: some View {
+    public var body: some View {
         ChatUIKitView(viewModel: viewModel, showProfile: showProfile, goBack: { dismiss() })
             .ignoresSafeArea(.keyboard)
             // Full-bleed under the bar and home indicator; the list insets itself from the safe area.
@@ -82,7 +88,7 @@ struct ChatView: View {
             }
             .background { backShortcut }
             .task {
-                AppMetrics.chatOpened(network: viewModel.network)
+                ChatKit.onEvent(.opened(network: viewModel.network))
                 await viewModel.connect()
             }
             .onDisappear {
@@ -97,14 +103,14 @@ struct ChatView: View {
 }
 
 /// The shared chat for a network without screens of its own, such as Spotify and Instagram.
-struct NetworkChatView: View {
+public struct NetworkChatView: View {
     @StateObject private var viewModel: ChatViewModel
 
-    init(viewModel: @autoclosure @escaping () -> ChatViewModel) {
+    public init(viewModel: @autoclosure @escaping () -> ChatViewModel) {
         _viewModel = StateObject(wrappedValue: viewModel())
     }
 
-    var body: some View {
+    public var body: some View {
         ChatView(viewModel: viewModel)
     }
 }
@@ -118,7 +124,7 @@ private struct ChatSearchField: View {
 
     var body: some View {
         Color.clear
-            .searchBar(text: $text, isPresented: $isPresented, prompt: "Search Messages", placement: .navigationBarDrawer(displayMode: .always))
+            .searchable(text: $text, isPresented: $isPresented, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search Messages")
             .onSubmit(of: .search) { Task { await viewModel.submitSearch() } }
             .onChange(of: text) { _, query in viewModel.updateSearch(query) }
             .onChange(of: isPresented) { _, presented in
@@ -135,7 +141,7 @@ private struct ChatSearchField: View {
 private struct ChatTitlePill: View {
     let title: String
     let subtitle: String
-    let network: SocialNetwork
+    let network: ChatNetwork
     /// Leads with the chat's picture, as its Chats row does.
     var avatar: ChatTitleAvatar?
 
@@ -145,7 +151,7 @@ private struct ChatTitlePill: View {
                 ChatAvatarImage(url: avatar.url, title: title, size: 32, colorKey: avatar.colorKey)
                     .overlay(alignment: .bottomTrailing) {
                         // An opaque backing, since some badges (such as Spotify's round logo) have transparent corners.
-                        NetworkBadgeIcon(network: network, size: 12)
+                        ChatKit.networkIcon(network, 12)
                             .clipShape(Circle())
                             .padding(1)
                             .background(Color(uiColor: .systemBackground), in: Circle())
@@ -156,7 +162,7 @@ private struct ChatTitlePill: View {
                 HStack(spacing: 4) {
                     // Without an avatar or subtitle to carry it, the network icon leads the title.
                     if avatar == nil, subtitle.isEmpty {
-                        NetworkBadgeIcon(network: network, size: 14)
+                        ChatKit.networkIcon(network, 14)
                     }
                     Text(title)
                         .font(.headline)
@@ -166,7 +172,7 @@ private struct ChatTitlePill: View {
                     HStack(spacing: 4) {
                         // Without an avatar to carry it, the network icon leads the subtitle.
                         if avatar == nil {
-                            NetworkBadgeIcon(network: network, size: 12)
+                            ChatKit.networkIcon(network, 12)
                         }
                         Text(subtitle)
                             .font(.caption)

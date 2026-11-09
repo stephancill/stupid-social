@@ -146,7 +146,7 @@ public final class AccountComponents {
     }
 
     /// The account's chats, when its network has any. Apron servers list through one shared source instead.
-    public var chatListProvider: (any ChatListProvider)? {
+    public var chatListProvider: (any ChatListProvider<ChatDestination>)? {
         spotifyMessagesSource ?? instagramClient ?? telegramClient ?? xChatClient ?? blueskyClient ?? discordChatList ?? linkedinClient
     }
 

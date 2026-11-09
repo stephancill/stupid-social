@@ -270,9 +270,9 @@ struct FeedView: View {
         let upcoming = items.dropFirst(index + 1).prefix(10)
         for displayItem in upcoming {
             for actor in displayItem.item.actors.prefix(5) {
-                actor.avatarURL.map(StoryImageCache.shared.preload)
+                actor.avatarURL.map(ImageCache.shared.preload)
             }
-            displayItem.item.target?.imageURL.map(StoryImageCache.shared.preload)
+            displayItem.item.target?.imageURL.map(ImageCache.shared.preload)
         }
     }
 

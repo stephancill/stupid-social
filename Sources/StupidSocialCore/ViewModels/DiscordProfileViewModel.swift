@@ -53,7 +53,7 @@ public final class DiscordProfileViewModel: ObservableObject {
 
     /// Your DM with them: the one the gateway knows, else the one Discord opens (no message is sent until you
     /// write one). Returns the destination to open.
-    public func openChat() async -> ChatSummary.Destination? {
+    public func openChat() async -> ChatDestination? {
         if let existing = gateway.privateChannels.values.first(where: { $0.type == DiscordChannel.dm && $0.recipients?.contains { $0.id == userId } == true }) {
             return .discord(channelId: existing.id)
         }

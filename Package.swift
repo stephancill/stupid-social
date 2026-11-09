@@ -13,6 +13,11 @@ let package = Package(
             name: "StupidSocial",
             targets: ["StupidSocial"]
         ),
+        // The chat framework, for use in other apps (docs/TECHNICAL_DESIGN.md § Chat Framework).
+        .library(
+            name: "StupidChatKit",
+            targets: ["StupidChatKit"]
+        ),
         .library(
             name: "StupidSocialNotificationService",
             targets: ["StupidSocialNotificationService"]
@@ -21,11 +26,17 @@ let package = Package(
     targets: [
         .target(
             name: "StupidSocial",
-            dependencies: ["StupidSocialCore", "StupidSocialPush"]
+            dependencies: ["StupidSocialCore", "StupidSocialPush", "StupidChatKit"]
+        ),
+        // Chat models, view models, storage and UI; knows no network.
+        .target(
+            name: "StupidChatKit",
+            resources: [.process("Resources")]
         ),
         .target(
             name: "StupidSocialCore",
             dependencies: [
+                "StupidChatKit",
                 "StupidSocialPush",
                 "JuiceboxSdk",
                 "StupidMetrics",
@@ -34,7 +45,8 @@ let package = Package(
             resources: [.process("Resources")]
         ),
         .target(
-            name: "StupidSocialPush"
+            name: "StupidSocialPush",
+            dependencies: ["StupidChatKit"]
         ),
         // XChat key recovery. Vendored by scripts/vendor-juicebox.sh; don't edit these by hand.
         .target(
@@ -55,6 +67,10 @@ let package = Package(
         .target(
             name: "StupidSocialNotificationService",
             dependencies: ["StupidSocialPush"]
+        ),
+        .testTarget(
+            name: "StupidChatKitTests",
+            dependencies: ["StupidChatKit"]
         ),
         .testTarget(
             name: "StupidSocialTests",

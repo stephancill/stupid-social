@@ -9,7 +9,7 @@ import Foundation
 /// messages show as seen once Telegram's outbox read cursor passes them.
 @MainActor
 public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, ChatReactionSending, ChatUnseenReactions, ChatReadReceipts, ChatLiveUpdating, ChatReferenceResolving, ChatMentioning, ChatTyping, ChatCustomEmojis, ChatAudioPreviewing, ChatReactionChoices, ChatButtonPressing, ChatStickerSending, ChatVoiceSending, ChatForwarding, ChatMessageLinking {
-    public let network = SocialNetwork.telegram
+    public let network = ChatNetwork.telegram
     public let canReply = true
     public let acceptsAttachments = true
     /// A fallback to pushed updates; it also re-reads a private chat's "last seen", which ages.

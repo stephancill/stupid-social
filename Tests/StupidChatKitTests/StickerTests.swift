@@ -1,6 +1,6 @@
 import CoreGraphics
 import Foundation
-@testable import StupidSocialCore
+@testable import StupidChatKit
 import XCTest
 
 /// The sticker renderers' parts, with values checked against Telegram's rlottie (`scripts/lottie-compare.py`) and

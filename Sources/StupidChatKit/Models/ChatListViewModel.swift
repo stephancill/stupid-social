@@ -1,33 +1,13 @@
 import Foundation
 
-/// One conversation in the Chats list.
-public struct ChatSummary: Identifiable, Hashable, Codable, Sendable {
-    public enum Destination: Hashable, Codable, Sendable {
-        case apron(serverURL: URL, roomId: String)
-        /// A direct chat with an Apron user that has no room yet; its first message starts one.
-        case apronDirect(serverURL: URL, user: ApronUser)
-        /// The base62 id from `spotify:chat:<id>`.
-        case spotify(chatId: String)
-        /// The id in `/direct/t/<thread_fbid>/`.
-        case instagram(threadFbid: String)
-        case telegram(peer: TelegramPeer)
-        /// An XChat conversation id: "<user id>:<user id>" for one-to-one chats.
-        case x(conversationId: String)
-        /// A `chat.bsky.convo` id.
-        case bluesky(convoId: String)
-        /// A Discord channel id: a DM, group DM or guild text channel.
-        case discord(channelId: String)
-        /// A LinkedIn `urn:li:msg_conversation:(<mailbox>,<thread id>)`.
-        case linkedin(conversationUrn: String)
-        /// A preview chat in demo mode (`DemoChats`).
-        case demo(chatId: String)
-    }
-
+/// One conversation in the Chats list. `Destination` is the app's id for a chat across its networks, which it
+/// turns into the chat when the row is opened.
+public struct ChatSummary<Destination: Hashable & Codable & Sendable>: Identifiable, Hashable, Codable, Sendable {
     /// Prefixed with the account's id, as two accounts can share a chat.
     public internal(set) var id: String
     /// The account the chat belongs to (`Account.id`).
     public internal(set) var accountId: String
-    public let network: SocialNetwork
+    public let network: ChatNetwork
     public let title: String
     /// Shown muted before the title, as "<prefix> / <title>", such as the Apron server a room is on.
     public let titlePrefix: String?
@@ -38,9 +18,9 @@ public struct ChatSummary: Identifiable, Hashable, Codable, Sendable {
     /// (the id their messages carry, so it matches their bubbles), else the chat's own.
     public let avatarColorKey: String?
     /// The latest message, prefixed with "You: " or the sender in a group.
-    public internal(set) var preview: String?
-    public internal(set) var timestamp: Date?
-    public internal(set) var unreadCount: Int
+    public var preview: String?
+    public var timestamp: Date?
+    public var unreadCount: Int
     public let destination: Destination
     /// Whether previews of others' messages start with the sender's name: in rooms and groups, not in DMs.
     public let namesSenderInPreview: Bool
@@ -75,7 +55,7 @@ public struct ChatSummary: Identifiable, Hashable, Codable, Sendable {
 
     public init(
         id: String,
-        network: SocialNetwork,
+        network: ChatNetwork,
         title: String,
         titlePrefix: String? = nil,
         subtitle: String? = nil,
@@ -112,11 +92,11 @@ public struct ChatSummary: Identifiable, Hashable, Codable, Sendable {
 }
 
 /// One network's rows for the Chats list.
-public struct ChatListPage: Sendable {
-    public let chats: [ChatSummary]
+public struct ChatListPage<Destination: Hashable & Codable & Sendable>: Sendable {
+    public let chats: [ChatSummary<Destination>]
     /// The chats the user archived on the network; `nil` when the archive didn't load, so the rows already
     /// listed stay. Networks without an archive return none.
-    public let archived: [ChatSummary]?
+    public let archived: [ChatSummary<Destination>]?
     /// The accounts a provider without one lists apart, such as each Apron server, with how each one's load
     /// went; `nil` when the page is all one account's.
     public let accounts: [AccountResult]?
@@ -138,7 +118,7 @@ public struct ChatListPage: Sendable {
         }
     }
 
-    public init(chats: [ChatSummary], archived: [ChatSummary]?, accounts: [AccountResult]? = nil) {
+    public init(chats: [ChatSummary<Destination>], archived: [ChatSummary<Destination>]?, accounts: [AccountResult]? = nil) {
         self.chats = chats
         self.archived = archived
         self.accounts = accounts
@@ -147,30 +127,32 @@ public struct ChatListPage: Sendable {
 
 /// A chat network's part of the Chats list. Each network conforms its client or source; the list knows networks
 /// only through this.
-public protocol ChatListProvider: Sendable {
-    var network: SocialNetwork { get }
-    /// The network's rows. Throws `SourceError.notConfigured` when the network isn't connected, which lists none.
-    func chatList() async throws -> ChatListPage
+public protocol ChatListProvider<Destination>: Sendable {
+    associatedtype Destination: Hashable & Codable & Sendable
+
+    var chatNetwork: ChatNetwork { get }
+    /// The network's rows. Throws a `ChatNotConnectedError` when the network isn't connected, which lists none.
+    func chatList() async throws -> ChatListPage<Destination>
 }
 
 /// A provider that finds the chat a notification or link names when it isn't listed under exactly that
 /// destination, or stands in for one the list doesn't have yet.
-public protocol ChatListResolving: ChatListProvider {
+public protocol ChatListResolving<Destination>: ChatListProvider {
     /// The chat among `chats` (this provider's rows) that `destination` names, or a row standing in for it;
     /// `nil` when the destination isn't this provider's.
-    @MainActor func chat(for destination: ChatSummary.Destination, in chats: [ChatSummary]) -> ChatSummary?
+    @MainActor func chat(for destination: Destination, in chats: [ChatSummary<Destination>]) -> ChatSummary<Destination>?
 }
 
 /// One account's provider, as the Chats list loads it.
-public struct ChatListSource {
-    public let provider: any ChatListProvider
+public struct ChatListSource<Destination: Hashable & Codable & Sendable> {
+    public let provider: any ChatListProvider<Destination>
     /// The account the rows belong to; `nil` when the provider names each row's account itself, as Apron's
     /// does for its servers.
     public let accountId: String?
     /// Names the account in errors, such as "Telegram" or, with several, "Telegram Alice".
     public let label: String
 
-    public init(provider: any ChatListProvider, accountId: String?, label: String) {
+    public init(provider: any ChatListProvider<Destination>, accountId: String?, label: String) {
         self.provider = provider
         self.accountId = accountId
         self.label = label
@@ -178,8 +160,8 @@ public struct ChatListSource {
 
     /// Whether the row is this source's. Without an account, the source's rows are those of its network, such
     /// as every Apron server's.
-    func owns(_ chat: ChatSummary) -> Bool {
-        accountId.map { chat.accountId == $0 } ?? (chat.network == provider.network)
+    func owns(_ chat: ChatSummary<Destination>) -> Bool {
+        accountId.map { chat.accountId == $0 } ?? (chat.network == provider.chatNetwork)
     }
 }
 
@@ -187,7 +169,7 @@ public struct ChatListSource {
 public struct ChatConnectionStatus: Identifiable, Equatable, Sendable {
     /// The account id, or the network's name for a provider that lists no accounts apart.
     public let id: String
-    public let network: SocialNetwork
+    public let network: ChatNetwork
     public let label: String
     /// Why the last load failed; `nil` when it loaded.
     public let error: String?
@@ -195,11 +177,13 @@ public struct ChatConnectionStatus: Identifiable, Equatable, Sendable {
 
 /// Every chat across every account's chat networks, newest first.
 @MainActor
-public final class ChatListViewModel: ObservableObject {
-    @Published public private(set) var chats: [ChatSummary] = []
+public final class ChatListViewModel<Destination: Hashable & Codable & Sendable>: ObservableObject {
+    public typealias Summary = ChatSummary<Destination>
+
+    @Published public private(set) var chats: [Summary] = []
     /// Chats the user archived on their network (Telegram's Archive folder, archived X chats), shown apart from
     /// `chats`.
-    @Published public private(set) var archivedChats: [ChatSummary] = []
+    @Published public private(set) var archivedChats: [Summary] = []
     @Published public private(set) var isLoading = false
     @Published public private(set) var hasLoaded = false
     /// Every connected account as of the last load, in source order, with the reason for any failure.
@@ -221,32 +205,32 @@ public final class ChatListViewModel: ObservableObject {
     }
 
     /// The accounts' providers as of each load, since accounts come and go.
-    private let sources: () -> [ChatListSource]
+    private let sources: () -> [ChatListSource<Destination>]
     /// The last loaded list, shown at launch while it refreshes, so only the very first load waits.
     private let cacheURL: URL
     private let archiveCacheURL: URL
 
-    public init(sources: @escaping () -> [ChatListSource], caches: URL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]) {
+    public init(sources: @escaping () -> [ChatListSource<Destination>], caches: URL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]) {
         self.sources = sources
         cacheURL = caches.appending(path: "chat-list.json")
         archiveCacheURL = caches.appending(path: "chat-list-archived.json")
-        if let data = try? Data(contentsOf: cacheURL), let cached = try? JSONDecoder().decode([ChatSummary].self, from: data) {
+        if let data = try? Data(contentsOf: cacheURL), let cached = try? JSONDecoder().decode([Summary].self, from: data) {
             chats = cached
             hasLoaded = true
         }
-        if let data = try? Data(contentsOf: archiveCacheURL), let cached = try? JSONDecoder().decode([ChatSummary].self, from: data) {
+        if let data = try? Data(contentsOf: archiveCacheURL), let cached = try? JSONDecoder().decode([Summary].self, from: data) {
             archivedChats = cached
         }
     }
 
     /// The chat a notification or link names: the listed one, else what its provider finds or stands in for.
-    public func chat(for destination: ChatSummary.Destination) -> ChatSummary? {
+    public func chat(for destination: Destination) -> Summary? {
         let all = chats + archivedChats
         if let listed = all.first(where: { $0.destination == destination }) {
             return listed
         }
         for source in sources() {
-            guard let provider = source.provider as? any ChatListResolving,
+            guard let provider = source.provider as? any ChatListResolving<Destination>,
                   let chat = provider.chat(for: destination, in: all.filter(source.owns)) else { continue }
             return chat.scoped(to: source.accountId)
         }
@@ -261,22 +245,22 @@ public final class ChatListViewModel: ObservableObject {
         let startedAfter = followedUpdateCount
         let sources = sources()
         let providers = sources.map(\.provider)
-        let results = await withTaskGroup(of: (Int, Result<ChatListPage, Error>).self) { group in
+        let results = await withTaskGroup(of: (Int, Result<ChatListPage<Destination>, Error>).self) { group in
             for (index, provider) in providers.enumerated() {
                 group.addTask { await (index, Self.result { try await provider.chatList() }) }
             }
-            var results: [Result<ChatListPage, Error>?] = Array(repeating: nil, count: providers.count)
+            var results: [Result<ChatListPage<Destination>, Error>?] = Array(repeating: nil, count: providers.count)
             for await (index, result) in group {
                 results[index] = result
             }
             return results.compactMap(\.self)
         }
 
-        var merged: [ChatSummary] = []
-        var archived: [ChatSummary] = []
+        var merged: [Summary] = []
+        var archived: [Summary] = []
         var statuses: [ChatConnectionStatus] = []
         let previous = Dictionary(connections.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        func status(id: String, network: SocialNetwork, label: String, error: Error?) -> ChatConnectionStatus {
+        func status(id: String, network: ChatNetwork, label: String, error: Error?) -> ChatConnectionStatus {
             // A reload cut short (such as by opening a chat) isn't a failure worth showing; the last status stays.
             if let error, Self.isCancellation(error) {
                 return previous[id] ?? ChatConnectionStatus(id: id, network: network, label: label, error: nil)
@@ -284,7 +268,7 @@ public final class ChatListViewModel: ObservableObject {
             return ChatConnectionStatus(id: id, network: network, label: label, error: error?.localizedDescription)
         }
         for (source, result) in zip(sources, results) {
-            let network = source.provider.network
+            let network = source.provider.chatNetwork
             let sourceId = source.accountId ?? network.rawValue
             switch result {
             case let .success(page):
@@ -319,7 +303,7 @@ public final class ChatListViewModel: ObservableObject {
     }
 
     /// The row as its open chat last reported it, for updates the finishing load doesn't include.
-    private func keepingFollowedState(_ chat: ChatSummary) -> ChatSummary {
+    private func keepingFollowedState(_ chat: Summary) -> Summary {
         guard let row = followedRows[chat.id] else { return chat }
         return Self.updated(chat, latest: row.latest, body: row.body, unreadCount: row.unreadCount, unseenReactionCount: row.unseenReactionCount)
     }
@@ -353,7 +337,7 @@ public final class ChatListViewModel: ObservableObject {
     }
 
     /// `unseenReactionCount` is `nil` for chats that don't track unseen reactions, which keep the row's.
-    private static func updated(_ chat: ChatSummary, latest: ChatMessage?, body: String?, unreadCount: Int, unseenReactionCount: Int?) -> ChatSummary {
+    private static func updated(_ chat: Summary, latest: ChatMessage?, body: String?, unreadCount: Int, unseenReactionCount: Int?) -> Summary {
         var chat = chat
         if let latest, let body {
             chat.preview = if latest.isOwn {
@@ -373,25 +357,25 @@ public final class ChatListViewModel: ObservableObject {
     }
 
     /// Whether the chat is listed, such as an Apron room the user has joined.
-    public func contains(_ destination: ChatSummary.Destination) -> Bool {
+    public func contains(_ destination: Destination) -> Bool {
         (chats + archivedChats).contains { $0.destination == destination }
     }
 
     /// Replaces a set of rows that a live connection rebuilt, such as one Apron server's rooms. The rows name
     /// their account.
-    public func replaceChats(where isReplaced: (ChatSummary) -> Bool, with summaries: [ChatSummary]) {
+    public func replaceChats(where isReplaced: (Summary) -> Bool, with summaries: [Summary]) {
         setChats(chats.filter { !isReplaced($0) } + summaries)
     }
 
     /// Rows rebuilt for chats with new messages, replacing those chats' rows. `accountId` names the account
     /// they came from, unless the rows already do.
-    public func updateChats(_ summaries: [ChatSummary], accountId: String? = nil) {
+    public func updateChats(_ summaries: [Summary], accountId: String? = nil) {
         let summaries = summaries.map { $0.scoped(to: accountId) }
         let ids = Set(summaries.map(\.id))
         replaceChats(where: { ids.contains($0.id) }, with: summaries)
     }
 
-    private func setChats(_ summaries: [ChatSummary]) {
+    private func setChats(_ summaries: [Summary]) {
         chats = summaries.sorted { ($0.timestamp ?? .distantPast) > ($1.timestamp ?? .distantPast) }
         hasLoaded = true
         if let data = try? JSONEncoder().encode(chats) {
@@ -399,7 +383,7 @@ public final class ChatListViewModel: ObservableObject {
         }
     }
 
-    private func setArchivedChats(_ summaries: [ChatSummary]) {
+    private func setArchivedChats(_ summaries: [Summary]) {
         archivedChats = summaries.sorted { ($0.timestamp ?? .distantPast) > ($1.timestamp ?? .distantPast) }
         if let data = try? JSONEncoder().encode(archivedChats) {
             try? data.write(to: archiveCacheURL, options: .atomic)
@@ -410,10 +394,10 @@ public final class ChatListViewModel: ObservableObject {
         error is CancellationError || (error as? URLError)?.code == .cancelled
     }
 
-    private nonisolated static func result(_ load: () async throws -> ChatListPage) async -> Result<ChatListPage, Error> {
+    private nonisolated static func result(_ load: () async throws -> ChatListPage<Destination>) async -> Result<ChatListPage<Destination>, Error> {
         do {
             return try await .success(load())
-        } catch SourceError.notConfigured {
+        } catch let error as any ChatNotConnectedError where error.isNotConnected {
             return .success(ChatListPage(chats: [], archived: [], accounts: []))
         } catch {
             return .failure(error)

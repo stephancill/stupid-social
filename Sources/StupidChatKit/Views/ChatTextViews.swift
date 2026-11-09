@@ -25,8 +25,8 @@ final class ChatLinkTapGesture: UITapGestureRecognizer {
     }
 
     @objc private func open() {
-        // Apron links open in the app, never in a browser.
-        guard !NotificationRouter.shared.open(link) else { return }
+        // The app's own links open in the app, never in a browser.
+        guard !ChatKit.openAppLink(link, nil) else { return }
         UIApplication.shared.open(link)
     }
 }

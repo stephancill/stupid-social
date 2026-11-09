@@ -1,4 +1,3 @@
-import StupidSocialCore
 import SwiftUI
 import UIKit
 

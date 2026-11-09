@@ -1,5 +1,5 @@
 #!/bin/sh
-# Compares the app's WebM sticker decoder (Sources/StupidSocialCore/Stickers/WebMSticker.swift) with ffmpeg's
+# Compares the app's WebM sticker decoder (Sources/StupidChatKit/Stickers/WebMSticker.swift) with ffmpeg's
 # libvpx-vp9 decode, alpha included, on the first, middle and last frame of each file.
 #
 #   scripts/webm-compare.sh logs/sticker-corpus-webm/*.webm
@@ -12,7 +12,7 @@ TOOLS="$ROOT/logs/lottie-tools"
 OUT="$ROOT/logs/webm-compare"
 mkdir -p "$TOOLS/webm" "$OUT"
 cp "$ROOT/scripts/stickers/webm.swift" "$TOOLS/webm/main.swift"
-xcrun swiftc -O -o "$TOOLS/webm-decode" "$ROOT/Sources/StupidSocialCore/Stickers/WebMSticker.swift" "$TOOLS/webm/main.swift"
+xcrun swiftc -O -o "$TOOLS/webm-decode" "$ROOT/Sources/StupidChatKit/Stickers/WebMSticker.swift" "$TOOLS/webm/main.swift"
 failed=0
 for file in "$@"; do
     name=$(basename "$file" .webm)

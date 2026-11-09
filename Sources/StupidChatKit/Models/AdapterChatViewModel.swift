@@ -33,7 +33,7 @@ public struct ChatOutgoing {
     /// Networks with formatting apply them; plain-text networks leave them out.
     public var links: [ChatOutgoingLink] = []
 
-    init(text: String, attachment: ChatAttachment?, replyToId: String?, italics: [NSRange] = [], links: [ChatOutgoingLink] = []) {
+    public init(text: String, attachment: ChatAttachment?, replyToId: String?, italics: [NSRange] = [], links: [ChatOutgoingLink] = []) {
         self.text = text
         self.attachment = attachment
         self.replyToId = replyToId
@@ -84,7 +84,7 @@ public struct ChatOutgoingLink: Equatable, Sendable {
 /// implements it.
 @MainActor
 public protocol ChatAdapter: AnyObject {
-    var network: SocialNetwork { get }
+    var network: ChatNetwork { get }
     /// The network and its id for the conversation, such as `spotify:<chat id>`; the account id is added to it.
     var key: String { get }
     /// Whether messages can be sent as replies.
@@ -618,11 +618,11 @@ public final class AdapterChatViewModel<Adapter: ChatAdapter>: ChatViewModel {
                 } else {
                     try await sendCopy(of: forward)
                 }
-                AppMetrics.messageForwarded(network: network, from: forward.network, isNative: isNative, error: nil)
+                ChatKit.onEvent(.messageForwarded(network: network, from: forward.network, isNative: isNative, error: nil))
                 adapterDidChange()
                 return id
             } catch {
-                AppMetrics.messageForwarded(network: network, from: forward.network, isNative: isNative, error: error)
+                ChatKit.onEvent(.messageForwarded(network: network, from: forward.network, isNative: isNative, error: error))
                 throw error
             }
         }
@@ -675,9 +675,9 @@ public final class AdapterChatViewModel<Adapter: ChatAdapter>: ChatViewModel {
         errorMessage = nil
         do {
             try await deleting.delete(message.id)
-            AppMetrics.messageDeleted(network: network, error: nil)
+            ChatKit.onEvent(.messageDeleted(network: network, error: nil))
         } catch {
-            AppMetrics.messageDeleted(network: network, error: error)
+            ChatKit.onEvent(.messageDeleted(network: network, error: error))
             errorMessage = error.localizedDescription
         }
         adapterDidChange()
@@ -692,11 +692,11 @@ public final class AdapterChatViewModel<Adapter: ChatAdapter>: ChatViewModel {
         errorMessage = nil
         do {
             let answer = try await pressing.press(button, on: message.id)
-            AppMetrics.messageButtonPressed(network: network, error: nil)
+            ChatKit.onEvent(.messageButtonPressed(network: network, error: nil))
             adapterDidChange()
             return answer
         } catch {
-            AppMetrics.messageButtonPressed(network: network, error: error)
+            ChatKit.onEvent(.messageButtonPressed(network: network, error: error))
             errorMessage = error.localizedDescription
             return nil
         }

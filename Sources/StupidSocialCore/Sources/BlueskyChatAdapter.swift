@@ -5,7 +5,7 @@ import Foundation
 /// attachments.
 @MainActor
 public final class BlueskyChatAdapter: ChatAdapter, ChatReactionSending {
-    public let network = SocialNetwork.bluesky
+    public let network = ChatNetwork.bluesky
     public let canReply = false
     public let acceptsAttachments = false
     public let pollInterval: Duration? = .seconds(10)

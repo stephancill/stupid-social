@@ -1,6 +1,17 @@
 import Foundation
-@testable import StupidSocialCore
+@testable import StupidChatKit
 import XCTest
+
+/// An app's destinations, as the tests need them.
+private enum TestDestination: Hashable, Codable {
+    case spotify(chatId: String)
+    case apron(serverURL: URL, roomId: String)
+}
+
+private typealias ChatSummary = StupidChatKit.ChatSummary<TestDestination>
+private typealias ChatListPage = StupidChatKit.ChatListPage<TestDestination>
+private typealias ChatListSource = StupidChatKit.ChatListSource<TestDestination>
+private typealias ChatListViewModel = StupidChatKit.ChatListViewModel<TestDestination>
 
 @MainActor
 final class ChatListViewModelTests: XCTestCase {
@@ -69,7 +80,7 @@ final class ChatListViewModelTests: XCTestCase {
         let x = FakeProvider(network: .x, page: .init(chats: [row("x", .x, minutesAgo: 1)], archived: [row("xa", .x, minutesAgo: 2)]))
         let list = makeList([(x, "x")])
         await list.load()
-        x.error = SourceError.notConfigured
+        x.error = NotConnected()
         await list.load()
         XCTAssertTrue(list.chats.isEmpty)
         XCTAssertTrue(list.archivedChats.isEmpty)
@@ -80,24 +91,24 @@ final class ChatListViewModelTests: XCTestCase {
         let one = try XCTUnwrap(URL(string: "wss://one.example"))
         let two = try XCTUnwrap(URL(string: "wss://two.example"))
         let apron = FakeProvider(network: .apron, page: .init(chats: [
-            row("a", .apron, minutesAgo: 1, destination: .apron(serverURL: one, roomId: "a")).scoped(to: Account.apronId(serverURL: one)),
-            row("b", .apron, minutesAgo: 2, destination: .apron(serverURL: two, roomId: "b")).scoped(to: Account.apronId(serverURL: two)),
+            row("a", .apron, minutesAgo: 1, destination: .apron(serverURL: one, roomId: "a")).scoped(to: one.absoluteString),
+            row("b", .apron, minutesAgo: 2, destination: .apron(serverURL: two, roomId: "b")).scoped(to: two.absoluteString),
         ], archived: []))
         let list = makeList([(apron, nil)])
         await list.load()
-        XCTAssertEqual(list.chats.map(\.accountId), [Account.apronId(serverURL: one), Account.apronId(serverURL: two)])
+        XCTAssertEqual(list.chats.map(\.accountId), [one.absoluteString, two.absoluteString])
         apron.error = URLError(.timedOut)
         await list.load()
         XCTAssertEqual(list.chats.count, 2)
-        list.replaceChats(where: { $0.isApronRoom(on: one) }, with: [])
-        XCTAssertEqual(list.chats.map(\.accountId), [Account.apronId(serverURL: two)])
+        list.replaceChats(where: { $0.destination == .apron(serverURL: one, roomId: "a") }, with: [])
+        XCTAssertEqual(list.chats.map(\.accountId), [two.absoluteString])
     }
 
     func testAFailingAccountInAPageKeepsItsRowsAndIsReported() async throws {
         let one = try XCTUnwrap(URL(string: "wss://one.example"))
         let two = try XCTUnwrap(URL(string: "wss://two.example"))
-        let oneId = Account.apronId(serverURL: one)
-        let twoId = Account.apronId(serverURL: two)
+        let oneId = one.absoluteString
+        let twoId = two.absoluteString
         let rowOne = row("a", .apron, minutesAgo: 1, destination: .apron(serverURL: one, roomId: "a")).scoped(to: oneId)
         let rowTwo = row("b", .apron, minutesAgo: 2, destination: .apron(serverURL: two, roomId: "b")).scoped(to: twoId)
         let apron = FakeProvider(network: .apron, page: .init(chats: [rowOne, rowTwo], archived: [], accounts: [
@@ -108,18 +119,18 @@ final class ChatListViewModelTests: XCTestCase {
         await list.load()
         apron.page = .init(chats: [rowOne], archived: [], accounts: [
             .init(accountId: oneId, label: "one", error: nil),
-            .init(accountId: twoId, label: "two", error: ApronError.rejected(status: 503)),
+            .init(accountId: twoId, label: "two", error: URLError(.badServerResponse)),
         ])
         await list.load()
         XCTAssertEqual(list.chats.map(\.accountId), [oneId, twoId], "the failing server's rows stay")
         XCTAssertEqual(list.connections.map(\.id), [oneId, twoId])
         XCTAssertNil(list.connections[0].error)
-        XCTAssertEqual(list.connections[1].error, ApronError.rejected(status: 503).localizedDescription)
+        XCTAssertEqual(list.connections[1].error, URLError(.badServerResponse).localizedDescription)
     }
 
     func testACurrentAccountInAPageKeepsTheRowsItHas() async throws {
         let server = try XCTUnwrap(URL(string: "wss://one.example"))
-        let accountId = Account.apronId(serverURL: server)
+        let accountId = server.absoluteString
         let first = row("a", .apron, minutesAgo: 5, destination: .apron(serverURL: server, roomId: "a")).scoped(to: accountId)
         let apron = FakeProvider(network: .apron, page: .init(chats: [first], archived: [], accounts: [
             .init(accountId: accountId, label: "one", error: nil),
@@ -165,20 +176,6 @@ final class ChatListViewModelTests: XCTestCase {
         XCTAssertEqual(first.offered.map(\.id), ["spotify-1|a"])
     }
 
-    func testATelegramNotificationOpensItsChatWithoutTheAccessHash() async throws {
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: "ChatListViewModelTests-\(UUID().uuidString)"))
-        let keychain = KeychainCredentialStore(service: "ChatListViewModelTests-\(UUID().uuidString)", fallbackStore: defaults, prefersSynchronizable: false, allowsInsecureFallback: true)
-        let listed = row("t", .telegram, minutesAgo: 1, destination: .telegram(peer: TelegramPeer(kind: .user, id: 7, accessHash: 42)))
-        await makeList([(FakeProvider(network: .telegram, page: .init(chats: [listed], archived: [])), "telegram")]).load()
-        // Starts from the cached list, then resolves through the real Telegram client.
-        let telegram = TelegramClient(keychain: keychain)
-        let list = ChatListViewModel(sources: {
-            [ChatListSource(provider: telegram, accountId: "telegram", label: "Telegram")]
-        }, caches: caches)
-        XCTAssertEqual(list.chat(for: .telegram(peer: TelegramPeer(kind: .user, id: 7, accessHash: 0)))?.id, "telegram|t")
-        XCTAssertNil(list.chat(for: .telegram(peer: TelegramPeer(kind: .chat, id: 7, accessHash: 0))))
-    }
-
     /// At launch from a notification, the first load can finish after the opened chat was read; its counts,
     /// fetched before reading, mustn't put the unread count back.
     func testALoadThatStartedBeforeAnOpenChatUpdatedItKeepsTheChatsState() async throws {
@@ -209,11 +206,11 @@ final class ChatListViewModelTests: XCTestCase {
 
     private func makeList(_ providers: [(FakeProvider, String?)]) -> ChatListViewModel {
         ChatListViewModel(sources: {
-            providers.map { ChatListSource(provider: $0.0, accountId: $0.1, label: $0.0.network.displayName) }
+            providers.map { ChatListSource(provider: $0.0, accountId: $0.1, label: $0.0.chatNetwork.rawValue) }
         }, caches: caches)
     }
 
-    private func row(_ id: String, _ network: SocialNetwork, minutesAgo: Double, destination: ChatSummary.Destination? = nil) -> ChatSummary {
+    private func row(_ id: String, _ network: ChatNetwork, minutesAgo: Double, destination: TestDestination? = nil) -> ChatSummary {
         ChatSummary(
             id: id,
             network: network,
@@ -229,12 +226,12 @@ final class ChatListViewModelTests: XCTestCase {
 
 @MainActor
 private final class FakeProvider: ChatListProvider {
-    let network: SocialNetwork
+    let chatNetwork: ChatNetwork
     var page: ChatListPage
     var error: Error?
 
-    init(network: SocialNetwork, page: ChatListPage) {
-        self.network = network
+    init(network: ChatNetwork, page: ChatListPage) {
+        chatNetwork = network
         self.page = page
     }
 
@@ -263,12 +260,12 @@ private final class FakeProvider: ChatListProvider {
 
 @MainActor
 private final class ResolvingFakeProvider: ChatListResolving {
-    let network: SocialNetwork
+    let chatNetwork: ChatNetwork
     let page: ChatListPage
     private(set) var offered: [ChatSummary] = []
 
-    init(network: SocialNetwork, page: ChatListPage) {
-        self.network = network
+    init(network: ChatNetwork, page: ChatListPage) {
+        chatNetwork = network
         self.page = page
     }
 
@@ -277,7 +274,7 @@ private final class ResolvingFakeProvider: ChatListResolving {
     }
 
     /// Matches a Spotify chat id regardless of case.
-    func chat(for destination: ChatSummary.Destination, in chats: [ChatSummary]) -> ChatSummary? {
+    func chat(for destination: TestDestination, in chats: [ChatSummary]) -> ChatSummary? {
         offered = chats
         guard case let .spotify(chatId) = destination else { return nil }
         return chats.first { chat in
@@ -285,4 +282,8 @@ private final class ResolvingFakeProvider: ChatListResolving {
             return listed.lowercased() == chatId.lowercased()
         }
     }
+}
+
+private struct NotConnected: ChatNotConnectedError {
+    let isNotConnected = true
 }

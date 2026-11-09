@@ -1,4 +1,4 @@
-// Renders frames of a TGS or Lottie JSON file with the app's renderer (Sources/StupidSocialCore/Stickers), on the Mac,
+// Renders frames of a TGS or Lottie JSON file with the app's renderer (Sources/StupidChatKit/Stickers), on the Mac,
 // for comparison with rlottie. Writes <out>/<frame>.png.
 //
 //   render <file.tgs|file.json> <out dir> <size> <frame>...

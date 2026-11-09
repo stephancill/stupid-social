@@ -1,6 +1,5 @@
 import Foundation
 import ImageIO
-import StupidSocialPush
 
 /// Someone shown in a chat: a message sender, reactor, or mention suggestion.
 public struct ChatUser: Hashable, Identifiable, Codable, Sendable {
@@ -615,7 +614,7 @@ public class ChatViewModel: ObservableObject {
     }
 
     /// The chat's network, whose icon leads the subtitle.
-    public let network: SocialNetwork
+    public let network: ChatNetwork
     /// Identifies the chat across visits, such as for its draft: the network, a colon, and the network's id for it.
     public let chatKey: String
     /// Whether swipe-to-reply and the Reply action are offered.
@@ -624,8 +623,8 @@ public class ChatViewModel: ObservableObject {
     public let offersAttachments: Bool
     /// `@user_id` mentions in message text, highlighted and tappable; `nil` when the network has none.
     public let mentionPattern: NSRegularExpression?
-    /// Where a reminder set on one of this chat's messages reopens it; the Remind Me action is offered when set.
-    public var reminderTarget: ChatReminderTarget?
+    /// Reminders of this chat's messages; the Remind Me action is offered when set.
+    public var reminders: (any ChatReminders)?
     /// A message to show once the chat loads, such as from a link or a reminder.
     public var focusMessageId: String?
     /// A quick look from the Chats list: the chat shows read-only and tells the network nothing it saw, so
@@ -684,7 +683,7 @@ public class ChatViewModel: ObservableObject {
     private var searchJumpTask: Task<Void, Never>?
 
     init(
-        network: SocialNetwork,
+        network: ChatNetwork,
         chatKey: String,
         title: String,
         subtitle: String,
@@ -919,9 +918,9 @@ public class ChatViewModel: ObservableObject {
                 sendingVoiceFiles[localId] = nil
                 outgoing.removeAll { $0.id == localId }
             }
-            AppMetrics.messageSent(network: network, hasAttachment: attachment != nil, isVoice: voice != nil, isReply: replyToId != nil, error: nil)
+            ChatKit.onEvent(.messageSent(network: network, hasAttachment: attachment != nil, isVoice: voice != nil, isReply: replyToId != nil, error: nil))
         } catch {
-            AppMetrics.messageSent(network: network, hasAttachment: attachment != nil, isVoice: voice != nil, isReply: replyToId != nil, error: error)
+            ChatKit.onEvent(.messageSent(network: network, hasAttachment: attachment != nil, isVoice: voice != nil, isReply: replyToId != nil, error: error))
             historyAtSend[localId] = nil
             sendingVoiceFiles[localId] = nil
             outgoing.removeAll { $0.id == localId }
@@ -991,9 +990,9 @@ public class ChatViewModel: ObservableObject {
         do {
             try await deliver(id, text)
             confirmedEdits.insert(id)
-            AppMetrics.messageEdited(network: network, error: nil)
+            ChatKit.onEvent(.messageEdited(network: network, error: nil))
         } catch {
-            AppMetrics.messageEdited(network: network, error: error)
+            ChatKit.onEvent(.messageEdited(network: network, error: error))
             pendingEdits[id] = nil
             editBases[id] = nil
             composeMessages()
@@ -1331,7 +1330,7 @@ public class ChatViewModel: ObservableObject {
     public func beginSearch() {
         guard searchQuery == nil else { return }
         searchQuery = ""
-        AppMetrics.chatSearched(network: network)
+        ChatKit.onEvent(.searched(network: network))
     }
 
     public func endSearch() {

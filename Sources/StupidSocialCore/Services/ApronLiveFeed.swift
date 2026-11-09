@@ -48,7 +48,7 @@ public final class ApronLiveFeed {
 
     /// Reactions seen on another device can only clear the row's unseen ones, and only history says which remain.
     private func reactionsSeenElsewhere(serverURL: URL, roomId: String) {
-        let destination = ChatSummary.Destination.apron(serverURL: serverURL, roomId: roomId)
+        let destination = ChatDestination.apron(serverURL: serverURL, roomId: roomId)
         guard sessions[serverURL] != nil, chatList.chats.first(where: { $0.destination == destination })?.unseenReactionCount ?? 0 > 0 else { return }
         scheduleRebuild(serverURL, roomId: roomId)
     }
@@ -151,7 +151,7 @@ public final class ApronLiveFeed {
         case "message":
             // Only logged messages change a room's latest message; transient notices don't (§3.5.3).
             guard let message = try? JSONDecoder().decode(ApronMessage.self, from: params), let roomId = message.roomId, message.messageId != nil else { return }
-            let destination = ChatSummary.Destination.apron(serverURL: session.serverURL, roomId: roomId)
+            let destination = ChatDestination.apron(serverURL: session.serverURL, roomId: roomId)
             // Before the rows are built, the rebuild under way may predate the message.
             if currentServers.contains(session.serverURL),
                let row = chatList.chats.first(where: { $0.destination == destination }),
@@ -189,7 +189,7 @@ public final class ApronLiveFeed {
             service.readStore.setServerCursor(cursor, serverURL: session.serverURL, roomId: roomId)
             // Read on another device: only history says what is still unread. Read here, the open chat already
             // cleared the row.
-            let destination = ChatSummary.Destination.apron(serverURL: session.serverURL, roomId: roomId)
+            let destination = ChatDestination.apron(serverURL: session.serverURL, roomId: roomId)
             if chatList.chats.first(where: { $0.destination == destination })?.unreadCount ?? 0 > 0 {
                 scheduleRebuild(session.serverURL, roomId: roomId)
             }

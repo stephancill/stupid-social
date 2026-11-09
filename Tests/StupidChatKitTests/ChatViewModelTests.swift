@@ -1,5 +1,5 @@
 import Foundation
-@testable import StupidSocialCore
+@testable import StupidChatKit
 import XCTest
 
 @MainActor

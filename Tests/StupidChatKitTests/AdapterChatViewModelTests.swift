@@ -1,6 +1,6 @@
 import AVFoundation
 import Foundation
-@testable import StupidSocialCore
+@testable import StupidChatKit
 import XCTest
 
 @MainActor
@@ -637,7 +637,7 @@ private func said(_ id: Int, _ text: String) -> ChatMessage {
 /// Read position is a message id, like Telegram's.
 @MainActor
 private class FakeAdapter: ChatAdapter {
-    let network = SocialNetwork.telegram
+    let network = ChatNetwork.telegram
     let key = "fake:1"
     let canReply = true
     var acceptsAttachments = false

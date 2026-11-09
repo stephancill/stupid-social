@@ -1,4 +1,3 @@
-import StupidSocialCore
 import UIKit
 
 /// The sticker panel, in the keyboard's place as in Telegram's apps: every set in one grid under its title, a tab per

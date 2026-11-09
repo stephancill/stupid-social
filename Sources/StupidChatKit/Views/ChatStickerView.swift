@@ -1,6 +1,5 @@
 import Compression
 import CryptoKit
-import StupidSocialCore
 import UIKit
 
 /// A sticker, in a message or the sticker picker: its still while the file loads, then the image, or the animation

@@ -22,7 +22,7 @@ public struct ChatForwardOrigin: Hashable, Sendable {
 public struct ChatForward: Identifiable, Hashable, Sendable {
     public let id: UUID
     public let message: ChatMessage
-    public let network: SocialNetwork
+    public let network: ChatNetwork
     public let accountId: String
     /// The source network's reference to the message for a native forward; `nil` when it can't forward natively.
     public let reference: String?
@@ -34,7 +34,7 @@ public struct ChatForward: Identifiable, Hashable, Sendable {
     /// A link to the original (`ChatMessageLinking`), which a copy's "Forwarded" links to.
     public let link: URL?
 
-    public init(message: ChatMessage, network: SocialNetwork, accountId: String, reference: String?, link: URL? = nil, media: [ChatForwardMedia]) {
+    public init(message: ChatMessage, network: ChatNetwork, accountId: String, reference: String?, link: URL? = nil, media: [ChatForwardMedia]) {
         id = UUID()
         self.message = message
         self.network = network
@@ -157,8 +157,8 @@ enum ChatForwardCopy {
 
 /// A recording as an attachment, for networks without voice messages: AAC in an M4A file, which every network's
 /// players read.
-enum ChatVoiceFile {
-    static func attachment(for voice: ChatVoiceNote) async throws -> ChatAttachment {
+public enum ChatVoiceFile {
+    public static func attachment(for voice: ChatVoiceNote) async throws -> ChatAttachment {
         if voice.fileURL.pathExtension.lowercased() == "m4a" {
             return try ChatAttachment(data: Data(contentsOf: voice.fileURL), mimeType: "audio/mp4", filename: "Voice Message.m4a", isImage: false)
         }

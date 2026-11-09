@@ -235,7 +235,7 @@ public struct XChatEventPage: Sendable {
 /// encrypted with per-conversation keys that only the account's private keys open. See
 /// `scripts/xchat-client.py`, which validated each request live, and `docs/IMPLEMENTATION.md`.
 public actor XChatClient: ChatListProvider {
-    public nonisolated let network: SocialNetwork = .x
+    public nonisolated let chatNetwork: ChatNetwork = .x
 
     private enum Operation: String {
         case initialPage = "GetInitialXChatPageQuery"

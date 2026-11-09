@@ -1,5 +1,4 @@
 import AVFoundation
-import StupidSocialCore
 
 /// Records one voice message at a time for the composer: 48 kHz mono PCM to a temporary file, which
 /// `ChatVoiceNote` reads for its length and waveform and the network's adapter encodes.

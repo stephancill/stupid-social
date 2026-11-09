@@ -1,5 +1,3 @@
-import StupidSocialCore
-import StupidSocialPush
 import UIKit
 
 /// A day's date in a small glass capsule, heading its messages. Headers pin to the top while their day scrolls
@@ -146,7 +144,7 @@ final class ChatTypingCell: UICollectionViewListCell {
     }
 
     func configure(names: [String], showsNames: Bool) {
-        let names = names.map { DebugRedaction.name($0) }
+        let names = names.map { ChatRedaction.name($0) }
         let who = switch names.count {
         case 0: ""
         case 1: names[0]
@@ -718,16 +716,16 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
         // Incoming messages keep the avatar column so a group's bubbles line up.
         avatarView.isHidden = layout.isOwn || !layout.showsAvatar
         if layout.showsAvatar {
-            avatarView.configure(name: DebugRedaction.name(message.sender.name), color: accent, url: avatarURL)
+            avatarView.configure(name: ChatRedaction.name(message.sender.name), color: accent, url: avatarURL)
         }
 
         configureReminder(due: reminderDue, isOwn: layout.isOwn)
         nameLabel.isHidden = !layout.showsName
-        nameLabel.text = DebugRedaction.name(message.sender.name)
+        nameLabel.text = ChatRedaction.name(message.sender.name)
         nameLabel.textColor = accent
         let forwardedFrom = message.isDeleted ? nil : message.forwardedFrom
         forwardLabel.isHidden = forwardedFrom == nil
-        forwardLabel.text = forwardedFrom.map { origin in ChatForwardOrigin(name: origin.name.map { DebugRedaction.name($0) }).label }
+        forwardLabel.text = forwardedFrom.map { origin in ChatForwardOrigin(name: origin.name.map { ChatRedaction.name($0) }).label }
         forwardLabel.textColor = layout.isOwn && !isSticker ? UIColor.white.withAlphaComponent(0.85) : .secondaryLabel
 
         if let reply {
@@ -1420,7 +1418,7 @@ final class ChatMessageCell: UICollectionViewListCell, UIGestureRecognizerDelega
         let isExpanded = actions.isEmbedExpanded(index)
         let quote = ChatReplyQuoteView()
         quote.configure(
-            name: DebugRedaction.name(title),
+            name: ChatRedaction.name(title),
             text: text,
             accent: isOwn ? .white : ChatUserColor.color(for: title),
             onBubbleColor: isOwn,
@@ -1606,7 +1604,7 @@ final class ChatAvatarView: UIView {
         reset()
         self.url = url
         guard let url else { return }
-        if let cached = StoryImageCache.shared.image(for: url) {
+        if let cached = ImageCache.shared.image(for: url) {
             imageView.image = cached
             return
         }
@@ -1614,7 +1612,7 @@ final class ChatAvatarView: UIView {
             guard let (data, _) = try? await URLSession.shared.data(from: url),
                   let image = UIImage(data: data), !Task.isCancelled
             else { return }
-            StoryImageCache.shared.setImage(image, for: url)
+            ImageCache.shared.setImage(image, for: url)
             if self?.url == url {
                 self?.imageView.image = image
             }
@@ -1686,7 +1684,7 @@ final class ChatReplyQuoteView: UIView {
 }
 
 /// Photos, artwork and card icons shown in chat bubbles, decoded once off the main thread. Kept apart from
-/// `StoryImageCache`, whose few entries the chat's avatars would evict, blanking photos on every reconfigure.
+/// `ImageCache`, whose few entries the chat's avatars would evict, blanking photos on every reconfigure.
 @MainActor
 final class ChatMediaImageCache {
     static let shared = ChatMediaImageCache()

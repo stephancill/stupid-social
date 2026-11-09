@@ -641,7 +641,7 @@ extension InstagramClient {
 
 @MainActor
 extension InstagramClient: ChatListProvider {
-    public nonisolated var network: SocialNetwork {
+    public nonisolated var chatNetwork: ChatNetwork {
         .instagram
     }
 

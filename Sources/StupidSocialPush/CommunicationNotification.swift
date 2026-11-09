@@ -1,5 +1,6 @@
 import Foundation
 @preconcurrency import Intents
+import StupidChatKit
 @preconcurrency import UserNotifications
 
 /// Turns notification content into a Communication Notification from a person, which shows their avatar. Used

@@ -1,4 +1,4 @@
-// Decodes a WebM video sticker with the app's decoder (Sources/StupidSocialCore/Stickers/WebMSticker.swift) on the
+// Decodes a WebM video sticker with the app's decoder (Sources/StupidChatKit/Stickers/WebMSticker.swift) on the
 // Mac and writes frames as PNGs, for comparison with ffmpeg's libvpx decode (scripts/webm-compare.sh).
 //
 //   webm <file.webm> <out dir> [frame...]    every frame when none are named

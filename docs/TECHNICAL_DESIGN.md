@@ -474,7 +474,7 @@ LinkedIn notifications and chats are a native client of www.linkedin.com's web c
 
 ## Stickers
 
-Stickers are drawn in the app, with no dependency (`StupidSocialCore/Stickers`):
+Stickers are drawn in the app, with no dependency (`StupidChatKit/Stickers`):
 
 - **Lottie (TGS):** `LottieAnimation` parses the gzipped Lottie JSON and `LottieRenderer` draws a frame with Core Graphics. It follows Telegram's rlottie fork (`TelegramMessenger/rlottie`, what Telegram's apps drew stickers with) rather than the Lottie spec where they differ, so stickers look as they do in Telegram: no skew, merge paths, expressions, effects or masks; rlottie's approximate distances for motion paths and trims; its gradient stops; and its unmasked colour packing, which some emoji rely on. Correctness is measured against rlottie frame by frame (`scripts/lottie-compare.py`) over a corpus of real stickers (`scripts/telegram-client.py sticker-corpus`, kept out of the repository), with the feature census in `scripts/lottie-census.py`.
 - **Video (WebM):** `WebMSticker` reads the Matroska container (VP9 frames, each with its alpha as a second VP9 frame in the block additions) and decodes both with VideoToolbox's VP9 decoder, which iOS 26.2 lets apps register; the alpha frame's luma becomes the alpha. Checked against ffmpeg's libvpx decode (`scripts/webm-compare.sh`).
@@ -504,6 +504,8 @@ Chat is one framework with an adapter per chat network (Apron, Telegram, Instagr
 **Forwarding:** a forward is the source message as displayed, its network and account, the adapter's native reference (if it gives one) and its media as fetchable files. The screen that opened the chat supplies where it goes (a chat picker), opens the target and stages the forward in its composer. The target forwards natively only when it is the same network and account and its adapter forwards; otherwise the framework sends a copy through the target's ordinary sends: an italic "Forwarded" line linking to the original where the source has message links (plain where the target has no formatting; no sender or network) with the text and first file, then each further file, voice messages through the voice send where the file decodes. Incoming forwards carry a forward origin (a name, or none when the network doesn't say) that the bubble shows.
 
 **Command line:** on a Mac the app serves its chats to a local command (`ChatControlServer`, `cli/`). It drives the same chat view model without a screen (connect, page, send through the composer, mark read, follow new messages) and the same Chats list, so it gains every network and behavior the framework has; nothing in it is per network beyond the one destination switch in the composition root.
+
+**Package:** the framework is the `StupidChatKit` library (models, view models, storage, stickers and the chat screen), which knows no network and imports nothing of the app, so other apps can use it. An app supplies its networks as `ChatNetwork` ids, its chat destination type (the Chats list types are generic over it), and at launch, through `ChatKit`, its network icons, where usage events go and which links it opens itself. Reminders, member lists, profiles and the Chats screen stay in the app.
 
 **Rules:** shared code never names a network or casts to one; a network-specific need becomes an optional capability any network could use; every declared capability is implemented (no silent no-ops); adapters are tested against recorded pages without the UI.
 

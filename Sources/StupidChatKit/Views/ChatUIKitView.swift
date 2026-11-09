@@ -1,8 +1,6 @@
 import Combine
 import PhotosUI
 import QuickLook
-import StupidSocialCore
-import StupidSocialPush
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
@@ -731,13 +729,15 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)
             .sink { [weak self] _ in self?.reportVisibleRead() }
             .store(in: &cancellables)
-        reminderDates = viewModel.reminderTarget.map { ChatReminderStore.dueDates(in: $0) } ?? [:]
-        // Every minute too, so "Due in" counts down.
-        NotificationCenter.default.publisher(for: ChatReminderStore.remindersDidChange)
-            .map { _ in () }
-            .merge(with: Timer.publish(every: 60, on: .main, in: .common).autoconnect().map { _ in () })
-            .sink { [weak self] in self?.reloadReminders() }
-            .store(in: &cancellables)
+        if let reminders = viewModel.reminders {
+            reminderDates = reminders.dueDates()
+            // Every minute too, so "Due in" counts down.
+            NotificationCenter.default.publisher(for: reminders.didChange)
+                .map { _ in () }
+                .merge(with: Timer.publish(every: 60, on: .main, in: .common).autoconnect().map { _ in () })
+                .sink { [weak self] in self?.reloadReminders() }
+                .store(in: &cancellables)
+        }
         viewModel.$typingNames.removeDuplicates().sink { [weak self] names in self?.updateTypingRow(names) }.store(in: &cancellables)
         viewModel.$scrollToLatestRequest.dropFirst().sink { [weak self] _ in
             DispatchQueue.main.async {
@@ -914,7 +914,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         // The view's own messages first: it renders from the view model's `messages` before that property is set.
         if let target = messagesById[targetId] ?? viewModel.message(withId: targetId) {
             let text = target.isDeleted ? target.previewText : mentionText(target.previewText)
-            return ChatReplyQuote(name: DebugRedaction.name(target.sender.name), text: text, accentUserId: target.sender.id)
+            return ChatReplyQuote(name: ChatRedaction.name(target.sender.name), text: text, accentUserId: target.sender.id)
         }
         let unavailable = viewModel.isUnavailableReference(targetId)
         return ChatReplyQuote(name: "Reply", text: unavailable ? "Message unavailable" : "Loading…", accentUserId: nil)
@@ -922,7 +922,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
 
     /// Quote and reply-preview text with mentions by name, or redacted.
     private func mentionText(_ text: String) -> String {
-        DebugRedaction.isEnabled ? DebugRedaction.mentions(in: text, pattern: viewModel.mentionPattern) : viewModel.showingMentionNames(text)
+        ChatRedaction.isEnabled ? ChatRedaction.mentions(in: text, pattern: viewModel.mentionPattern) : viewModel.showingMentionNames(text)
     }
 
     /// Mentions show names, so messages and quotes with any `@` render again when the known names change.
@@ -1045,12 +1045,12 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
             replyPreviewCancel.accessibilityLabel = "Cancel Editing"
         } else if let forwarding {
             replyPreview.isHidden = false
-            replyPreviewName.text = "Forward from \(DebugRedaction.name(forwarding.originName ?? forwarding.message.sender.name ?? "You"))"
+            replyPreviewName.text = "Forward from \(ChatRedaction.name(forwarding.originName ?? forwarding.message.sender.name ?? "You"))"
             replyPreviewText.text = forwarding.message.previewText.replacingOccurrences(of: "\n", with: " ")
             replyPreviewCancel.accessibilityLabel = "Cancel Forward"
         } else if let replyingTo {
             replyPreview.isHidden = false
-            replyPreviewName.text = "Reply to \(DebugRedaction.name(replyingTo.sender.name))"
+            replyPreviewName.text = "Reply to \(ChatRedaction.name(replyingTo.sender.name))"
             replyPreviewText.text = mentionText(replyingTo.previewText).replacingOccurrences(of: "\n", with: " ")
             replyPreviewCancel.accessibilityLabel = "Cancel Reply"
         } else {
@@ -1167,7 +1167,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
             underlinesMentions: isOwn,
             mentionPattern: viewModel.mentionPattern,
             mentionNames: viewModel.mentionNames,
-            redactsMentions: DebugRedaction.isEnabled,
+            redactsMentions: ChatRedaction.isEnabled,
             customEmojis: viewModel.customEmojis,
             emojiImageDidLoad: { [weak self] in self?.customEmojiImagesDidLoad() },
             places: ChatPlaces(
@@ -2244,17 +2244,16 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
             }))
         }
         // A message with a reminder offers Mark as Done in place of Remind Me.
-        if let target = viewModel.reminderTarget, reminderDates[id] != nil {
+        if let reminders = viewModel.reminders, reminderDates[id] != nil {
             menu.items.append(.action(ChatMessageMenu.Action(title: "Mark as Done", image: UIImage(systemName: "checkmark.circle")) {
-                ChatReminderStore.markDone(messageId: id, in: target)
-                AppMetrics.chatReminderDone(via: "chat")
+                reminders.markDone(messageId: id)
             }))
-        } else if let target = viewModel.reminderTarget, !message.isDeleted {
-            var delays = ChatReminderStore.Delay.allCases.map { delay in
-                ChatMessageMenu.Action(title: delay.title) { [weak self] in self?.remind(of: message, in: target, at: delay.dueDate(), delay: delay) }
+        } else if let reminders = viewModel.reminders, !message.isDeleted {
+            var delays = ChatReminderDelay.allCases.map { delay in
+                ChatMessageMenu.Action(title: delay.title) { [weak self] in self?.remind(of: message, in: reminders, at: delay.dueDate(), delay: delay) }
             }
             delays.append(ChatMessageMenu.Action(title: "Custom…", image: UIImage(systemName: "calendar")) { [weak self] in
-                self?.presentReminderDatePicker(for: message, in: target)
+                self?.presentReminderDatePicker(for: message, in: reminders)
             })
             menu.items.append(.submenu(title: "Remind Me", image: UIImage(systemName: "alarm"), children: delays))
         }
@@ -2281,7 +2280,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         case nil:
             break
         }
-        guard !NotificationRouter.shared.open(url, contentServer: viewModel.linkBaseURL) else { return }
+        guard !ChatKit.openAppLink(url, viewModel.linkBaseURL) else { return }
         guard ["http", "https", "mailto"].contains(url.scheme?.lowercased()) else { return }
         UIApplication.shared.open(url)
     }
@@ -2540,7 +2539,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
 
     private func mentionRow(for user: ChatUser) -> UIView {
         let avatar = ChatAvatarView()
-        let userName = DebugRedaction.name(user.name)
+        let userName = ChatRedaction.name(user.name)
         avatar.configure(name: userName, color: ChatUserColor.color(for: user.id), url: viewModel.avatarURL(for: user))
         avatar.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
@@ -2552,7 +2551,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         name.font = .preferredFont(forTextStyle: .subheadline)
         name.setContentHuggingPriority(.required, for: .horizontal)
         let userId = UILabel()
-        userId.text = DebugRedaction.isEnabled ? "@Redacted" : "@\(user.id)"
+        userId.text = ChatRedaction.isEnabled ? "@Redacted" : "@\(user.id)"
         userId.font = .preferredFont(forTextStyle: .footnote)
         userId.textColor = .secondaryLabel
         userId.lineBreakMode = .byTruncatingMiddle
@@ -2718,11 +2717,11 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         replyPreview.isHidden = true
     }
 
-    private func presentReminderDatePicker(for message: ChatMessage, in target: ChatReminderTarget) {
+    private func presentReminderDatePicker(for message: ChatMessage, in reminders: any ChatReminders) {
         let picker = UIHostingController(rootView: ChatReminderDatePicker(
             onSet: { [weak self] date in
                 self?.dismiss(animated: true)
-                self?.remind(of: message, in: target, at: date, delay: nil)
+                self?.remind(of: message, in: reminders, at: date, delay: nil)
             },
             onCancel: { [weak self] in self?.dismiss(animated: true) },
         ))
@@ -2730,10 +2729,10 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
         present(picker, animated: true)
     }
 
-    private func remind(of message: ChatMessage, in target: ChatReminderTarget, at dueDate: Date, delay: ChatReminderStore.Delay?) {
+    private func remind(of message: ChatMessage, in reminders: any ChatReminders, at dueDate: Date, delay: ChatReminderDelay?) {
         Task {
             do {
-                _ = try await ChatReminderStore.schedule(message, in: target, dueDate: dueDate, delay: delay)
+                try await reminders.schedule(message, dueDate: dueDate, delay: delay)
             } catch {
                 let alert = UIAlertController(title: "Reminder Not Set", message: error.localizedDescription, preferredStyle: .alert)
                 alert.addAction(UIAlertAction(title: "OK", style: .default))
@@ -2779,9 +2778,9 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
 
     /// Reconfigures messages whose reminder changed, and those with one, whose "Due in" moves on.
     private func reloadReminders() {
-        guard let target = viewModel.reminderTarget else { return }
+        guard let reminders = viewModel.reminders else { return }
         let old = reminderDates
-        reminderDates = ChatReminderStore.dueDates(in: target)
+        reminderDates = reminders.dueDates()
         var snapshot = dataSource.snapshot()
         let items = Set(old.keys).union(reminderDates.keys)
             .map { Item.message(itemKey(for: $0)) }
@@ -2855,7 +2854,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     private func reactionMenu(pressed emoji: String, on id: String) -> UIMenu? {
         guard messagesById[id]?.isNotice == false else { return nil }
         let rows = viewModel.reactors(of: emoji, on: id).map { reactor in
-            let action = UIAction(title: reactor.isYou ? "You" : DebugRedaction.name(reactor.user.name), image: reactorImage(for: reactor.user)) { _ in }
+            let action = UIAction(title: reactor.isYou ? "You" : ChatRedaction.name(reactor.user.name), image: reactorImage(for: reactor.user)) { _ in }
             action.subtitle = reactor.date.map(Self.reactionTimeFormatter.string(from:))
             return action
         }
@@ -2867,13 +2866,13 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     private func prefetchReactorAvatars(on message: ChatMessage) {
         guard let totals = reactionTotals[message.id] else { return }
         let urls = totals.flatMap { viewModel.reactors(of: $0.emoji, on: message.id) }.compactMap { viewModel.avatarURL(for: $0.user) }
-        for url in urls where StoryImageCache.shared.image(for: url) == nil && avatarPrefetches.insert(url).inserted {
+        for url in urls where ImageCache.shared.image(for: url) == nil && avatarPrefetches.insert(url).inserted {
             Task {
                 guard let (data, _) = try? await URLSession.shared.data(from: url), let image = UIImage(data: data) else {
                     avatarPrefetches.remove(url)
                     return
                 }
-                StoryImageCache.shared.setImage(image, for: url)
+                ImageCache.shared.setImage(image, for: url)
             }
         }
     }
@@ -2881,7 +2880,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
     /// The reactor's avatar when it is already loaded, otherwise initials on their color, like the chat's avatars.
     private func reactorImage(for user: ChatUser) -> UIImage {
         let size = CGSize(width: 28, height: 28)
-        let photo = viewModel.avatarURL(for: user).flatMap { StoryImageCache.shared.image(for: $0) }
+        let photo = viewModel.avatarURL(for: user).flatMap { ImageCache.shared.image(for: $0) }
         let image = UIGraphicsImageRenderer(size: size).image { _ in
             let rect = CGRect(origin: .zero, size: size)
             UIBezierPath(ovalIn: rect).addClip()
@@ -2893,7 +2892,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UITe
             }
             ChatUserColor.color(for: user.id).setFill()
             UIRectFill(rect)
-            let initials = DebugRedaction.name(user.name).split(separator: " ").prefix(2).compactMap(\.first).map(String.init).joined().uppercased() as NSString
+            let initials = ChatRedaction.name(user.name).split(separator: " ").prefix(2).compactMap(\.first).map(String.init).joined().uppercased() as NSString
             let attributes: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: 11, weight: .semibold), .foregroundColor: UIColor.white]
             let textSize = initials.size(withAttributes: attributes)
             initials.draw(at: CGPoint(x: (size.width - textSize.width) / 2, y: (size.height - textSize.height) / 2), withAttributes: attributes)

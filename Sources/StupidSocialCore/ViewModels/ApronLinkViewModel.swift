@@ -52,7 +52,7 @@ public final class ApronLinkViewModel: ObservableObject {
         service.server(for: link.serverURL)
     }
 
-    public var destination: ChatSummary.Destination? {
+    public var destination: ChatDestination? {
         link.room.map { .apron(serverURL: link.serverURL, roomId: $0) }
     }
 

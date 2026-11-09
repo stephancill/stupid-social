@@ -275,7 +275,7 @@ private enum ChatImageSaveError: Error {
 
 import SwiftUI
 
-extension View {
+public extension View {
     /// Opens a profile photo full screen when tapped: `fullURL` when there is a larger one, showing the small
     /// photo while it loads. Without a photo, or with names redacted, the avatar isn't tappable.
     func opensFullScreenPhoto(_ url: URL?, fullURL: URL? = nil) -> some View {
@@ -284,7 +284,7 @@ extension View {
 }
 
 private struct FullScreenPhotoModifier: ViewModifier {
-    @AppStorage("redactionEnabled") private var redactionEnabled = false
+    @AppStorage(ChatRedaction.defaultsKey) private var redactionEnabled = false
     let url: URL?
     let fullURL: URL?
 
@@ -308,7 +308,7 @@ private struct FullScreenPhotoModifier: ViewModifier {
         while let presented = presenter.presentedViewController {
             presenter = presented
         }
-        let placeholder = url.flatMap { StoryImageCache.shared.image(for: $0) }
+        let placeholder = url.flatMap { ImageCache.shared.image(for: $0) }
         presenter.present(ChatImageViewerController(url: target, image: placeholder, alt: "Profile photo", imageIsPreview: true), animated: true)
     }
 }

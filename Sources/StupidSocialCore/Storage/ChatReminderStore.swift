@@ -1,11 +1,12 @@
 import Foundation
+import StupidChatKit
 import StupidSocialPush
 import UserNotifications
 
 /// A chat message the user asked to be reminded of, from its long-press menu.
 public struct ChatReminder: Identifiable, Hashable, Codable, Sendable {
     public let id: String
-    public let destination: ChatSummary.Destination
+    public let destination: ChatDestination
     public let accountId: String
     public let network: SocialNetwork
     public let chatTitle: String
@@ -68,16 +69,48 @@ public struct ChatReminder: Identifiable, Hashable, Codable, Sendable {
 
 /// Where a chat can be reopened from a reminder: set on a chat's view model when it opens from the Chats list.
 public struct ChatReminderTarget: Sendable {
-    public let destination: ChatSummary.Destination
+    public let destination: ChatDestination
     public let accountId: String
     public let network: SocialNetwork
     public let chatTitle: String
 
-    public init(destination: ChatSummary.Destination, accountId: String, network: SocialNetwork, chatTitle: String) {
+    public init(destination: ChatDestination, accountId: String, network: SocialNetwork, chatTitle: String) {
         self.destination = destination
         self.accountId = accountId
         self.network = network
         self.chatTitle = chatTitle
+    }
+}
+
+extension ChatReminderDelay {
+    var metricName: String {
+        switch self {
+        case .fiveMinutes: "5m"
+        case .thirtyMinutes: "30m"
+        case .oneHour: "1h"
+        case .threeHours: "3h"
+        case .tomorrow: "tomorrow"
+        }
+    }
+}
+
+/// A chat's reminders, as the chat's long-press menu offers them.
+extension ChatReminderTarget: ChatReminders {
+    public var didChange: Notification.Name {
+        ChatReminderStore.remindersDidChange
+    }
+
+    public func dueDates() -> [String: Date] {
+        ChatReminderStore.dueDates(in: self)
+    }
+
+    public func markDone(messageId: String) {
+        ChatReminderStore.markDone(messageId: messageId, in: self)
+        AppMetrics.chatReminderDone(via: "chat")
+    }
+
+    public func schedule(_ message: ChatMessage, dueDate: Date, delay: ChatReminderDelay?) async throws {
+        _ = try await ChatReminderStore.schedule(message, in: self, dueDate: dueDate, delay: delay)
     }
 }
 
@@ -90,42 +123,6 @@ public struct ChatReminderTarget: Sendable {
 /// reminder back.
 @MainActor
 public enum ChatReminderStore {
-    public enum Delay: CaseIterable, Sendable {
-        case fiveMinutes, thirtyMinutes, oneHour, threeHours, tomorrow
-
-        var metricName: String {
-            switch self {
-            case .fiveMinutes: "5m"
-            case .thirtyMinutes: "30m"
-            case .oneHour: "1h"
-            case .threeHours: "3h"
-            case .tomorrow: "tomorrow"
-            }
-        }
-
-        public var title: String {
-            switch self {
-            case .fiveMinutes: "In 5 Minutes"
-            case .thirtyMinutes: "In 30 Minutes"
-            case .oneHour: "In 1 Hour"
-            case .threeHours: "In 3 Hours"
-            case .tomorrow: "Tomorrow"
-            }
-        }
-
-        /// Tomorrow is 9 AM local time.
-        public func dueDate(from now: Date = Date(), calendar: Calendar = .current) -> Date {
-            switch self {
-            case .fiveMinutes: now.addingTimeInterval(5 * 60)
-            case .thirtyMinutes: now.addingTimeInterval(30 * 60)
-            case .oneHour: now.addingTimeInterval(60 * 60)
-            case .threeHours: now.addingTimeInterval(3 * 60 * 60)
-            case .tomorrow:
-                calendar.date(bySettingHour: 9, minute: 0, second: 0, of: calendar.date(byAdding: .day, value: 1, to: now) ?? now) ?? now
-            }
-        }
-    }
-
     /// Posted when reminders are added or removed, so chats and the feed show the change.
     public static let remindersDidChange = Notification.Name("tech.stupid.StupidSocial.chatRemindersDidChange")
     /// Posted when a reminder's notification arrives with the app open, so the feed shows it.
@@ -197,7 +194,7 @@ public enum ChatReminderStore {
         _ message: ChatMessage,
         in target: ChatReminderTarget,
         dueDate: Date,
-        delay: Delay?,
+        delay: ChatReminderDelay?,
         defaults: UserDefaults = .standard,
     ) async throws -> ChatReminder {
         var reminder = ChatReminder(

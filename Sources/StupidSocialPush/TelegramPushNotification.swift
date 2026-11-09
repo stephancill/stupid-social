@@ -1,4 +1,5 @@
 import Foundation
+import StupidChatKit
 
 /// What a Telegram push (core.telegram.org/api/push-updates) shows as a Communication Notification: the sender,
 /// with their avatar when the app has saved it, and the message. Worked out apart from UserNotifications so it can

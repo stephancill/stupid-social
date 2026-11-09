@@ -4,7 +4,7 @@ import Foundation
 /// push channel the app can't use), sends text, and marks the chat seen as messages are read.
 @MainActor
 public final class SpotifyChatAdapter: ChatAdapter, ChatAudioPreviewing {
-    public let network = SocialNetwork.spotify
+    public let network = ChatNetwork.spotify
     public let canReply = false
     public let acceptsAttachments = false
     public let pollInterval: Duration? = .seconds(10)

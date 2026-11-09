@@ -7,7 +7,7 @@ import Foundation
 /// guild's with Nitro).
 @MainActor
 public final class DiscordChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditing, ChatDeleting, ChatReactionSending, ChatLiveUpdating, ChatReferenceResolving, ChatTyping, ChatMentioning, ChatCustomEmojis, ChatStickerSending, ChatForwarding, ChatVoiceSending, ChatAudioPreviewing, ChatMessageLinking {
-    public let network = SocialNetwork.discord
+    public let network = ChatNetwork.discord
     public let canReply = true
     /// Read again once connected: a guild channel may not allow files.
     public private(set) var acceptsAttachments = true

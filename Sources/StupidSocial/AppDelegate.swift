@@ -97,7 +97,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             Task { @MainActor in completion() }
             return
         }
-        let destination = ChatSummary.Destination.apron(serverURL: server, roomId: room)
+        let destination = ChatDestination.apron(serverURL: server, roomId: room)
         let action = response.actionIdentifier
         let text = (response as? UNTextInputNotificationResponse)?.userText.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         // DMs get a plain message; in a room the reply quotes the message, so it is clear what it answers.
@@ -153,7 +153,7 @@ final class NotificationRouter: ObservableObject {
 
     static let shared = NotificationRouter()
 
-    @Published var pendingChat: ChatSummary.Destination?
+    @Published var pendingChat: ChatDestination?
     /// Read with `pendingChat` when it opens.
     var pendingFocus: ChatFocus?
     @Published var linkRequest: LinkRequest?
@@ -253,7 +253,7 @@ final class NotificationRouter: ObservableObject {
 
     /// Posts a reply typed into a notification. On success the room's notifications are cleared; on failure a
     /// notification says so, since there is no screen to show it on.
-    func sendReply(_ text: String, to destination: ChatSummary.Destination, replyTo: String?, title: String) async {
+    func sendReply(_ text: String, to destination: ChatDestination, replyTo: String?, title: String) async {
         guard case let .apron(serverURL, roomId) = destination else { return }
         let service = apronService ?? ApronService(accountStore: AccountStore(), keychainStore: KeychainCredentialStore())
         do {

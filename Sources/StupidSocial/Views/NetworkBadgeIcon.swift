@@ -8,6 +8,16 @@ struct NetworkBadgeIcon: View {
     /// Draws the badge's shape in one color, for a glyph badge on a colored background.
     var tint: Color?
 
+    init(network: SocialNetwork, size: CGFloat = 16, tint: Color? = nil) {
+        self.network = network
+        self.size = size
+        self.tint = tint
+    }
+
+    init(network: ChatNetwork, size: CGFloat = 16) {
+        self.init(network: network.socialNetwork, size: size)
+    }
+
     var body: some View {
         Group {
             if let image = networkBadgeImage(named: network.badgeAssetName) {

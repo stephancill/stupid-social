@@ -1,7 +1,7 @@
 import Foundation
 
 extension LinkedInClient: ChatListProvider {
-    public var network: SocialNetwork {
+    public var chatNetwork: ChatNetwork {
         .linkedin
     }
 

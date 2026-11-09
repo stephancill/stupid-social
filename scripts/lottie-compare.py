@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare the app's Lottie renderer (Sources/StupidSocialCore/Stickers) with rlottie, Telegram's renderer.
+"""Compare the app's Lottie renderer (Sources/StupidChatKit/Stickers) with rlottie, Telegram's renderer.
 
 Builds both renderers as Mac command-line tools (Telegram's rlottie fork from third-party/rlottie-telegram, cloned and built with cmake on
 first use), renders evenly spaced frames of each sticker with both, and measures how many pixels differ, as a share
@@ -48,7 +48,7 @@ def build_tools() -> tuple[pathlib.Path, pathlib.Path]:
     if not reference.exists() or reference.stat().st_mtime < source.stat().st_mtime:
         run(["clang++", "-std=c++17", "-O2", "-I", str(RLOTTIE / "inc"), str(source), str(RLOTTIE / "build" / "librlottie.a"), "-o", str(reference)])
     ours = TOOLS / "render"
-    sources = sorted((ROOT / "Sources" / "StupidSocialCore" / "Stickers").glob("*.swift")) + [ROOT / "scripts" / "lottie" / "render.swift"]
+    sources = sorted((ROOT / "Sources" / "StupidChatKit" / "Stickers").glob("*.swift")) + [ROOT / "scripts" / "lottie" / "render.swift"]
     if not ours.exists() or ours.stat().st_mtime < max(s.stat().st_mtime for s in sources):
         # render.swift is top-level code, so it's compiled as main.swift.
         main = TOOLS / "main.swift"

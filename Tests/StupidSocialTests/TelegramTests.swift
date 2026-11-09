@@ -732,4 +732,24 @@ final class TelegramTests: XCTestCase {
         XCTAssertEqual(key.authKey.count, 256)
         XCTAssertLessThan(abs(key.timeOffset), 120)
     }
+
+    @MainActor
+    func testANotificationOpensItsListedChatWithoutTheAccessHash() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "TelegramTests-\(UUID().uuidString)"))
+        let keychain = KeychainCredentialStore(service: "TelegramTests-\(UUID().uuidString)", fallbackStore: defaults, prefersSynchronizable: false, allowsInsecureFallback: true)
+        let caches = FileManager.default.temporaryDirectory.appending(path: "TelegramTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: caches, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: caches) }
+        let telegram = TelegramClient(keychain: keychain)
+        let list = ChatListViewModel(sources: {
+            [ChatListSource(provider: telegram, accountId: "telegram", label: "Telegram")]
+        }, caches: caches)
+        let listed = ChatSummary(
+            id: "t", network: .telegram, title: "t", avatarURL: nil, preview: nil, timestamp: Date(), unreadCount: 0,
+            destination: .telegram(peer: TelegramPeer(kind: .user, id: 7, accessHash: 42)),
+        )
+        list.updateChats([listed], accountId: "telegram")
+        XCTAssertEqual(list.chat(for: .telegram(peer: TelegramPeer(kind: .user, id: 7, accessHash: 0)))?.id, "telegram|t")
+        XCTAssertNil(list.chat(for: .telegram(peer: TelegramPeer(kind: .chat, id: 7, accessHash: 0))))
+    }
 }

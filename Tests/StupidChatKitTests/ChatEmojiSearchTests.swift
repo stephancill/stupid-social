@@ -1,5 +1,5 @@
 import Foundation
-@testable import StupidSocialCore
+@testable import StupidChatKit
 import XCTest
 
 /// Emoji offered while typing a `:word`: Unicode emoji by name, after the network's custom emoji.

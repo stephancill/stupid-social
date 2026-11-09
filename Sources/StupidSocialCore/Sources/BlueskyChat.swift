@@ -229,7 +229,7 @@ extension BlueskyClient {
 }
 
 extension BlueskyClient: ChatListProvider {
-    public var network: SocialNetwork {
+    public var chatNetwork: ChatNetwork {
         .bluesky
     }
 

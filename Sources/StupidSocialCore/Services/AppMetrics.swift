@@ -1,4 +1,5 @@
 import Foundation
+import StupidChatKit
 import StupidMetrics
 
 /// Every anonymous usage event and error the app reports to metrics.stupidtech.net, in one place.
@@ -46,59 +47,49 @@ public enum AppMetrics {
 
     // MARK: Chats
 
-    public static func chatOpened(network: SocialNetwork) {
-        StupidMetrics.track("chat_open", properties: ["network": network.rawValue])
-    }
-
-    /// Search was opened in a chat (long-pressing its title).
-    static func chatSearched(network: SocialNetwork) {
-        StupidMetrics.track("chat_search", properties: ["network": network.rawValue])
-    }
-
-    /// `native`: the network's own forward; otherwise a copy of the content, possibly from another network.
-    static func messageForwarded(network: SocialNetwork, from source: SocialNetwork, isNative: Bool, error: (any Error)?) {
-        StupidMetrics.track("message_forward", properties: [
-            "network": network.rawValue,
-            "from": source.rawValue,
-            "native": isNative ? "yes" : "no",
-            "outcome": error == nil ? "ok" : "error",
-        ])
-        if let error {
-            StupidMetrics.error("message_forward_failed", error: error, properties: ["network": network.rawValue])
+    /// What the user does in a chat, as the chat framework reports it (`ChatKit.onEvent`).
+    public static func chat(_ event: ChatEvent) {
+        switch event {
+        case let .opened(network):
+            StupidMetrics.track("chat_open", properties: ["network": network.rawValue])
+        case let .searched(network):
+            // Search was opened in a chat (long-pressing its title).
+            StupidMetrics.track("chat_search", properties: ["network": network.rawValue])
+        case let .messageForwarded(network, source, isNative, error):
+            // `native`: the network's own forward; otherwise a copy of the content, possibly from another network.
+            StupidMetrics.track("message_forward", properties: [
+                "network": network.rawValue,
+                "from": source.rawValue,
+                "native": isNative ? "yes" : "no",
+                "outcome": error == nil ? "ok" : "error",
+            ])
+            if let error {
+                StupidMetrics.error("message_forward_failed", error: error, properties: ["network": network.rawValue])
+            }
+        case let .messageSent(network, hasAttachment, isVoice, isReply, error):
+            StupidMetrics.track("message_send", properties: [
+                "network": network.rawValue,
+                "attachment": hasAttachment ? "yes" : "no",
+                "voice": isVoice ? "yes" : "no",
+                "reply": isReply ? "yes" : "no",
+                "outcome": error == nil ? "ok" : "error",
+            ])
+            if let error {
+                StupidMetrics.error("message_send_failed", error: error, properties: ["network": network.rawValue])
+            }
+        case let .messageEdited(network, error):
+            outcome("message_edit", network: network, error: error)
+        case let .messageDeleted(network, error):
+            outcome("message_delete", network: network, error: error)
+        case let .messageButtonPressed(network, error):
+            outcome("message_button_press", network: network, error: error)
         }
     }
 
-    static func messageSent(network: SocialNetwork, hasAttachment: Bool, isVoice: Bool, isReply: Bool, error: (any Error)?) {
-        StupidMetrics.track("message_send", properties: [
-            "network": network.rawValue,
-            "attachment": hasAttachment ? "yes" : "no",
-            "voice": isVoice ? "yes" : "no",
-            "reply": isReply ? "yes" : "no",
-            "outcome": error == nil ? "ok" : "error",
-        ])
+    private static func outcome(_ name: String, network: ChatNetwork, error: (any Error)?) {
+        StupidMetrics.track(name, properties: ["network": network.rawValue, "outcome": error == nil ? "ok" : "error"])
         if let error {
-            StupidMetrics.error("message_send_failed", error: error, properties: ["network": network.rawValue])
-        }
-    }
-
-    static func messageEdited(network: SocialNetwork, error: (any Error)?) {
-        StupidMetrics.track("message_edit", properties: ["network": network.rawValue, "outcome": error == nil ? "ok" : "error"])
-        if let error {
-            StupidMetrics.error("message_edit_failed", error: error, properties: ["network": network.rawValue])
-        }
-    }
-
-    static func messageDeleted(network: SocialNetwork, error: (any Error)?) {
-        StupidMetrics.track("message_delete", properties: ["network": network.rawValue, "outcome": error == nil ? "ok" : "error"])
-        if let error {
-            StupidMetrics.error("message_delete_failed", error: error, properties: ["network": network.rawValue])
-        }
-    }
-
-    static func messageButtonPressed(network: SocialNetwork, error: (any Error)?) {
-        StupidMetrics.track("message_button_press", properties: ["network": network.rawValue, "outcome": error == nil ? "ok" : "error"])
-        if let error {
-            StupidMetrics.error("message_button_press_failed", error: error, properties: ["network": network.rawValue])
+            StupidMetrics.error("\(name)_failed", error: error, properties: ["network": network.rawValue])
         }
     }
 

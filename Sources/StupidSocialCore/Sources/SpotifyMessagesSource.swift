@@ -5,6 +5,7 @@ import Foundation
 public final class SpotifyMessagesSource: ChatListProvider {
     private static let chatListLimit = 50
     public let network: SocialNetwork = .spotify
+    public let chatNetwork: ChatNetwork = .spotify
 
     private let client: SpotifyClient
     private let metadataStore: AccountMetadataStore

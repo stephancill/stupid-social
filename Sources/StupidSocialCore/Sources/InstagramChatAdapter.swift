@@ -5,7 +5,7 @@ import Foundation
 /// The user's messages show as seen once someone else's read receipt passes them.
 @MainActor
 public final class InstagramChatAdapter: ChatAdapter, ChatReactionSending, ChatReadReceipts, ChatForwarding, ChatVoiceSending, ChatAudioPreviewing {
-    public let network = SocialNetwork.instagram
+    public let network = ChatNetwork.instagram
     public let canReply = true
     public let acceptsAttachments = false
     public let pollInterval: Duration? = .seconds(20)

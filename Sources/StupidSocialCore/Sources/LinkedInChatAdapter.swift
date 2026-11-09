@@ -6,7 +6,7 @@ import Foundation
 /// conversation, so it is marked read only once the newest message from someone else has been seen.
 @MainActor
 public final class LinkedInChatAdapter: ChatAdapter, ChatReactionSending, ChatEditing, ChatDeleting, ChatTyping, ChatReferenceResolving, ChatLiveUpdating {
-    public let network = SocialNetwork.linkedin
+    public let network = ChatNetwork.linkedin
     public let canReply = true
     public let acceptsAttachments = false
     public var onChange: (() -> Void)?

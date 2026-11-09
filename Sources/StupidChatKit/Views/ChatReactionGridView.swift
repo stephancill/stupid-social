@@ -1,4 +1,3 @@
-import StupidSocialCore
 import UIKit
 
 /// The grid a message's reaction row expands into, as in Telegram: a search field over the chat's custom emoji and
