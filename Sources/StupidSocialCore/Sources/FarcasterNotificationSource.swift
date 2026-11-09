@@ -1,7 +1,10 @@
 import Foundation
 
-public struct FarcasterNotificationSource: NotificationFetching, ProfileFetching, NotificationTargetDetailFetching {
+public struct FarcasterNotificationSource: NotificationFetching, ProfileFetching, NotificationTargetDetailFetching, PostThreadLoading {
     public let network: SocialNetwork = .farcaster
+
+    /// How many casts above a reply a thread loads; each is its own request.
+    static let maxThreadDepth = 20
 
     private let client: FarcasterClient
     private let metadataStore: AccountMetadataStore
@@ -17,8 +20,7 @@ public struct FarcasterNotificationSource: NotificationFetching, ProfileFetching
         }
 
         let response = try await client.notifications(fid: account.fid)
-        let items = filteredItems(from: response.notifications, account: account)
-        return groupItems(items, accountId: String(account.fid))
+        return Self.items(from: response.notifications, account: account)
     }
 
     public func fetchProfile(id: String) async throws -> NetworkProfile {
@@ -54,39 +56,75 @@ public struct FarcasterNotificationSource: NotificationFetching, ProfileFetching
         let authorFid = target.author?.id ?? metadataStore.farcasterAccount.map { String($0.fid) } ?? ""
         let likeCount = try await client.reactionCount(castHash: target.id, authorFid: authorFid)
         let cast = try? await client.cast(hash: target.id, fid: authorFid)
-        let imageURLs = cast?.embeds?.compactMap { $0.url.flatMap(URL.init) } ?? []
 
         return NotificationTargetDetails(
-            author: cast?.author.map { author in
-                NotificationActor(
-                    id: String(author.fid),
-                    network: .farcaster,
-                    username: author.username,
-                    displayName: author.displayName,
-                    avatarURL: author.pfpUrl,
-                )
-            },
+            author: cast?.author.map { Self.actor(from: $0) },
             text: cast?.displayText ?? cast?.text,
-            imageURLs: imageURLs,
+            imageURLs: cast.map(Self.imageURLs(in:)) ?? [],
             postedAt: cast?.timestamp,
             likeCount: likeCount,
         )
     }
 
-    private func normalize(
-        _ notification: FarcasterNotificationResponse,
-        accountId: String,
-    ) -> NotificationItem {
-        let timestamp = notification.notificationDate
-        let type = normalizeType(notification.type, notification: notification, accountFid: accountId)
-        let actors = notificationActors(notification, timestamp: timestamp)
-        let sourceId = stableSourceId(notification, type: notification.type)
-        let text = notificationText(notification, type: type, actors: actors)
+    /// Hypersnap's `/cast/conversation` returns no casts above the one asked for (observed 2026-11-09), so this
+    /// walks `parent_hash` up one cast at a time (`scripts/farcaster-client.py thread`).
+    public func fetchThread(postId: String) async throws -> PostThread {
+        let focal = try await client.cast(hash: postId, fid: nil)
+        var ancestors: [FarcasterCastResponse] = []
+        var parentHash = focal.parentHash
+        while let hash = parentHash, ancestors.count < Self.maxThreadDepth {
+            let parent = try await client.cast(hash: hash, fid: nil)
+            ancestors.append(parent)
+            parentHash = parent.parentHash
+        }
+        return PostThread(
+            ancestors: ancestors.reversed().map { PostThread.Post(target: Self.target(from: $0), engagement: nil) },
+            focal: PostThread.Post(target: Self.target(from: focal), engagement: nil),
+        )
+    }
 
-        let imageURLs = notification.cast?
-            .embeds?
-            .compactMap { $0.url.flatMap(URL.init) } ?? []
-        let imageURL = imageURLs.first
+    // ── Normalizing ──
+
+    /// What a Hypersnap notification's `type` means, with `include_quotes_and_deep_replies` set.
+    enum Kind: Equatable {
+        case like
+        case recast
+        case quote
+        /// A cast replying to the user's cast, deeper in their thread, or mentioning them (Hypersnap's `reply`).
+        case cast
+        case follow
+        case other
+    }
+
+    static func kind(of type: String) -> Kind {
+        switch type {
+        case "likes", "reaction": .like
+        case "recasts": .recast
+        case "quote": .quote
+        case "reply", "mention", "cast-mention", "cast-reply": .cast
+        case "follows", "follow": .follow
+        default: .other
+        }
+    }
+
+    static func items(from notifications: [FarcasterNotificationResponse], account: FarcasterAccountMetadata) -> [NotificationItem] {
+        let accountId = String(account.fid)
+        let normalized = notifications
+            .map { (kind: kind(of: $0.type), notification: $0) }
+            .map { (kind: $0.kind, item: normalize($0.notification, kind: $0.kind, accountFid: account.fid)) }
+            .filter { entry in
+                guard let category = FarcasterNotificationCategory.category(for: entry.item.type) else { return false }
+                return account.enabledCategories.contains(category)
+            }
+        return groupItems(normalized, accountId: accountId)
+    }
+
+    private static func normalize(_ notification: FarcasterNotificationResponse, kind: Kind, accountFid: UInt64) -> NotificationItem {
+        let accountId = String(accountFid)
+        let timestamp = notification.notificationDate
+        let type = notificationType(kind, cast: notification.cast, accountFid: accountFid)
+        let actors = notificationActors(notification, timestamp: timestamp)
+        let sourceId = stableSourceId(notification, kind: kind)
 
         return NotificationItem(
             id: "farcaster:\(accountId):\(sourceId)",
@@ -95,33 +133,53 @@ public struct FarcasterNotificationSource: NotificationFetching, ProfileFetching
             sourceId: sourceId,
             type: type,
             timestamp: timestamp,
-            text: text,
+            text: notificationText(kind: kind, type: type, cast: notification.cast, accountFid: accountFid, actors: actors),
             actors: actors,
-            target: notification.cast.map { cast in
-                NotificationTarget(
-                    id: cast.hash,
-                    text: cast.displayText ?? cast.text,
-                    url: nil,
-                    imageURL: imageURL,
-                    imageURLs: imageURLs,
-                    author: cast.author.map { author in
-                        NotificationActor(
-                            id: String(author.fid),
-                            network: .farcaster,
-                            username: author.username,
-                            displayName: author.displayName,
-                            avatarURL: author.pfpUrl,
-                        )
-                    },
-                    postedAt: cast.timestamp,
-                    likeCount: cast.reactions?.likesCount,
-                )
-            },
+            target: notification.cast.map(target(from:)),
             parentTarget: parentTarget(from: notification.cast),
         )
     }
 
-    private func parentTarget(from cast: FarcasterCastResponse?) -> NotificationTarget? {
+    /// Quotes count as replies and recasts as reactions, as X's notifications do.
+    private static func notificationType(_ kind: Kind, cast: FarcasterCastResponse?, accountFid: UInt64) -> NotificationType {
+        switch kind {
+        case .like, .recast: return .reaction
+        case .quote: return .reply
+        case .follow: return .follow
+        case .other: return .unknown
+        case .cast:
+            // Hypersnap calls every cast `reply`: a reply to the user's cast, one deeper in their thread, or a
+            // cast that mentions them. A reply deeper down that mentions them is a mention.
+            guard let cast, cast.parentHash != nil else { return .mention }
+            if cast.parentAuthor?.fid == accountFid { return .reply }
+            return mentions(cast, fid: accountFid) ? .mention : .reply
+        }
+    }
+
+    private static func mentions(_ cast: FarcasterCastResponse, fid: UInt64) -> Bool {
+        cast.mentionedProfiles?.contains { $0.fid == fid } == true
+    }
+
+    static func target(from cast: FarcasterCastResponse) -> NotificationTarget {
+        let imageURLs = imageURLs(in: cast)
+        return NotificationTarget(
+            id: cast.hash,
+            text: cast.displayText ?? cast.text,
+            url: nil,
+            imageURL: imageURLs.first,
+            imageURLs: imageURLs,
+            author: cast.author.map { actor(from: $0) },
+            postedAt: cast.timestamp,
+            likeCount: cast.reactions?.likesCount,
+        )
+    }
+
+    /// URL embeds; embedded casts (quotes) have no URL.
+    private static func imageURLs(in cast: FarcasterCastResponse) -> [URL] {
+        cast.embeds?.compactMap { $0.url.flatMap(URL.init) } ?? []
+    }
+
+    private static func parentTarget(from cast: FarcasterCastResponse?) -> NotificationTarget? {
         guard let cast, let parentHash = cast.parentHash else { return nil }
         let author = cast.parentAuthor?.fid.map { fid in
             NotificationActor(
@@ -140,21 +198,11 @@ public struct FarcasterNotificationSource: NotificationFetching, ProfileFetching
         )
     }
 
-    private func filteredItems(
-        from notifications: [FarcasterNotificationResponse],
-        account: FarcasterAccountMetadata,
-    ) -> [NotificationItem] {
-        notifications
-            .map { normalize($0, accountId: String(account.fid)) }
-            .filter { item in
-                guard let category = FarcasterNotificationCategory.category(for: item.type) else { return false }
-                return account.enabledCategories.contains(category)
-            }
-    }
-
-    private func stableSourceId(_ notification: FarcasterNotificationResponse, type: String) -> String {
+    /// Likes and recasts of one cast are separate groups, so recasts get their own id.
+    private static func stableSourceId(_ notification: FarcasterNotificationResponse, kind: Kind) -> String {
+        let type = notification.type
         if let hash = notification.cast?.hash {
-            return hash
+            return kind == .recast ? "\(type):\(hash)" : hash
         }
         if let user = notification.user {
             return "\(type):\(user.fid)"
@@ -168,24 +216,7 @@ public struct FarcasterNotificationSource: NotificationFetching, ProfileFetching
         return "\(type):fallback"
     }
 
-    private func normalizeType(_ type: String, notification: FarcasterNotificationResponse, accountFid: String) -> NotificationType {
-        switch type {
-        case "reply":
-            // Hypersnap returns "reply" for all CastAdd messages.
-            // Distinguish: replies have parent_author.fid == accountFid, mentions do not.
-            if let parentFid = notification.cast?.parentAuthor?.fid, String(parentFid) == accountFid {
-                return .reply
-            }
-            return .mention
-        case "mention", "cast-mention": return .mention
-        case "cast-reply": return .reply
-        case "reaction", "likes": return .reaction
-        case "follow", "follows": return .follow
-        default: return .unknown
-        }
-    }
-
-    private func notificationActors(_ notification: FarcasterNotificationResponse, timestamp: Date) -> [NotificationActor] {
+    private static func notificationActors(_ notification: FarcasterNotificationResponse, timestamp: Date) -> [NotificationActor] {
         if let user = notification.user {
             return [actor(from: user, timestamp: timestamp)]
         }
@@ -205,7 +236,7 @@ public struct FarcasterNotificationSource: NotificationFetching, ProfileFetching
         return []
     }
 
-    private func actor(from user: FarcasterUserResponse, timestamp: Date) -> NotificationActor {
+    private static func actor(from user: FarcasterUserResponse, timestamp: Date? = nil) -> NotificationActor {
         NotificationActor(
             id: String(user.fid),
             network: .farcaster,
@@ -216,7 +247,7 @@ public struct FarcasterNotificationSource: NotificationFetching, ProfileFetching
         )
     }
 
-    private func actor(from user: FarcasterReactionResponse, timestamp: Date) -> NotificationActor? {
+    private static func actor(from user: FarcasterReactionResponse, timestamp: Date) -> NotificationActor? {
         guard let fid = user.fid else { return nil }
         return NotificationActor(
             id: String(fid),
@@ -228,7 +259,7 @@ public struct FarcasterNotificationSource: NotificationFetching, ProfileFetching
         )
     }
 
-    private func actor(from user: FarcasterFollowResponse, timestamp: Date) -> NotificationActor? {
+    private static func actor(from user: FarcasterFollowResponse, timestamp: Date) -> NotificationActor? {
         guard let fid = user.fid else { return nil }
         return NotificationActor(
             id: String(fid),
@@ -240,35 +271,40 @@ public struct FarcasterNotificationSource: NotificationFetching, ProfileFetching
         )
     }
 
-    private func notificationText(
-        _ notification: FarcasterNotificationResponse,
+    private static func notificationText(
+        kind: Kind,
         type: NotificationType,
+        cast: FarcasterCastResponse?,
+        accountFid: UInt64,
         actors: [NotificationActor],
     ) -> String {
         let actorName = actors.first?.username.map { "@\($0)" } ?? "Someone"
 
-        return switch type {
-        case .mention: "\(actorName) mentioned you"
-        case .reply: "\(actorName) replied to you"
-        case .reaction: "\(actorName) reacted to your cast"
-        case .follow: "\(actorName) followed you"
-        case .post: "New Farcaster post"
-        case .message: "New Farcaster notification"
-        case .music: "New Farcaster notification"
-        case .unknown: notification.cast?.text ?? "New Farcaster notification"
+        switch kind {
+        case .like: return "\(actorName) reacted to your cast"
+        case .recast: return "\(actorName) recast your cast"
+        case .quote: return "\(actorName) quoted your cast"
+        case .follow: return "\(actorName) followed you"
+        case .other: return cast?.text ?? "New Farcaster notification"
+        case .cast:
+            if type == .mention { return "\(actorName) mentioned you" }
+            if cast?.parentAuthor?.fid == accountFid { return "\(actorName) replied to you" }
+            return "\(actorName) replied in your thread"
         }
     }
 
     // ── Grouping ──
 
-    private func groupItems(_ items: [NotificationItem], accountId: String) -> [NotificationItem] {
+    private static func groupItems(_ entries: [(kind: Kind, item: NotificationItem)], accountId _: String) -> [NotificationItem] {
         var reactionGroups: [String: [NotificationItem]] = [:]
+        var reactionKinds: [String: Kind] = [:]
         var followItems: [NotificationItem] = []
         var ungrouped: [NotificationItem] = []
 
-        for item in items {
-            if item.type == .reaction, let targetId = item.target?.id {
-                reactionGroups[targetId, default: []].append(item)
+        for (kind, item) in entries {
+            if item.type == .reaction, item.target != nil, let sourceId = item.sourceId {
+                reactionGroups[sourceId, default: []].append(item)
+                reactionKinds[sourceId] = kind
             } else if item.type == .follow {
                 followItems.append(item)
             } else {
@@ -276,18 +312,18 @@ public struct FarcasterNotificationSource: NotificationFetching, ProfileFetching
             }
         }
 
-        let groupedReactions: [NotificationItem] = reactionGroups.compactMap { _, group in
-            mergeGroup(group, type: .reaction, accountId: accountId)
+        let groupedReactions: [NotificationItem] = reactionGroups.compactMap { sourceId, group in
+            mergeGroup(group, kind: reactionKinds[sourceId] ?? .like)
         }
 
         let groupedFollows: [NotificationItem] = followItems.isEmpty
             ? []
-            : [mergeGroup(followItems, type: .follow, accountId: accountId)].compactMap(\.self)
+            : [mergeGroup(followItems, kind: .follow)].compactMap(\.self)
 
         return (ungrouped + groupedReactions + groupedFollows).sorted { $0.timestamp > $1.timestamp }
     }
 
-    private func mergeGroup(_ group: [NotificationItem], type: NotificationType, accountId _: String) -> NotificationItem? {
+    private static func mergeGroup(_ group: [NotificationItem], kind: Kind) -> NotificationItem? {
         guard let first = group.first else { return nil }
 
         var seenIds: Set<String> = []
@@ -304,8 +340,9 @@ public struct FarcasterNotificationSource: NotificationFetching, ProfileFetching
         let suffix = mergedActors.count > 1
             ? " and \(mergedActors.count - 1) other\(mergedActors.count == 2 ? "" : "s")"
             : ""
-        let text: String = switch type {
-        case .reaction: "\(actorName)\(suffix) reacted to your cast"
+        let text: String = switch kind {
+        case .like: "\(actorName)\(suffix) reacted to your cast"
+        case .recast: "\(actorName)\(suffix) recast your cast"
         case .follow: "\(actorName)\(suffix) followed you"
         default: first.text
         }

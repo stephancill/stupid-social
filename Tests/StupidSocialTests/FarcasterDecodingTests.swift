@@ -282,3 +282,73 @@ final class FarcasterDecodingTests: XCTestCase {
 private struct _FarcasterUserWrapperTest: Decodable {
     let user: FarcasterUserResponse
 }
+
+/// Hypersnap notifications as sent with `include_quotes_and_deep_replies=true` (shapes observed 2026-11-09).
+@MainActor
+final class FarcasterNotificationNormalizingTests: XCTestCase {
+    private let account = FarcasterAccountMetadata(username: "me", fid: 194, status: .valid)
+
+    func testQuoteIsAReplyNotification() throws {
+        let items = try normalize(#"""
+        {"object": "notification", "type": "quote", "timestamp": "2026-11-08T10:00:00.000Z",
+         "user": {"fid": 5818, "username": "quoter"},
+         "cast": {"hash": "002cb8788b", "text": "look", "author": {"fid": 5818, "username": "quoter"},
+                  "parent_author": {"fid": null},
+                  "embeds": [{"cast_id": {"fid": 194, "hash": "fa953421fd"}}, {"url": "https://example.com/a.png"}]}}
+        """#)
+
+        XCTAssertEqual(items.count, 1)
+        XCTAssertEqual(items[0].type, .reply)
+        XCTAssertEqual(items[0].text, "@quoter quoted your cast")
+        XCTAssertEqual(items[0].target?.id, "002cb8788b")
+        XCTAssertEqual(items[0].target?.imageURLs, try [XCTUnwrap(URL(string: "https://example.com/a.png"))])
+        XCTAssertNil(items[0].parentTarget)
+    }
+
+    func testRecastsGroupApartFromLikesOfTheSameCast() throws {
+        let cast = #""cast": {"hash": "fa953421fd", "text": "mine", "author": {"fid": 194}, "parent_author": {"fid": null}}"#
+        let items = try normalize(
+            #"{"type": "likes", "timestamp": "2026-11-08T10:00:00.000Z", "user": {"fid": 1, "username": "a"}, \#(cast)}"#,
+            #"{"type": "likes", "timestamp": "2026-11-08T11:00:00.000Z", "user": {"fid": 2, "username": "b"}, \#(cast)}"#,
+            #"{"type": "recasts", "timestamp": "2026-11-08T12:00:00.000Z", "user": {"fid": 3, "username": "c"}, \#(cast)}"#,
+        )
+
+        XCTAssertEqual(items.map(\.text), ["@c recast your cast", "@a and 1 other reacted to your cast"])
+        XCTAssertEqual(items.map(\.type), [.reaction, .reaction])
+        XCTAssertEqual(Set(items.map(\.id)).count, 2)
+    }
+
+    func testCastsAreRepliesOrMentionsByParentAndMentions() throws {
+        let items = try normalize(
+            // A reply to the user's cast.
+            #"{"type": "reply", "timestamp": "2026-11-08T14:00:00.000Z", "user": {"fid": 1, "username": "a"}, "cast": {"hash": "c1", "author": {"fid": 1}, "parent_hash": "p1", "parent_author": {"fid": 194}}}"#,
+            // A reply deeper in the user's thread.
+            #"{"type": "reply", "timestamp": "2026-11-08T13:00:00.000Z", "user": {"fid": 2, "username": "b"}, "cast": {"hash": "c2", "author": {"fid": 2}, "parent_hash": "p2", "parent_author": {"fid": 3642}}}"#,
+            // A reply deeper down that mentions the user.
+            #"{"type": "reply", "timestamp": "2026-11-08T12:00:00.000Z", "user": {"fid": 3, "username": "c"}, "cast": {"hash": "c3", "author": {"fid": 3}, "parent_hash": "p3", "parent_author": {"fid": 3642}, "mentioned_profiles": [{"fid": 194}]}}"#,
+            // A new cast mentioning the user.
+            #"{"type": "reply", "timestamp": "2026-11-08T11:00:00.000Z", "user": {"fid": 4, "username": "d"}, "cast": {"hash": "c4", "author": {"fid": 4}, "parent_author": {"fid": null}, "mentioned_profiles": [{"fid": 194}]}}"#,
+        )
+
+        XCTAssertEqual(items.map(\.type), [.reply, .reply, .mention, .mention])
+        XCTAssertEqual(items.map(\.text), [
+            "@a replied to you",
+            "@b replied in your thread",
+            "@c mentioned you",
+            "@d mentioned you",
+        ])
+        XCTAssertEqual(items[1].parentTarget?.id, "p2")
+    }
+
+    private func normalize(_ notifications: String...) throws -> [NotificationItem] {
+        let json = #"{"notifications": [\#(notifications.joined(separator: ","))], "next": {}}"#
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let value = try decoder.singleValueContainer().decode(String.self)
+            return try XCTUnwrap(Date.iso8601(value))
+        }
+        let response = try decoder.decode(FarcasterNotificationsResponse.self, from: Data(json.utf8))
+        return FarcasterNotificationSource.items(from: response.notifications, account: account)
+    }
+}
