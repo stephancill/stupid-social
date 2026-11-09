@@ -1408,9 +1408,11 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
     private func chatEmbed(_ embed: ApronEmbed) -> ChatEmbed {
         let link = embed.url.flatMap(URL.init(string:)).flatMap { ["http", "https"].contains($0.scheme) ? $0 : nil }
         if let image = embed.og?.image, let imageURL = allowedMediaURL(image.url) {
-            // Uploaded images open in the viewer; a link preview's image opens its page.
-            let isUpload = embed.kind == "upload"
-            return .image(url: imageURL, aspectRatio: image.aspectRatio, alt: image.alt ?? embed.title, link: isUpload ? nil : link, opensViewer: isUpload)
+            let preview = ChatEmbed.image(url: imageURL, aspectRatio: image.aspectRatio, alt: image.alt ?? embed.title, link: nil, opensViewer: true)
+            guard embed.kind != "upload" else { return preview }
+            // A link preview shows its title with the image, which opens in the viewer; the title opens the page.
+            let title = embed.og?.title ?? embed.title ?? link?.host() ?? "Link"
+            return .linkPreview(title: title, subtitle: embed.og?.description ?? embed.text, link: link, media: [preview])
         }
         if embed.isPendingUpload {
             return .pending(title: embed.title ?? "Attachment")

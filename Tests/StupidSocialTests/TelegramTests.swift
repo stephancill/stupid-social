@@ -333,6 +333,67 @@ final class TelegramTests: XCTestCase {
         guard case .card = try XCTUnwrap(huge.embeds.first) else { return XCTFail("\(huge)") }
     }
 
+    /// Link preview shapes from the probe's `webpage-preview` (fxtwitter posts, observed 2026-11-09).
+    func testLargeMediaLinkPreviewsCarryTheirMedia() throws {
+        func photo(_ id: Int64, _ w: Int32, _ h: Int32) -> TLValue {
+            .object(TLObject("photo", [
+                "id": .long(id), "access_hash": .long(7), "file_reference": .bytes(Data([1])), "dc_id": .int(4),
+                "sizes": .vector([.object(TLObject("photoSize", ["type": .string("y"), "w": .int(w), "h": .int(h), "size": .int(1000)]))]),
+            ]))
+        }
+        func page(_ fields: [String: TLValue]) -> TLObject {
+            var page = TLObject("webPage", [
+                "url": .string("https://fxtwitter.com/a/status/1"), "site_name": .string("FxTwitter"),
+                "title": .string("Ally (@a)"), "description": .string("last hour of the day"),
+            ])
+            for (key, value) in fields {
+                page[key] = value
+            }
+            return TLObject("messageMediaWebPage", ["webpage": .object(page)])
+        }
+
+        // Several photos: the Instant View page's, in page order; the footer after the divider (the author's
+        // photo) is left out, and so is the preview's own photo, a collage of them.
+        let block = { (id: Int64) in TLValue.object(TLObject("pageBlockPhoto", ["photo_id": .long(id)])) }
+        let photos = TelegramMediaParser.content(of: page([
+            "has_large_media": .bool(true),
+            "photo": photo(1, 944, 1280),
+            "cached_page": .object(TLObject("page", [
+                "blocks": .vector([block(11), .object(TLObject("pageBlockCollage", ["items": .vector([block(12), block(13)])])), .object(TLObject("pageBlockDivider")), block(14)]),
+                "photos": .vector([photo(11, 960, 1280), photo(12, 960, 1280), photo(13, 892, 1280), photo(14, 400, 400)]),
+                "documents": .vector([]),
+            ])),
+        ]))
+        guard case let .linkPreview(title, subtitle, link, media) = try XCTUnwrap(photos.embeds.first) else { return XCTFail("\(photos)") }
+        XCTAssertEqual(title, "Ally (@a)")
+        XCTAssertEqual(subtitle, "last hour of the day")
+        XCTAssertEqual(link?.absoluteString, "https://fxtwitter.com/a/status/1")
+        XCTAssertEqual(media.compactMap { embed -> String? in
+            guard case let .image(url, _) = embed else { return nil }
+            return try? XCTUnwrap(TelegramMediaURL.parse(url)).key
+        }, ["photo-11-y", "photo-12-y", "photo-13-y"])
+
+        // A video: the whole document, with the page's larger photo as its poster.
+        let video = TelegramMediaParser.content(of: page([
+            "has_large_media": .bool(true),
+            "photo": photo(2, 640, 360),
+            "document": .object(TLObject("document", [
+                "id": .long(3), "access_hash": .long(7), "file_reference": .bytes(Data([1])), "dc_id": .int(4),
+                "mime_type": .string("video/mp4"), "size": .long(7_404_048),
+                "attributes": .vector([.object(TLObject("documentAttributeVideo", ["duration": .double(258.787), "w": .int(640), "h": .int(360)]))]),
+            ])),
+        ]))
+        guard case let .linkPreview(_, _, _, videoMedia) = try XCTUnwrap(video.embeds.first),
+              case let .video(url, poster?, _, "4:19", false) = try XCTUnwrap(videoMedia.first)
+        else { return XCTFail("\(video)") }
+        XCTAssertEqual(TelegramMediaURL.maxSize(of: url), TelegramMediaURL.maxWholeDownloadSize)
+        XCTAssertEqual(try XCTUnwrap(TelegramMediaURL.parse(poster)).key, "photo-2-y")
+
+        // Without large media, a card with a thumbnail as before.
+        let small = TelegramMediaParser.content(of: page(["photo": photo(4, 400, 400)]))
+        guard case .card = try XCTUnwrap(small.embeds.first) else { return XCTFail("\(small)") }
+    }
+
     /// 5-bit levels, least significant bit first, as the probe decodes a voice message's `waveform`.
     func testDecodesVoiceWaveform() {
         // 31, 0, 16 and 1 at bits 0, 5, 10 and 15: 0xC01F, little-endian.

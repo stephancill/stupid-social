@@ -81,6 +81,34 @@ final class DiscordChatTests: XCTestCase {
 
     // MARK: Snowflakes and permissions
 
+    /// A link's several images arrive as embeds sharing its `url`; a proxied video plays, a player's thumbnail opens
+    /// the link, and an article's side thumbnail stays a card.
+    func testLinkEmbedsWithMediaBecomeLinkPreviews() throws {
+        let json = #"""
+        [
+          {"type": "rich", "url": "https://fxtwitter.com/a/status/1", "title": "Ally (@a)", "description": "four photos", "image": {"url": "https://pbs.twimg.com/1.jpg", "proxy_url": "https://media.discordapp.net/1.jpg", "width": 960, "height": 1280}},
+          {"type": "rich", "url": "https://fxtwitter.com/a/status/1", "image": {"url": "https://pbs.twimg.com/2.jpg", "proxy_url": "https://media.discordapp.net/2.jpg", "width": 960, "height": 1280}},
+          {"type": "rich", "url": "https://fxtwitter.com/b/status/2", "title": "Kumar (@b)", "image": {"url": "https://pbs.twimg.com/p.jpg", "width": 640, "height": 360}, "video": {"url": "https://video.twimg.com/v.mp4", "proxy_url": "https://media.discordapp.net/v.mp4", "width": 640, "height": 360}},
+          {"type": "video", "url": "https://www.youtube.com/watch?v=1", "title": "A video", "thumbnail": {"url": "https://i.ytimg.com/1.jpg", "width": 1280, "height": 720}, "video": {"url": "https://www.youtube.com/embed/1", "width": 1280, "height": 720}, "provider": {"name": "YouTube"}},
+          {"type": "article", "url": "https://example.com/post", "title": "Post", "thumbnail": {"url": "https://example.com/t.png", "width": 64, "height": 64}}
+        ]
+        """#
+        let messageEmbeds = try JSONDecoder.discord.decode([DiscordEmbed].self, from: Data(json.utf8))
+        let embeds = DiscordChatAdapter.embeds(attachments: [], stickers: nil, embeds: messageEmbeds, flags: nil, hasText: true)
+        XCTAssertEqual(embeds.count, 4)
+
+        guard case let .linkPreview("Ally (@a)", "four photos", _, photos) = embeds[0] else { return XCTFail("\(embeds[0])") }
+        XCTAssertEqual(photos, try [
+            .image(url: XCTUnwrap(URL(string: "https://media.discordapp.net/1.jpg")), aspectRatio: 0.75, alt: nil, link: nil, opensViewer: true),
+            .image(url: XCTUnwrap(URL(string: "https://media.discordapp.net/2.jpg")), aspectRatio: 0.75, alt: nil, link: nil, opensViewer: true),
+        ])
+        guard case let .linkPreview(_, _, _, video) = embeds[1] else { return XCTFail("\(embeds[1])") }
+        XCTAssertEqual(video, try [.video(url: XCTUnwrap(URL(string: "https://media.discordapp.net/v.mp4")), posterURL: URL(string: "https://pbs.twimg.com/p.jpg"), aspectRatio: 640.0 / 360, duration: nil, isGIF: false)])
+        guard case let .linkPreview("A video", "YouTube", link, player) = embeds[2] else { return XCTFail("\(embeds[2])") }
+        XCTAssertEqual(player, try [.image(url: XCTUnwrap(URL(string: "https://i.ytimg.com/1.jpg")), aspectRatio: 1280.0 / 720, alt: nil, link: link, opensViewer: false)])
+        guard case .card = embeds[3] else { return XCTFail("\(embeds[3])") }
+    }
+
     func testSnowflakeDate() {
         XCTAssertEqual(DiscordSnowflake.date("175928847299117063")?.timeIntervalSince1970 ?? 0, 1_462_015_105.796, accuracy: 0.001)
         XCTAssertTrue(DiscordSnowflake.isAfter("10", "9"), "numeric, not string, order")

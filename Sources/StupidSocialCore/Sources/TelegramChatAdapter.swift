@@ -102,7 +102,7 @@ public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, 
 
     /// Raised when messages are parsed differently, such as when media gained new embeds: an older snapshot's
     /// messages are dropped, since only the newest page reloads on open and the rest would keep the old shapes.
-    private static let snapshotVersion = 4
+    private static let snapshotVersion = 5
 
     private struct Snapshot: Codable {
         var version: Int?
@@ -786,6 +786,27 @@ public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, 
         return try? await ChatMediaFiles.shared.file(for: url)
     }
 
+    private static func chatEmbed(_ embed: TelegramEmbed) -> ChatEmbed {
+        switch embed {
+        case let .image(url, aspectRatio):
+            .image(url: url, aspectRatio: aspectRatio, alt: nil, link: nil, opensViewer: true)
+        case let .card(title, subtitle, systemImage, imageURL, link):
+            .card(title: title, subtitle: subtitle, systemImage: systemImage, imageURL: imageURL, link: link)
+        case let .video(url, posterURL, aspectRatio, duration, isGIF):
+            .video(url: url, posterURL: posterURL, aspectRatio: aspectRatio, duration: duration, isGIF: isGIF)
+        case let .file(url, filename, subtitle, thumbnailURL):
+            .file(url: url, filename: filename, subtitle: subtitle, thumbnailURL: thumbnailURL)
+        case let .audio(url, title, subtitle):
+            .audio(previewId: url.absoluteString, title: title, subtitle: subtitle, detail: nil, imageURL: nil, link: nil)
+        case let .voice(url, duration, waveform):
+            .voice(previewId: url.absoluteString, duration: duration, waveform: waveform ?? [])
+        case let .sticker(sticker):
+            .sticker(sticker)
+        case let .linkPreview(title, subtitle, link, media):
+            .linkPreview(title: title, subtitle: subtitle, link: link, media: media.map(chatEmbed))
+        }
+    }
+
     private func chatMessage(_ message: TelegramMessage) -> ChatMessage {
         let id = String(message.id)
         if message.isService {
@@ -806,24 +827,7 @@ public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, 
                 avatarURL: (message.senderId ?? (peer.kind == .user ? peer.id : nil)).flatMap { avatars[$0] },
             )
         }
-        let embeds: [ChatEmbed] = message.embeds.map { embed in
-            switch embed {
-            case let .image(url, aspectRatio):
-                .image(url: url, aspectRatio: aspectRatio, alt: nil, link: nil, opensViewer: true)
-            case let .card(title, subtitle, systemImage, imageURL, link):
-                .card(title: title, subtitle: subtitle, systemImage: systemImage, imageURL: imageURL, link: link)
-            case let .video(url, posterURL, aspectRatio, duration, isGIF):
-                .video(url: url, posterURL: posterURL, aspectRatio: aspectRatio, duration: duration, isGIF: isGIF)
-            case let .file(url, filename, subtitle, thumbnailURL):
-                .file(url: url, filename: filename, subtitle: subtitle, thumbnailURL: thumbnailURL)
-            case let .audio(url, title, subtitle):
-                .audio(previewId: url.absoluteString, title: title, subtitle: subtitle, detail: nil, imageURL: nil, link: nil)
-            case let .voice(url, duration, waveform):
-                .voice(previewId: url.absoluteString, duration: duration, waveform: waveform ?? [])
-            case let .sticker(sticker):
-                .sticker(sticker)
-            }
-        }
+        let embeds = message.embeds.map(Self.chatEmbed)
         // Media without a caption shows only the media; media the app can't draw shows its label.
         let text: String? = if !message.caption.isEmpty {
             message.caption

@@ -80,7 +80,7 @@ public enum ChatForwardMedia: Hashable, Sendable {
                 if let url = await voiceURL(previewId) {
                     media.append(.voice(url: url, duration: duration, waveform: waveform))
                 }
-            case .sticker, .card, .audio, .message, .pending:
+            case .sticker, .card, .linkPreview, .audio, .message, .pending:
                 break
             }
         }
