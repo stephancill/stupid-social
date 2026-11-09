@@ -212,6 +212,9 @@ public protocol ChatLiveUpdating: ChatAdapter {
     var onConnectionLost: ((Error?) -> Void)? { get set }
     /// Set by the framework: something failed outside a call it made, such as an upload after its message posted.
     var onError: ((Error) -> Void)? { get set }
+    /// Set by the framework: the adapter calls it when pushed updates may have been missed, such as after its
+    /// connection reconnected (`LiveUpdate.catchUp`), and the framework loads the newest messages.
+    var onCatchUp: (() -> Void)? { get set }
     /// Called once the newest messages have loaded.
     func startFollowing() async
     func stopFollowing()
@@ -351,6 +354,10 @@ public final class AdapterChatViewModel<Adapter: ChatAdapter>: ChatViewModel {
         if let live = adapter as? any ChatLiveUpdating {
             live.onConnectionLost = { [weak self] error in self?.connectionLost(error) }
             live.onError = { [weak self] error in self?.errorMessage = error.localizedDescription }
+            live.onCatchUp = { [weak self] in
+                guard let self, isOpen else { return }
+                Task { await self.poll() }
+            }
         }
         if let snapshot = snapshotCache.data(key: chatKey) {
             adapter.restore(snapshot: snapshot)

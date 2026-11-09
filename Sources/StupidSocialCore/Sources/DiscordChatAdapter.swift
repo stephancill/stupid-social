@@ -15,6 +15,7 @@ public final class DiscordChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEdit
     public let pollInterval: Duration? = .seconds(30)
     public var onChange: (() -> Void)?
     public var onConnectionLost: ((Error?) -> Void)?
+    public var onCatchUp: (() -> Void)?
     public var onError: ((Error) -> Void)?
     public private(set) var info: ChatInfo
     public private(set) var messages: [ChatMessage] = []
@@ -295,7 +296,12 @@ public final class DiscordChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEdit
 
     public func startFollowing() async {
         guard observation == nil else { return }
-        observation = gateway.observe { [weak self] event in self?.handle(event) }
+        observation = gateway.observe { [weak self] update in
+            switch update {
+            case let .event(event): self?.handle(event)
+            case .catchUp: self?.onCatchUp?()
+            }
+        }
         if let guildId = channel?.guildId {
             gateway.subscribe(guildId: guildId)
         }
@@ -338,8 +344,6 @@ public final class DiscordChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEdit
                 readId = messageId
                 onChange?()
             }
-        case .reconnected:
-            Task { try? await self.loadNewest() }
         default:
             break
         }

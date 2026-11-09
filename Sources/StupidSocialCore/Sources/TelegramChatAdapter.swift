@@ -16,6 +16,7 @@ public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, 
     public let pollInterval: Duration? = .seconds(30)
     public var onChange: (() -> Void)?
     public var onConnectionLost: ((Error?) -> Void)?
+    public var onCatchUp: (() -> Void)?
     public var onError: ((Error) -> Void)?
     /// Not in Saved Messages without Premium, where reactions are tags.
     public var acceptsReactions: Bool {

@@ -12,6 +12,7 @@ public final class XChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, 
     public let pollInterval: Duration? = nil
     public var onChange: (() -> Void)?
     public var onConnectionLost: ((Error?) -> Void)?
+    public var onCatchUp: (() -> Void)?
     public var onError: ((Error) -> Void)?
     public let acceptsReactions = true
     public private(set) var info: ChatInfo
@@ -92,24 +93,27 @@ public final class XChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, 
         }
     }
 
-    /// Pushed events merge as they arrive; after a reconnect the newest page fills in what the socket missed.
+    /// Pushed events merge as they arrive; after a reconnect the framework loads the newest page for what the socket
+    /// missed.
     public func startFollowing() async {
         guard observation == nil else { return }
-        observation = liveFeed.observe(
-            conversationId: conversationId,
-            onEvents: { [weak self] events in Task { await self?.merge(events) } },
-            onCatchUp: { [weak self] in Task { await self?.refreshNewest() } },
-        )
+        observation = liveFeed.connection.observe { [weak self] update in
+            guard let self else { return }
+            switch update {
+            case let .event(events):
+                let own = events.filter { $0.conversationId == self.conversationId }
+                if !own.isEmpty {
+                    Task { await self.merge(own) }
+                }
+            case .catchUp:
+                onCatchUp?()
+            }
+        }
     }
 
     public func stopFollowing() {
-        observation.map(liveFeed.removeObserver)
+        observation.map(liveFeed.connection.removeObserver)
         observation = nil
-    }
-
-    private func refreshNewest() async {
-        guard let page = try? await client.eventPage(conversationId: conversationId) else { return }
-        await merge(page.events)
     }
 
     public func loadEarlier() async throws {

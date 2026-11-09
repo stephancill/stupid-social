@@ -148,10 +148,14 @@ public final class AccountComponents {
         spotifyMessagesSource ?? instagramClient ?? telegramClient ?? xChatClient ?? blueskyClient ?? discordChatList ?? linkedinClient
     }
 
+    /// The connection the account keeps open while the app is in the foreground, when its network pushes updates.
+    public var liveConnection: (any LiveConnecting)? {
+        xChatLiveFeed ?? discordGateway
+    }
+
     /// Stops what runs in the background, when the account goes away.
     func shutDown() {
-        xChatLiveFeed?.stop()
-        discordGateway?.stop()
+        liveConnection?.stop()
     }
 }
 

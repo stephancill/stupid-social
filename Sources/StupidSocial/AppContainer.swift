@@ -102,20 +102,19 @@ final class AppContainer {
         }
     }
 
-    /// Apron servers and X Chat stream updates only while the app is in the foreground.
+    /// Live connections (Apron servers, and each account's that has one) stream updates only while the app is in
+    /// the foreground.
     func startLiveFeeds() {
         apronLiveFeed.start()
         for component in services.components {
-            component.xChatLiveFeed?.start()
-            component.discordGateway?.start()
+            component.liveConnection?.start()
         }
     }
 
     func stopLiveFeeds() {
         apronLiveFeed.stop()
         for component in services.components {
-            component.xChatLiveFeed?.stop()
-            component.discordGateway?.stop()
+            component.liveConnection?.stop()
         }
     }
 

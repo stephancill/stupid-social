@@ -9,6 +9,7 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
     public let pollInterval: Duration? = nil
     public var onChange: (() -> Void)?
     public var onConnectionLost: ((Error?) -> Void)?
+    public var onCatchUp: (() -> Void)?
     public var onError: ((Error) -> Void)?
     public private(set) var info: ChatInfo
     public private(set) var messages: [ChatMessage] = []

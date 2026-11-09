@@ -29,6 +29,7 @@ Examples:
   scripts/linkedin-web-client.py --simulator recall --conversation URN --expect-name Helaine --message URN
   scripts/linkedin-web-client.py --simulator read --conversation URN --expect-name Helaine [--unread]
   scripts/linkedin-web-client.py --simulator typing --conversation URN --expect-name Helaine
+  scripts/linkedin-web-client.py --simulator stream --seconds 60    # realtime events: topic, shape, never others' text
   scripts/linkedin-web-client.py --simulator raw /voyager/api/me
 """
 
@@ -392,6 +393,105 @@ def cmd_raw(client: Client, args: argparse.Namespace) -> Any:
     return shape(client.get(args.path, accept))
 
 
+# The messaging topics' realtime decorations, from the web client's `x-li-query-map` header (observed 2026-11-09).
+# The server decorates each event with the named GraphQL query before sending it.
+REALTIME_QUERY_MAP = {
+    "conversationsBroadcastTopic": "voyagerMessagingDashMessengerRealtimeDecoration.f855048b390b286e513d7b23c59efee3",
+    "conversationsTopic": "voyagerMessagingDashMessengerRealtimeDecoration.f855048b390b286e513d7b23c59efee3",
+    "conversationDeletesBroadcastTopic": "voyagerMessagingDashMessengerRealtimeDecoration.282abe5fa1a242cb76825c32dbbfaede",
+    "conversationDeletesTopic": "voyagerMessagingDashMessengerRealtimeDecoration.282abe5fa1a242cb76825c32dbbfaede",
+    "messageReactionSummariesBroadcastTopic": "voyagerMessagingDashMessengerRealtimeDecoration.85ff5a1aabf7c52f40aa85ccc84e3bf5",
+    "messageReactionSummariesTopic": "voyagerMessagingDashMessengerRealtimeDecoration.85ff5a1aabf7c52f40aa85ccc84e3bf5",
+    "messageSeenReceiptsBroadcastTopic": "voyagerMessagingDashMessengerRealtimeDecoration.e23d3971dc83a115b03584cf2381256c",
+    "messageSeenReceiptsTopic": "voyagerMessagingDashMessengerRealtimeDecoration.e23d3971dc83a115b03584cf2381256c",
+    "messagesBroadcastTopic": "voyagerMessagingDashMessengerRealtimeDecoration.db0f1d3f53747f49f3fd87b139df9eda",
+    "messagesTopic": "voyagerMessagingDashMessengerRealtimeDecoration.db0f1d3f53747f49f3fd87b139df9eda",
+    "typingIndicatorsBroadcastTopic": "voyagerMessagingDashMessengerRealtimeDecoration.234ce03cd062b2438dae060ca854a6d2",
+    "typingIndicatorsTopic": "voyagerMessagingDashMessengerRealtimeDecoration.234ce03cd062b2438dae060ca854a6d2",
+}
+
+
+def realtime_headers(client: Client, session_id: str) -> dict[str, str]:
+    query_map = {topic: {"queryId": query, "variables": {}, "extensions": {}} for topic, query in REALTIME_QUERY_MAP.items()}
+    return {
+        "cookie": f'li_at={client.li_at}; JSESSIONID="{client.jsession}"',
+        "csrf-token": client.jsession,
+        "accept": "text/event-stream",
+        "cache-control": "no-cache",
+        "x-restli-protocol-version": "2.0.0",
+        "x-li-accept": NORMALIZED,
+        "x-li-query-accept": GRAPHQL,
+        "x-li-recipe-accept": NORMALIZED,
+        "x-li-query-map": json.dumps({"topicToGraphQLQueryParams": query_map}, separators=(",", ":")),
+        "x-li-realtime-session": session_id,
+        # Without `mpName` the stream answers 400 "Could not map to valid appName for supplied mpName: null".
+        "x-li-track": json.dumps({"clientVersion": "1.13.47699", "mpVersion": "1.13.47699", "osName": "web", "mpName": "voyager-web", "deviceFormFactor": "DESKTOP"}, separators=(",", ":")),
+        "user-agent": USER_AGENT,
+    }
+
+
+def summarize_event(event: dict[str, Any], me_urn: str) -> dict[str, Any]:
+    """Topic and shape of one realtime event; text from others is replaced by its length."""
+    if "com.linkedin.realtimefrontend.DecoratedEvent" in event:
+        decorated = event["com.linkedin.realtimefrontend.DecoratedEvent"]
+        payload = decorated.get("payload") or {}
+        data = (payload.get("data") or {})
+        result = next((v.get("result") for k, v in data.items() if isinstance(v, dict) and "result" in v), None)
+        summary: dict[str, Any] = {"topic": decorated.get("topic"), "keys": list(data.keys()), "shape": shape(result)}
+        if isinstance(result, dict):
+            sender = ((result.get("sender") or {}).get("hostIdentityUrn"))
+            body = (result.get("body") or {}).get("text")
+            if body is not None:
+                summary["mine"] = sender == me_urn
+                summary["text" if sender == me_urn else "length"] = body if sender == me_urn else len(body)
+            for key in ("entityUrn", "deliveredAt", "messageBodyRenderFormat"):
+                if key in result:
+                    summary[key] = result[key]
+            if "conversation" in result:
+                summary["conversation"] = (result["conversation"] or {}).get("entityUrn")
+        return summary
+    return {"event": list(event.keys()), "shape": shape(event)}
+
+
+def cmd_stream(client: Client, args: argparse.Namespace) -> Any:
+    """Opens /realtime/connect (server-sent events) and prints each event's topic and shape until --seconds pass."""
+    import http.client
+    import ssl
+    import time
+
+    me_urn = me(client)["profileUrn"]
+    session_id = str(uuid.uuid4())
+    connection = http.client.HTTPSConnection("www.linkedin.com", timeout=args.seconds + 30, context=ssl.create_default_context())
+    connection.request("GET", "/realtime/connect?rc=1", headers=realtime_headers(client, session_id))
+    response = connection.getresponse()
+    print(json.dumps({"status": response.status, "content-type": response.getheader("content-type")}), flush=True)
+    if response.status != 200:
+        return {"body": response.read(300).decode(errors="replace")}
+    deadline = time.time() + args.seconds
+    events = 0
+    buffer = b""
+    while time.time() < deadline:
+        chunk = response.readline()
+        if not chunk:
+            break
+        line = chunk.rstrip(b"\r\n")
+        if line.startswith(b"data:"):
+            buffer += line[5:].strip()
+        elif line == b"" and buffer:
+            try:
+                event = json.loads(buffer)
+            except ValueError:
+                print(json.dumps({"unparsed": buffer[:200].decode(errors="replace")}), flush=True)
+            else:
+                events += 1
+                print(json.dumps(summarize_event(event, me_urn), ensure_ascii=False), flush=True)
+            buffer = b""
+        elif line and not line.startswith(b":"):
+            print(json.dumps({"line": line[:200].decode(errors="replace")}), flush=True)
+    connection.close()
+    return {"events": events}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--credentials-file")
@@ -426,6 +526,8 @@ def main() -> None:
             p.add_argument("--remove", action="store_true")
         if name == "read":
             p.add_argument("--unread", action="store_true")
+    p = sub.add_parser("stream")
+    p.add_argument("--seconds", type=int, default=60)
     p = sub.add_parser("raw")
     p.add_argument("path")
     args = parser.parse_args()

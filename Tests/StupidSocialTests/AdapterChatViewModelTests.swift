@@ -713,6 +713,7 @@ private class FakeAdapter: ChatAdapter {
 private final class FakeLiveAdapter: FakeAdapter, ChatLiveUpdating, ChatReferenceResolving {
     var onConnectionLost: ((Error?) -> Void)?
     var onError: ((Error) -> Void)?
+    var onCatchUp: (() -> Void)?
     private(set) var followCount = 0
     private(set) var isFollowing = false
     var referencedMessages: [String: ChatMessage] = [:]

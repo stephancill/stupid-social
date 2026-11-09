@@ -141,7 +141,12 @@ public final class DiscordChatList: ChatListProvider {
         self.gateway = gateway
         self.accountId = accountId
         self.chatList = chatList
-        observation = gateway.observe { [weak self] event in self?.handle(event) }
+        observation = gateway.observe { [weak self] update in
+            switch update {
+            case let .event(event): self?.handle(event)
+            case .catchUp: Task { await chatList?.load() }
+            }
+        }
     }
 
     public nonisolated func chatList() async throws -> ChatListPage {
@@ -280,8 +285,6 @@ extension DiscordChatList {
             publish(channel.id)
         case let .ack(channelId, _):
             publish(channelId)
-        case .reconnected:
-            Task { await chatList?.load() }
         default:
             break
         }

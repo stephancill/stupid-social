@@ -259,10 +259,10 @@ public final class DiscordClient: @unchecked Sendable {
 /// The account's gateway connection while the app is in the foreground: its `READY` state (guilds, channels, DMs,
 /// read states, mutes), kept current by the events after it, and those events for open chats and the Chats list.
 /// Identifies as the web client does, without capabilities so `READY` has its plain shape and without
-/// compression (scripts/discord-web-client.py `ready` and `follow`). A dropped connection identifies again with
-/// backoff, and observers catch up.
+/// compression (scripts/discord-web-client.py `ready` and `follow`). `LiveConnection` identifies again on a new
+/// connection with backoff when one drops, and tells observers to catch up.
 @MainActor
-public final class DiscordGateway {
+public final class DiscordGateway: LiveConnecting {
     enum Event {
         case message(DiscordMessage)
         case messageUpdate(DiscordMessageUpdate)
@@ -271,19 +271,15 @@ public final class DiscordGateway {
         case typing(channelId: String, userId: String, name: String?)
         /// The user read up to the message, here or on another device.
         case ack(channelId: String, messageId: String)
-        /// A connection opened after an earlier one: events may have been missed.
-        case reconnected
     }
 
     private static let url = URL(string: "wss://gateway.discord.gg/?encoding=json&v=9")!
 
     let client: DiscordClient
     private let logger = Logger(subsystem: "tech.stupid.StupidSocial", category: "DiscordGateway")
-    private var loop: Task<Void, Never>?
+    private var connection: LiveConnection<Event>!
     private var socket: URLSessionWebSocketTask?
-    private var observers: [UUID: (Event) -> Void] = [:]
     private var readyWaiters: [CheckedContinuation<Void, Error>] = []
-    private var hasConnected = false
     /// The last dispatch's sequence number, which heartbeats carry.
     private var sequence: Int?
     private var stickerPacks: [DiscordStickerPack]?
@@ -300,16 +296,20 @@ public final class DiscordGateway {
 
     public init(client: DiscordClient) {
         self.client = client
+        connection = LiveConnection(
+            name: "Discord gateway",
+            outcome: Self.outcome(for:),
+        ) { [weak self] connection in
+            try await self?.follow(connection)
+        }
     }
 
     public func start() {
-        guard loop == nil, !DemoData.isDemoMode else { return }
-        loop = Task { [weak self] in await self?.run() }
+        connection.start()
     }
 
     public func stop() {
-        loop?.cancel()
-        loop = nil
+        connection.stop()
         socket?.cancel(with: .goingAway, reason: nil)
         socket = nil
     }
@@ -338,14 +338,12 @@ public final class DiscordGateway {
         return packs
     }
 
-    func observe(_ handler: @escaping (Event) -> Void) -> UUID {
-        let id = UUID()
-        observers[id] = handler
-        return id
+    func observe(_ handler: @escaping (LiveUpdate<Event>) -> Void) -> UUID {
+        connection.observe(handler)
     }
 
     func removeObserver(_ id: UUID) {
-        observers[id] = nil
+        connection.removeObserver(id)
     }
 
     // MARK: State
@@ -404,25 +402,8 @@ public final class DiscordGateway {
 
     // MARK: Connection
 
-    private func run() async {
-        var delay: Duration = .seconds(1)
-        while !Task.isCancelled {
-            do {
-                try await follow { delay = .seconds(1) }
-            } catch let error as GatewayClosed where error.isAuthenticationFailure {
-                logger.info("Discord gateway refused the token")
-                identifyError = SourceError.notConfigured
-                failWaiters(SourceError.notConfigured)
-                break
-            } catch {
-                logger.info("Discord gateway closed: \(error.localizedDescription, privacy: .public)")
-            }
-            isReady = false
-            guard !Task.isCancelled else { break }
-            try? await Task.sleep(for: delay)
-            delay = min(delay * 2, .seconds(60))
-        }
-        loop = nil
+    private static func outcome(for error: Error) -> LiveOutcome {
+        (error as? GatewayClosed)?.isAuthenticationFailure == true ? .stop : .retry
     }
 
     private struct GatewayClosed: Error {
@@ -448,7 +429,21 @@ public final class DiscordGateway {
         let heartbeatInterval: Double
     }
 
-    private func follow(onReady: () -> Void) async throws {
+    /// One connection: identify, then dispatch until it closes. A refused token stops reconnecting
+    /// (`LiveOutcome.stop`) and fails whoever waits for `READY`.
+    private func follow(_ connection: LiveConnection<Event>) async throws {
+        defer { isReady = false }
+        do {
+            try await identifyAndDispatch(connection)
+        } catch let error as GatewayClosed where error.isAuthenticationFailure {
+            logger.info("Discord gateway refused the token")
+            identifyError = SourceError.notConfigured
+            failWaiters(SourceError.notConfigured)
+            throw error
+        }
+    }
+
+    private func identifyAndDispatch(_ connection: LiveConnection<Event>) async throws {
         let token = try client.token()
         var request = URLRequest(url: Self.url)
         request.setValue("https://discord.com", forHTTPHeaderField: "Origin")
@@ -510,14 +505,10 @@ public final class DiscordGateway {
                 if frame.t == "READY" {
                     let ready = try JSONDecoder.discord.decode(Payload<DiscordReady>.self, from: data).d
                     apply(ready: ready)
-                    onReady()
                     let waiters = readyWaiters
                     readyWaiters = []
                     waiters.forEach { $0.resume() }
-                    if hasConnected {
-                        deliver(.reconnected)
-                    }
-                    hasConnected = true
+                    connection.opened()
                 } else if let name = frame.t {
                     dispatch(name, data: data)
                 }
@@ -702,8 +693,6 @@ public final class DiscordGateway {
     }
 
     private func deliver(_ event: Event) {
-        for observer in observers.values {
-            observer(event)
-        }
+        connection.deliver(event)
     }
 }
