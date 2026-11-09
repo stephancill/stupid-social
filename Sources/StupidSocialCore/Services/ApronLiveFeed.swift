@@ -7,8 +7,9 @@ import OSLog
 /// A new message updates its room's row from the message itself; edits, reactions and room changes rebuild
 /// rows from history on the already-open connection, debounced so a burst costs one rebuild. Servers allow few
 /// history pages a day, so once a connection's rows are built, Chats reloads keep them instead of reading every
-/// room again. Read cursors the server sends for the user update unread badges directly. Dropped connections
-/// reconnect with backoff; a `denied` sign-in stops until the user acts (§1.1).
+/// room again. Read cursors the server sends for the user update unread badges directly. Each server's
+/// connection runs on `LiveConnection`, which reconnects dropped ones with backoff; a `denied` sign-in stops
+/// until the user acts (§1.1).
 @MainActor
 public final class ApronLiveFeed {
     /// Posted by settings after a server is added or removed.
@@ -23,7 +24,7 @@ public final class ApronLiveFeed {
     private let stableConnection: Duration = .seconds(120)
 
     private var isRunning = false
-    private var loops: [URL: Task<Void, Never>] = [:]
+    private var connections: [URL: LiveConnection<Never>] = [:]
     private var sessions: [URL: ApronSession] = [:]
     private var rebuilds: [URL: Task<Void, Never>] = [:]
     /// Rooms with new messages since the last rebuild; `nil` rebuilds every room, as after `room_update`.
@@ -60,7 +61,7 @@ public final class ApronLiveFeed {
 
     public func stop() {
         isRunning = false
-        for url in Array(loops.keys) {
+        for url in Array(connections.keys) {
             disconnect(url)
         }
     }
@@ -69,18 +70,20 @@ public final class ApronLiveFeed {
     public func sync() {
         guard isRunning else { return }
         let saved = Set(service.servers.map(\.serverURL))
-        for url in loops.keys where !saved.contains(url) {
+        for url in connections.keys where !saved.contains(url) {
             disconnect(url)
             // Removed here or on another device.
             chatList.replaceChats(where: { $0.isApronRoom(on: url) }, with: [])
         }
-        for url in saved where loops[url] == nil {
-            loops[url] = Task { [weak self] in await self?.run(url) }
+        for url in saved where connections[url] == nil {
+            let connection = makeConnection(url)
+            connections[url] = connection
+            connection.start()
         }
     }
 
     private func disconnect(_ url: URL) {
-        loops.removeValue(forKey: url)?.cancel()
+        connections.removeValue(forKey: url)?.stop()
         rebuilds.removeValue(forKey: url)?.cancel()
         pendingRooms[url] = nil
         currentServers.remove(url)
@@ -89,54 +92,58 @@ public final class ApronLiveFeed {
         service.closeSessions(for: url)
     }
 
-    /// Reconnects with exponential backoff and jitter (1 s doubling to 60 s, ±50%), reset only by a connection that
-    /// stayed up a while, and never sooner than the server asked (docs/limits.md, Checklist).
-    private func run(_ url: URL) async {
-        var failures = 0
-        while isRunning, !Task.isCancelled, service.server(for: url) != nil {
-            var error: Error?
-            do {
-                let session = try await service.session(serverURL: url)
-                guard isRunning, !Task.isCancelled else { return }
-                sessions[url] = session
-                let connectedAt = ContinuousClock.now
-                // Catch up on anything that arrived while disconnected, then follow live deliveries until
-                // the shared connection closes.
-                error = await withCheckedContinuation { (continuation: CheckedContinuation<Error?, Never>) in
-                    guard session.connection.isOpen else {
-                        continuation.resume(returning: nil)
-                        return
-                    }
-                    session.connection.observe(
-                        notifications: { [weak self] method, params in self?.handle(method: method, params: params, session: session) },
-                        onClose: { continuation.resume(returning: $0) },
-                    )
-                    scheduleRebuild(url, immediately: true)
-                }
-                sessions[url] = nil
-                currentServers.remove(url)
-                if ContinuousClock.now - connectedAt >= stableConnection {
-                    failures = 0
-                }
-            } catch let caught as ApronError where caught.isDenied {
-                logger.info("Apron live feed stopped for \(url.host() ?? "server", privacy: .public): sign-in denied")
-                return
-            } catch let caught {
-                error = caught
-            }
-            guard isRunning, !Task.isCancelled else { return }
-            if let apronError = error as? ApronError, apronError.endsSignIn {
-                logger.info("Apron live feed stopped for \(url.host() ?? "server", privacy: .public): signed out by the server")
-                service.signInEnded(serverURL: url)
-                return
-            }
-            if let error {
-                logger.info("Apron live feed disconnected from \(url.host() ?? "server", privacy: .public): \(error.localizedDescription, privacy: .public)")
-            }
-            let backoff = min(pow(2, Double(failures)), 60) * Double.random(in: 0.5 ... 1.5)
-            try? await Task.sleep(for: max(.seconds(backoff), (error as? ApronError)?.reconnectDelay ?? .zero))
-            failures += 1
+    /// One server's connection on `LiveConnection`: exponential backoff with jitter (1 s doubling to 60 s, ±50%),
+    /// reset only by a connection that stayed up a while, and never sooner than the server asked (docs/limits.md,
+    /// Checklist).
+    private func makeConnection(_ url: URL) -> LiveConnection<Never> {
+        LiveConnection(
+            name: "Apron \(url.host() ?? "server")\(url.port.map { ":\($0)" } ?? "")",
+            retry: LiveRetryPolicy(stableAfter: stableConnection),
+            canConnect: { [weak self] in self.map { $0.isRunning && $0.service.server(for: url) != nil } ?? false },
+            outcome: { [weak self] error in self?.outcome(for: error, serverURL: url) ?? .stop },
+        ) { [weak self] connection in
+            try await self?.follow(url, connection: connection)
         }
+    }
+
+    /// A denied sign-in, or one the server ended, stops until the user acts (§1.1).
+    private func outcome(for error: Error, serverURL url: URL) -> LiveOutcome {
+        guard let apronError = error as? ApronError else { return .retry }
+        if apronError.isDenied {
+            logger.info("Apron live feed stopped for \(url.host() ?? "server", privacy: .public): sign-in denied")
+            return .stop
+        }
+        if apronError.endsSignIn {
+            logger.info("Apron live feed stopped for \(url.host() ?? "server", privacy: .public): signed out by the server")
+            service.signInEnded(serverURL: url)
+            return .stop
+        }
+        return .retry(minimum: apronError.reconnectDelay ?? .zero)
+    }
+
+    /// Catches up on anything that arrived while disconnected, then follows live deliveries until the shared
+    /// connection closes.
+    private func follow(_ url: URL, connection: LiveConnection<Never>) async throws {
+        let session = try await service.session(serverURL: url)
+        guard isRunning, !Task.isCancelled else { return }
+        sessions[url] = session
+        defer {
+            sessions[url] = nil
+            currentServers.remove(url)
+        }
+        let closing: Error? = await withCheckedContinuation { (continuation: CheckedContinuation<Error?, Never>) in
+            guard session.connection.isOpen else {
+                continuation.resume(returning: nil)
+                return
+            }
+            connection.opened()
+            session.connection.observe(
+                notifications: { [weak self] method, params in self?.handle(method: method, params: params, session: session) },
+                onClose: { continuation.resume(returning: $0) },
+            )
+            scheduleRebuild(url, immediately: true)
+        }
+        if let closing { throw closing }
     }
 
     private func handle(method: String, params: Data, session: ApronSession) {

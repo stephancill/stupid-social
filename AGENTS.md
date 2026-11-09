@@ -93,6 +93,8 @@ Sources/
       ApronService.swift            # Apron server list, tokens, and signed-in sessions
       ApronLiveFeed.swift           # Foreground WebSocket per Apron server for realtime feed items
       XChatLiveFeed.swift           # Foreground X Chat WebSocket: pushed events for open chats and the Chats list
+      LiveConnection.swift          # One foreground connection per account: lifecycle, reconnect backoff, observers, catch-up
+      LinkedInLiveFeed.swift        # Foreground LinkedIn realtime stream (SSE): messages, reactions, typing, conversations
       ApronPushService.swift        # Apron push registration through the push.stupidtech.net relay
       ChatReminderPush.swift        # Chat reminders pushed to the user's other devices, scheduled on the relay
       AppMetrics.swift              # Every anonymous usage event and error sent to metrics.stupidtech.net

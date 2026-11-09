@@ -189,7 +189,7 @@ Observed X behavior:
 ### LinkedIn Chat
 
 - LinkedIn conversations in the primary inbox (the newest 40) appear on the Chats screen with their latest message, time and unread count; muted ones show a gray badge.
-- Opening one shows its history (older pages load on scroll), polled every 10 s while open. The user can send text, reply, react, edit and unsend their own messages, and others see them typing. GIFs, photos, videos, files and shared posts display. Reading the newest message marks the conversation read on LinkedIn.
+- Opening one shows its history (older pages load on scroll), and new and changed messages, reactions and typing appear as they happen while the app is open; the Chats list updates the same way. The user can send text, reply, react, edit and unsend their own messages, and others see them typing. GIFs, photos, videos, files and shared posts display. Reading the newest message marks the conversation read on LinkedIn.
 
 ### Chat Title
 
