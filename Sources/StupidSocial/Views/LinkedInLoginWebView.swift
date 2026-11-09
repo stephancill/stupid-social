@@ -12,6 +12,7 @@ struct LinkedInLoginWebView: View {
                 url: URL(string: "https://www.linkedin.com/login")!,
                 sessionCookies: ["li_at", "JSESSIONID"],
                 domainSuffix: "linkedin.com",
+                userAgent: LinkedInClient.userAgent,
                 credentials: LinkedInCredentials.init(cookies:),
             ) { credentials in
                 onLoginSuccess(credentials)

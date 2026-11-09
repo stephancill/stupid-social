@@ -46,12 +46,14 @@ enum LinkedInError: LocalizedError {
 }
 
 /// LinkedIn's Voyager API as www.linkedin.com's web client calls it: the `li_at` and `JSESSIONID` cookies, the
-/// JSESSIONID again as `csrf-token`, Rest.li protocol 2.0 and a Chrome user agent (validated with
+/// JSESSIONID again as `csrf-token`, Rest.li protocol 2.0 and the login page's user agent (validated with
 /// `scripts/linkedin-web-client.py`, observed 2026-11-09). Notifications are Voyager REST; messaging is the messenger
 /// SDK's GraphQL queries and Rest.li actions.
 public final class LinkedInClient: @unchecked Sendable {
     static let baseURL = URL(string: "https://www.linkedin.com")!
-    static let userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+    /// iPhone Safari's, sent by the login page (`LinkedInLoginWebView`) too, so the session is only ever used by the
+    /// browser it was created in.
+    public static let userAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1"
     static let normalizedJSON = "application/vnd.linkedin.normalized+json+2.1"
 
     /// Messaging SDK query ids, from the web bundle (`kind:"query",id:"messengerMessages.<hash>"`, observed 2026-11-09).

@@ -30,6 +30,8 @@ struct CookieLoginWebView<Credentials>: UIViewRepresentable {
     /// The session cookies a previous login left, deleted before the page loads.
     let sessionCookies: Set<String>
     let domainSuffix: String
+    /// The user agent the page loads with, when the network's client sends a set one; the web view's own otherwise.
+    var userAgent: String?
     /// The credentials in the store's cookies, or `nil` until the login has finished.
     let credentials: ([HTTPCookie]) -> Credentials?
     let onLogin: (Credentials) -> Void
@@ -46,6 +48,7 @@ struct CookieLoginWebView<Credentials>: UIViewRepresentable {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .default()
         let webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.customUserAgent = userAgent
         webView.navigationDelegate = context.coordinator
         context.coordinator.webView = webView
         #if DEBUG

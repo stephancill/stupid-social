@@ -49,9 +49,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import sim_keychain  # noqa: E402
 
 BASE = "https://www.linkedin.com"
+# iPhone Safari, as the app's login page and LinkedInClient send it.
 USER_AGENT = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 "
+    "(KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1"
 )
 NORMALIZED = "application/vnd.linkedin.normalized+json+2.1"
 GRAPHQL = "application/graphql"
