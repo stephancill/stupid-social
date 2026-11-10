@@ -173,6 +173,23 @@ final class GitHubActivityParserTests: XCTestCase {
         XCTAssertEqual(storyTargets, ["apache/datafusion"])
     }
 
+    /// Stored credentials can lack the username; GitHub's `starred_viewer_repo` gatherer still names the viewer.
+    func testInfersViewerFromStarredViewerRepoGatherer() throws {
+        let html = [
+            card(cardType: "STARRED_REPOSITORY", createdAt: "2026-11-10T14:50:30.000-08:00", recordId: "star-your-1",
+                 actorHref: "/burneikis", actorId: "700", repoHref: "/stephancill/swift-pi", position: 0, subPosition: nil,
+                 gatherer: "starred_viewer_repo"),
+            card(cardType: "STARRED_REPOSITORY", createdAt: "2026-11-10T14:41:58.000-08:00", recordId: "star-other-1",
+                 actorHref: "/mikedemarais", actorId: "701", repoHref: "/TomiXRM/git-grapher", position: 1, subPosition: nil,
+                 gatherer: "starred_repo"),
+        ].joined()
+
+        let result = try GitHubActivityParser.parse(html)
+
+        XCTAssertEqual(result.notificationItems.map(\.targetName), ["stephancill/swift-pi"])
+        XCTAssertEqual(result.storyGroups.flatMap(\.activities).map(\.targetName), ["TomiXRM/git-grapher"])
+    }
+
     func testWithoutViewerUsernameEverythingStaysStories() throws {
         let html = card(cardType: "STARRED_REPOSITORY", createdAt: "2026-08-29T05:30:41.000-07:00", recordId: "star-a",
                         actorHref: "/SystemWOWS", actorId: "700", repoHref: "/stephancill/pfwc", position: 0, subPosition: nil)
@@ -272,18 +289,18 @@ final class GitHubActivityParserTests: XCTestCase {
              actorHref: actorHref, actorId: actorId, repoHref: repoHref, position: 1, subPosition: sub)
     }
 
-    private func card(cardType: String, createdAt: String, recordId: String, actorHref: String, actorId: String, repoHref: String, position: Int, subPosition: Int?) -> String {
+    private func card(cardType: String, createdAt: String, recordId: String, actorHref: String, actorId: String, repoHref: String, position: Int, subPosition: Int?, gatherer: String? = nil) -> String {
         let actorMetadata: [String: Any] = ["clicked_resource_type": "USER", "clicked_resource_id": actorId]
         let repoMetadata: [String: Any] = ["clicked_resource_type": "REPO", "clicked_resource_id": recordId]
         return """
-        <article data-hydro-view="\(payload(cardType: cardType, createdAt: createdAt, recordId: recordId, position: position, subPosition: subPosition))">
-          <a href="\(actorHref)" data-hydro-click="\(payload(cardType: cardType, createdAt: createdAt, recordId: recordId, position: position, subPosition: subPosition, clickTarget: "feed_user_link", metadata: actorMetadata))"></a>
-          <a href="\(repoHref)" data-hydro-click="\(payload(cardType: cardType, createdAt: createdAt, recordId: recordId, position: position, subPosition: subPosition, clickTarget: "repository_link", metadata: repoMetadata))"></a>
+        <article data-hydro-view="\(payload(cardType: cardType, createdAt: createdAt, recordId: recordId, position: position, subPosition: subPosition, gatherer: gatherer))">
+          <a href="\(actorHref)" data-hydro-click="\(payload(cardType: cardType, createdAt: createdAt, recordId: recordId, position: position, subPosition: subPosition, gatherer: gatherer, clickTarget: "feed_user_link", metadata: actorMetadata))"></a>
+          <a href="\(repoHref)" data-hydro-click="\(payload(cardType: cardType, createdAt: createdAt, recordId: recordId, position: position, subPosition: subPosition, gatherer: gatherer, clickTarget: "repository_link", metadata: repoMetadata))"></a>
         </article>
         """
     }
 
-    private func payload(cardType: String, createdAt: String, recordId: String, position: Int, subPosition: Int?, clickTarget: String? = nil, metadata: [String: Any]? = nil) -> String {
+    private func payload(cardType: String, createdAt: String, recordId: String, position: Int, subPosition: Int?, gatherer: String? = nil, clickTarget: String? = nil, metadata: [String: Any]? = nil) -> String {
         var feedCard: [String: Any] = [
             "card_type": cardType,
             "created_at": createdAt,
@@ -293,6 +310,7 @@ final class GitHubActivityParserTests: XCTestCase {
             "card_position": position,
         ]
         feedCard["card_sub_position"] = subPosition ?? NSNull()
+        feedCard["gatherer"] = gatherer
         var value: [String: Any] = ["feed_card": feedCard]
         value["click_target"] = clickTarget
         value["metadata"] = metadata

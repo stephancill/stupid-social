@@ -540,6 +540,17 @@ def parse_structured_html(html: str) -> dict[str, Any]:
     return parser.structured_feed()
 
 
+def viewer_from_feed(html: str) -> str | None:
+    """The viewer's login, from the owner of a repo whose star GitHub gathered
+    as ``starred_viewer_repo``. Stored credentials can lack the username, and
+    without it every star of the viewer's repos would stay a story."""
+    for item in parse_structured_html(html)["items"]:
+        target = item.get("target") or {}
+        if item.get("type") == "STARRED_REPOSITORY" and item.get("gatherer") == "starred_viewer_repo" and target.get("name"):
+            return target["name"].split("/")[0]
+    return None
+
+
 def summarize_html(html: str) -> dict[str, Any]:
     structured = parse_structured_html(html)
     timestamps = [item["created_at"] for item in structured["items"] if item["created_at"]]
@@ -852,7 +863,7 @@ def main() -> None:
             return
         if args.command == "notifications":
             html, _ = client.for_you_feed()
-            viewer = credentials.get("username")
+            viewer = credentials.get("username") or (viewer_from_feed(html) if html else None)
             notifications_list = extract_starred_your_repo(html, viewer) if html else []
             write_json(args.output, notifications_list)
             print(json.dumps(notifications_list, indent=2, sort_keys=True))

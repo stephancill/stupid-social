@@ -83,20 +83,10 @@ public final class GitHubNotificationSource: NotificationFetching, ProfileFetchi
             return GitHubFeedParseResult(storyGroups: [], notificationItems: [])
         }
         metadataStore.status = .valid
-        persistRefreshedSession(from: loaded.response, original: credentials)
+        if let updated = credentials.updated(from: loaded.response, accountUsername: metadataStore.githubAccount?.username) {
+            _ = try? credentialStore.saveGitHubCredentials(updated)
+        }
         return loaded.parsed
-    }
-
-    /// Persists a `user_session` GitHub re-issued via `Set-Cookie`. GitHub does
-    /// not normally re-issue it, so this is usually a no-op; keeping the stored
-    /// credentials current is what lets the same session stay valid long-term.
-    private func persistRefreshedSession(from response: GitHubForYouFeedResponse, original: GitHubCredentials) {
-        let userSession = response.refreshedUserSession ?? original.userSession
-        let sameSite = response.refreshedSameSiteUserSession ?? original.sameSiteUserSession
-        guard userSession != original.userSession || sameSite != original.sameSiteUserSession else { return }
-        _ = try? credentialStore.saveGitHubCredentials(
-            original.replacingSessionCookies(userSession: userSession, sameSiteUserSession: sameSite),
-        )
     }
 
     /// Groups "starred your repository" notifications by repo, the same way

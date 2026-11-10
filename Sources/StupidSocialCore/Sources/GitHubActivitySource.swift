@@ -27,26 +27,35 @@ public final class GitHubActivitySource: GitHubActivityFetching {
     private func fetch(credentials: GitHubCredentials) async throws -> [GitHubActivityGroup] {
         guard let loaded = try await feedLoader.load(credentials: credentials) else { return [] }
         metadataStore.status = .valid
-        persistRefreshedSession(from: loaded.response, original: credentials)
+        if let updated = credentials.updated(from: loaded.response, accountUsername: metadataStore.githubAccount?.username) {
+            _ = try? credentialStore.saveGitHubCredentials(updated)
+        }
         return loaded.parsed.storyGroups
-    }
-
-    /// Persists a `user_session` GitHub re-issued via `Set-Cookie`. GitHub does
-    /// not normally re-issue it, so this is usually a no-op; keeping the stored
-    /// credentials current is what lets the same session stay valid long-term.
-    private func persistRefreshedSession(from response: GitHubForYouFeedResponse, original: GitHubCredentials) {
-        let userSession = response.refreshedUserSession ?? original.userSession
-        let sameSite = response.refreshedSameSiteUserSession ?? original.sameSiteUserSession
-        guard userSession != original.userSession || sameSite != original.sameSiteUserSession else { return }
-        _ = try? credentialStore.saveGitHubCredentials(
-            original.replacingSessionCookies(userSession: userSession, sameSiteUserSession: sameSite),
-        )
     }
 
     private func markInvalid() {
         guard var account = metadataStore.githubAccount else { return }
         account.status = .invalidCredentials
         metadataStore.githubAccount = account
+    }
+}
+
+extension GitHubCredentials {
+    /// The credentials to store after a feed load, or nil when nothing changed. Takes a `user_session` GitHub
+    /// re-issued via `Set-Cookie` (rare, but it keeps the session valid long-term) and fills a missing username from
+    /// the account's handle, which came from GitHub's signed-in identity when it was added; the feed parser needs the
+    /// username to tell stars of the viewer's repositories (notifications) from other stars (stories).
+    func updated(from response: GitHubForYouFeedResponse, accountUsername: String?) -> GitHubCredentials? {
+        let userSession = response.refreshedUserSession ?? userSession
+        let sameSite = response.refreshedSameSiteUserSession ?? sameSiteUserSession
+        let username = username.flatMap { $0.isEmpty ? nil : $0 } ?? accountUsername.flatMap { $0.isEmpty ? nil : $0 }
+        guard userSession != self.userSession || sameSite != sameSiteUserSession || username != self.username else { return nil }
+        return GitHubCredentials(
+            userSession: userSession,
+            sameSiteUserSession: sameSite,
+            username: username,
+            additionalCookies: additionalCookies,
+        )
     }
 }
 
@@ -153,8 +162,11 @@ public enum GitHubActivityParser {
         let resourceId: FlexibleId
         let cardPosition: Int?
         let cardSubPosition: Int?
+        /// Why GitHub put the card in the feed; `starred_viewer_repo` marks a star of the viewer's own repository.
+        let gatherer: String?
 
         enum CodingKeys: String, CodingKey {
+            case gatherer
             case cardType = "card_type"
             case createdAt = "created_at"
             case recordId = "record_id"
@@ -229,10 +241,15 @@ public enum GitHubActivityParser {
             ))
         }
 
-        let normalized = order.compactMap { key -> (item: GitHubActivityItem, position: Int?, subPosition: Int?)? in
+        let normalized = order.compactMap { key -> (item: GitHubActivityItem, position: Int?, subPosition: Int?, gatherer: String?)? in
             guard let card = cards[key], let item = normalize(card) else { return nil }
-            return (item, card.metadata.cardPosition, card.metadata.cardSubPosition)
+            return (item, card.metadata.cardPosition, card.metadata.cardSubPosition, card.metadata.gatherer)
         }
+        // Stored credentials can lack the username. The owner of a repo whose star GitHub gathered as the viewer's
+        // own names the viewer, so stars of their repositories still become notifications rather than stories.
+        let viewerUsername = viewerUsername.flatMap { $0.isEmpty ? nil : $0 } ?? normalized
+            .first { $0.item.kind == .starredRepository && $0.gatherer == "starred_viewer_repo" }
+            .flatMap { $0.item.targetName.split(separator: "/").first.map(String.init) }
         var actorByFollowResourceId: [String: NotificationActor] = [:]
         var actorByRollupPosition: [Int: NotificationActor] = [:]
         for entry in normalized where entry.item.actor.username != nil {
