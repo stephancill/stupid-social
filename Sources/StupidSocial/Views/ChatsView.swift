@@ -191,13 +191,10 @@ struct ChatsView: View {
         .frame(idealWidth: 390, idealHeight: 560)
     }
 
-    /// A network chat opening from its row, which says whether there are unread messages to wait for.
+    /// A network chat opening from its row.
     private func opened<ViewModel: ChatViewModel>(_ chatViewModel: ViewModel, chat: ChatSummary, quickLook: Bool = false) -> ViewModel {
         chatViewModel.isQuickLook = quickLook
         chatViewModel.showRowAvatar(url: chat.avatarURL, colorKey: chat.avatarColorKey)
-        if chat.unreadCount > 0 {
-            chatViewModel.expectUnread()
-        }
         // A quick look only reads, so the focus and a staged forward wait for the chat itself.
         guard !quickLook else { return viewModel.follow(chatViewModel, chatId: chat.id) }
         chatViewModel.reminders = ChatReminderTarget(destination: chat.destination, accountId: chat.accountId, network: chat.network.socialNetwork, chatTitle: chat.title)
