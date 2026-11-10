@@ -1239,11 +1239,16 @@ def find_reels_tray(value: Any) -> dict[str, Any] | None:
     return None
 
 
+# Routes the homepage serves a signed-in session that must confirm it's the user first: the UFAC suspended
+# page and the auth platform's challenge redirect (`/auth_platform/logged_in_redirect/?next=…__coig_challenge_redirected=1`).
+CHECKPOINT_ROUTE_PREFIXES = ("/accounts/suspended/", "/auth_platform/")
+
+
 def contains_logged_out(value: Any) -> bool:
     if isinstance(value, dict):
         if value.get("is_logged_out_user") is True or value.get("is_logged_out_user_ssr") is True:
             return True
-        if str(value.get("routePath") or "").startswith("/accounts/suspended/"):
+        if str(value.get("routePath") or "").startswith(CHECKPOINT_ROUTE_PREFIXES):
             return True
         return any(contains_logged_out(v) for v in value.values())
     if isinstance(value, list):
