@@ -86,6 +86,11 @@ final class AppContainer {
             self?.accountsDidChange()
         }
         AppMetrics.accounts(accountStore.accounts)
+        chatListViewModel.prefetcher = { [weak self] chat in
+            // X Chat keeps no snapshot (decrypting needs the account's keys), so loading it ahead would be lost.
+            if case .x = chat.destination { return nil }
+            return self?.unfollowedChatViewModel(for: chat)
+        }
 
         if DemoData.shouldAutoLoad {
             loadDemoData()
@@ -181,7 +186,15 @@ final class AppContainer {
 
     /// A chat for the command line (`ChatControlServer`), built from the same factories the Chats screen uses.
     func chatViewModel(for chat: ChatSummary) throws -> ChatViewModel {
-        let viewModel: ChatViewModel? = switch chat.destination {
+        guard let viewModel = unfollowedChatViewModel(for: chat) else {
+            throw ChatControlError("\(chat.network.displayName) account isn't connected or is locked")
+        }
+        return chatListViewModel.follow(viewModel, chatId: chat.id)
+    }
+
+    /// The chat for a row, not yet reporting to its row; nil when its account isn't connected or is locked.
+    private func unfollowedChatViewModel(for chat: ChatSummary) -> ChatViewModel? {
+        switch chat.destination {
         case let .apron(serverURL, roomId):
             AdapterChatViewModel(
                 adapter: ApronChatAdapter(service: apronService, serverURL: serverURL, roomId: roomId, title: chat.title),
@@ -213,10 +226,6 @@ final class AppContainer {
         case let .demo(chatId):
             AdapterChatViewModel(adapter: DemoChatAdapter(chatId: chatId), accountId: chat.accountId)
         }
-        guard let viewModel else {
-            throw ChatControlError("\(chat.network.displayName) account isn't connected or is locked")
-        }
-        return chatListViewModel.follow(viewModel, chatId: chat.id)
     }
 
     func loadDemoData() {
