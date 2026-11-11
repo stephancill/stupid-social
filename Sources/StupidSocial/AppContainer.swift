@@ -61,6 +61,10 @@ final class AppContainer {
             return [ChatListSource(provider: apronSource, accountId: nil, label: SocialNetwork.apron.displayName)] + services.chatListSources
         })
         services.chatList = chatListViewModel
+        // Links to X posts draw as the post in every chat, loaded through the first signed-in X account.
+        ChatKit.resolveLink = { [services] url in
+            services.components.lazy.compactMap(\.xPostResolver).first?.embed(for: url)
+        }
 
         settingsViewModel = SettingsViewModel(
             services: services,
@@ -172,8 +176,7 @@ final class AppContainer {
         guard let component = services.component(id: accountId), component.credentials.hasXChatKeys(),
               let client = component.xChatClient, let liveFeed = component.xChatLiveFeed
         else { return nil }
-        let postResolver = component.xPostResolver
-        return { AdapterChatViewModel(adapter: XChatAdapter(client: client, liveFeed: liveFeed, postResolver: postResolver, conversationId: conversationId, title: title), accountId: accountId) }
+        return { AdapterChatViewModel(adapter: XChatAdapter(client: client, liveFeed: liveFeed, conversationId: conversationId, title: title), accountId: accountId) }
     }
 
     /// The chat and its group's member list.

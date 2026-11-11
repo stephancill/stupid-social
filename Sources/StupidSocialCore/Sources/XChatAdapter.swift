@@ -24,8 +24,6 @@ public final class XChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, 
     public let unavailableReferences: Set<String> = []
 
     private let client: XChatClient
-    /// Loads the posts messages share, with the account's X session.
-    private let postResolver: XPostResolver?
     private let conversationId: String
     /// Every loaded event by sequence id, with what its message decrypted to (nil when it didn't).
     private var events: [String: XChatEvent] = [:]
@@ -44,9 +42,8 @@ public final class XChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, 
     private let liveFeed: XChatLiveFeed
     private var observation: UUID?
 
-    public init(client: XChatClient, liveFeed: XChatLiveFeed, postResolver: XPostResolver?, conversationId: String, title: String) {
+    public init(client: XChatClient, liveFeed: XChatLiveFeed, conversationId: String, title: String) {
         self.client = client
-        self.postResolver = postResolver
         self.liveFeed = liveFeed
         self.conversationId = conversationId
         info = ChatInfo(title: title, subtitle: "")
@@ -366,23 +363,12 @@ public final class XChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, 
             }
             return mediaEmbed(media, keyVersion: event.messageCreate?.string(101))
         case let .post(id, url):
-            return postEmbed(id: id ?? url.flatMap(XPost.id(in:)), link: url)
-                ?? .card(title: "Post", subtitle: url?.host(), systemImage: "text.bubble", imageURL: nil, link: url)
+            // A card the framework draws as the post once `ChatKit.resolveLink` has it, so it needs the post's link.
+            let link = url ?? id.flatMap { URL(string: "https://x.com/i/status/\($0)") }
+            return .card(title: "Post", subtitle: link?.host(), systemImage: "text.bubble", imageURL: nil, link: link)
         case let .link(url, title):
-            return postEmbed(id: url.flatMap(XPost.id(in:)), link: url)
-                ?? .card(title: title ?? url?.absoluteString ?? "Link", subtitle: title == nil ? nil : url?.host(), systemImage: "link", imageURL: nil, link: url)
+            return .card(title: title ?? url?.absoluteString ?? "Link", subtitle: title == nil ? nil : url?.host(), systemImage: "link", imageURL: nil, link: url)
         }
-    }
-
-    /// A shared post drawn from the post itself once it has loaded. Until then, or when X has none, nil; the
-    /// messages draw again when it arrives.
-    private func postEmbed(id: String?, link: URL?) -> ChatEmbed? {
-        guard let id, let postResolver else { return nil }
-        if let post = postResolver.post(id) {
-            return post.chatEmbed(link: link)
-        }
-        postResolver.resolve(id) { [weak self] in self?.publish() }
-        return nil
     }
 
     /// Encrypted media loads through `XChatMediaURLProtocol`, which needs the key version of the message that

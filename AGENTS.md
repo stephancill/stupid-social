@@ -130,7 +130,7 @@ Sources/
       XChatClient.swift             # X Chat (encrypted X DMs): GraphQL inbox/history/send/read, replies, media upload, Juicebox key recovery
       XChatAdapter.swift            # X Chat adapter: decrypted history, live events, send, reactions, read marker
       XChatMedia.swift              # X Chat media: xchatmedia: URLs, the URLProtocol that downloads, decrypts and caches them; outgoing media metadata
-      XPost.swift                   # Shared X posts in chats: TweetResultByRestId → XPost, its chat embed, XPostResolver
+      XPost.swift                   # X posts in every chat: TweetResultByRestId → XPost, its .post embed, XPostResolver (ChatKit.resolveLink)
     Resources/
       TelegramSchema.tl             # Telegram TL schema (scripts/telegram-schema.py); TelegramAPI.json is gitignored
     Storage/

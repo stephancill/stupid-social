@@ -20,7 +20,7 @@ let package = Package(
     ],
     dependencies: [
         // The chat framework (docs/TECHNICAL_DESIGN.md § Chat Framework).
-        .package(url: "https://github.com/stephancill/stupid-chatkit", from: "0.4.0"),
+        .package(url: "https://github.com/stephancill/stupid-chatkit", from: "0.7.0"),
         // Anonymous usage metrics (AGENTS.md § Usage Metrics).
         .package(url: "https://github.com/stephancill/stupid-metrics-swift", from: "0.2.1"),
     ],

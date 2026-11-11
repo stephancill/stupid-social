@@ -171,13 +171,13 @@ enum XPostParser {
     }
 }
 
-/// Posts that chats link to, loaded once per account and kept for the session. Chats show a plain card until a post
-/// arrives, then draw again.
+/// Posts that chats link to, loaded once per account and kept for the session. Chats show what the network sent
+/// until a post arrives; `ChatKit.linksDidResolve()` then draws them again.
 @MainActor
 public final class XPostResolver {
     private let load: @Sendable (String) async throws -> XPost?
     private var posts: [String: XPost] = [:]
-    private var waiting: [String: [() -> Void]] = [:]
+    private var loading: Set<String> = []
     /// Posts X has none of (deleted or protected) aren't asked for again; failed loads are, after a while.
     private var unavailable: Set<String> = []
     private var failedAt: [String: Date] = [:]
@@ -195,16 +195,12 @@ public final class XPostResolver {
         posts[id]
     }
 
-    /// Loads the post unless it's loaded, loading, or unavailable; `onLoad` runs once it has arrived.
-    public func resolve(_ id: String, onLoad: @escaping () -> Void) {
-        guard posts[id] == nil, !unavailable.contains(id),
+    /// Loads the post unless it's loaded, loading, or unavailable, and has chats draw again once it arrives.
+    public func resolve(_ id: String) {
+        guard posts[id] == nil, !unavailable.contains(id), !loading.contains(id),
               failedAt[id].map({ Date().timeIntervalSince($0) > Self.retryAfter }) ?? true
         else { return }
-        if waiting[id] != nil {
-            waiting[id]?.append(onLoad)
-            return
-        }
-        waiting[id] = [onLoad]
+        loading.insert(id)
         Task {
             do {
                 if let post = try await load(id) {
@@ -216,10 +212,20 @@ public final class XPostResolver {
             } catch {
                 failedAt[id] = Date()
             }
-            let callbacks = waiting.removeValue(forKey: id) ?? []
+            loading.remove(id)
             if posts[id] != nil {
-                callbacks.forEach { $0() }
+                ChatKit.linksDidResolve()
             }
         }
+    }
+
+    /// The embed for a link to a post, for `ChatKit.resolveLink`: the post once loaded, else nil while it loads.
+    public func embed(for url: URL) -> ChatEmbed? {
+        guard let id = XPost.id(in: url) else { return nil }
+        if let post = posts[id] {
+            return post.chatEmbed(link: url)
+        }
+        resolve(id)
+        return nil
     }
 }
