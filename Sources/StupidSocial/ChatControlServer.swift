@@ -641,6 +641,7 @@ private struct ChatControlMessage: Encodable {
             case let .card(title, subtitle, _, _, link), let .linkPreview(title, subtitle, link, _): Embed(type: "card", title: title, text: subtitle, url: link)
             case let .audio(_, title, subtitle, _, _, link): Embed(type: "audio", title: title, text: subtitle, url: link)
             case let .message(title, text, link): Embed(type: "message", title: title, text: text, url: link)
+            case let .post(post): Embed(type: "post", title: [post.authorName, post.authorHandle].compactMap(\.self).joined(separator: " "), text: post.text, url: post.link)
             case let .video(url, _, _, duration, isGIF): Embed(type: isGIF ? "gif" : "video", text: duration, url: Self.webURL(url))
             case let .file(url, filename, subtitle, _): Embed(type: "file", title: filename, text: subtitle, url: Self.webURL(url))
             case let .voice(_, duration, _): Embed(type: "voice", text: duration.map { Duration.seconds($0).formatted(.time(pattern: .minuteSecond)) })

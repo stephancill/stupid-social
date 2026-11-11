@@ -1,6 +1,7 @@
 import Foundation
 
-/// A post as chats preview it: its author, text and media (`scripts/x-web-client.py post-preview`).
+/// A post as chats show it: its author, text, media and the post it quotes
+/// (`scripts/x-web-client.py post-preview`).
 public struct XPost: Hashable, Sendable {
     public struct Media: Hashable, Sendable {
         public enum Kind: Sendable {
@@ -19,8 +20,29 @@ public struct XPost: Hashable, Sendable {
     public let id: String
     public let authorName: String
     public let screenName: String
+    public let avatarURL: URL?
+    public let isVerified: Bool
+    public let postedAt: Date?
     public let text: String
     public let media: [Media]
+    /// Held in an array, since a struct can't contain itself.
+    private let quotedPosts: [XPost]
+
+    public var quoted: XPost? {
+        quotedPosts.first
+    }
+
+    public init(id: String, authorName: String, screenName: String, avatarURL: URL? = nil, isVerified: Bool = false, postedAt: Date? = nil, text: String, media: [Media] = [], quoted: XPost? = nil) {
+        self.id = id
+        self.authorName = authorName
+        self.screenName = screenName
+        self.avatarURL = avatarURL
+        self.isVerified = isVerified
+        self.postedAt = postedAt
+        self.text = text
+        self.media = media
+        quotedPosts = quoted.map { [$0] } ?? []
+    }
 
     public var link: URL {
         URL(string: "https://x.com/\(screenName)/status/\(id)")!
@@ -40,28 +62,35 @@ public struct XPost: Hashable, Sendable {
 }
 
 public extension XPost {
-    /// The post as a link preview, the way Telegram shows X links: the author over the text, with photos and videos
-    /// to page through in place. A post without media is a card.
+    /// The post drawn as a post: author, badge, time, the whole text, media to page through and the quoted post.
     func chatEmbed(link: URL?) -> ChatEmbed {
-        let title = "\(authorName) (@\(screenName))"
-        let subtitle = text.isEmpty ? nil : text
-        let link = link ?? self.link
-        let media: [ChatEmbed] = media.map { item in
-            guard let videoURL = item.videoURL else {
-                return .image(url: item.imageURL, aspectRatio: item.aspectRatio, alt: item.altText, link: nil, opensViewer: true)
-            }
-            return .video(
-                url: videoURL,
-                posterURL: item.imageURL,
-                aspectRatio: item.aspectRatio,
-                duration: item.kind == .gif ? nil : item.durationMillis.map { XChatAdapter.duration(Int64($0)) },
-                isGIF: item.kind == .gif,
-            )
-        }
-        if media.isEmpty {
-            return .card(title: title, subtitle: subtitle, systemImage: "text.bubble", imageURL: nil, link: link)
-        }
-        return .linkPreview(title: title, subtitle: subtitle, link: link, media: media)
+        .post(chatPost(link: link ?? self.link))
+    }
+
+    private func chatPost(link: URL) -> ChatPost {
+        ChatPost(
+            authorName: authorName,
+            authorHandle: "@\(screenName)",
+            authorAvatarURL: avatarURL,
+            isVerified: isVerified,
+            date: postedAt,
+            text: text,
+            media: media.map { item in
+                guard let videoURL = item.videoURL else {
+                    return .image(url: item.imageURL, aspectRatio: item.aspectRatio, alt: item.altText, link: nil, opensViewer: true)
+                }
+                return .video(
+                    url: videoURL,
+                    posterURL: item.imageURL,
+                    aspectRatio: item.aspectRatio,
+                    duration: item.kind == .gif ? nil : item.durationMillis.map { XChatAdapter.duration(Int64($0)) },
+                    isGIF: item.kind == .gif,
+                )
+            },
+            link: link,
+            network: .x,
+            quoted: quoted.map { $0.chatPost(link: $0.link) },
+        )
     }
 }
 
@@ -73,40 +102,63 @@ enum XPostParser {
     static func parse(data: Data) throws -> XPost? {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
-        guard let result = try decoder.decode(Page.self, from: data).data?.tweetResult?.result else { return nil }
+        return try decoder.decode(Page.self, from: data).data?.tweetResult?.result.flatMap(post(from:))
+    }
+
+    private static func post(from result: XThreadResponse.Result) -> XPost? {
         let tweet = result.wrapped ?? result.direct
-        guard let id = tweet.restId, let legacy = tweet.legacy,
-              let user = tweet.core?.userResults?.result?.core, let screenName = user.screenName
+        guard let id = tweet.restId, let legacy = tweet.legacy, let author = tweet.core?.userResults?.result,
+              let screenName = author.core?.screenName
         else { return nil }
-        let media: [XPost.Media] = (legacy.extendedEntities?.media ?? []).compactMap { item in
-            guard let imageURL = item.mediaUrlHttps.flatMap(URL.init(string:)) else { return nil }
-            let kind: XPost.Media.Kind = switch item.type {
-            case "video": .video
-            case "animated_gif": .gif
-            default: .photo
-            }
-            let aspectRatio = item.originalInfo.flatMap { info in
-                info.width.flatMap { width in info.height.map { Double(width) / Double(max($0, 1)) } }
-            }
-            let variants = (item.videoInfo?.variants ?? [])
-                .filter { $0.contentType == "video/mp4" && $0.url != nil }
-                .sorted { ($0.bitrate ?? 0) < ($1.bitrate ?? 0) }
-            let variant = variants.last { ($0.bitrate ?? 0) <= maxBitrate } ?? variants.first
-            return XPost.Media(
-                kind: kind,
-                imageURL: imageURL,
-                aspectRatio: aspectRatio,
-                videoURL: kind == .photo ? nil : variant?.url.flatMap(URL.init(string:)),
-                durationMillis: item.videoInfo?.durationMillis,
-                altText: item.extAltText,
-            )
-        }
         return XPost(
             id: id,
-            authorName: user.name ?? screenName,
+            authorName: author.core?.name ?? screenName,
             screenName: screenName,
-            text: XThreadParser.text(of: tweet) ?? "",
-            media: media,
+            // `_normal` is 48 pixels; the card's picture is up to 108.
+            avatarURL: author.avatar?.imageUrl.flatMap { URL(string: $0.replacingOccurrences(of: "_normal.", with: "_200x200.")) },
+            isVerified: author.isBlueVerified == true || author.verification?.verified == true,
+            postedAt: legacy.createdAt.flatMap(Date.twitter),
+            text: text(of: tweet),
+            media: (legacy.extendedEntities?.media ?? []).compactMap(media(from:)),
+            quoted: tweet.quotedStatusResult?.result.flatMap(post(from:)),
+        )
+    }
+
+    /// The shown text with its t.co links as X shows them (`display_url`), and without the link to the quoted post,
+    /// which the quote shows instead.
+    private static func text(of tweet: XThreadResponse.Tweet) -> String {
+        var text = XThreadParser.text(of: tweet) ?? ""
+        if let permalink = tweet.legacy?.quotedStatusPermalink?.url, text.hasSuffix(permalink) {
+            text = String(text.dropLast(permalink.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        for link in tweet.legacy?.entities?.urls ?? [] {
+            guard let url = link.url, let display = link.displayUrl else { continue }
+            text = text.replacingOccurrences(of: url, with: display)
+        }
+        return text
+    }
+
+    private static func media(from item: XThreadResponse.Media) -> XPost.Media? {
+        guard let imageURL = item.mediaUrlHttps.flatMap(URL.init(string:)) else { return nil }
+        let kind: XPost.Media.Kind = switch item.type {
+        case "video": .video
+        case "animated_gif": .gif
+        default: .photo
+        }
+        let aspectRatio = item.originalInfo.flatMap { info in
+            info.width.flatMap { width in info.height.map { Double(width) / Double(max($0, 1)) } }
+        }
+        let variants = (item.videoInfo?.variants ?? [])
+            .filter { $0.contentType == "video/mp4" && $0.url != nil }
+            .sorted { ($0.bitrate ?? 0) < ($1.bitrate ?? 0) }
+        let variant = variants.last { ($0.bitrate ?? 0) <= maxBitrate } ?? variants.first
+        return XPost.Media(
+            kind: kind,
+            imageURL: imageURL,
+            aspectRatio: aspectRatio,
+            videoURL: kind == .photo ? nil : variant?.url.flatMap(URL.init(string:)),
+            durationMillis: item.videoInfo?.durationMillis,
+            altText: item.extAltText,
         )
     }
 

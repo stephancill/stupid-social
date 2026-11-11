@@ -25,17 +25,22 @@ final class XPostTests: XCTestCase {
         XCTAssertEqual(post.authorName, "Alice")
         XCTAssertEqual(post.screenName, "alice")
         XCTAssertEqual(post.text, "Look & see")
+        XCTAssertEqual(post.avatarURL?.absoluteString, "https://pbs.twimg.com/profile_images/1/a_200x200.jpg")
+        XCTAssertTrue(post.isVerified)
+        XCTAssertEqual(post.postedAt, Date(timeIntervalSince1970: 1_666_940_433))
         XCTAssertEqual(post.media.count, 1)
         XCTAssertEqual(post.media[0].kind, .video)
         XCTAssertEqual(post.media[0].videoURL?.absoluteString, "https://video.twimg.com/mid.mp4")
         XCTAssertEqual(post.media[0].aspectRatio ?? 0, 1280.0 / 720, accuracy: 0.001)
         XCTAssertEqual(post.media[0].durationMillis, 38966)
 
-        guard case let .linkPreview(title, subtitle, link, media) = post.chatEmbed(link: nil) else { return XCTFail("Expected a link preview") }
-        XCTAssertEqual(title, "Alice (@alice)")
-        XCTAssertEqual(subtitle, "Look & see")
-        XCTAssertEqual(link?.absoluteString, "https://x.com/alice/status/42")
-        guard case let .video(url, poster, _, duration, isGIF) = media.first else { return XCTFail("Expected a video") }
+        let card = try XCTUnwrap(chatPost(post.chatEmbed(link: nil)))
+        XCTAssertEqual(card.authorName, "Alice")
+        XCTAssertEqual(card.authorHandle, "@alice")
+        XCTAssertTrue(card.isVerified)
+        XCTAssertEqual(card.text, "Look & see")
+        XCTAssertEqual(card.link?.absoluteString, "https://x.com/alice/status/42")
+        guard case let .video(url, poster, _, duration, isGIF) = card.media.first else { return XCTFail("Expected a video") }
         XCTAssertEqual(url.absoluteString, "https://video.twimg.com/mid.mp4")
         XCTAssertEqual(poster?.absoluteString, "https://pbs.twimg.com/ext_tw_video_thumb/1/pu/img/poster.jpg")
         XCTAssertEqual(duration, "0:38")
@@ -51,28 +56,49 @@ final class XPostTests: XCTestCase {
         ]
         let post = try XCTUnwrap(XPostParser.parse(data: page(tweet(text: "", media: [photo, gif]))))
 
-        guard case let .linkPreview(_, subtitle, _, media) = post.chatEmbed(link: URL(string: "https://x.com/i/status/42")) else { return XCTFail("Expected a link preview") }
-        XCTAssertNil(subtitle)
-        guard case let .image(url, _, alt, _, opensViewer) = media[0] else { return XCTFail("Expected a photo") }
+        let card = try XCTUnwrap(chatPost(post.chatEmbed(link: URL(string: "https://x.com/i/status/42"))))
+        XCTAssertEqual(card.text, "")
+        XCTAssertEqual(card.link?.absoluteString, "https://x.com/i/status/42")
+        guard case let .image(url, _, alt, _, opensViewer) = card.media[0] else { return XCTFail("Expected a photo") }
         XCTAssertEqual(url.absoluteString, "https://pbs.twimg.com/media/a.jpg")
         XCTAssertEqual(alt, "A cat")
         XCTAssertTrue(opensViewer)
-        guard case let .video(url, _, _, duration, isGIF) = media[1] else { return XCTFail("Expected a GIF") }
+        guard case let .video(url, _, _, duration, isGIF) = card.media[1] else { return XCTFail("Expected a GIF") }
         XCTAssertEqual(url.absoluteString, "https://video.twimg.com/b.mp4")
         XCTAssertNil(duration)
         XCTAssertTrue(isGIF)
     }
 
-    func testTextOnlyPostIsACard() throws {
+    func testLongPostsUseTheirWholeText() throws {
         var long = tweet(text: "Truncated…")
         long["note_tweet"] = ["note_tweet_results": ["result": ["text": "The whole long post"]]]
         let wrapped: [String: Any] = ["__typename": "TweetWithVisibilityResults", "tweet": long]
         let post = try XCTUnwrap(XPostParser.parse(data: page(wrapped)))
 
-        guard case let .card(title, subtitle, _, _, link) = post.chatEmbed(link: URL(string: "https://x.com/i/status/42")) else { return XCTFail("Expected a card") }
-        XCTAssertEqual(title, "Alice (@alice)")
-        XCTAssertEqual(subtitle, "The whole long post")
-        XCTAssertEqual(link?.absoluteString, "https://x.com/i/status/42")
+        XCTAssertEqual(try XCTUnwrap(chatPost(post.chatEmbed(link: nil))).text, "The whole long post")
+    }
+
+    /// The quoted post's t.co link leaves the text, which the quote shows instead; other links show as X shows them.
+    func testQuotedPostAndLinks() throws {
+        var quoting = tweet(text: "Read https://t.co/a then this https://t.co/q")
+        var legacy = try XCTUnwrap(quoting["legacy"] as? [String: Any])
+        legacy["entities"] = ["urls": [["url": "https://t.co/a", "display_url": "example.com/a…", "expanded_url": "https://example.com/a/long"]]]
+        legacy["quoted_status_permalink"] = ["url": "https://t.co/q", "expanded": "https://twitter.com/bob/status/9"]
+        quoting["legacy"] = legacy
+        var quoted = tweet(text: "Original", media: [["type": "photo", "media_url_https": "https://pbs.twimg.com/media/q.jpg"]])
+        quoted["rest_id"] = "9"
+        quoted["core"] = ["user_results": ["result": ["rest_id": "8", "core": ["name": "Bob", "screen_name": "bob"]]]]
+        quoting["quoted_status_result"] = ["result": ["__typename": "TweetWithVisibilityResults", "tweet": quoted]]
+        let post = try XCTUnwrap(XPostParser.parse(data: page(quoting)))
+
+        XCTAssertEqual(post.text, "Read example.com/a… then this")
+        let card = try XCTUnwrap(chatPost(post.chatEmbed(link: nil)))
+        XCTAssertEqual(card.quoted?.authorName, "Bob")
+        XCTAssertEqual(card.quoted?.authorHandle, "@bob")
+        XCTAssertEqual(card.quoted?.text, "Original")
+        XCTAssertEqual(card.quoted?.link?.absoluteString, "https://x.com/bob/status/9")
+        XCTAssertEqual(card.quoted?.media.count, 1)
+        XCTAssertEqual(card.quoted?.isVerified, false)
     }
 
     func testUnavailablePostIsNil() throws {
@@ -98,12 +124,16 @@ final class XPostTests: XCTestCase {
 
     // MARK: Fixtures
 
+    private func chatPost(_ embed: ChatEmbed) -> ChatPost? {
+        if case let .post(post) = embed { post } else { nil }
+    }
+
     private func page(_ result: [String: Any]) throws -> Data {
         try JSONSerialization.data(withJSONObject: ["data": ["tweetResult": ["result": result]]])
     }
 
     private func tweet(text: String, range: [Int]? = nil, media: [[String: Any]] = []) -> [String: Any] {
-        var legacy: [String: Any] = ["full_text": text, "favorite_count": 1]
+        var legacy: [String: Any] = ["full_text": text, "favorite_count": 1, "created_at": "Fri Oct 28 07:00:33 +0000 2022"]
         if let range {
             legacy["display_text_range"] = range
         }
@@ -117,6 +147,7 @@ final class XPostTests: XCTestCase {
                 "rest_id": "7",
                 "core": ["name": "Alice", "screen_name": "alice"],
                 "avatar": ["image_url": "https://pbs.twimg.com/profile_images/1/a_normal.jpg"],
+                "is_blue_verified": true,
             ]]],
             "legacy": legacy,
         ]

@@ -1893,6 +1893,12 @@ struct XThreadResponse: Decodable {
         let core: Core?
         let legacy: Legacy?
         let noteTweet: NoteTweet?
+        let quotedStatusResult: QuotedResult?
+    }
+
+    /// The post a post quotes; a class, since a struct can't contain itself.
+    final class QuotedResult: Decodable {
+        let result: Result?
     }
 
     struct Core: Decodable {
@@ -1907,6 +1913,12 @@ struct XThreadResponse: Decodable {
         let restId: String?
         let core: UserCore?
         let avatar: Avatar?
+        let isBlueVerified: Bool?
+        let verification: Verification?
+    }
+
+    struct Verification: Decodable {
+        let verified: Bool?
     }
 
     struct UserCore: Decodable {
@@ -1929,6 +1941,23 @@ struct XThreadResponse: Decodable {
         let favorited: Bool?
         let retweeted: Bool?
         let extendedEntities: ExtendedEntities?
+        let entities: Entities?
+        let quotedStatusPermalink: Permalink?
+    }
+
+    struct Entities: Decodable {
+        let urls: [EntityURL]?
+    }
+
+    /// A t.co link in the text, and what it shows as.
+    struct EntityURL: Decodable {
+        let url: String?
+        let displayUrl: String?
+    }
+
+    struct Permalink: Decodable {
+        /// The t.co link to the quoted post.
+        let url: String?
     }
 
     struct ExtendedEntities: Decodable {
