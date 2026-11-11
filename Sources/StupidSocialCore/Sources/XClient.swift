@@ -374,6 +374,30 @@ public struct XClient {
 
     /// The post's counts and whether the viewer liked or reposted it (`TweetResultByRestId`).
     func tweetEngagement(tweetId: String) async throws -> PostEngagement {
+        let data = try await tweetResult(tweetId: tweetId)
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        guard let tweet = try decoder.decode(XTweetResultResponse.self, from: data).data.tweetResult?.result?.post,
+              let legacy = tweet.legacy
+        else {
+            throw SourceError.invalidResponse
+        }
+        return PostEngagement(
+            replyCount: legacy.replyCount ?? 0,
+            repostCount: legacy.retweetCount ?? 0,
+            quoteCount: legacy.quoteCount ?? 0,
+            likeCount: legacy.favoriteCount ?? 0,
+            isLiked: legacy.favorited ?? false,
+            isReposted: legacy.retweeted ?? false,
+        )
+    }
+
+    /// A post as chats preview it, or nil when X has none to show (deleted, or from a protected account).
+    public func post(id: String) async throws -> XPost? {
+        try await XPostParser.parse(data: tweetResult(tweetId: id))
+    }
+
+    private func tweetResult(tweetId: String) async throws -> Data {
         guard let credentials = try credentialStore.loadXCredentials() else {
             throw SourceError.notConfigured
         }
@@ -400,23 +424,7 @@ public struct XClient {
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.allHTTPHeaderFields = headers(credentials: credentials)
-
-        let data = try await send(request)
-        let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-        guard let tweet = try decoder.decode(XTweetResultResponse.self, from: data).data.tweetResult?.result?.post,
-              let legacy = tweet.legacy
-        else {
-            throw SourceError.invalidResponse
-        }
-        return PostEngagement(
-            replyCount: legacy.replyCount ?? 0,
-            repostCount: legacy.retweetCount ?? 0,
-            quoteCount: legacy.quoteCount ?? 0,
-            likeCount: legacy.favoriteCount ?? 0,
-            isLiked: legacy.favorited ?? false,
-            isReposted: legacy.retweeted ?? false,
-        )
+        return try await send(request)
     }
 
     /// The thread a post belongs to, up to the post (`TweetDetail`).
@@ -1929,6 +1937,27 @@ struct XThreadResponse: Decodable {
 
     struct Media: Decodable {
         let mediaUrlHttps: String?
+        /// "photo", "video" or "animated_gif".
+        let type: String?
+        let originalInfo: OriginalInfo?
+        let videoInfo: VideoInfo?
+        let extAltText: String?
+    }
+
+    struct OriginalInfo: Decodable {
+        let width: Int?
+        let height: Int?
+    }
+
+    struct VideoInfo: Decodable {
+        let durationMillis: Int?
+        let variants: [Variant]?
+    }
+
+    struct Variant: Decodable {
+        let contentType: String?
+        let bitrate: Int?
+        let url: String?
     }
 
     struct NoteTweet: Decodable {

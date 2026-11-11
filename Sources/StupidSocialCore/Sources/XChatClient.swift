@@ -136,7 +136,8 @@ public struct XChatMessageContents: Equatable, Sendable {
 
     public enum Attachment: Equatable, Sendable {
         case media(Media)
-        case post(url: URL?)
+        /// A shared post (`{1 rest id, 2 URL, 3 …}`, observed 2026-11-11).
+        case post(id: String?, url: URL?)
         case link(url: URL?, title: String?)
     }
 
@@ -164,7 +165,7 @@ public struct XChatMessageContents: Equatable, Sendable {
                 return .media(Media(media))
             }
             if let post = attachment.structure(2) {
-                return .post(url: post.string(2).flatMap(URL.init))
+                return .post(id: post.string(1), url: post.string(2).flatMap(URL.init))
             }
             if let link = attachment.structure(3) ?? attachment.structure(4) {
                 return .link(url: link.string(1).flatMap(URL.init), title: link.string(4))

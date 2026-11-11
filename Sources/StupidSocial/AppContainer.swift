@@ -172,7 +172,8 @@ final class AppContainer {
         guard let component = services.component(id: accountId), component.credentials.hasXChatKeys(),
               let client = component.xChatClient, let liveFeed = component.xChatLiveFeed
         else { return nil }
-        return { AdapterChatViewModel(adapter: XChatAdapter(client: client, liveFeed: liveFeed, conversationId: conversationId, title: title), accountId: accountId) }
+        let postResolver = component.xPostResolver
+        return { AdapterChatViewModel(adapter: XChatAdapter(client: client, liveFeed: liveFeed, postResolver: postResolver, conversationId: conversationId, title: title), accountId: accountId) }
     }
 
     /// The chat and its group's member list.

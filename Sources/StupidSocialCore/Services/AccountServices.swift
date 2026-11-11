@@ -16,6 +16,8 @@ public final class AccountComponents {
     public private(set) var threadLoader: (any PostThreadLoading)?
 
     public private(set) var xClient: XClient?
+    /// Posts that chats share, kept for every chat of the account.
+    public private(set) var xPostResolver: XPostResolver?
     public private(set) var xChatClient: XChatClient?
     public private(set) var xChatUnlock: XChatUnlockViewModel?
     public private(set) var xChatLiveFeed: XChatLiveFeed?
@@ -44,6 +46,7 @@ public final class AccountComponents {
             let client = XClient(credentialStore: credentials)
             let source = XNotificationSource(client: client, metadataStore: metadata)
             xClient = client
+            xPostResolver = XPostResolver(client: client)
             notificationSource = source
             profileFetcher = source
             targetDetailFetcher = source

@@ -1187,8 +1187,9 @@ def decrypt_media(key: bytes, blob: bytes) -> bytes:
     return output
 
 
-def media_attachments(client: "XChatClient", item: dict[str, Any], keys: dict[str, Any], pages: int) -> list[dict[str, Any]]:
-    """Each media attachment in an inbox conversation's newest pages: parsed fields, never message text."""
+def decrypted_messages(client: "XChatClient", item: dict[str, Any], keys: dict[str, Any], pages: int):
+    """(event, key version, conversation key, message contents) for each decryptable message in an inbox
+    conversation's newest pages."""
     conversation_id = item["conversation_detail"]["conversation_id"]
     conversation_keys = client.conversation_keys(
         [thrift(base64.b64decode(e)) for e in item.get("latest_conversation_key_change_events") or []], keys
@@ -1213,34 +1214,81 @@ def media_attachments(client: "XChatClient", item: dict[str, Any], keys: dict[st
             message = entry.get(1) if isinstance(entry, dict) else None
             if not isinstance(message, dict):
                 continue
-            for attachment in message.get(3) or []:
-                media = attachment.get(1)
-                if not media:
-                    continue
-                size = media.get(2) or {}
-                filename = text(media.get(6)) or ""
-                found.append({
-                    "conversation_id": conversation_id,
-                    "sequence_id": text(event.get(1)),
-                    "message_id": text(event.get(2)),
-                    "key_version": version,
-                    "conversation_key": key,
-                    "fields": sorted(media),
-                    "media_hash_key": text(media.get(1)),
-                    "type": MEDIA_TYPES.get(media.get(3), media.get(3)),
-                    "width": size.get(1),
-                    "height": size.get(2),
-                    "duration_millis": media.get(4),
-                    "filesize_bytes": media.get(5),
-                    "extension": os.path.splitext(filename)[1].lower(),
-                    "attachment_id": text(media.get(7)),
-                    "legacy_url": bool(media.get(8)),
-                    "legacy_preview_url": bool(media.get(9)),
-                    "plaintext_sha256": media.get(11),
-                })
+            yield event, version, key, message
         if not conversation.get("has_more") or not events:
             break
         min_sequence = min((text(e.get(1)) for e in events), key=int)
+
+
+def media_attachments(client: "XChatClient", item: dict[str, Any], keys: dict[str, Any], pages: int) -> list[dict[str, Any]]:
+    """Each media attachment in an inbox conversation's newest pages: parsed fields, never message text."""
+    conversation_id = item["conversation_detail"]["conversation_id"]
+    found = []
+    for event, version, key, message in decrypted_messages(client, item, keys, pages):
+        for attachment in message.get(3) or []:
+            media = attachment.get(1)
+            if not media:
+                continue
+            size = media.get(2) or {}
+            filename = text(media.get(6)) or ""
+            found.append({
+                "conversation_id": conversation_id,
+                "sequence_id": text(event.get(1)),
+                "message_id": text(event.get(2)),
+                "key_version": version,
+                "conversation_key": key,
+                "fields": sorted(media),
+                "media_hash_key": text(media.get(1)),
+                "type": MEDIA_TYPES.get(media.get(3), media.get(3)),
+                "width": size.get(1),
+                "height": size.get(2),
+                "duration_millis": media.get(4),
+                "filesize_bytes": media.get(5),
+                "extension": os.path.splitext(filename)[1].lower(),
+                "attachment_id": text(media.get(7)),
+                "legacy_url": bool(media.get(8)),
+                "legacy_preview_url": bool(media.get(9)),
+                "plaintext_sha256": media.get(11),
+            })
+    return found
+
+
+def shape(value: Any) -> Any:
+    """A thrift value's field numbers and types, with no values: strings as their length."""
+    if isinstance(value, dict):
+        return {str(k): shape(v) for k, v in sorted(value.items())}
+    if isinstance(value, list):
+        return [shape(v) for v in value[:3]]
+    if isinstance(value, bytes):
+        return f"bytes({len(value)})"
+    if isinstance(value, str):
+        return f"str({len(value)})"
+    return type(value).__name__
+
+
+def url_pattern(value: Any) -> str | None:
+    """A URL's host and path with names and numbers replaced, such as x.com/<name>/status/<digits>."""
+    url = text(value)
+    if not url:
+        return None
+    parsed = urllib.parse.urlsplit(url)
+    kept = {"i", "status", "web", "photo", "video"}
+    parts = ["<digits>" if p.isdigit() else p if p in kept else "<name>" for p in parsed.path.split("/") if p]
+    return f"{parsed.scheme}://{parsed.netloc}/{'/'.join(parts)}" + ("?<query>" if parsed.query else "")
+
+
+def link_attachments(client: "XChatClient", item: dict[str, Any], keys: dict[str, Any], pages: int) -> list[dict[str, Any]]:
+    """Each post (attachment field 2) or link (fields 3 and 4) attachment in an inbox conversation's newest pages:
+    field shapes and URL patterns, never values."""
+    found = []
+    for _, _, _, message in decrypted_messages(client, item, keys, pages):
+        for attachment in message.get(3) or []:
+            for field in (2, 3, 4):
+                inner = attachment.get(field)
+                if not isinstance(inner, dict):
+                    continue
+                urls = {str(k): url_pattern(v) for k, v in inner.items() if (text(v) or "").startswith("http")}
+                found.append({"attachment_field": field, "shape": shape(inner), "urls": urls, "message_has_text": bool(message.get(1))})
     return found
 
 
@@ -1352,6 +1400,12 @@ def build_parser() -> argparse.ArgumentParser:
     media.add_argument("conversation_id", nargs="?", help="Omit to scan every inbox conversation.")
     media.add_argument("--pages", type=int, default=3)
     media.add_argument("--download", type=int, action="append", default=[], help="Index of an attachment to download and decrypt.")
+    links = subparsers.add_parser(
+        "links",
+        help="List post and link attachments' field shapes and URL patterns (no values) in one conversation, or every inbox conversation.",
+    )
+    links.add_argument("conversation_id", nargs="?", help="Omit to scan every inbox conversation.")
+    links.add_argument("--pages", type=int, default=3)
     send = subparsers.add_parser("send-message", help="Send an encrypted text message. Only to a conversation agreed for testing.")
     send.add_argument("conversation_id")
     send.add_argument("text")
@@ -1447,6 +1501,10 @@ def main() -> None:
             "attachments": [{"index": index, **public_media_row(row)} for index, row in enumerate(rows)],
             "downloads": {str(index): download_media(client, rows[index]) for index in args.download},
         }
+    elif args.command == "links":
+        keys = load_keys()
+        items = [i for i in client.inbox_items() if args.conversation_id in (None, i["conversation_detail"]["conversation_id"])]
+        result = {"attachments": [row for item in items for row in link_attachments(client, item, keys, args.pages)]}
     elif args.command == "send-message":
         result = client.send_message(args.conversation_id, args.expect_participant, args.text, args.reply_to)
     elif args.command == "send-media":

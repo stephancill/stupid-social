@@ -627,6 +627,45 @@ def summarize_thread(response: dict[str, Any]) -> list[dict[str, Any]]:
     return summary
 
 
+def post_preview(response: dict[str, Any]) -> dict[str, Any] | None:
+    """A `TweetResultByRestId` post as the app previews it in chats: author, text, and each photo, video or GIF with
+    its aspect ratio and the MP4 variant it plays (the highest bitrate up to 1 Mbps, else the lowest)."""
+    result = ((response.get("data") or {}).get("tweetResult") or {}).get("result") or {}
+    result = result.get("tweet") or result
+    legacy = result.get("legacy") or {}
+    if not legacy:
+        return None
+    user = ((result.get("core") or {}).get("user_results") or {}).get("result") or {}
+    note = (((result.get("note_tweet") or {}).get("note_tweet_results") or {}).get("result") or {}).get("text")
+    text = legacy.get("full_text") or ""
+    start, end = (legacy.get("display_text_range") or [0, len(text)])[:2]
+    media = []
+    for item in (legacy.get("extended_entities") or {}).get("media") or []:
+        info = item.get("original_info") or {}
+        variants = [v for v in (item.get("video_info") or {}).get("variants") or [] if v.get("content_type") == "video/mp4"]
+        variants.sort(key=lambda v: v.get("bitrate") or 0)
+        playable = [v for v in variants if (v.get("bitrate") or 0) <= 1_000_000] or variants[:1]
+        media.append({
+            "type": item.get("type"),
+            "aspect_ratio": round(info["width"] / max(info["height"], 1), 3) if info.get("width") and info.get("height") else None,
+            "has_image_url": bool(item.get("media_url_https")),
+            "has_alt_text": bool(item.get("ext_alt_text")),
+            "duration_millis": (item.get("video_info") or {}).get("duration_millis"),
+            "variant_bitrate": playable[-1].get("bitrate") if playable else None,
+        })
+    return {
+        "id": result.get("rest_id"),
+        "typename": result.get("__typename"),
+        "author": {"name": (user.get("core") or {}).get("name"), "screen_name": (user.get("core") or {}).get("screen_name")},
+        "has_avatar": bool((user.get("avatar") or {}).get("image_url")),
+        "verified": bool(user.get("is_blue_verified") or (user.get("verification") or {}).get("verified")),
+        "text_length": len(note or text[start:end]),
+        "is_note_tweet": note is not None,
+        "media": media,
+        "quotes": ((result.get("quoted_status_result") or {}).get("result") or {}).get("rest_id") is not None,
+    }
+
+
 def summarize_notifications(response: dict[str, Any]) -> dict[str, Any]:
     """Summarize grouped X notifications, focusing on actor ordering.
 
@@ -798,6 +837,8 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("dm-unread-count", help="Fetch the DM unread badge count.")
     tweet = subparsers.add_parser("tweet", help="Fetch one post with the viewer's like/repost state and counts.")
     tweet.add_argument("tweet_id")
+    preview = subparsers.add_parser("post-preview", help="Fetch one post and summarize it as chats preview it (TweetResultByRestId).")
+    preview.add_argument("tweet_id")
     for name, help_text in [
         ("like", "Like a post."),
         ("unlike", "Remove your like from a post."),
@@ -852,6 +893,8 @@ def main() -> None:
         result = client.thread(args.tweet_id, cursor=args.cursor)
     elif args.command == "tweet":
         result = client.tweet(args.tweet_id)
+    elif args.command == "post-preview":
+        result = post_preview(client.tweet(args.tweet_id)["raw"]) or {"status": "unavailable"}
     elif args.command in ("like", "unlike"):
         result = client.set_liked(args.tweet_id, args.command == "like")
     elif args.command in ("retweet", "unretweet"):
