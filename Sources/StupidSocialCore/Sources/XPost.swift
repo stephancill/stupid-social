@@ -32,7 +32,14 @@ public struct XPost: Hashable, Sendable {
         quotedPosts.first
     }
 
-    public init(id: String, authorName: String, screenName: String, avatarURL: URL? = nil, isVerified: Bool = false, postedAt: Date? = nil, text: String, media: [Media] = [], quoted: XPost? = nil) {
+    public let replyCount: Int?
+    public let repostCount: Int?
+    public let likeCount: Int?
+
+    public init(id: String, authorName: String, screenName: String, avatarURL: URL? = nil, isVerified: Bool = false, postedAt: Date? = nil, text: String, media: [Media] = [], replyCount: Int? = nil, repostCount: Int? = nil, likeCount: Int? = nil, quoted: XPost? = nil) {
+        self.replyCount = replyCount
+        self.repostCount = repostCount
+        self.likeCount = likeCount
         self.id = id
         self.authorName = authorName
         self.screenName = screenName
@@ -89,6 +96,7 @@ public extension XPost {
             },
             link: link,
             network: .x,
+            counts: ChatPost.Counts(replies: replyCount, reposts: repostCount, likes: likeCount),
             quoted: quoted.map { $0.chatPost(link: $0.link) },
         )
     }
@@ -120,6 +128,10 @@ enum XPostParser {
             postedAt: legacy.createdAt.flatMap(Date.twitter),
             text: text(of: tweet),
             media: (legacy.extendedEntities?.media ?? []).compactMap(media(from:)),
+            replyCount: legacy.replyCount,
+            // X's repost count leaves out quotes, which it counts apart.
+            repostCount: legacy.retweetCount,
+            likeCount: legacy.favoriteCount,
             quoted: tweet.quotedStatusResult?.result.flatMap(post(from:)),
         )
     }

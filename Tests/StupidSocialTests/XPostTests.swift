@@ -38,6 +38,7 @@ final class XPostTests: XCTestCase {
         XCTAssertEqual(card.authorName, "Alice")
         XCTAssertEqual(card.authorHandle, "@alice")
         XCTAssertTrue(card.isVerified)
+        XCTAssertEqual(card.counts, ChatPost.Counts(replies: 3, reposts: 5, likes: 1))
         XCTAssertEqual(card.text, "Look & see")
         XCTAssertEqual(card.link?.absoluteString, "https://x.com/alice/status/42")
         guard case let .video(url, poster, _, duration, isGIF) = card.media.first else { return XCTFail("Expected a video") }
@@ -133,7 +134,7 @@ final class XPostTests: XCTestCase {
     }
 
     private func tweet(text: String, range: [Int]? = nil, media: [[String: Any]] = []) -> [String: Any] {
-        var legacy: [String: Any] = ["full_text": text, "favorite_count": 1, "created_at": "Fri Oct 28 07:00:33 +0000 2022"]
+        var legacy: [String: Any] = ["full_text": text, "favorite_count": 1, "reply_count": 3, "retweet_count": 5, "quote_count": 2, "created_at": "Fri Oct 28 07:00:33 +0000 2022"]
         if let range {
             legacy["display_text_range"] = range
         }
