@@ -144,6 +144,7 @@ public final class ApronNotificationSource: ChatListProvider {
               message.logId == nil || message.logId == messageId, !message.isDeleted
         else { return nil }
         var row = row
+        row.latestMessageId = messageId
         let isOwn = service.readStore.ownUserIds(serverURL: session.serverURL).union([session.you.userId]).contains(message.from.userId)
         if !(message.body?.text ?? "").isEmpty {
             row.preview = preview(of: message, isOwn: isOwn)

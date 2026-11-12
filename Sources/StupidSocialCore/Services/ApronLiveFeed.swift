@@ -127,9 +127,11 @@ public final class ApronLiveFeed {
         let session = try await service.session(serverURL: url)
         guard isRunning, !Task.isCancelled else { return }
         sessions[url] = session
+        let accountId = Account.apronId(serverURL: url)
         defer {
             sessions[url] = nil
             currentServers.remove(url)
+            ChatKit.store.setFollowed(false, accountId: accountId)
         }
         let closing: Error? = await withCheckedContinuation { (continuation: CheckedContinuation<Error?, Never>) in
             guard session.connection.isOpen else {
@@ -137,6 +139,8 @@ public final class ApronLiveFeed {
                 return
             }
             connection.opened()
+            // Every room's messages and reactions go into the store from here, so closed chats stay current.
+            ChatKit.store.setFollowed(true, accountId: accountId)
             session.connection.observe(
                 notifications: { [weak self] method, params in self?.handle(method: method, params: params, session: session) },
                 onClose: { continuation.resume(returning: $0) },
@@ -151,6 +155,7 @@ public final class ApronLiveFeed {
         case "message":
             // Only logged messages change a room's latest message; transient notices don't (§3.5.3).
             guard let message = try? JSONDecoder().decode(ApronMessage.self, from: params), let roomId = message.roomId, message.messageId != nil else { return }
+            store(roomId: roomId, session: session) { try ApronChatAdapter.record(message).map { [$0] } ?? [] }
             let destination = ChatDestination.apron(serverURL: session.serverURL, roomId: roomId)
             // Before the rows are built, the rebuild under way may predate the message.
             if currentServers.contains(session.serverURL),
@@ -165,6 +170,9 @@ public final class ApronLiveFeed {
         case "reactions":
             // A reaction to the user's message changes the room's unseen reactions.
             guard let record = try? JSONDecoder().decode(ApronReactionRecord.self, from: params) else { return }
+            if let roomId = record.roomId {
+                store(roomId: roomId, session: session) { try ApronChatAdapter.records(record, roomId: roomId) }
+            }
             scheduleRebuild(session.serverURL, roomId: record.roomId)
         case "room_update":
             // A room renamed or someone joining or leaving changes only those rooms' rows; rebuilding every
@@ -195,6 +203,15 @@ public final class ApronLiveFeed {
             }
         default:
             break
+        }
+    }
+
+    /// Writes a room's live records where its chat reads them, the same as the open chat's adapter would.
+    private func store(roomId: String, session: ApronSession, _ records: () throws -> [ChatRecord]) {
+        do {
+            try ChatKit.store.write(records(), chatKey: "\(Account.apronId(serverURL: session.serverURL))|apron:\(roomId)")
+        } catch {
+            logger.error("Apron live record not stored: \(String(describing: type(of: error)), privacy: .public)")
         }
     }
 

@@ -34,6 +34,7 @@ public final class AccountComponents {
     public private(set) var discordChatList: DiscordChatList?
     public private(set) var linkedinClient: LinkedInClient?
     public private(set) var linkedinLiveFeed: LinkedInLiveFeed?
+    private var telegramLiveRows: TelegramLiveRows?
 
     init(account: Account, store: AccountStore, keychain: KeychainCredentialStore, farcasterClient: FarcasterClient, chatList: ChatListViewModel?, onTelegramChange: (() -> Void)?, onXChatChange: (() -> Void)?) {
         accountId = account.id
@@ -121,6 +122,9 @@ public final class AccountComponents {
             connection.onChange = onTelegramChange
             telegramClient = client
             telegramConnection = connection
+            if let chatList {
+                telegramLiveRows = TelegramLiveRows(client: client, accountId: account.id, chatList: chatList)
+            }
         case .discord:
             let gateway = DiscordGateway(client: DiscordClient(credentialStore: credentials))
             discordGateway = gateway
@@ -159,8 +163,16 @@ public final class AccountComponents {
     }
 
     /// Stops what runs in the background, when the account goes away.
+    /// Keeps a Telegram account's rows current in the Chats list, once there is one; the component itself is kept,
+    /// with its session.
+    func follow(chatList: ChatListViewModel) {
+        guard telegramLiveRows == nil, let telegramClient else { return }
+        telegramLiveRows = TelegramLiveRows(client: telegramClient, accountId: accountId, chatList: chatList)
+    }
+
     func shutDown() {
         liveConnection?.stop()
+        telegramLiveRows?.stop()
     }
 }
 
@@ -257,6 +269,11 @@ public final class AccountServices: ObservableObject {
         }
         let changed = rebuilt.map(\.accountId) != components.map(\.accountId)
         components = rebuilt
+        if let chatList {
+            for component in rebuilt {
+                component.follow(chatList: chatList)
+            }
+        }
         TelegramFileURLProtocol.register(clients: rebuilt.compactMap(\.telegramClient))
         XChatMediaURLProtocol.register(clients: rebuilt.compactMap(\.xChatClient))
         if changed {

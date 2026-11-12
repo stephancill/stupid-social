@@ -585,6 +585,33 @@ public actor TelegramClient: ChatListProvider {
         return id
     }
 
+    /// Calls `observer` when Telegram pushes an update that changes any chat's messages or unread count, so the
+    /// Chats list can follow them.
+    public func addMessageObserver(_ observer: @escaping @Sendable () -> Void) -> UUID {
+        let id = UUID()
+        observers[id] = { update in
+            if Self.changesMessages(update) {
+                observer()
+            }
+        }
+        return id
+    }
+
+    static func changesMessages(_ update: TLObject) -> Bool {
+        switch update.name {
+        case "updatesTooLong", "updateShortMessage", "updateShortChatMessage", "updateNewMessage", "updateEditMessage",
+             "updateNewChannelMessage", "updateEditChannelMessage", "updateDeleteMessages", "updateDeleteChannelMessages",
+             "updateReadHistoryInbox", "updateReadChannelInbox", "updateChannelTooLong":
+            true
+        case "updateShort":
+            update["update"]?.object.map(changesMessages) ?? false
+        case "updates", "updatesCombined":
+            update.objects("updates").contains(where: changesMessages)
+        default:
+            false
+        }
+    }
+
     static func update(_ update: TLObject, concerns peer: TelegramPeer) -> Bool {
         switch update.name {
         case "updatesTooLong":
