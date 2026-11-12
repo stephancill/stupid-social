@@ -19,15 +19,27 @@ final class ApronReadReceiptsTests: XCTestCase {
 
     func testMessagesUpToOthersCursorAreSeen() throws {
         let adapter = try makeAdapter()
-        adapter.restore(snapshot: snapshot(othersRead: "150"))
-        let receipts = adapter.messages.map { adapter.receipt(for: $0) }
+        adapter.restore(state: state(othersRead: "150"))
+        let chat = try stored(adapter)
+        let receipts = chat.messages.map { adapter.receipt(for: $0) }
         XCTAssertEqual(receipts, [.seen, .sent])
     }
 
     func testNoReceiptsUntilTheServerSharesCursors() throws {
         let adapter = try makeAdapter()
-        adapter.restore(snapshot: snapshot(othersRead: nil))
-        XCTAssertEqual(adapter.messages.map { adapter.receipt(for: $0) }, [nil, nil])
+        adapter.restore(state: state(othersRead: nil))
+        let chat = try stored(adapter)
+        XCTAssertEqual(chat.messages.map { adapter.receipt(for: $0) }, [nil, nil])
+    }
+
+    /// The user's two messages, stored.
+    private func stored(_ adapter: ApronChatAdapter) throws -> StoredChat<ApronChatAdapter> {
+        let chat = try StoredChat(adapter)
+        let messages = try ["100", "200"].map { id in
+            try JSONDecoder().decode(ApronMessage.self, from: Data(#"{"message_id":"\#(id)","log_id":"\#(id)","room_id":"general","from":{"user_id":"me","name":"Me"},"body":{"text":"hi"}}"#.utf8))
+        }
+        try chat.apply(ChatPage(records: messages.compactMap(ApronChatAdapter.record), earlier: nil))
+        return chat
     }
 
     private func makeAdapter() throws -> ApronChatAdapter {
@@ -43,11 +55,8 @@ final class ApronReadReceiptsTests: XCTestCase {
         return try JSONDecoder().decode(ApronActivity.self, from: Data(json.utf8))
     }
 
-    private func snapshot(othersRead: String?) -> Data {
-        let messages = ["100", "200"].map { id in
-            #"{"message_id":"\#(id)","log_id":"\#(id)","room_id":"general","from":{"user_id":"me","name":"Me"},"body":{"text":"hi"}}"#
-        }
+    private func state(othersRead: String?) -> Data {
         let read = othersRead.map { #","othersRead":\#($0)"# } ?? ""
-        return Data(#"{"messages":[\#(messages.joined(separator: ","))],"users":[],"reactions":[],"mediaOrigins":[]\#(read)}"#.utf8)
+        return Data(#"{"users":[],"mediaOrigins":[]\#(read)}"#.utf8)
     }
 }

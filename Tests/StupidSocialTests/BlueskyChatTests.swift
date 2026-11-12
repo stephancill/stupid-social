@@ -106,8 +106,7 @@ final class BlueskyChatTests: XCTestCase {
           \(message(id: "m1", sender: friend, at: 1, reactions: reactions))
         ]}
         """)
-        let snapshot: [String: Any] = try [
-            "messages": JSONSerialization.jsonObject(with: JSONEncoder().encode(page.messages.elements)),
+        let state: [String: Any] = [
             "members": [
                 viewer: ["id": viewer, "name": "You", "isSystem": false],
                 friend: ["id": friend, "name": "Friend", "isSystem": false],
@@ -118,28 +117,31 @@ final class BlueskyChatTests: XCTestCase {
             "showsSenderNames": false,
         ]
         let adapter = BlueskyChatAdapter(client: client, convoId: "c1", title: "Friend")
-        try adapter.restore(snapshot: JSONSerialization.data(withJSONObject: snapshot))
+        try adapter.restore(state: JSONSerialization.data(withJSONObject: state))
+        let chat = try StoredChat(adapter)
+        try chat.apply(ChatPage(records: page.messages.elements.map(BlueskyChatAdapter.record), earlier: nil))
 
         XCTAssertEqual(adapter.key, "bluesky:c1")
-        XCTAssertEqual(adapter.messages.map(\.id), ["m1", "m2", "m3"])
-        XCTAssertEqual(adapter.messages[0].sender.name, "Friend")
-        XCTAssertFalse(adapter.messages[0].isOwn)
-        XCTAssertEqual(adapter.reactions["m1"], [
+        let messages = chat.messages
+        XCTAssertEqual(messages.map(\.id), ["m1", "m2", "m3"])
+        XCTAssertEqual(messages[0].sender.name, "Friend")
+        XCTAssertFalse(messages[0].isOwn)
+        XCTAssertEqual(chat.reactions["m1"], [
             ChatReaction(emoji: "👍", count: 2, includesYou: true),
             ChatReaction(emoji: "😂", count: 1, includesYou: false),
         ])
         XCTAssertEqual(adapter.yourEmojis(on: "m1"), ["👍"])
         XCTAssertEqual(adapter.reactors(of: "😂", on: "m1").map(\.user.name), ["Friend"])
-        XCTAssertTrue(adapter.messages[1].isDeleted)
-        XCTAssertTrue(adapter.messages[2].isOwn)
-        XCTAssertNil(adapter.messages[2].text)
-        XCTAssertEqual(adapter.messages[2].embeds, [
+        XCTAssertTrue(messages[1].isDeleted)
+        XCTAssertTrue(messages[2].isOwn)
+        XCTAssertNil(messages[2].text)
+        XCTAssertEqual(messages[2].embeds, [
             .card(title: "A post", subtitle: "Author", systemImage: "text.bubble", imageURL: nil, link: URL(string: "https://bsky.app/profile/did:plc:author/post/3abc")),
         ])
         XCTAssertEqual(adapter.info.subtitle, "@friend.bsky.social")
 
         let reopened = BlueskyChatAdapter(client: client, convoId: "c1", title: "Friend")
-        try reopened.restore(snapshot: XCTUnwrap(adapter.snapshot()))
-        XCTAssertEqual(reopened.messages, adapter.messages)
+        try reopened.restore(state: XCTUnwrap(adapter.state()))
+        XCTAssertEqual(try reopened.render(chat.store.window(chatKey: chat.chatKey, at: .newest(count: 10)).records).messages, messages)
     }
 }

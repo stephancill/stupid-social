@@ -190,6 +190,7 @@ final class DiscordChatTests: XCTestCase {
     func testAdapterMapsLiveMessages() async throws {
         let gateway = try gateway(readyJSON(readId: snowflake(1000)))
         let adapter = DiscordChatAdapter(gateway: gateway, channelId: general, title: "general")
+        let chat = try StoredChat(adapter)
         await adapter.startFollowing()
         XCTAssertEqual(adapter.info.subtitle, "Guild")
         XCTAssertTrue(adapter.info.showsSenderNames)
@@ -205,23 +206,23 @@ final class DiscordChatTests: XCTestCase {
         dispatch(gateway, "MESSAGE_CREATE", message(snowflake(3500), channel: general, author: friend, authorName: "friend", content: "", type: 7))
         dispatch(gateway, "MESSAGE_CREATE", message(snowflake(4000), channel: "300000000000000099", author: friend, authorName: "friend", content: "elsewhere"))
 
-        XCTAssertEqual(adapter.messages.map(\.id), [first, reply, snowflake(3500)])
-        let photo = adapter.messages[0]
+        XCTAssertEqual(chat.messages.map(\.id), [first, reply, snowflake(3500)])
+        let photo = chat.messages[0]
         XCTAssertEqual(photo.sender.name, "Pal", "the guild nickname")
         XCTAssertNil(photo.text)
         XCTAssertEqual(photo.embeds, try [.image(url: XCTUnwrap(URL(string: "https://cdn.discordapp.com/a.png")), aspectRatio: 2, alt: "a.png", link: nil, opensViewer: true)])
-        XCTAssertEqual(adapter.reactions[first], [ChatReaction(emoji: "👍", count: 2, includesYou: true), ChatReaction(emoji: ":500000000000000001:", count: 1, includesYou: false)])
+        XCTAssertEqual(chat.reactions[first], [ChatReaction(emoji: "👍", count: 2, includesYou: true), ChatReaction(emoji: ":500000000000000001:", count: 1, includesYou: false)])
         XCTAssertEqual(adapter.yourEmojis(on: first), ["👍"])
         XCTAssertNotNil(adapter.customEmojis[":500000000000000001:"])
 
-        let sent = adapter.messages[1]
+        let sent = chat.messages[1]
         XCTAssertTrue(sent.isOwn)
         XCTAssertTrue(sent.isMarkdown)
         XCTAssertEqual(sent.text, "**nice** :500000000000000001:")
         XCTAssertEqual(sent.replyToId, first)
         XCTAssertEqual(adapter.editableText(of: sent), "**nice** :500000000000000001:")
         XCTAssertNil(adapter.editableText(of: photo), "someone else's")
-        XCTAssertTrue(adapter.messages[2].sender.isSystem, "a join is a system message")
+        XCTAssertTrue(chat.messages[2].sender.isSystem, "a join is a system message")
 
         XCTAssertTrue(adapter.isAfterReadPosition(photo))
         XCTAssertNotNil(adapter.markRead(upTo: photo))
@@ -229,10 +230,10 @@ final class DiscordChatTests: XCTestCase {
         XCTAssertNil(adapter.markRead(upTo: photo), "already read")
 
         dispatch(gateway, "MESSAGE_UPDATE", #"{"id": "\#(reply)", "channel_id": "\#(general)", "content": "edited", "edited_timestamp": "2026-11-07T10:01:00+00:00"}"#)
-        XCTAssertEqual(adapter.messages[1].text, "edited")
-        XCTAssertTrue(adapter.messages[1].isEdited)
+        XCTAssertEqual(chat.messages[1].text, "edited")
+        XCTAssertTrue(chat.messages[1].isEdited)
         dispatch(gateway, "MESSAGE_DELETE", #"{"id": "\#(reply)", "channel_id": "\#(general)"}"#)
-        XCTAssertFalse(adapter.messages.contains { $0.id == reply })
+        XCTAssertFalse(chat.messages.contains { $0.id == reply })
 
         dispatch(gateway, "TYPING_START", #"{"channel_id": "\#(general)", "user_id": "\#(friend)", "timestamp": 1}"#)
         XCTAssertEqual(adapter.typingNames, ["Pal"])
@@ -243,6 +244,7 @@ final class DiscordChatTests: XCTestCase {
     func testForwardsShowTheirSnapshotAndVoiceMessagesTheirWaveform() async throws {
         let gateway = try gateway(readyJSON(readId: snowflake(1000)))
         let adapter = DiscordChatAdapter(gateway: gateway, channelId: general, title: "general")
+        let chat = try StoredChat(adapter)
         await adapter.startFollowing()
         let forward = snowflake(2000)
         let snapshot = #", "message_reference": {"type": 1, "channel_id": "300000000000000099", "message_id": "\#(snowflake(1500))"}, "message_snapshots": [{"message": {"type": 0, "content": "from elsewhere", "mentions": [], "attachments": [], "embeds": [], "timestamp": "2026-11-07T10:00:00+00:00", "edited_timestamp": null, "flags": 0, "components": []}}]"#
@@ -252,28 +254,31 @@ final class DiscordChatTests: XCTestCase {
         let audio = #"[{"id": "2", "filename": "voice-message.ogg", "size": 9000, "url": "https://cdn.discordapp.com/v.ogg", "proxy_url": "https://media.discordapp.net/v.ogg", "content_type": "audio/ogg", "duration_secs": 2.02, "waveform": "\#(waveform)"}]"#
         dispatch(gateway, "MESSAGE_CREATE", message(voice, channel: general, author: friend, authorName: "friend", content: "", attachments: audio, flags: 8192))
 
-        XCTAssertEqual(adapter.messages.map(\.id), [forward, voice])
-        XCTAssertEqual(adapter.messages[0].text, "from elsewhere")
-        XCTAssertEqual(adapter.messages[0].forwardedFrom, ChatForwardOrigin(name: nil))
-        guard case let .voice(previewId, duration, levels)? = adapter.messages[1].embeds.first else { return XCTFail("\(adapter.messages[1].embeds)") }
+        XCTAssertEqual(chat.messages.map(\.id), [forward, voice])
+        XCTAssertEqual(chat.messages[0].text, "from elsewhere")
+        XCTAssertEqual(chat.messages[0].forwardedFrom, ChatForwardOrigin(name: nil))
+        guard case let .voice(previewId, duration, levels)? = chat.messages[1].embeds.first else { return XCTFail("\(chat.messages[1].embeds)") }
         XCTAssertEqual(previewId, "https://cdn.discordapp.com/v.ogg")
         XCTAssertEqual(duration, 2.02)
         XCTAssertEqual(levels, [0, 1, 128.0 / 255])
-        XCTAssertNil(adapter.messages[1].forwardedFrom)
+        XCTAssertNil(chat.messages[1].forwardedFrom)
         XCTAssertEqual(ChatVoiceNote(fileURL: URL(fileURLWithPath: "/tmp/v.caf"), duration: 1, waveform: [0, 0.5, 1, 0.25]).levels(2), [0.5, 1])
         adapter.stopFollowing()
     }
 
-    func testSnapshotRoundTrip() async throws {
+    func testStateRoundTrip() async throws {
         let gateway = try gateway(readyJSON())
         let adapter = DiscordChatAdapter(gateway: gateway, channelId: dm, title: "friend")
+        let chat = try StoredChat(adapter)
         await adapter.startFollowing()
         dispatch(gateway, "MESSAGE_CREATE", message(snowflake(6000), channel: dm, author: friend, authorName: "friend", content: "hello"))
-        let data = try XCTUnwrap(adapter.snapshot())
+        XCTAssertEqual(chat.messages.map(\.text), ["hello"])
+        let data = try XCTUnwrap(adapter.state())
 
         let restored = DiscordChatAdapter(gateway: gateway, channelId: dm, title: "friend")
-        restored.restore(snapshot: data)
-        XCTAssertEqual(restored.messages.map(\.text), ["hello"])
+        restored.restore(state: data)
+        let records = try chat.store.window(chatKey: chat.chatKey, at: .newest(count: 10)).records
+        XCTAssertEqual(restored.render(records).messages.map(\.text), ["hello"])
         XCTAssertFalse(restored.info.showsSenderNames, "a DM")
         XCTAssertEqual(restored.info.subtitle, "@friend")
     }
@@ -361,6 +366,7 @@ final class DiscordChatTests: XCTestCase {
         configuration.protocolClasses = [DiscordURLProtocol.self]
         let gateway = try gateway(readyJSON(), session: URLSession(configuration: configuration))
         let adapter = DiscordChatAdapter(gateway: gateway, channelId: general, title: "general")
+        let chat = try StoredChat(adapter)
         await adapter.startFollowing()
         let sentId = snowflake(9900)
         let general = general
@@ -389,7 +395,7 @@ final class DiscordChatTests: XCTestCase {
         XCTAssertEqual(sent["content"] as? String, "look")
         XCTAssertEqual((sent["attachments"] as? [[String: Any]])?.first?["uploaded_filename"] as? String, "u/a.png")
         XCTAssertEqual(DiscordURLProtocol.requests[2].authorization, "test-token")
-        XCTAssertTrue(adapter.messages.contains { $0.id == sentId })
+        XCTAssertTrue(chat.messages.contains { $0.id == sentId })
         XCTAssertTrue(adapter.acceptsAttachments)
 
         DiscordURLProtocol.reset()

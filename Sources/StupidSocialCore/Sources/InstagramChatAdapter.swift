@@ -12,14 +12,12 @@ public final class InstagramChatAdapter: ChatAdapter, ChatReactionSending, ChatR
     public var onChange: (() -> Void)?
     public let acceptsReactions = true
     public private(set) var info: ChatInfo
-    public private(set) var messages: [ChatMessage] = []
-    public private(set) var reactions: [String: [ChatReaction]] = [:]
-    public private(set) var hasEarlierMessages = false
+    public var history: ChatHistory?
 
     private let client: InstagramClient
     private let threadFbid: String
+    /// The messages last rendered: the stretch the chat shows.
     private var loaded: [String: InstagramDirectMessage] = [:]
-    private var nextCursor: String?
     /// Messaging id → person, from the thread's users and the viewer.
     private var people: [String: ChatUser] = [:]
     private var viewerFbid: String?
@@ -29,8 +27,6 @@ public final class InstagramChatAdapter: ChatAdapter, ChatReactionSending, ChatR
     private var readAt: Date?
     /// The furthest anyone else has read.
     private var othersReadAt: Date?
-    /// Whether the thread came from Instagram this visit; until then the messages are the cached snapshot.
-    private var hasLoadedHistory = false
 
     public init(client: InstagramClient, threadFbid: String, title: String) {
         self.client = client
@@ -42,11 +38,10 @@ public final class InstagramChatAdapter: ChatAdapter, ChatReactionSending, ChatR
         "instagram:\(threadFbid)"
     }
 
-    // MARK: Snapshot
+    // MARK: State
 
-    /// What the chat showed last time, so it opens with its messages and people in place.
-    private struct Snapshot: Codable {
-        let messages: [InstagramDirectMessage]
+    /// The chat's people and read receipts, so it opens with them in place.
+    private struct State: Codable {
         let people: [String: ChatUser]
         let viewerFbid: String?
         let legacyThreadId: String?
@@ -54,42 +49,45 @@ public final class InstagramChatAdapter: ChatAdapter, ChatReactionSending, ChatR
         let title: String
         let subtitle: String
         let showsSenderNames: Bool
-        var othersReadAt: Date?
+        let othersReadAt: Date?
     }
 
-    public func restore(snapshot data: Data) {
-        guard let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data) else { return }
-        for message in snapshot.messages {
-            loaded[message.id] = message
-        }
-        people = snapshot.people
-        viewerFbid = snapshot.viewerFbid
-        legacyThreadId = snapshot.legacyThreadId
-        readAt = snapshot.readAt
-        othersReadAt = snapshot.othersReadAt
-        info = ChatInfo(title: snapshot.title, subtitle: snapshot.subtitle, showsSenderNames: snapshot.showsSenderNames)
-        publish()
+    public func restore(state data: Data) {
+        guard let state = try? JSONDecoder().decode(State.self, from: data) else { return }
+        people = state.people
+        viewerFbid = state.viewerFbid
+        legacyThreadId = state.legacyThreadId
+        readAt = state.readAt
+        othersReadAt = state.othersReadAt
+        info = ChatInfo(title: state.title, subtitle: state.subtitle, showsSenderNames: state.showsSenderNames)
     }
 
-    public func snapshot() -> Data? {
-        let newest = loaded.values.sorted { ($0.sentAt ?? .distantPast, $0.id) < ($1.sentAt ?? .distantPast, $1.id) }.suffix(ChatSnapshotCache.messageLimit)
-        return try? JSONEncoder().encode(Snapshot(
-            messages: Array(newest), people: people, viewerFbid: viewerFbid, legacyThreadId: legacyThreadId, readAt: readAt,
+    public func state() -> Data? {
+        try? JSONEncoder().encode(State(
+            people: people, viewerFbid: viewerFbid, legacyThreadId: legacyThreadId, readAt: readAt,
             title: info.title, subtitle: info.subtitle, showsSenderNames: info.showsSenderNames, othersReadAt: othersReadAt,
         ))
     }
 
     // MARK: Loading
 
-    public func loadNewest() async throws {
-        let thread = try await client.directThread(threadFbid: threadFbid)
-        apply(thread: thread)
-        if !hasLoadedHistory {
-            hasLoadedHistory = true
-            nextCursor = thread.slideMessages?.pageInfo?.hasNextPage == true ? thread.slideMessages?.pageInfo?.endCursor : nil
-            hasEarlierMessages = nextCursor != nil
+    nonisolated static func record(_ message: InstagramDirectMessage) throws -> ChatRecord {
+        try ChatRecord(id: message.id, sortKey: Int64((message.sentAt?.timeIntervalSince1970 ?? 0) * 1000), encoding: message)
+    }
+
+    public func fetch(_ request: ChatPageRequest) async throws -> ChatPage {
+        switch request {
+        case .newest:
+            let thread = try await client.directThread(threadFbid: threadFbid)
+            apply(thread: thread)
+            let pageInfo = thread.slideMessages?.pageInfo
+            return try ChatPage(records: thread.messages.map(Self.record), earlier: pageInfo?.hasNextPage == true ? pageInfo?.endCursor.map(ChatCursor.init) : nil)
+        case let .before(cursor):
+            let page = try await client.directOlderMessages(threadFbid: threadFbid, cursor: cursor.value)
+            return try ChatPage(records: page.edges.map(\.node).map(Self.record), earlier: page.pageInfo?.hasNextPage == true ? page.pageInfo?.endCursor.map(ChatCursor.init) : nil)
+        case .after, .around:
+            throw SourceError.serviceError("Instagram chats have no windows.")
         }
-        merge(thread.messages)
     }
 
     private func apply(thread: InstagramDirectThread) {
@@ -115,18 +113,10 @@ public final class InstagramChatAdapter: ChatAdapter, ChatReactionSending, ChatR
         info.subtitle = thread.isGroup == true ? "\(thread.others.count + 1) members" : ""
     }
 
-    public func loadEarlier() async throws {
-        guard let cursor = nextCursor else { return }
-        let page = try await client.directOlderMessages(threadFbid: threadFbid, cursor: cursor)
-        nextCursor = page.pageInfo?.hasNextPage == true ? page.pageInfo?.endCursor : nil
-        hasEarlierMessages = nextCursor != nil
-        merge(page.edges.map(\.node))
-    }
-
     public func send(_ message: ChatOutgoing) async throws -> String? {
         let sent = try await client.sendDirectText(threadFbid: threadFbid, text: message.text, replyToMessageId: message.replyToId)
         // Added as sent; the next poll replaces it with Instagram's copy, which has the same id.
-        loaded[sent.id] = InstagramDirectMessage(
+        let sentMessage = InstagramDirectMessage(
             id: sent.id,
             senderFbid: viewerFbid,
             timestampMs: sent.timestampMs,
@@ -138,7 +128,7 @@ public final class InstagramChatAdapter: ChatAdapter, ChatReactionSending, ChatR
             reactions: nil,
             sender: nil,
         )
-        publish()
+        try history?.write([Self.record(sentMessage)])
         return sent.id
     }
 
@@ -162,7 +152,6 @@ public final class InstagramChatAdapter: ChatAdapter, ChatReactionSending, ChatR
     public func forward(reference: String) async throws -> String? {
         let forward = try JSONDecoder().decode(InstagramDirectForward.self, from: Data(reference.utf8))
         let sent = try await client.forwardDirect(forward, to: threadFbid)
-        try await loadNewest()
         return sent.id
     }
 
@@ -175,7 +164,6 @@ public final class InstagramChatAdapter: ChatAdapter, ChatReactionSending, ChatR
         let data = try await Task.detached { try OggOpusEncoder.encode(fileAt: fileURL) }.value
         let levels = voice.levels(64)
         let sent = try await client.sendDirectVoice(threadFbid: threadFbid, oggOpus: data, duration: voice.duration, levels: levels, viewerFbid: viewerFbid, replyToMessageId: replyToId)
-        try await loadNewest()
         return sent.id
     }
 
@@ -210,14 +198,8 @@ public final class InstagramChatAdapter: ChatAdapter, ChatReactionSending, ChatR
 
     // MARK: Display
 
-    private func merge(_ page: [InstagramDirectMessage]) {
-        for message in page {
-            loaded[message.id] = message
-        }
-        publish()
-    }
-
-    private func publish() {
+    public func render(_ records: [ChatRecord]) -> ChatRendering {
+        loaded = Dictionary(records.compactMap { try? $0.decode(InstagramDirectMessage.self) }.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
         let sorted = loaded.values.sorted { ($0.sentAt ?? .distantPast, $0.id) < ($1.sentAt ?? .distantPast, $1.id) }
         var totals: [String: [ChatReaction]] = [:]
         for message in sorted {
@@ -229,9 +211,7 @@ public final class InstagramChatAdapter: ChatAdapter, ChatReactionSending, ChatR
                 }
                 .sorted { ($0.count, $0.emoji) > ($1.count, $1.emoji) }
         }
-        reactions = totals
-        messages = sorted.map(chatMessage)
-        onChange?()
+        return ChatRendering(messages: sorted.map(chatMessage), reactions: totals)
     }
 
     /// Instagram stores emoji without the variation selector (❤️ comes back as ❤), so one that matches a quick
@@ -271,8 +251,11 @@ public final class InstagramChatAdapter: ChatAdapter, ChatReactionSending, ChatR
     }
 
     private func setReactions(_ reactions: [InstagramDirectMessage.Reaction]?, on messageId: String) {
-        loaded[messageId]?.reactions = reactions
-        publish()
+        try? history?.update(id: messageId) { record in
+            var message = try record.decode(InstagramDirectMessage.self)
+            message.reactions = reactions
+            return try Self.record(message)
+        }
     }
 
     public func reactors(of emoji: String, on messageId: String) -> [ChatReactor] {

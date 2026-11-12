@@ -251,15 +251,17 @@ public final class DemoChatAdapter: ChatReactionSending, ChatCustomEmojis, ChatA
     public let pollInterval: Duration? = nil
     public var onChange: (() -> Void)?
     public let info: ChatInfo
-    public private(set) var messages: [ChatMessage] = []
+    public var history: ChatHistory?
     public private(set) var reactions: [String: [ChatReaction]]
-    public let hasEarlierMessages = false
     public let acceptsReactions = true
     public let customEmojis: [String: ChatCustomEmoji]
     private let chat: DemoChats.Chat
     private let readCount: Int
     /// Sent this visit; no one reads them.
     private var sentIds: Set<String> = []
+    /// The preview's messages by id, and their order; there is no network to store records of.
+    private var catalog: [String: ChatMessage] = [:]
+    private var order: [String: Int64] = [:]
 
     public init(chatId: String) {
         let chat = DemoChats.chats.first { $0.id == chatId } ?? DemoChats.chats[0]
@@ -275,20 +277,33 @@ public final class DemoChatAdapter: ChatReactionSending, ChatCustomEmojis, ChatA
             info.avatarURL = chat.avatarURL
         }
         self.info = info
-    }
-
-    public func loadNewest() async throws {
-        if messages.isEmpty {
-            messages = chat.messages(Date())
+        for (index, message) in chat.messages(Date()).enumerated() {
+            catalog[message.id] = message
+            order[message.id] = Int64(index)
         }
     }
 
-    public func loadEarlier() async throws {}
+    private func record(_ message: ChatMessage) -> ChatRecord {
+        ChatRecord(id: message.id, sortKey: order[message.id] ?? 0, data: Data(message.id.utf8))
+    }
+
+    public func fetch(_: ChatPageRequest) async throws -> ChatPage {
+        let messages = catalog.values.sorted { order[$0.id, default: 0] < order[$1.id, default: 0] }
+        return ChatPage(records: messages.map(record), earlier: nil)
+    }
+
+    /// Records the preview didn't make this run (sent in an earlier one) aren't shown.
+    public func render(_ records: [ChatRecord]) -> ChatRendering {
+        ChatRendering(messages: records.compactMap { catalog[$0.id] }, reactions: reactions)
+    }
 
     public func send(_ message: ChatOutgoing) async throws -> String? {
         let id = UUID().uuidString
-        messages.append(ChatMessage(id: id, sender: DemoChats.you, timestamp: Date(), text: message.text, replyToId: message.replyToId, isOwn: true))
+        order[id] = (order.values.max() ?? 0) + 1
         sentIds.insert(id)
+        let sent = ChatMessage(id: id, sender: DemoChats.you, timestamp: Date(), text: message.text, replyToId: message.replyToId, isOwn: true)
+        catalog[id] = sent
+        try history?.write([record(sent)])
         return id
     }
 
@@ -299,7 +314,7 @@ public final class DemoChatAdapter: ChatReactionSending, ChatCustomEmojis, ChatA
     }
 
     public func isAfterReadPosition(_ message: ChatMessage) -> Bool {
-        guard let index = messages.firstIndex(where: { $0.id == message.id }) else { return false }
+        guard let index = order[message.id] else { return false }
         return index >= readCount
     }
 
@@ -332,7 +347,7 @@ public final class DemoChatAdapter: ChatReactionSending, ChatCustomEmojis, ChatA
         onChange?()
     }
 
-    public func snapshot() -> Data? {
+    public func state() -> Data? {
         nil
     }
 
@@ -341,5 +356,5 @@ public final class DemoChatAdapter: ChatReactionSending, ChatCustomEmojis, ChatA
         URL(string: previewId).flatMap { $0.scheme == "https" ? $0 : nil }
     }
 
-    public func restore(snapshot _: Data) {}
+    public func restore(state _: Data) {}
 }

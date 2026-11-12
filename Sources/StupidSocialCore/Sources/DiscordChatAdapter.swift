@@ -6,7 +6,7 @@ import Foundation
 /// doesn't send. Files go through Discord's upload slots; stickers are the standard packs and the guild's own (any
 /// guild's with Nitro).
 @MainActor
-public final class DiscordChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditing, ChatDeleting, ChatReactionSending, ChatLiveUpdating, ChatReferenceResolving, ChatTyping, ChatMentioning, ChatCustomEmojis, ChatStickerSending, ChatForwarding, ChatVoiceSending, ChatAudioPreviewing, ChatMessageLinking {
+public final class DiscordChatAdapter: ChatAdapter, ChatWindowing, ChatReadOnlyAccess, ChatEditing, ChatDeleting, ChatReactionSending, ChatLiveUpdating, ChatReferenceResolving, ChatTyping, ChatMentioning, ChatCustomEmojis, ChatStickerSending, ChatForwarding, ChatVoiceSending, ChatAudioPreviewing, ChatMessageLinking {
     public let network = ChatNetwork.discord
     public let canReply = true
     /// Read again once connected: a guild channel may not allow files.
@@ -18,9 +18,7 @@ public final class DiscordChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEdit
     public var onCatchUp: (() -> Void)?
     public var onError: ((Error) -> Void)?
     public private(set) var info: ChatInfo
-    public private(set) var messages: [ChatMessage] = []
-    public private(set) var reactions: [String: [ChatReaction]] = [:]
-    public private(set) var hasEarlierMessages = false
+    public var history: ChatHistory?
     public private(set) var referencedMessages: [String: ChatMessage] = [:]
     public private(set) var unavailableReferences: Set<String> = []
     public private(set) var customEmojis: [String: ChatCustomEmoji] = [:]
@@ -31,6 +29,7 @@ public final class DiscordChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEdit
     private let gateway: DiscordGateway
     private let client: DiscordClient
     private let channelId: String
+    /// The messages last rendered: the stretch the chat shows.
     private var loaded: [String: DiscordMessage] = [:]
     private var users: [String: DiscordUser] = [:]
     /// Guild nicknames by user id.
@@ -44,7 +43,7 @@ public final class DiscordChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEdit
     /// Reactors fetched per "<message id>|<emoji key>".
     private var reactorCache: [String: [DiscordUser]] = [:]
     private var reactorRequests: Set<String> = []
-    private var hasLoadedHistory = false
+    private let pageSize = 50
 
     public init(gateway: DiscordGateway, channelId: String, title: String) {
         self.gateway = gateway
@@ -104,10 +103,9 @@ public final class DiscordChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEdit
         }
     }
 
-    // MARK: Snapshot
+    // MARK: State
 
-    private struct Snapshot: Codable {
-        let messages: [DiscordMessage]
+    private struct State: Codable {
         let users: [String: DiscordUser]
         let nicknames: [String: String]
         let meId: String?
@@ -117,55 +115,68 @@ public final class DiscordChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEdit
         let showsSenderNames: Bool
     }
 
-    public func restore(snapshot data: Data) {
-        guard let snapshot = try? JSONDecoder.discord.decode(Snapshot.self, from: data) else { return }
-        for message in snapshot.messages {
-            loaded[message.id] = message
-        }
-        users.merge(snapshot.users) { current, _ in current }
-        nicknames.merge(snapshot.nicknames) { current, _ in current }
-        meId = meId ?? snapshot.meId
-        if let read = snapshot.readId, DiscordSnowflake.isAfter(read, readId) {
+    public func restore(state data: Data) {
+        guard let state = try? JSONDecoder.discord.decode(State.self, from: data) else { return }
+        users.merge(state.users) { current, _ in current }
+        nicknames.merge(state.nicknames) { current, _ in current }
+        meId = meId ?? state.meId
+        if let read = state.readId, DiscordSnowflake.isAfter(read, readId) {
             readId = read
         }
         if channel == nil {
-            info.title = snapshot.title
-            info.subtitle = snapshot.subtitle
-            info.showsSenderNames = snapshot.showsSenderNames
+            info.title = state.title
+            info.subtitle = state.subtitle
+            info.showsSenderNames = state.showsSenderNames
         }
-        publish()
     }
 
-    public func snapshot() -> Data? {
-        let newest = sortedMessages.suffix(ChatSnapshotCache.messageLimit)
-        return try? JSONEncoder.discord.encode(Snapshot(
-            messages: Array(newest), users: users, nicknames: nicknames, meId: meId, readId: readId,
+    /// The people the shown messages name, so they show by name and picture before the gateway is ready.
+    public func state() -> Data? {
+        let shown = Set(loaded.values.flatMap { [$0.author.id] + $0.mentions.map(\.id) })
+        return try? JSONEncoder.discord.encode(State(
+            users: users.filter { shown.contains($0.key) }, nicknames: nicknames.filter { shown.contains($0.key) }, meId: meId, readId: readId,
             title: info.title, subtitle: info.subtitle, showsSenderNames: info.showsSenderNames,
         ))
     }
 
     // MARK: Loading
 
-    public func loadNewest() async throws {
-        try await gateway.waitUntilReady()
-        applyChannel()
-        let page = try await client.messages(channelId: channelId, limit: 50)
-        if !hasLoadedHistory {
-            hasLoadedHistory = true
-            hasEarlierMessages = page.count == 50
-            // The snapshot's messages may have been deleted or edited since; the page replaces those it covers.
-            if let oldest = page.last {
-                loaded = loaded.filter { !DiscordSnowflake.isAfter($0.key, oldest.id) && $0.key != oldest.id }
-            }
-        }
-        merge(page)
+    /// Snowflakes order messages and fit in 63 bits.
+    nonisolated static func record(_ message: DiscordMessage) throws -> ChatRecord {
+        try ChatRecord(id: message.id, sortKey: Int64(message.id) ?? 0, data: JSONEncoder.discord.encode(message))
     }
 
-    public func loadEarlier() async throws {
-        guard let oldest = sortedMessages.first else { return }
-        let page = try await client.messages(channelId: channelId, before: oldest.id, limit: 50)
-        hasEarlierMessages = page.count == 50
-        merge(page)
+    /// Discord returns pages newest first; a short page reached the end of history in its direction.
+    public func fetch(_ request: ChatPageRequest) async throws -> ChatPage {
+        try await gateway.waitUntilReady()
+        applyChannel()
+        switch request {
+        case .newest:
+            let page = try await client.messages(channelId: channelId, limit: pageSize)
+            return try ChatPage(records: page.map(Self.record), earlier: page.count == pageSize ? page.last.map { ChatCursor($0.id) } : nil)
+        case let .before(cursor):
+            let page = try await client.messages(channelId: channelId, before: cursor.value, limit: pageSize)
+            return try ChatPage(records: page.map(Self.record), earlier: page.count == pageSize ? page.last.map { ChatCursor($0.id) } : nil)
+        case let .after(cursor):
+            let page = try await client.messages(channelId: channelId, after: cursor.value, limit: pageSize)
+            return try ChatPage(
+                records: page.map(Self.record), earlier: ChatCursor(cursor.value),
+                later: page.count == pageSize ? page.first.map { ChatCursor($0.id) } : nil,
+            )
+        case let .around(messageId):
+            let page = try await client.messages(channelId: channelId, around: messageId, limit: pageSize)
+            guard page.contains(where: { $0.id == messageId }) else { return ChatPage(records: [], earlier: nil) }
+            let newest = page.first?.id
+            let reachesNewest = newest != nil && newest == channel?.lastMessageId
+            return try ChatPage(
+                records: page.map(Self.record), earlier: page.last.map { ChatCursor($0.id) },
+                later: reachesNewest ? nil : newest.map(ChatCursor.init),
+            )
+        }
+    }
+
+    public func cursor(before record: ChatRecord) -> ChatCursor? {
+        ChatCursor(record.id)
     }
 
     public func send(_ message: ChatOutgoing) async throws -> String? {
@@ -219,10 +230,21 @@ public final class DiscordChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEdit
 
     /// The network's copy of a message the user sent, which also reads the channel up to it.
     private func accept(_ sent: DiscordMessage) {
-        loaded[sent.id] = sent
         gateway.setRead(channelId: channelId, messageId: sent.id)
         readId = sent.id
-        publish()
+        write(sent)
+    }
+
+    private func write(_ message: DiscordMessage) {
+        do {
+            try history?.write([Self.record(message)])
+        } catch {
+            onError?(error)
+        }
+    }
+
+    private func stored(_ id: String) -> DiscordMessage? {
+        loaded[id] ?? (try? history?.record(id: id)).flatMap(\.self).flatMap { try? JSONDecoder.discord.decode(DiscordMessage.self, from: $0.data) }
     }
 
     // MARK: Stickers
@@ -317,20 +339,18 @@ public final class DiscordChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEdit
         switch event {
         case let .message(message) where message.channelId == channelId:
             typing[message.author.id] = nil
-            loaded[message.id] = message
-            publish()
+            write(message)
         case let .messageUpdate(update) where update.channelId == channelId:
-            guard var message = loaded[update.id] else { return }
+            // Partial: applied to the stored copy.
+            guard var message = stored(update.id) else { return }
             if let content = update.content { message.content = content }
             if let edited = update.editedTimestamp { message.editedTimestamp = edited }
             if let attachments = update.attachments { message.attachments = attachments }
             if let embeds = update.embeds { message.embeds = embeds }
             if let mentions = update.mentions { message.mentions = mentions }
-            loaded[update.id] = message
-            publish()
+            write(message)
         case let .messageDelete(channelId, messageId) where channelId == self.channelId:
-            guard loaded.removeValue(forKey: messageId) != nil else { return }
-            publish()
+            try? history?.delete(ids: [messageId])
         case let .reaction(channelId, messageId, userId, emoji, added) where channelId == self.channelId:
             guard userId != meId else { return }
             reactorCache[reactorKey(messageId, emoji.key ?? "")] = nil
@@ -375,8 +395,7 @@ public final class DiscordChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEdit
 
     public func edit(_ messageId: String, text: String) async throws {
         let edited = try await client.edit(channelId: channelId, messageId: messageId, content: DiscordText.outgoing(text))
-        loaded[messageId] = edited
-        publish()
+        try history?.write([Self.record(edited)])
     }
 
     public func canDelete(_ message: ChatMessage) -> Bool {
@@ -385,8 +404,7 @@ public final class DiscordChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEdit
 
     public func delete(_ messageId: String) async throws {
         try await client.delete(channelId: channelId, messageId: messageId)
-        loaded[messageId] = nil
-        publish()
+        try history?.delete(ids: [messageId])
     }
 
     // MARK: Reactions
@@ -416,7 +434,7 @@ public final class DiscordChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEdit
     }
 
     private func adjustReaction(_ emoji: DiscordEmoji, on messageId: String, by delta: Int, mine: Bool) {
-        guard var message = loaded[messageId], let key = emoji.key else { return }
+        guard var message = stored(messageId), let key = emoji.key else { return }
         var reactions = message.reactions ?? []
         if let index = reactions.firstIndex(where: { $0.emoji.key == key }) {
             reactions[index].count += delta
@@ -426,9 +444,8 @@ public final class DiscordChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEdit
             reactions.append(DiscordReaction(emoji: emoji, count: delta, me: mine))
         }
         message.reactions = reactions
-        loaded[messageId] = message
         register(emoji)
-        publish()
+        write(message)
     }
 
     public func reactors(of emoji: String, on messageId: String) -> [ChatReactor] {
@@ -516,13 +533,6 @@ public final class DiscordChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEdit
         loaded.values.sorted { (UInt64($0.id) ?? 0) < (UInt64($1.id) ?? 0) }
     }
 
-    private func merge(_ page: [DiscordMessage]) {
-        for message in page {
-            loaded[message.id] = message
-        }
-        publish()
-    }
-
     private func register(_ emoji: DiscordEmoji) {
         guard let key = emoji.key, emoji.id != nil, customEmojis[key] == nil, let url = emoji.imageURL else { return }
         customEmojis[key] = ChatCustomEmoji(key: key, url: url, alt: ":\(emoji.name ?? "emoji"):", isHidden: true)
@@ -537,7 +547,11 @@ public final class DiscordChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEdit
         return ChatUser(id: id, name: user.map(displayName) ?? nicknames[id], avatarURL: user?.avatarURL)
     }
 
-    private func publish() {
+    public func render(_ records: [ChatRecord]) -> ChatRendering {
+        loaded = Dictionary(
+            records.compactMap { try? JSONDecoder.discord.decode(DiscordMessage.self, from: $0.data) }.map { ($0.id, $0) },
+            uniquingKeysWith: { _, latest in latest },
+        )
         let context = textContext
         var referenced: [String: ChatMessage] = [:]
         var unavailable: Set<String> = []
@@ -568,11 +582,9 @@ public final class DiscordChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEdit
                 reaction.emoji.key.map { ChatReaction(emoji: $0, count: reaction.count, includesYou: reaction.me) }
             }
         }
-        reactions = totals
         referencedMessages = referenced
         unavailableReferences = unavailable
-        messages = sorted.map { chatMessage($0, context: context) }
-        onChange?()
+        return ChatRendering(messages: sorted.map { chatMessage($0, context: context) }, reactions: totals)
     }
 
     private func chatMessage(_ message: DiscordMessage, context: DiscordText.Context) -> ChatMessage {

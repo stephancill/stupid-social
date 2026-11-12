@@ -203,14 +203,12 @@ final class AppContainer {
             AdapterChatViewModel(
                 adapter: ApronChatAdapter(service: apronService, serverURL: serverURL, roomId: roomId, title: chat.title),
                 accountId: Account.apronId(serverURL: serverURL),
-                snapshotCache: apronService.snapshotCache,
                 draftStore: apronService.draftStore,
             )
         case let .apronDirect(serverURL, user):
             AdapterChatViewModel(
                 adapter: ApronChatAdapter(service: apronService, serverURL: serverURL, directWith: user),
                 accountId: Account.apronId(serverURL: serverURL),
-                snapshotCache: apronService.snapshotCache,
                 draftStore: apronService.draftStore,
             )
         case let .spotify(chatId):

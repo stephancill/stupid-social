@@ -12,21 +12,19 @@ public final class BlueskyChatAdapter: ChatAdapter, ChatReactionSending {
     public var onChange: (() -> Void)?
     public let acceptsReactions = true
     public private(set) var info: ChatInfo
-    public private(set) var messages: [ChatMessage] = []
-    public private(set) var reactions: [String: [ChatReaction]] = [:]
-    public private(set) var hasEarlierMessages = false
+    public var history: ChatHistory?
 
     private let client: BlueskyClient
     private let convoId: String
+    /// The messages last rendered: the stretch the chat shows.
     private var loaded: [String: BlueskyChatMessage] = [:]
-    private var cursor: String?
     /// DID → member.
     private var members: [String: ChatUser] = [:]
     private var viewerDid: String?
     /// Where the viewer has read up to, locally ahead of Bluesky while a mark is pending.
     private var readAt: Date?
-    /// Whether the chat came from Bluesky this visit; until then the messages are the cached snapshot.
-    private var hasLoadedHistory = false
+    /// Whether the chat itself (members, read position) came from Bluesky this visit.
+    private var hasLoadedConvo = false
 
     public init(client: BlueskyClient, convoId: String, title: String) {
         self.client = client
@@ -38,10 +36,9 @@ public final class BlueskyChatAdapter: ChatAdapter, ChatReactionSending {
         "bluesky:\(convoId)"
     }
 
-    // MARK: Snapshot
+    // MARK: State
 
-    private struct Snapshot: Codable {
-        let messages: [BlueskyChatMessage]
+    private struct State: Codable {
         let members: [String: ChatUser]
         let viewerDid: String?
         let readAt: Date?
@@ -50,46 +47,52 @@ public final class BlueskyChatAdapter: ChatAdapter, ChatReactionSending {
         let showsSenderNames: Bool
     }
 
-    public func restore(snapshot data: Data) {
-        guard let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data) else { return }
-        for message in snapshot.messages {
-            loaded[message.id] = message
-        }
-        members = snapshot.members
-        viewerDid = snapshot.viewerDid
-        readAt = snapshot.readAt
-        info = ChatInfo(title: snapshot.title, subtitle: snapshot.subtitle, showsSenderNames: snapshot.showsSenderNames, titleIsMemberNames: true)
-        publish()
+    public func restore(state data: Data) {
+        guard let state = try? JSONDecoder().decode(State.self, from: data) else { return }
+        members = state.members
+        viewerDid = state.viewerDid
+        readAt = state.readAt
+        info = ChatInfo(title: state.title, subtitle: state.subtitle, showsSenderNames: state.showsSenderNames, titleIsMemberNames: true)
     }
 
-    public func snapshot() -> Data? {
-        let newest = sortedMessages.suffix(ChatSnapshotCache.messageLimit)
-        return try? JSONEncoder().encode(Snapshot(
-            messages: Array(newest), members: members, viewerDid: viewerDid, readAt: readAt,
+    public func state() -> Data? {
+        try? JSONEncoder().encode(State(
+            members: members, viewerDid: viewerDid, readAt: readAt,
             title: info.title, subtitle: info.subtitle, showsSenderNames: info.showsSenderNames,
         ))
     }
 
     // MARK: Loading
 
-    /// The first load also reads the chat itself, for its members and unread count; polls only fetch messages.
-    public func loadNewest() async throws {
-        if !hasLoadedHistory {
-            let viewerDid = try await client.viewerDid()
-            async let loadingConvo = client.convo(id: convoId)
-            let page = try await client.messages(convoId: convoId)
-            let convo = try await loadingConvo
-            apply(convo: convo, viewerDid: viewerDid)
-            if let position = convo.readPosition(messages: page.messages.elements, viewerDid: viewerDid), position > (readAt ?? .distantPast) {
-                readAt = position
+    nonisolated static func record(_ message: BlueskyChatMessage) throws -> ChatRecord {
+        try ChatRecord(id: message.id, sortKey: Int64(message.sentAt.timeIntervalSince1970 * 1000), encoding: message)
+    }
+
+    /// The first newest page of a visit also reads the chat itself, for its members and unread count; polls only
+    /// fetch messages.
+    public func fetch(_ request: ChatPageRequest) async throws -> ChatPage {
+        let page: BlueskyMessagesPage
+        switch request {
+        case .newest:
+            if !hasLoadedConvo {
+                let viewerDid = try await client.viewerDid()
+                async let loadingConvo = client.convo(id: convoId)
+                page = try await client.messages(convoId: convoId)
+                let convo = try await loadingConvo
+                apply(convo: convo, viewerDid: viewerDid)
+                if let position = convo.readPosition(messages: page.messages.elements, viewerDid: viewerDid), position > (readAt ?? .distantPast) {
+                    readAt = position
+                }
+                hasLoadedConvo = true
+            } else {
+                page = try await client.messages(convoId: convoId)
             }
-            cursor = page.cursor
-            hasEarlierMessages = cursor != nil
-            hasLoadedHistory = true
-            merge(page.messages.elements)
-            return
+        case let .before(cursor):
+            page = try await client.messages(convoId: convoId, cursor: cursor.value)
+        case .after, .around:
+            throw SourceError.serviceError("Bluesky chats have no windows.")
         }
-        try await merge(client.messages(convoId: convoId).messages.elements)
+        return try ChatPage(records: page.messages.elements.map(Self.record), earlier: page.cursor.map(ChatCursor.init))
     }
 
     private func apply(convo: BlueskyConvo, viewerDid: String) {
@@ -103,18 +106,9 @@ public final class BlueskyChatAdapter: ChatAdapter, ChatReactionSending {
         info.subtitle = info.showsSenderNames ? "\(convo.members.count) members" : others.first?.handle.map { "@\($0)" } ?? ""
     }
 
-    public func loadEarlier() async throws {
-        guard let cursor else { return }
-        let page = try await client.messages(convoId: convoId, cursor: cursor)
-        self.cursor = page.cursor
-        hasEarlierMessages = page.cursor != nil
-        merge(page.messages.elements)
-    }
-
     public func send(_ message: ChatOutgoing) async throws -> String? {
         let sent = try await client.sendMessage(convoId: convoId, text: message.text)
-        loaded[sent.id] = sent
-        publish()
+        try history?.write([Self.record(sent)])
         return sent.id
     }
 
@@ -140,14 +134,8 @@ public final class BlueskyChatAdapter: ChatAdapter, ChatReactionSending {
         loaded.values.sorted { ($0.sentAt, $0.id) < ($1.sentAt, $1.id) }
     }
 
-    private func merge(_ page: [BlueskyChatMessage]) {
-        for message in page {
-            loaded[message.id] = message
-        }
-        publish()
-    }
-
-    private func publish() {
+    public func render(_ records: [ChatRecord]) -> ChatRendering {
+        loaded = Dictionary(records.compactMap { try? $0.decode(BlueskyChatMessage.self) }.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
         let sorted = sortedMessages
         var totals: [String: [ChatReaction]] = [:]
         for message in sorted {
@@ -158,9 +146,7 @@ public final class BlueskyChatAdapter: ChatAdapter, ChatReactionSending {
                 }
                 .sorted { ($0.count, $0.emoji) > ($1.count, $1.emoji) }
         }
-        reactions = totals
-        messages = sorted.map(chatMessage)
-        onChange?()
+        return ChatRendering(messages: sorted.map(chatMessage), reactions: totals)
     }
 
     // MARK: Reactions
@@ -187,8 +173,11 @@ public final class BlueskyChatAdapter: ChatAdapter, ChatReactionSending {
     }
 
     private func setReactions(_ reactions: [BlueskyChatMessage.Reaction]?, on messageId: String) {
-        loaded[messageId]?.reactions = reactions
-        publish()
+        try? history?.update(id: messageId) { record in
+            var message = try record.decode(BlueskyChatMessage.self)
+            message.reactions = reactions
+            return try Self.record(message)
+        }
     }
 
     public func reactors(of emoji: String, on messageId: String) -> [ChatReactor] {

@@ -10,23 +10,21 @@ public final class SpotifyChatAdapter: ChatAdapter, ChatAudioPreviewing {
     public let pollInterval: Duration? = .seconds(10)
     public var onChange: (() -> Void)?
     public private(set) var info: ChatInfo
-    public private(set) var messages: [ChatMessage] = []
-    public private(set) var reactions: [String: [ChatReaction]] = [:]
-    public private(set) var hasEarlierMessages = false
+    public var history: ChatHistory?
 
     private let client: SpotifyClient
     private let chatId: String
     private let viewerUsername: String
+    /// The messages last rendered: the stretch the chat shows.
     private var loaded: [String: SpotifyChatMessage] = [:]
-    private var nextPageToken: String?
     private var profiles: [String: ChatUser] = [:]
     private var pendingProfiles: Set<String> = []
     private var shares: [String: SpotifyShareMetadata] = [:]
     private var tracks: [String: SpotifyTrackMetadata] = [:]
     private var pendingShares: Set<String> = []
     private var previewURLs: [String: URL] = [:]
-    /// Whether the first page came from Spotify this visit; until then the messages are the cached snapshot.
-    private var hasLoadedHistory = false
+    /// Whether the cached profiles were refreshed this visit.
+    private var hasRefreshedProfiles = false
     /// The other member of a one-to-one chat, whose name titles it.
     private var partner: String?
     /// The newest incoming message the chat was marked seen at.
@@ -45,11 +43,10 @@ public final class SpotifyChatAdapter: ChatAdapter, ChatAudioPreviewing {
         "spotify:\(chatId)"
     }
 
-    // MARK: Snapshot
+    // MARK: State
 
-    /// What the chat showed last time, so it opens with its messages, names and track details in place.
-    private struct Snapshot: Codable {
-        let messages: [SpotifyChatMessage]
+    /// Names and track details, so the chat opens with them in place.
+    private struct State: Codable {
         let profiles: [String: ChatUser]
         let tracks: [String: SpotifyTrackMetadata]
         let shares: [String: SpotifyShareMetadata]
@@ -59,71 +56,70 @@ public final class SpotifyChatAdapter: ChatAdapter, ChatAudioPreviewing {
         let showsSenderNames: Bool
     }
 
-    public func restore(snapshot data: Data) {
-        guard let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data) else { return }
-        for message in snapshot.messages {
-            loaded[message.id] = message
-        }
-        profiles = snapshot.profiles
-        tracks = snapshot.tracks
-        shares = snapshot.shares
-        partner = snapshot.partner
-        info = ChatInfo(title: snapshot.title, subtitle: snapshot.subtitle, showsSenderNames: snapshot.showsSenderNames)
-        publish()
+    public func restore(state data: Data) {
+        guard let state = try? JSONDecoder().decode(State.self, from: data) else { return }
+        profiles = state.profiles
+        tracks = state.tracks
+        shares = state.shares
+        partner = state.partner
+        info = ChatInfo(title: state.title, subtitle: state.subtitle, showsSenderNames: state.showsSenderNames)
     }
 
-    public func snapshot() -> Data? {
-        let newest = loaded.values.sorted { ($0.sentAt ?? .distantPast, $0.id) < ($1.sentAt ?? .distantPast, $1.id) }.suffix(ChatSnapshotCache.messageLimit)
-        return try? JSONEncoder().encode(Snapshot(
-            messages: Array(newest), profiles: profiles, tracks: tracks, shares: shares, partner: partner,
+    public func state() -> Data? {
+        try? JSONEncoder().encode(State(
+            profiles: profiles, tracks: tracks, shares: shares, partner: partner,
             title: info.title, subtitle: info.subtitle, showsSenderNames: info.showsSenderNames,
         ))
     }
 
     // MARK: Loading
 
-    public func loadNewest() async throws {
-        let page = try await client.chatHistory(chatId: chatId, pageSize: pageSize, pageToken: nil)
-        if let chat = page.chat, chat.isGroup {
-            info.title = chat.name ?? "Group"
-            info.subtitle = "\(chat.members.count) members"
-        } else if let chat = page.chat, let other = chat.members.first(where: { $0 != viewerUsername }) {
-            partner = other
-            info.showsSenderNames = false
-            // Keeps the title it opened with (the profile name from the Chats list) rather than flashing
-            // the username, which is often a random ID, until the profile loads.
-            if let profile = profiles[other] {
-                info.title = profile.name
-            }
-            loadProfile(username: other)
-        }
-        if !hasLoadedHistory {
-            hasLoadedHistory = true
-            nextPageToken = page.nextPageToken
-            hasEarlierMessages = page.nextPageToken != nil
-            // Cached profiles refresh once per visit, quietly, since they render already.
-            for username in profiles.keys {
-                loadProfile(username: username)
-            }
-        }
-        merge(page.messages)
+    nonisolated static func record(_ message: SpotifyChatMessage) throws -> ChatRecord {
+        try ChatRecord(id: message.id, sortKey: Int64((message.sentAt?.timeIntervalSince1970 ?? 0) * 1000), encoding: message)
     }
 
-    public func loadEarlier() async throws {
-        guard let token = nextPageToken else { return }
-        let page = try await client.chatHistory(chatId: chatId, pageSize: pageSize, pageToken: token)
-        nextPageToken = page.nextPageToken
-        hasEarlierMessages = page.nextPageToken != nil
-        merge(page.messages)
+    /// Messages the app shows: ones with an id and content it can draw.
+    nonisolated static func records(_ messages: [SpotifyChatMessage]) throws -> [ChatRecord] {
+        try messages.filter { !$0.id.isEmpty && $0.content != .other }.map(record)
     }
 
-    /// When Spotify doesn't return the sent message, the newest page loads it before the sending copy goes.
+    public func fetch(_ request: ChatPageRequest) async throws -> ChatPage {
+        switch request {
+        case .newest:
+            let page = try await client.chatHistory(chatId: chatId, pageSize: pageSize, pageToken: nil)
+            if let chat = page.chat, chat.isGroup {
+                info.title = chat.name ?? "Group"
+                info.subtitle = "\(chat.members.count) members"
+            } else if let chat = page.chat, let other = chat.members.first(where: { $0 != viewerUsername }) {
+                partner = other
+                info.showsSenderNames = false
+                // Keeps the title it opened with (the profile name from the Chats list) rather than flashing
+                // the username, which is often a random ID, until the profile loads.
+                if let profile = profiles[other] {
+                    info.title = profile.name
+                }
+                loadProfile(username: other)
+            }
+            if !hasRefreshedProfiles {
+                hasRefreshedProfiles = true
+                // Cached profiles refresh once per visit, quietly, since they render already.
+                for username in profiles.keys {
+                    loadProfile(username: username)
+                }
+            }
+            return try ChatPage(records: Self.records(page.messages), earlier: page.nextPageToken.map(ChatCursor.init))
+        case let .before(cursor):
+            let page = try await client.chatHistory(chatId: chatId, pageSize: pageSize, pageToken: cursor.value)
+            return try ChatPage(records: Self.records(page.messages), earlier: page.nextPageToken.map(ChatCursor.init))
+        case .after, .around:
+            throw SourceError.serviceError("Spotify chats have no windows.")
+        }
+    }
+
+    /// When Spotify doesn't return the sent message, the framework fetches the newest page for it.
     public func send(_ message: ChatOutgoing) async throws -> String? {
-        guard let sent = try await client.sendChatText(chatId: chatId, text: message.text) else {
-            try? await loadNewest()
-            return nil
-        }
-        merge([sent])
+        guard let sent = try await client.sendChatText(chatId: chatId, text: message.text) else { return nil }
+        try history?.write(Self.records([sent]))
         return sent.id
     }
 
@@ -145,14 +141,8 @@ public final class SpotifyChatAdapter: ChatAdapter, ChatAudioPreviewing {
 
     // MARK: Display
 
-    private func merge(_ page: [SpotifyChatMessage]) {
-        for message in page where !message.id.isEmpty && message.content != .other {
-            loaded[message.id] = message
-        }
-        publish()
-    }
-
-    private func publish() {
+    public func render(_ records: [ChatRecord]) -> ChatRendering {
+        loaded = Dictionary(records.compactMap { try? $0.decode(SpotifyChatMessage.self) }.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
         let sorted = loaded.values.sorted { ($0.sentAt ?? .distantPast, $0.id) < ($1.sentAt ?? .distantPast, $1.id) }
         var totals: [String: [ChatReaction]] = [:]
         for message in sorted where !message.reactions.isEmpty {
@@ -163,9 +153,7 @@ public final class SpotifyChatAdapter: ChatAdapter, ChatAudioPreviewing {
                 }
                 .sorted { ($0.count, $0.emoji) > ($1.count, $1.emoji) }
         }
-        reactions = totals
-        messages = sorted.map(chatMessage)
-        onChange?()
+        return ChatRendering(messages: sorted.map(chatMessage), reactions: totals)
     }
 
     public func reactors(of emoji: String, on messageId: String) -> [ChatReactor] {
@@ -218,7 +206,7 @@ public final class SpotifyChatAdapter: ChatAdapter, ChatAudioPreviewing {
             if username == partner, let name = profiles[username]?.name {
                 info.title = name
             }
-            publish()
+            onChange?()
         }
     }
 
@@ -265,7 +253,7 @@ public final class SpotifyChatAdapter: ChatAdapter, ChatAudioPreviewing {
         Task {
             guard let track = try? await client.trackMetadata(trackId: id) else { return }
             tracks[id] = track
-            publish()
+            onChange?()
         }
     }
 
@@ -274,7 +262,7 @@ public final class SpotifyChatAdapter: ChatAdapter, ChatAudioPreviewing {
         Task {
             guard let metadata = try? await client.shareMetadata(url: url) else { return }
             shares[url.absoluteString] = metadata
-            publish()
+            onChange?()
         }
     }
 

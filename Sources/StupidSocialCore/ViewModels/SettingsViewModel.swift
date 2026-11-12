@@ -616,6 +616,8 @@ public final class SettingsViewModel: ObservableObject {
         }
         services.keychain.scoped(to: accountId).deleteAccountCredentials()
         try? cacheStore.deleteAccount(network: account.network, accountId: accountId)
+        // Its chats' history; an Apron server's goes with `removeServer`.
+        try? ChatKit.store.removeAll(accountId: accountId)
         store.remove(id: accountId)
         AppMetrics.accountRemoved(network: account.network)
         loadStatuses()

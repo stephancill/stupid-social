@@ -176,30 +176,31 @@ final class LinkedInTests: XCTestCase {
             messages: messages,
         )
         let adapter = LinkedInChatAdapter(client: stubbedClient(), conversationUrn: conversation, title: "Pat Friend")
-        try await adapter.loadNewest()
+        let chat = try StoredChat(adapter)
+        try await chat.loadNewest()
 
-        XCTAssertEqual(adapter.messages.map(\.id), [1, 2, 3, 4, 5].map(messageUrn))
-        XCTAssertTrue(adapter.messages[1].isDeleted)
-        XCTAssertTrue(adapter.messages[2].isEdited)
-        XCTAssertEqual(adapter.reactions[messageUrn(3)], [ChatReaction(emoji: "👍", count: 2, includesYou: true)])
+        XCTAssertEqual(chat.messages.map(\.id), [1, 2, 3, 4, 5].map(messageUrn))
+        XCTAssertTrue(chat.messages[1].isDeleted)
+        XCTAssertTrue(chat.messages[2].isEdited)
+        XCTAssertEqual(chat.reactions[messageUrn(3)], [ChatReaction(emoji: "👍", count: 2, includesYou: true)])
         XCTAssertEqual(adapter.yourEmojis(on: messageUrn(3)), ["👍"])
-        XCTAssertEqual(adapter.messages[3].replyToId, messageUrn(0))
+        XCTAssertEqual(chat.messages[3].replyToId, messageUrn(0))
         XCTAssertEqual(adapter.referencedMessages[messageUrn(0)]?.text, "older question")
         XCTAssertEqual(adapter.referencedMessages[messageUrn(0)]?.isOwn, true)
-        guard case let .image(url, ratio, _, _, _) = adapter.messages[4].embeds.first else { return XCTFail("GIF") }
+        guard case let .image(url, ratio, _, _, _) = chat.messages[4].embeds.first else { return XCTFail("GIF") }
         XCTAssertEqual(url.absoluteString, "https://media.tenor.com/a.gif")
         XCTAssertEqual(ratio, 2)
         XCTAssertEqual(adapter.info.avatarUserId, friend)
         XCTAssertFalse(adapter.info.showsSenderNames)
-        XCTAssertTrue(adapter.canDelete(adapter.messages[0]))
-        XCTAssertFalse(adapter.canDelete(adapter.messages[2]))
-        XCTAssertEqual(adapter.editableText(of: adapter.messages[0]), "lunch?")
+        XCTAssertTrue(adapter.canDelete(chat.messages[0]))
+        XCTAssertFalse(adapter.canDelete(chat.messages[2]))
+        XCTAssertEqual(adapter.editableText(of: chat.messages[0]), "lunch?")
 
-        XCTAssertFalse(adapter.isAfterReadPosition(adapter.messages[2]))
-        XCTAssertTrue(adapter.isAfterReadPosition(adapter.messages[3]))
+        XCTAssertFalse(adapter.isAfterReadPosition(chat.messages[2]))
+        XCTAssertTrue(adapter.isAfterReadPosition(chat.messages[3]))
         // Read state is per conversation: seeing the reply alone leaves the newer GIF unread on LinkedIn.
-        XCTAssertNil(adapter.markRead(upTo: adapter.messages[3]))
-        let send = try XCTUnwrap(adapter.markRead(upTo: adapter.messages[4]))
+        XCTAssertNil(adapter.markRead(upTo: chat.messages[3]))
+        let send = try XCTUnwrap(adapter.markRead(upTo: chat.messages[4]))
         LinkedInURLProtocol.requests = []
         try await send()
         let request = try XCTUnwrap(LinkedInURLProtocol.requests.first)
@@ -208,7 +209,7 @@ final class LinkedInTests: XCTestCase {
         XCTAssertEqual(body["entities"]?[conversation]?["patch"]?["$set"]?["read"], true)
         XCTAssertEqual(request.headers["csrf-token"], "ajax:123")
         XCTAssertEqual(request.headers["Cookie"], #"li_at=test-li-at; JSESSIONID="ajax:123""#)
-        XCTAssertNil(adapter.markRead(upTo: adapter.messages[4]))
+        XCTAssertNil(adapter.markRead(upTo: chat.messages[4]))
     }
 
     func testSendQuotesTheRepliedMessage() async throws {
@@ -216,7 +217,8 @@ final class LinkedInTests: XCTestCase {
         LinkedInURLProtocol.reset()
         LinkedInURLProtocol.handler = routes(conversation: conversationJSON(unread: 0, lastReadAt: 1000, lastActivityAt: 1000, last: messages[0]), messages: messages)
         let adapter = LinkedInChatAdapter(client: stubbedClient(), conversationUrn: conversation, title: "Pat Friend")
-        try await adapter.loadNewest()
+        let chat = try StoredChat(adapter)
+        try await chat.loadNewest()
         LinkedInURLProtocol.requests = []
 
         let id = try await adapter.send(ChatOutgoing(text: "answer", attachment: nil, replyToId: messageUrn(1)))
@@ -287,7 +289,8 @@ final class LinkedInTests: XCTestCase {
         LinkedInURLProtocol.reset()
         LinkedInURLProtocol.handler = routes(conversation: conversationJSON(unread: 0, lastReadAt: 1000, lastActivityAt: 1000, last: messages[0]), messages: messages)
         let adapter = LinkedInChatAdapter(client: stubbedClient(), conversationUrn: conversation, title: "Pat Friend")
-        try await adapter.loadNewest()
+        let chat = try StoredChat(adapter)
+        try await chat.loadNewest()
         XCTAssertEqual(adapter.pollInterval, .seconds(10), "without a live feed it polls quickly")
 
         let participant = try JSONDecoder().decode(LinkedInParticipant.self, from: Data(participant(friend, first: "Pat", last: "Friend").utf8))
@@ -298,18 +301,18 @@ final class LinkedInTests: XCTestCase {
 
         let live = try JSONDecoder().decode(LinkedInMessage.self, from: Data(message(2, from: friend, text: "answer", at: 2000).utf8))
         adapter.handle(.message(conversationUrn: conversation, live))
-        XCTAssertEqual(adapter.messages.map(\.id), [messageUrn(1), messageUrn(2)])
+        XCTAssertEqual(chat.messages.map(\.id), [messageUrn(1), messageUrn(2)])
         XCTAssertEqual(adapter.typingNames, [], "a message ends its sender's typing")
-        XCTAssertTrue(adapter.isAfterReadPosition(adapter.messages[1]))
+        XCTAssertTrue(adapter.isAfterReadPosition(chat.messages[1]))
 
         adapter.handle(.reaction(messageUrn: messageUrn(2), LinkedInMessage.ReactionSummary(emoji: "🎉", count: 1, viewerReacted: false)))
-        XCTAssertEqual(adapter.reactions[messageUrn(2)], [ChatReaction(emoji: "🎉", count: 1, includesYou: false)])
+        XCTAssertEqual(chat.reactions[messageUrn(2)], [ChatReaction(emoji: "🎉", count: 1, includesYou: false)])
         adapter.handle(.reaction(messageUrn: messageUrn(2), LinkedInMessage.ReactionSummary(emoji: "🎉", count: 0, viewerReacted: false)))
-        XCTAssertNil(adapter.reactions[messageUrn(2)])
+        XCTAssertNil(chat.reactions[messageUrn(2)])
 
         let recalled = try JSONDecoder().decode(LinkedInMessage.self, from: Data(message(2, from: friend, text: "", at: 2000, format: "RECALLED").utf8))
         adapter.handle(.message(conversationUrn: conversation, recalled))
-        XCTAssertTrue(adapter.messages[1].isDeleted)
+        XCTAssertTrue(chat.messages[1].isDeleted)
     }
 
     func testRedirectToLoginReadsAsSignedOut() async throws {

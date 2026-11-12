@@ -16,18 +16,22 @@ public final class XChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, 
     public var onError: ((Error) -> Void)?
     public let acceptsReactions = true
     public private(set) var info: ChatInfo
-    public private(set) var messages: [ChatMessage] = []
-    public private(set) var reactions: [String: [ChatReaction]] = [:]
-    public private(set) var hasEarlierMessages = false
+    public var history: ChatHistory?
+    /// Reaction totals of the rendered messages.
+    private var reactions: [String: [ChatReaction]] = [:]
     /// Replies render from the decrypted reply preview when the original isn't loaded.
     public private(set) var referencedMessages: [String: ChatMessage] = [:]
     public let unavailableReferences: Set<String> = []
 
     private let client: XChatClient
     private let conversationId: String
-    /// Every loaded event by sequence id, with what its message decrypted to (nil when it didn't).
+    /// The events last rendered by sequence id, with what their messages decrypted to (nil when they didn't).
     private var events: [String: XChatEvent] = [:]
     private var entries: [String: XChatEntry?] = [:]
+    /// What stored events decrypted to this run, by "<conversation>|<sequence id>": stored events stay encrypted, and
+    /// decrypting needs the conversation's keys, which the client has once the inbox loads.
+    private static var decrypted: [String: XChatEntry?] = [:]
+    private var decrypting: Set<String> = []
     private var people: [String: ChatUser] = [:]
     /// Sequence id → the text of its latest edit.
     private var editedTexts: [String: String] = [:]
@@ -38,7 +42,6 @@ public final class XChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, 
     private var readUntil: Int64 = 0
     /// The furthest anyone else has read, by their read markers; people who turned read receipts off send none.
     private var othersReadUntil: Int64 = 0
-    private var hasLoadedHistory = false
     private let liveFeed: XChatLiveFeed
     private var observation: UUID?
 
@@ -53,25 +56,120 @@ public final class XChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, 
         "x:\(conversationId)"
     }
 
-    /// Decrypting needs the account's keys, so nothing is cached between visits.
-    public func snapshot() -> Data? {
-        nil
+    // MARK: State
+
+    private struct State: Codable {
+        let people: [String: ChatUser]
+        let viewerId: String?
+        let readUntil: Int64
+        let othersReadUntil: Int64
+        let title: String
+        let subtitle: String
+        let showsSenderNames: Bool
+        let titleIsMemberNames: Bool
     }
 
-    public func restore(snapshot _: Data) {}
+    public func restore(state data: Data) {
+        guard let state = try? JSONDecoder().decode(State.self, from: data) else { return }
+        people = state.people
+        viewerId = state.viewerId
+        readUntil = state.readUntil
+        othersReadUntil = state.othersReadUntil
+        info.title = state.title
+        info.subtitle = state.subtitle
+        info.showsSenderNames = state.showsSenderNames
+        info.titleIsMemberNames = state.titleIsMemberNames
+    }
+
+    public func state() -> Data? {
+        try? JSONEncoder().encode(State(
+            people: people, viewerId: viewerId, readUntil: readUntil, othersReadUntil: othersReadUntil, title: info.title,
+            subtitle: info.subtitle, showsSenderNames: info.showsSenderNames, titleIsMemberNames: info.titleIsMemberNames,
+        ))
+    }
 
     // MARK: Loading
 
-    public func loadNewest() async throws {
-        let conversation = try await client.conversation(conversationId)
-        viewerId = await client.viewerId
-        apply(conversation)
-        let page = try await client.eventPage(conversationId: conversationId)
-        if !hasLoadedHistory {
-            hasLoadedHistory = true
-            hasEarlierMessages = page.hasMore
+    public func fetch(_ request: ChatPageRequest) async throws -> ChatPage {
+        let page: XChatEventPage
+        switch request {
+        case .newest:
+            let conversation = try await client.conversation(conversationId)
+            viewerId = await client.viewerId
+            apply(conversation)
+            page = try await client.eventPage(conversationId: conversationId)
+        case let .before(cursor):
+            page = try await client.eventPage(conversationId: conversationId, beforeSequenceId: cursor.value)
+        case .after, .around:
+            throw SourceError.serviceError("X chats have no windows.")
         }
-        await merge(page.events)
+        let sequences = page.events.map(\.sequence)
+        let covers = sequences.min().flatMap { low in sequences.max().map { low ... $0 } }
+        return try await ChatPage(
+            records: records(page.events),
+            earlier: page.hasMore ? page.events.first.map { ChatCursor($0.sequenceId) } : nil,
+            covers: covers,
+            // Deletions are events of their own.
+            isComplete: false,
+        )
+    }
+
+    public func cursor(before record: ChatRecord) -> ChatCursor? {
+        ChatCursor(record.id)
+    }
+
+    /// Events as records, still encrypted: messages, and reactions, edits and deletes related to the messages they
+    /// name, which decrypting tells apart. Read markers and the conversation token apply here.
+    private func records(_ events: [XChatEvent]) async throws -> [ChatRecord] {
+        var records: [ChatRecord] = []
+        for event in events {
+            if let token = event.conversationToken {
+                conversationToken = token
+            }
+            if let read = event.readUntil {
+                if event.senderId == viewerId {
+                    readUntil = max(readUntil, read)
+                } else if viewerId != nil {
+                    othersReadUntil = max(othersReadUntil, read)
+                }
+            }
+            var relatesTo: String?
+            if event.messageCreate != nil {
+                switch await entry(of: event) {
+                case let .reaction(target, _, _), let .edit(target, _):
+                    relatesTo = target
+                case .other:
+                    continue
+                case .message, nil:
+                    break
+                }
+            } else if let target = event.deletedSequenceIds.first {
+                relatesTo = target
+            } else {
+                continue
+            }
+            records.append(ChatRecord(id: event.sequenceId, sortKey: event.sequence, relatesTo: relatesTo, data: ThriftCoder.encode(event.raw)))
+        }
+        return records
+    }
+
+    /// What the event decrypts to, once per run; nil when it doesn't.
+    private func entry(of event: XChatEvent) async -> XChatEntry? {
+        let key = "\(conversationId)|\(event.sequenceId)"
+        if let known = Self.decrypted[key] {
+            return known
+        }
+        let entry = try? await client.decrypt(event)
+        Self.decrypted[key] = .some(entry)
+        return entry
+    }
+
+    private func write(_ events: [XChatEvent]) async {
+        do {
+            try await history?.write(records(events))
+        } catch {
+            onError?(error)
+        }
     }
 
     private func apply(_ conversation: XChatConversationInfo) {
@@ -103,7 +201,7 @@ public final class XChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, 
             case let .event(events):
                 let own = events.filter { $0.conversationId == self.conversationId }
                 if !own.isEmpty {
-                    Task { await self.merge(own) }
+                    Task { await self.write(own) }
                 }
             case .catchUp:
                 onCatchUp?()
@@ -116,13 +214,6 @@ public final class XChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, 
         observation = nil
     }
 
-    public func loadEarlier() async throws {
-        guard hasEarlierMessages, let oldest = events.values.min(by: { $0.sequence < $1.sequence }) else { return }
-        let page = try await client.eventPage(conversationId: conversationId, beforeSequenceId: oldest.sequenceId)
-        hasEarlierMessages = page.hasMore && !page.events.isEmpty
-        await merge(page.events)
-    }
-
     /// X answers with the stored event, which takes the sending copy's place. A reply quotes the message as
     /// shown, with its latest edit.
     public func send(_ message: ChatOutgoing) async throws -> String? {
@@ -132,7 +223,7 @@ public final class XChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, 
         }
         let media: XChatOutgoingMedia? = if let attachment = message.attachment { await XChatOutgoingMedia(data: attachment.data, mimeType: attachment.mimeType, filename: attachment.filename, isImage: attachment.isImage) } else { nil }
         let event = try await client.sendMessage(message.text, media: media, replyTo: replyTo, conversationId: conversationId, token: conversationToken)
-        await merge([event])
+        await write([event])
         return event.sequenceId
     }
 
@@ -179,7 +270,7 @@ public final class XChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, 
             await media.append(.forwarded(data: data, filename: item.filename, kind: XChatMessageContents.Media.Kind(rawValue: item.kind) ?? .file, durationMillis: item.durationMillis))
         }
         let event = try await client.sendForward(text: reference.text, media: media, conversationId: conversationId, token: conversationToken)
-        await merge([event])
+        await write([event])
         return event.sequenceId
     }
 
@@ -194,7 +285,7 @@ public final class XChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, 
         let file = try await ChatVoiceFile.attachment(for: voice)
         let media = XChatOutgoingMedia(voiceNote: file.data, durationMillis: Int64((voice.duration * 1000).rounded()))
         let event = try await client.sendMessage("", media: media, replyTo: replyTo, conversationId: conversationId, token: conversationToken)
-        await merge([event])
+        await write([event])
         return event.sequenceId
     }
 
@@ -219,7 +310,7 @@ public final class XChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, 
     public func edit(_ messageId: String, text: String) async throws {
         guard let event = events[messageId] else { return }
         let edit = try await client.sendEdit(text, of: messageId, messageId: event.messageId, conversationId: conversationId, token: conversationToken)
-        await merge([edit])
+        await write([edit])
     }
 
     // MARK: Read position
@@ -247,29 +338,28 @@ public final class XChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, 
 
     // MARK: Display
 
-    private func merge(_ page: [XChatEvent]) async {
-        for event in page where events[event.sequenceId] == nil {
-            events[event.sequenceId] = event
-            if event.messageCreate != nil {
-                let entry = try? await client.decrypt(event)
-                // `.some(nil)` keeps a message that didn't decrypt, where assigning nil would drop it.
-                entries[event.sequenceId] = .some(entry)
-            }
-            if let token = event.conversationToken {
-                conversationToken = token
-            }
-            if let read = event.readUntil {
-                if event.senderId == viewerId {
-                    readUntil = max(readUntil, read)
-                } else if viewerId != nil {
-                    othersReadUntil = max(othersReadUntil, read)
-                }
+    /// The stored stretch the chat shows. Events this run hasn't decrypted yet show once they have.
+    public func render(_ records: [ChatRecord]) -> ChatRendering {
+        events = Dictionary(records.compactMap { try? XChatEvent(ThriftCoder.decode($0.data)) }.map { ($0.sequenceId, $0) }, uniquingKeysWith: { _, latest in latest })
+        entries = [:]
+        var undecrypted: [XChatEvent] = []
+        for event in events.values where event.messageCreate != nil {
+            if let entry = Self.decrypted["\(conversationId)|\(event.sequenceId)"] {
+                entries[event.sequenceId] = entry
+            } else if !decrypting.contains(event.sequenceId) {
+                undecrypted.append(event)
             }
         }
-        publish()
-    }
-
-    private func publish() {
+        if !undecrypted.isEmpty {
+            decrypting.formUnion(undecrypted.map(\.sequenceId))
+            Task {
+                for event in undecrypted {
+                    _ = await entry(of: event)
+                    decrypting.remove(event.sequenceId)
+                }
+                onChange?()
+            }
+        }
         let sorted = events.values.sorted { $0.sequence < $1.sequence }
         var edits: [String: String] = [:]
         var deleted: Set<String> = []
@@ -347,8 +437,7 @@ public final class XChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, 
                 .sorted { ($0.count, $0.emoji) > ($1.count, $1.emoji) }
         }
         reactions = totals
-        messages = chatMessages
-        onChange?()
+        return ChatRendering(messages: chatMessages, reactions: totals)
     }
 
     private func person(_ id: String) -> ChatUser {
@@ -419,7 +508,7 @@ public final class XChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, 
     public func toggleReaction(_ emoji: String, on messageId: String) async throws {
         let remove = yourEmojis(on: messageId).contains(emoji)
         let event = try await client.sendReaction(emoji, on: messageId, remove: remove, conversationId: conversationId, token: conversationToken)
-        await merge([event])
+        await write([event])
     }
 
     public func reactors(of emoji: String, on messageId: String) -> [ChatReactor] {

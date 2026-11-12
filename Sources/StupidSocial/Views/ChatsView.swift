@@ -222,7 +222,6 @@ struct ChatsView: View {
                     let room = AdapterChatViewModel(
                         adapter: ApronChatAdapter(service: apronService, serverURL: serverURL, roomId: roomId, title: chat.title),
                         accountId: Account.apronId(serverURL: serverURL),
-                        snapshotCache: apronService.snapshotCache,
                         draftStore: apronService.draftStore,
                     )
                     return opened(room, chat: chat, quickLook: quickLook)
@@ -234,7 +233,6 @@ struct ChatsView: View {
                 AdapterChatViewModel(
                     adapter: ApronChatAdapter(service: apronService, serverURL: serverURL, directWith: user),
                     accountId: Account.apronId(serverURL: serverURL),
-                    snapshotCache: apronService.snapshotCache,
                     draftStore: apronService.draftStore,
                 ),
                 chat: chat,

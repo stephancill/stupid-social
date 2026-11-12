@@ -12,10 +12,7 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
     public var onCatchUp: (() -> Void)?
     public var onError: ((Error) -> Void)?
     public private(set) var info: ChatInfo
-    public private(set) var messages: [ChatMessage] = []
-    public private(set) var reactions: [String: [ChatReaction]] = [:]
-    public private(set) var hasEarlierMessages = false
-    public private(set) var hasLaterMessages = false
+    public var history: ChatHistory?
     public private(set) var referencedMessages: [String: ChatMessage] = [:]
     public private(set) var unavailableReferences: Set<String> = []
     /// Names of the other users typing, in the order they started.
@@ -43,10 +40,10 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
     private var mediaOrigins: [URL] = []
     /// The catalog `customEmojis` came from or is loading from.
     private var emojiCatalogURL: URL?
+    /// The messages last rendered: the stretch the chat shows, which actions work on.
     private var snapshots: [String: ApronMessage] = [:]
-    /// Messages moved to another room (§4.4), by the `log_id` of the move, so an older page loaded later doesn't
-    /// bring them back.
-    private var movedOut: [String: Int64] = [:]
+    /// Reaction totals of the rendered messages.
+    private var reactions: [String: [ChatReaction]] = [:]
     /// Kept current user objects (§3.3.1); messages carry recorded `from` objects that often omit avatars.
     /// Mentions show these names; a name another known user shares is left out, so those mentions keep their
     /// `@user_id` (§3.3.1).
@@ -68,8 +65,6 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
     /// This room's record as last listed or updated (§4.2), for its description and whether it can be edited.
     private var roomRecord: ApronRoom?
     private var notices: [ApronMessage] = []
-    private var firstLogId: String?
-    private var lastLogId: String?
     private var pendingReferences: Set<String> = []
     private let windowSize = 30
     /// Whether the server's cursor is the source of truth here (see `ApronService.serverTracksCursors`).
@@ -83,7 +78,6 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
     private var sentReadMessageId: Int64 = 0
     private var ownUserIds: Set<String>
     private var observerToken: UUID?
-    private var hasLoadedHistory = false
     private let pageSize = 50
     /// userId → (name, when the typing indication expires), from other users' `activity.typing`.
     private var typingUsers: [(userId: String, name: String, expires: Date)] = []
@@ -162,85 +156,119 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
         return origins.contains(host) ? url : nil
     }
 
-    // MARK: Snapshot
+    // MARK: State
 
-    /// Snapshots merge with live and history records by the greatest `log_id` (§2.3), so a stale one can never
-    /// override newer state.
-    private struct Snapshot: Codable {
-        let messages: [ApronMessage]
+    private struct State: Codable {
+        /// Authors and reactors of the shown messages, so they show with their avatars before the connection is up.
         let users: [ApronUser]
-        /// Reactions on the cached messages, so they render with the first frame.
-        let reactions: [ApronReactionRecord]
-        /// So cached image embeds render as images before the connection is up instead of growing from cards.
+        /// So image embeds render as images before the connection is up instead of growing from cards.
         let mediaOrigins: [URL]
         /// So custom emoji render before the connection is up; the catalog is cached for as long as its URL stays.
-        var emojiCatalogURL: URL?
+        let emojiCatalogURL: URL?
         /// So read receipts render before the connection is up; only in rooms where another member's cursor arrived.
-        var othersRead: Int64?
+        let othersRead: Int64?
     }
 
-    public func restore(snapshot data: Data) {
-        guard snapshots.isEmpty, let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data) else { return }
-        mediaOrigins = snapshot.mediaOrigins
-        othersRead = snapshot.othersRead
-        if let url = snapshot.emojiCatalogURL {
+    public func restore(state data: Data) {
+        guard let state = try? JSONDecoder().decode(State.self, from: data) else { return }
+        mediaOrigins = state.mediaOrigins
+        othersRead = state.othersRead
+        if let url = state.emojiCatalogURL {
             loadEmojiCatalog(url)
         }
-        for user in snapshot.users where users[user.userId] == nil {
+        for user in state.users where users[user.userId] == nil {
             users[user.userId] = user
         }
-        for message in snapshot.messages {
-            install(message)
-        }
-        for record in snapshot.reactions {
-            applyReactions(record)
-        }
-        publish()
     }
 
-    /// The newest messages, unless an older window is showing.
-    public func snapshot() -> Data? {
-        guard !isNewDirectChat, !hasLaterMessages, !snapshots.isEmpty else { return nil }
-        let recent = sortedSnapshots().suffix(ChatSnapshotCache.messageLimit)
-        // Reactors too, so the reaction list has their avatars before the connection is up.
-        let authors = Set(recent.map(\.from.userId)).union(recent.compactMap(\.messageId).flatMap { (reactionEntries[$0] ?? [:]).keys })
-        // One record per user and message, keeping each set's own `log_id` so merging stays correct (§4.7).
-        let reactions = recent.compactMap(\.messageId).flatMap { messageId in
-            (reactionEntries[messageId] ?? [:]).map { userId, entry in
-                ApronReactionRecord(
-                    logId: String(entry.logId),
-                    messageId: messageId,
-                    roomId: roomId,
-                    reactions: [ApronReactionSet(from: users[userId] ?? reactionAuthors[userId] ?? ApronUser(userId: userId, name: nil, avatar: nil, roles: nil), emojis: entry.emojis)],
-                )
-            }
-        }
-        return try? JSONEncoder().encode(Snapshot(
-            messages: Array(recent),
+    public func state() -> Data? {
+        guard !isNewDirectChat else { return nil }
+        let authors = Set(snapshots.values.map(\.from.userId)).union(reactionEntries.values.flatMap(\.keys))
+        return try? JSONEncoder().encode(State(
             users: users.values.filter { authors.contains($0.userId) },
-            reactions: reactions,
             mediaOrigins: mediaOrigins,
             emojiCatalogURL: emojiCatalogURL,
             othersRead: othersRead,
         ))
     }
 
+    // MARK: Records
+
+    /// A message's record is keyed by its `message_id` and replaced only by a snapshot with a greater `log_id`; at an
+    /// equal `log_id` the tombstone wins (§2.3).
+    nonisolated static func record(_ message: ApronMessage) throws -> ChatRecord? {
+        guard let id = message.messageId else { return nil }
+        return try ChatRecord(
+            id: id, sortKey: Int64(id) ?? message.sortKey, version: message.sortKey * 2 + (message.isDeleted ? 1 : 0), encoding: message,
+        )
+    }
+
+    /// Each user's reaction set on a message is its own record, related to the message; the newest `log_id` wins
+    /// (§4.7).
+    nonisolated static func records(_ reactions: ApronReactionRecord, roomId: String) throws -> [ChatRecord] {
+        guard reactions.roomId == nil || reactions.roomId == roomId else { return [] }
+        let logId = reactions.logId.flatMap(Int64.init) ?? 0
+        return try reactions.reactions.map { set in
+            try ChatRecord(
+                id: "reaction:\(reactions.messageId):\(set.from.userId)", sortKey: logId, relatesTo: reactions.messageId, version: logId,
+                encoding: ApronReactionRecord(logId: reactions.logId, messageId: reactions.messageId, roomId: reactions.roomId, reactions: [set]),
+            )
+        }
+    }
+
+    /// A history page as records: the room's messages and reactions. A snapshot in another room means the message
+    /// moved out (§4.3.1), so its stored copy goes. Pages run by `log_id`, which a message's id is its creation's, and
+    /// can carry older messages edited within them; deletions come as tombstones.
+    private func page(_ result: ApronHistoryResult, request: ChatPageRequest) throws -> ChatPage {
+        var records: [ChatRecord] = []
+        var moved: [String] = []
+        for message in result.messages ?? [] {
+            if message.roomId == nil || message.roomId == roomId {
+                if let record = try Self.record(message) {
+                    records.append(record)
+                }
+            } else if let id = message.messageId {
+                moved.append(id)
+            }
+        }
+        for reactions in result.reactions ?? [] {
+            records += try Self.records(reactions, roomId: roomId)
+        }
+        if !moved.isEmpty {
+            try history?.delete(ids: moved)
+        }
+        let first = result.firstLogId.flatMap(Int64.init)
+        let last = result.lastLogId.flatMap(Int64.init)
+        let more = result.more ?? false
+        let covers = first.flatMap { first in last.map { first ... max(first, $0) } }
+        switch request {
+        case .after:
+            return ChatPage(records: records, earlier: first.map { ChatCursor(String($0 - 1)) }, later: more ? last.map { ChatCursor(String($0 + 1)) } : nil, covers: covers, isComplete: false)
+        default:
+            return ChatPage(records: records, earlier: more ? first.map { ChatCursor(String($0 - 1)) } : nil, covers: covers, isComplete: false)
+        }
+    }
+
     // MARK: Connection
 
-    /// Signs in on the shared connection and starts applying live frames before history loads, since replay is
+    /// Signs in on the shared connection once per visit and starts applying live frames, since replay is
     /// order-independent (§2.3).
-    public func loadNewest() async throws {
+    private func ensureSession() async throws -> ApronSession {
+        if let session {
+            return session
+        }
         let session = try await service.session(serverURL: serverURL)
         self.session = session
         do {
-            try await load(on: session)
+            try await setUp(on: session)
         } catch {
             stopObserving()
             throw error
         }
+        return session
     }
 
-    private func load(on session: ApronSession) async throws {
+    private func setUp(on session: ApronSession) async throws {
         you = session.you
         ownUserIds.insert(session.you.userId)
         mediaOrigins = session.server.ext?.mediaOrigins ?? mediaOrigins
@@ -251,12 +279,6 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
             onClose: { [weak self] error in self?.connectionClosed(error) },
         )
         updateOthersRead(from: session.connection)
-        if !session.server.has("history") {
-            // The room's log is what the connection received before this chat observed it. Read in the same
-            // main-actor turn as observing, so no frame is missed.
-            apply(session.connection.keptPage(roomId: roomId), publishing: false)
-        }
-
         if session.server.has("rooms") {
             let listing = try await session.connection.joinedRooms()
             for user in listing.users {
@@ -275,30 +297,58 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
                 try? await session.connection.joinRoom(roomId: roomId)
             }
         }
-        if session.server.has("history") {
-            if hasLoadedHistory, let last = lastLogId.flatMap(Int64.init) {
-                // A reconnect (such as after the app was in the background) keeps what the user is reading,
-                // including the divider, and catches up from the last loaded message so nothing between is
-                // skipped. With `more`, the rest loads by paging forward, like an older window.
-                let page = try await session.connection.history(roomId: roomId, after: String(last + 1), limit: pageSize)
-                apply(page, direction: .forward, publishing: false)
-            } else {
-                // Any cursor the server keeps arrived after `room_list`, before this result (§1, §4.6).
-                let page = try await session.connection.history(roomId: roomId, limit: pageSize)
-                dropCacheBehindGap(newestPage: page)
-                apply(page, publishing: false)
-                // Reactions already in the room when it's first shown aren't unseen.
-                if let last = page.lastLogId.flatMap(Int64.init) {
-                    service.reactionStore.setBaselineIfNeeded(last, serverURL: serverURL, roomId: roomId)
-                }
-                try await openAtFirstUnread(session: session)
-            }
-            hasLoadedHistory = true
-            await loadMissingReferences()
-        }
         room.isConnected = true
         updateNotifications()
-        publish()
+        onChange?()
+    }
+
+    public func fetch(_ request: ChatPageRequest) async throws -> ChatPage {
+        let session = try await ensureSession()
+        guard directUser == nil else { return ChatPage(records: [], earlier: nil) }
+        guard session.server.has("history") else {
+            // The room's log is what the connection received before this chat observed it.
+            return try page(session.connection.keptPage(roomId: roomId), request: .newest)
+        }
+        let connection = session.connection
+        let result: ChatPage
+        switch request {
+        case .newest:
+            // Any cursor the server keeps arrived after `room_list`, before this result (§1, §4.6).
+            let newest = try await connection.history(roomId: roomId, limit: pageSize)
+            // Reactions already in the room when it's first shown aren't unseen.
+            if let last = newest.lastLogId.flatMap(Int64.init) {
+                service.reactionStore.setBaselineIfNeeded(last, serverURL: serverURL, roomId: roomId)
+            }
+            if let newestMessage = newest.messages?.compactMap({ $0.messageId.flatMap(Int64.init) }).max() {
+                service.readStore.setBaselineIfNeeded(newestMessage, serverURL: serverURL, roomId: roomId)
+            }
+            result = try page(newest, request: request)
+        case let .before(cursor):
+            result = try await page(connection.history(roomId: roomId, before: cursor.value, limit: pageSize), request: request)
+        case let .after(cursor):
+            result = try await page(connection.history(roomId: roomId, after: cursor.value, limit: pageSize), request: request)
+        case let .around(messageId):
+            // A window of history around the message, without loading everything in between (§4.3.2).
+            guard let target = Int64(messageId) else { return ChatPage(records: [], earlier: nil) }
+            let older = try await connection.history(roomId: roomId, before: messageId, limit: windowSize)
+            guard older.messages?.contains(where: { $0.messageId == messageId }) == true else { return ChatPage(records: [], earlier: nil) }
+            let newer = try await connection.history(roomId: roomId, after: String(target + 1), limit: windowSize)
+            let olderPage = try page(older, request: .before(ChatCursor(messageId)))
+            let newerPage = try page(newer, request: .after(ChatCursor(String(target + 1))))
+            let low = olderPage.covers?.lowerBound ?? target
+            let high = newerPage.covers?.upperBound ?? olderPage.covers?.upperBound ?? target
+            result = ChatPage(
+                records: olderPage.records + newerPage.records, earlier: olderPage.earlier, later: newerPage.later,
+                covers: low ... max(low, high), isComplete: false,
+            )
+        }
+        await loadMissingReferences()
+        return result
+    }
+
+    /// `before` is inclusive, so the history before a message starts just under its id.
+    public func cursor(before record: ChatRecord) -> ChatCursor? {
+        ChatCursor(String(record.sortKey - 1))
     }
 
     /// A new direct chat shows just the two of you, like the room it becomes, with no history to load.
@@ -312,7 +362,7 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
         room.isConnected = true
         updateNotifications()
         publishMembers()
-        publish()
+        onChange?()
     }
 
     /// Starts the new direct chat's room, once however many sends wait on it, then shows it as that room.
@@ -342,8 +392,15 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
         }
     }
 
-    /// Frames already arrive from `loadNewest`; this keeps a DM's "last seen" current.
+    /// Frames arrive once the session is up, which fetching the newest page may already have done; this keeps a
+    /// DM's "last seen" current.
     public func startFollowing() async {
+        do {
+            _ = try await ensureSession()
+        } catch {
+            onConnectionLost?(error)
+            return
+        }
         if seenReactionsObserver == nil {
             seenReactionsObserver = NotificationCenter.default.addObserver(forName: ApronReactionStore.remoteDidChangeNotification, object: nil, queue: .main) { [weak self] note in
                 let url = note.userInfo?["serverURL"] as? URL, room = note.userInfo?["roomId"] as? String
@@ -426,149 +483,46 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
         updateNotifications()
     }
 
-    /// Cached messages older than a full newest page would sit next to it with a hole between; drop them. A cache
-    /// that reaches the page has no hole, so it stays.
-    private func dropCacheBehindGap(newestPage page: ApronHistoryResult) {
-        guard page.more == true, let pageFirst = page.firstLogId.flatMap(Int64.init),
-              let cachedNewest = snapshots.keys.compactMap(Int64.init).max(), cachedNewest < pageFirst
-        else { return }
-        snapshots = snapshots.filter { (Int64($0.key) ?? 0) >= pageFirst }
-    }
+    // MARK: Display
 
-    /// When the first unread message lies before the loaded page, loads a window starting just before it rather
-    /// than every page in between (§4.3.2); the framework then places the divider there.
-    private func openAtFirstUnread(session: ApronSession) async throws {
-        if let newest = snapshots.keys.compactMap(Int64.init).max() {
-            service.readStore.setBaselineIfNeeded(newest, serverURL: serverURL, roomId: roomId)
-        }
-        guard let cursor = readCursor else { return }
-        let loadedFrom = firstLogId.flatMap(Int64.init) ?? 0
-        guard hasEarlierMessages, cursor + 1 < loadedFrom else { return }
-        let older = try await session.connection.history(roomId: roomId, before: String(cursor), limit: 10)
-        let newer = try await session.connection.history(roomId: roomId, after: String(cursor + 1), limit: pageSize)
-        resetWindow()
-        apply(older, direction: .backward, publishing: false)
-        apply(newer, direction: .forward, publishing: false)
-    }
-
-    // MARK: History
-
-    public func loadEarlier() async throws {
-        guard let session, let firstLogId, let first = Int64(firstLogId) else { return }
-        let page = try await session.connection.history(roomId: roomId, before: String(first - 1), limit: pageSize)
-        apply(page)
-    }
-
-    public func loadLater() async throws {
-        guard let session, hasLaterMessages, let last = lastLogId.flatMap(Int64.init) else { return }
-        let page = try await session.connection.history(roomId: roomId, after: String(last + 1), limit: pageSize)
-        apply(page, direction: .forward)
-        if !hasLaterMessages, let last = lastLogId.flatMap(Int64.init) {
-            // Caught up: live delivery resumes; read once more for anything that arrived during this page.
-            let tail = try await session.connection.history(roomId: roomId, after: String(last + 1), limit: pageSize)
-            apply(tail, direction: .forward)
-        }
-    }
-
-    /// A window of history around the message, without loading everything in between (§4.3.2).
-    public func showWindow(around messageId: String) async throws -> Bool {
-        guard let session, session.server.has("history"), let target = Int64(messageId) else { return false }
-        let older = try await session.connection.history(roomId: roomId, before: messageId, limit: windowSize)
-        guard older.messages?.contains(where: { $0.messageId == messageId }) == true else { return false }
-        let newer = try await session.connection.history(roomId: roomId, after: String(target + 1), limit: windowSize)
-        resetWindow()
-        notices = []
-        apply(older, direction: .backward, publishing: false)
-        apply(newer, direction: .forward, publishing: false)
-        publish()
-        return true
-    }
-
-    public func showLatest() async throws {
-        guard let session else { return }
-        let page = try await session.connection.history(roomId: roomId, limit: pageSize)
-        resetWindow()
-        hasLaterMessages = false
-        apply(page, publishing: false)
-        publish()
-    }
-
-    private func resetWindow() {
-        snapshots = [:]
-        firstLogId = nil
-        lastLogId = nil
-    }
-
-    private enum PageDirection {
-        case backward
-        case forward
-    }
-
-    /// `more` describes the selected direction: older pages for `before`, newer ones for `after` (§4.3.2).
-    private func apply(_ page: ApronHistoryResult, direction: PageDirection = .backward, publishing: Bool = true) {
-        for message in page.messages ?? [] {
-            if message.roomId == nil || message.roomId == roomId {
-                install(message)
-            } else {
-                moveOut(message)
+    /// The stored stretch the chat shows: its messages, with each user's newest reaction set on them.
+    public func render(_ records: [ChatRecord]) -> ChatRendering {
+        var shown: [String: ApronMessage] = [:]
+        var entries: [String: [String: (logId: Int64, emojis: [String])]] = [:]
+        for record in records {
+            if record.relatesTo == nil {
+                if let message = try? record.decode(ApronMessage.self), let id = message.messageId {
+                    shown[id] = message
+                }
+            } else if let reactions = try? record.decode(ApronReactionRecord.self) {
+                let logId = reactions.logId.flatMap(Int64.init) ?? 0
+                for set in reactions.reactions {
+                    // Recorded `from` objects name reactors who aren't listed room members (§3.3.1).
+                    reactionAuthors[set.from.userId] = set.from
+                    if let existing = entries[reactions.messageId]?[set.from.userId], existing.logId > logId { continue }
+                    // Duplicates collapse and order doesn't matter (§4.7).
+                    var seen = Set<String>()
+                    entries[reactions.messageId, default: [:]][set.from.userId] = (logId, set.emojis.filter { seen.insert($0).inserted })
+                }
             }
         }
-        for record in page.reactions ?? [] {
-            applyReactions(record)
+        snapshots = shown
+        reactionEntries = entries
+        reactions = [:]
+        for messageId in entries.keys {
+            updateReactionTotals(for: messageId)
         }
-        if let pageFirst = page.firstLogId.flatMap(Int64.init),
-           firstLogId.flatMap(Int64.init).map({ pageFirst < $0 }) ?? true
-        {
-            firstLogId = String(pageFirst)
-        }
-        if let pageLast = page.lastLogId.flatMap(Int64.init),
-           lastLogId.flatMap(Int64.init).map({ pageLast > $0 }) ?? true
-        {
-            lastLogId = String(pageLast)
-        }
-        switch direction {
-        case .backward: hasEarlierMessages = page.more ?? false
-        case .forward: hasLaterMessages = page.more ?? false
-        }
-        if publishing {
-            publish()
-        }
-    }
-
-    /// Keeps the snapshot with the greatest `log_id`; at an equal `log_id` the tombstone wins (§2.3).
-    private func install(_ message: ApronMessage) {
-        guard let id = message.messageId else { return }
-        if let moved = movedOut[id], moved >= message.sortKey { return }
-        if let existing = snapshots[id] {
-            if existing.sortKey > message.sortKey { return }
-            if existing.sortKey == message.sortKey, existing.isDeleted { return }
-        }
-        snapshots[id] = message
-    }
-
-    /// A snapshot in another room: the room's log holds it when the message moved out (§4.3.1), and it then
-    /// leaves this chat. A bot's delete sent with the wrong `room_id` is such a move.
-    private func moveOut(_ message: ApronMessage) {
-        guard let id = message.messageId else { return }
-        movedOut[id] = max(movedOut[id] ?? .min, message.sortKey)
-        if let existing = snapshots[id], existing.sortKey < message.sortKey {
-            snapshots[id] = nil
-        }
+        let own = shown.values.filter(isOwn).compactMap(\.messageId)
+        service.reactionStore.addOwnMessageIds(own, serverURL: serverURL, roomId: roomId)
+        fetchMissingReferences()
+        fetchLinkedMessages()
+        return ChatRendering(messages: (sortedSnapshots() + notices).map(chatMessage), reactions: reactions)
     }
 
     private func sortedSnapshots() -> [ApronMessage] {
         snapshots.values.sorted { lhs, rhs in
             (lhs.messageId.flatMap(Int64.init) ?? lhs.sortKey) < (rhs.messageId.flatMap(Int64.init) ?? rhs.sortKey)
         }
-    }
-
-    private func publish() {
-        let own = snapshots.values.filter(isOwn).compactMap(\.messageId)
-        service.reactionStore.addOwnMessageIds(own, serverURL: serverURL, roomId: roomId)
-        messages = (sortedSnapshots() + notices).map(chatMessage)
-        fetchMissingReferences()
-        fetchLinkedMessages()
-        onChange?()
     }
 
     // MARK: Linked messages
@@ -603,7 +557,7 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
                 linkedMessages[link] = await .some(linkedMessageCard(link))
                 pendingLinkedMessages.remove(link)
             }
-            publish()
+            onChange?()
         }
     }
 
@@ -629,20 +583,23 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
     /// Fetches reply targets later pages and live messages quote, without holding up the update.
     private func fetchMissingReferences() {
         Task {
-            await loadMissingReferences()
-            onChange?()
+            if await loadMissingReferences() {
+                onChange?()
+            }
         }
     }
 
     /// Fetches, four at a time, reply targets that aren't loaded, with `after` and `before` both at their id
     /// (§4.3.1). The first load awaits it, so quotes show with the messages instead of loading after them
     /// (the server answers each in about 0.2 s; the wait was the fetches starting only after the chat showed).
-    private func loadMissingReferences() async {
-        guard let session, session.server.has("history") else { return }
+    @discardableResult
+    private func loadMissingReferences() async -> Bool {
+        guard let session, session.server.has("history") else { return false }
         let missing = Set(snapshots.values.compactMap { $0.replyTo?.messageId }).filter {
             snapshots[$0] == nil && referencedMessages[$0] == nil && !unavailableReferences.contains($0) && !pendingReferences.contains($0)
+                && (try? history?.record(id: $0)) == nil
         }
-        guard !missing.isEmpty else { return }
+        guard !missing.isEmpty else { return false }
         pendingReferences.formUnion(missing)
         let connection = session.connection
         let roomId = roomId
@@ -669,6 +626,7 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
                 }
             }
         }
+        return true
     }
 
     // MARK: Live frames
@@ -692,7 +650,7 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
                     publishMembers()
                 }
                 // Senders show their current avatar.
-                publish()
+                onChange?()
             }
             return
         }
@@ -723,8 +681,7 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
             return
         }
         if method == "reactions", let record = try? JSONDecoder().decode(ApronReactionRecord.self, from: params) {
-            applyReactions(record)
-            onChange?()
+            write { try Self.records(record, roomId: roomId) }
             return
         }
         guard method == "message", let message = try? JSONDecoder().decode(ApronMessage.self, from: params) else { return }
@@ -737,19 +694,25 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
             // Transient notices without a room (such as sign-in welcomes) are shown in the open room.
             guard message.roomId == nil || message.roomId == roomId, !notices.contains(where: { $0.id == message.id }) else { return }
             notices.append(message)
+            onChange?()
         } else if message.roomId == roomId {
-            // While showing an older window, new messages arrive later by paging forward; edits to loaded ones apply now.
-            if !hasLaterMessages || message.messageId.map({ snapshots[$0] != nil }) == true {
-                install(message)
-            }
-        } else {
-            moveOut(message)
+            write { try Self.record(message).map { [$0] } ?? [] }
+        } else if let id = message.messageId {
+            // Moved to another room (§4.4).
+            try? history?.delete(ids: [id])
         }
         // Sending a message means the user has read up to it.
         if let id = message.messageId.flatMap(Int64.init), isOwn(message), let send = markRead(upTo: id) {
             Task { try? await send() }
         }
-        publish()
+    }
+
+    private func write(_ records: () throws -> [ChatRecord]) {
+        do {
+            try history?.write(records())
+        } catch {
+            onError?(error)
+        }
     }
 
     // MARK: Custom emoji
@@ -1077,22 +1040,6 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
         })
         service.reactionStore.markSeen(newest, serverURL: serverURL, roomId: roomId)
         return nil
-    }
-
-    private func applyReactions(_ record: ApronReactionRecord) {
-        guard record.roomId == nil || record.roomId == roomId else { return }
-        let logId = record.logId.flatMap(Int64.init) ?? 0
-        var entries = reactionEntries[record.messageId] ?? [:]
-        for set in record.reactions {
-            // Recorded `from` objects name reactors who aren't listed room members (§3.3.1).
-            reactionAuthors[set.from.userId] = set.from
-            if let existing = entries[set.from.userId], existing.logId > logId { continue }
-            // Duplicates collapse and order doesn't matter (§4.7).
-            var seen = Set<String>()
-            entries[set.from.userId] = (logId, set.emojis.filter { seen.insert($0).inserted })
-        }
-        reactionEntries[record.messageId] = entries
-        updateReactionTotals(for: record.messageId)
     }
 
     private func updateReactionTotals(for messageId: String) {

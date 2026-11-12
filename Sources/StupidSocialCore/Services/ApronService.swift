@@ -27,7 +27,6 @@ public final class ApronService {
     private var emojiCatalogs: [URL: Task<[String: ChatCustomEmoji], Error>] = [:]
     public let readStore: ApronReadStore
     public let reactionStore = ApronReactionStore()
-    public let snapshotCache = ChatSnapshotCache()
     public let draftStore = ChatDraftStore()
     public let push: ApronPushService
     /// The servers last seen in the account store, to notice ones added or removed on another device.
@@ -176,7 +175,7 @@ public final class ApronService {
         closeSessions(for: serverURL)
         readStore.removeServer(serverURL)
         reactionStore.removeServer(serverURL)
-        snapshotCache.removeAll(accountId: Account.apronId(serverURL: serverURL))
+        try? ChatKit.store.removeAll(accountId: Account.apronId(serverURL: serverURL))
         draftStore.removeDrafts(keyPrefix: "\(Account.apronId(serverURL: serverURL))|")
     }
 

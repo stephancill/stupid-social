@@ -15,22 +15,21 @@ public final class LinkedInChatAdapter: ChatAdapter, ChatReactionSending, ChatEd
     public var onCatchUp: (() -> Void)?
     public let acceptsReactions = true
     public private(set) var info: ChatInfo
-    public private(set) var messages: [ChatMessage] = []
-    public private(set) var reactions: [String: [ChatReaction]] = [:]
-    public private(set) var hasEarlierMessages = false
+    public var history: ChatHistory?
     public private(set) var referencedMessages: [String: ChatMessage] = [:]
     public let unavailableReferences: Set<String> = []
 
     private let client: LinkedInClient
     private let conversationUrn: String
+    /// The messages last rendered: the stretch the chat shows.
     private var loaded: [String: LinkedInMessage] = [:]
     /// Host identity urn → person.
     private var members: [String: ChatUser] = [:]
     private var viewerUrn: String?
     /// Where the viewer has read up to, locally ahead of LinkedIn while a mark is pending.
     private var readAt: Date?
-    /// Whether the chat came from LinkedIn this visit; until then the messages are the cached snapshot.
-    private var hasLoadedHistory = false
+    /// Whether the conversation itself (members, read position) came from LinkedIn this visit.
+    private var hasLoadedConversation = false
     private var lastTypingSent: Date?
     private let liveFeed: LinkedInLiveFeed?
     private var observation: UUID?
@@ -54,10 +53,9 @@ public final class LinkedInChatAdapter: ChatAdapter, ChatReactionSending, ChatEd
         "linkedin:\(conversationUrn)"
     }
 
-    // MARK: Snapshot
+    // MARK: State
 
-    private struct Snapshot: Codable {
-        let messages: [LinkedInMessage]
+    private struct State: Codable {
         let members: [String: ChatUser]
         let viewerUrn: String?
         let readAt: Date?
@@ -69,24 +67,19 @@ public final class LinkedInChatAdapter: ChatAdapter, ChatReactionSending, ChatEd
         let avatarURL: URL?
     }
 
-    public func restore(snapshot data: Data) {
-        guard let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data) else { return }
-        for message in snapshot.messages {
-            loaded[message.entityUrn] = message
-        }
-        members = snapshot.members
-        viewerUrn = snapshot.viewerUrn
-        readAt = snapshot.readAt
-        info = ChatInfo(title: snapshot.title, subtitle: snapshot.subtitle, showsSenderNames: snapshot.showsSenderNames, titleIsMemberNames: snapshot.titleIsMemberNames)
-        info.avatarUserId = snapshot.avatarUserId
-        info.avatarURL = snapshot.avatarURL
-        publish()
+    public func restore(state data: Data) {
+        guard let state = try? JSONDecoder().decode(State.self, from: data) else { return }
+        members = state.members
+        viewerUrn = state.viewerUrn
+        readAt = state.readAt
+        info = ChatInfo(title: state.title, subtitle: state.subtitle, showsSenderNames: state.showsSenderNames, titleIsMemberNames: state.titleIsMemberNames)
+        info.avatarUserId = state.avatarUserId
+        info.avatarURL = state.avatarURL
     }
 
-    public func snapshot() -> Data? {
-        let newest = sortedMessages.suffix(ChatSnapshotCache.messageLimit)
-        return try? JSONEncoder().encode(Snapshot(
-            messages: Array(newest), members: members, viewerUrn: viewerUrn, readAt: readAt,
+    public func state() -> Data? {
+        try? JSONEncoder().encode(State(
+            members: members, viewerUrn: viewerUrn, readAt: readAt,
             title: info.title, subtitle: info.subtitle, showsSenderNames: info.showsSenderNames,
             titleIsMemberNames: info.titleIsMemberNames, avatarUserId: info.avatarUserId, avatarURL: info.avatarURL,
         ))
@@ -94,19 +87,56 @@ public final class LinkedInChatAdapter: ChatAdapter, ChatReactionSending, ChatEd
 
     // MARK: Loading
 
-    /// The first load also reads the conversation, for its members and read position; polls only fetch messages.
-    public func loadNewest() async throws {
-        if !hasLoadedHistory {
-            let viewerUrn = try await client.me().profileUrn
-            async let loadingConversation = client.conversation(urn: conversationUrn)
-            let page = try await client.messages(conversationUrn: conversationUrn)
-            try await apply(conversation: loadingConversation, viewerUrn: viewerUrn)
-            hasEarlierMessages = !page.isEmpty
-            hasLoadedHistory = true
-            merge(page)
-            return
+    nonisolated static func record(_ message: LinkedInMessage) throws -> ChatRecord {
+        try ChatRecord(id: message.entityUrn, sortKey: message.deliveredAtMs, encoding: message)
+    }
+
+    /// The newest page is LinkedIn's sync page, whatever size it picks; earlier ones go back from a delivery time.
+    /// The first newest page of a visit also reads the conversation, for its members and read position.
+    public func fetch(_ request: ChatPageRequest) async throws -> ChatPage {
+        switch request {
+        case .newest:
+            let page: [LinkedInMessage]
+            if !hasLoadedConversation {
+                let viewerUrn = try await client.me().profileUrn
+                async let loadingConversation = client.conversation(urn: conversationUrn)
+                page = try await client.messages(conversationUrn: conversationUrn)
+                try await apply(conversation: loadingConversation, viewerUrn: viewerUrn)
+                hasLoadedConversation = true
+            } else {
+                page = try await client.messages(conversationUrn: conversationUrn)
+            }
+            rememberActors(page)
+            return try ChatPage(records: page.map(Self.record), earlier: page.map(\.deliveredAtMs).min().map { ChatCursor(String($0)) })
+        case let .before(cursor):
+            guard let ms = Int64(cursor.value) else { throw SourceError.serviceError("Bad cursor.") }
+            let page = try await client.messages(conversationUrn: conversationUrn, before: Date(timeIntervalSince1970: Double(ms) / 1000))
+            rememberActors(page.messages)
+            return try ChatPage(
+                records: page.messages.map(Self.record),
+                earlier: page.hasMore ? page.messages.map(\.deliveredAtMs).min().map { ChatCursor(String($0)) } : nil,
+            )
+        case .after, .around:
+            throw SourceError.serviceError("LinkedIn chats have no windows.")
         }
-        try await merge(client.messages(conversationUrn: conversationUrn))
+    }
+
+    public func cursor(before record: ChatRecord) -> ChatCursor? {
+        ChatCursor(String(record.sortKey))
+    }
+
+    private func rememberActors(_ messages: [LinkedInMessage]) {
+        for actor in messages.compactMap(\.actor) {
+            remember(actor)
+        }
+    }
+
+    private func refreshNewest() async throws {
+        try await history?.apply(newest: fetch(.newest))
+    }
+
+    private func stored(_ id: String) -> LinkedInMessage? {
+        loaded[id] ?? (try? history?.record(id: id)).flatMap(\.self).flatMap { try? $0.decode(LinkedInMessage.self) }
     }
 
     private func apply(conversation: LinkedInConversation, viewerUrn: String) {
@@ -129,17 +159,10 @@ public final class LinkedInChatAdapter: ChatAdapter, ChatReactionSending, ChatEd
         }
     }
 
-    public func loadEarlier() async throws {
-        guard let oldest = sortedMessages.first else { return }
-        let page = try await client.messages(conversationUrn: conversationUrn, before: oldest.deliveredAt)
-        hasEarlierMessages = page.hasMore
-        merge(page.messages)
-    }
-
     public func send(_ message: ChatOutgoing) async throws -> String? {
-        let replyTo = message.replyToId.flatMap { loaded[$0] }
+        let replyTo = message.replyToId.flatMap(stored)
         let sent = try await client.send(conversationUrn: conversationUrn, text: message.text, replyTo: replyTo)
-        try await merge(client.messages(conversationUrn: conversationUrn))
+        try await refreshNewest()
         return sent.entityUrn
     }
 
@@ -170,7 +193,7 @@ public final class LinkedInChatAdapter: ChatAdapter, ChatReactionSending, ChatEd
 
     public func edit(_ messageId: String, text: String) async throws {
         try await client.edit(messageUrn: messageId, text: text)
-        try await merge(client.messages(conversationUrn: conversationUrn))
+        try await refreshNewest()
     }
 
     public func canDelete(_ message: ChatMessage) -> Bool {
@@ -181,7 +204,7 @@ public final class LinkedInChatAdapter: ChatAdapter, ChatReactionSending, ChatEd
     /// Unsends: LinkedIn keeps the message in the history, shown as deleted.
     public func delete(_ messageId: String) async throws {
         try await client.recall(messageUrn: messageId)
-        try await merge(client.messages(conversationUrn: conversationUrn))
+        try await refreshNewest()
     }
 
     // MARK: Live
@@ -208,9 +231,14 @@ public final class LinkedInChatAdapter: ChatAdapter, ChatReactionSending, ChatEd
         switch event {
         case let .message(conversation, message) where conversation == conversationUrn:
             typing[message.sender.hostIdentityUrn] = nil
-            merge([message])
-        case let .reaction(messageUrn, summary) where loaded[messageUrn] != nil:
-            var summaries = loaded[messageUrn]?.reactionSummaries ?? []
+            rememberActors([message])
+            do {
+                try history?.write([Self.record(message)])
+            } catch {
+                onError?(error)
+            }
+        case let .reaction(messageUrn, summary) where stored(messageUrn) != nil:
+            var summaries = stored(messageUrn)?.reactionSummaries ?? []
             summaries.removeAll { $0.emoji == summary.emoji }
             if summary.count > 0 {
                 summaries.append(summary)
@@ -289,8 +317,11 @@ public final class LinkedInChatAdapter: ChatAdapter, ChatReactionSending, ChatEd
     }
 
     private func setReactions(_ summaries: [LinkedInMessage.ReactionSummary], on messageId: String) {
-        loaded[messageId]?.reactionSummaries = summaries
-        publish()
+        try? history?.update(id: messageId) { record in
+            var message = try record.decode(LinkedInMessage.self)
+            message.reactionSummaries = summaries
+            return try Self.record(message)
+        }
     }
 
     /// LinkedIn's counts don't say who reacted, apart from the viewer.
@@ -305,16 +336,6 @@ public final class LinkedInChatAdapter: ChatAdapter, ChatReactionSending, ChatEd
         loaded.values.sorted { ($0.deliveredAtMs, $0.entityUrn) < ($1.deliveredAtMs, $1.entityUrn) }
     }
 
-    private func merge(_ page: [LinkedInMessage]) {
-        for message in page {
-            loaded[message.entityUrn] = message
-            if let actor = message.actor {
-                remember(actor)
-            }
-        }
-        publish()
-    }
-
     private func remember(_ participant: LinkedInParticipant) {
         let isViewer = participant.hostIdentityUrn == viewerUrn
         members[participant.hostIdentityUrn] = ChatUser(id: participant.hostIdentityUrn, name: isViewer ? "You" : participant.name, avatarURL: participant.avatarURL)
@@ -324,7 +345,8 @@ public final class LinkedInChatAdapter: ChatAdapter, ChatReactionSending, ChatEd
         members[urn] ?? ChatUser(id: urn, name: "LinkedIn Member", avatarURL: nil)
     }
 
-    private func publish() {
+    public func render(_ records: [ChatRecord]) -> ChatRendering {
+        loaded = Dictionary(records.compactMap { try? $0.decode(LinkedInMessage.self) }.map { ($0.entityUrn, $0) }, uniquingKeysWith: { _, latest in latest })
         let sorted = sortedMessages
         var totals: [String: [ChatReaction]] = [:]
         var referenced: [String: ChatMessage] = [:]
@@ -347,10 +369,8 @@ public final class LinkedInChatAdapter: ChatAdapter, ChatReactionSending, ChatEd
                 )
             }
         }
-        reactions = totals
         referencedMessages = referenced
-        messages = sorted.map(chatMessage)
-        onChange?()
+        return ChatRendering(messages: sorted.map(chatMessage), reactions: totals)
     }
 
     func chatMessage(_ message: LinkedInMessage) -> ChatMessage {

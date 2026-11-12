@@ -23,11 +23,14 @@ public struct XChatEvent: Sendable {
     let conversationToken: String?
     let createdAt: Date?
     let detail: ThriftStruct
+    /// The event as X sent it, so it can be stored and read back (`ThriftCoder.encode`).
+    let raw: ThriftStruct
 
     init(_ event: ThriftStruct) throws {
         guard let sequenceId = event.string(1), let senderId = event.string(3), let conversationId = event.string(4) else {
             throw SourceError.invalidResponse
         }
+        raw = event
         self.sequenceId = sequenceId
         messageId = event.string(2)
         self.senderId = senderId
