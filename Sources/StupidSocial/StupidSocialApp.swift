@@ -1,4 +1,5 @@
 import StupidSocialCore
+import StupidSocialPush
 import SwiftData
 import SwiftUI
 
@@ -9,6 +10,12 @@ struct StupidSocialApp: App {
     private let modelContainer: ModelContainer
 
     init() {
+        // Before any chat is made: shared with the notification extension, which stores pushed messages.
+        do {
+            ChatKit.store = try SharedChatStore.open()
+        } catch {
+            fatalError("Chat store failed to open: \(error)")
+        }
         AppMetrics.configure()
         ChatKit.onEvent = AppMetrics.chat
         ChatKit.networkIcon = { network, size in AnyView(NetworkBadgeIcon(network: network, size: size)) }

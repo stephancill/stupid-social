@@ -115,6 +115,17 @@ public enum AppMetrics {
         }
     }
 
+    // MARK: Background refresh
+
+    /// iOS woke the app and the Chats list reloaded and loaded changed chats ahead.
+    public static func backgroundRefreshed() {
+        StupidMetrics.track("background_refresh")
+    }
+
+    public static func backgroundRefreshFailed(_ error: any Error) {
+        StupidMetrics.error("background_refresh_schedule_failed", error: error)
+    }
+
     // MARK: Chat reminders
 
     /// A reminder was set: `delay` is the preset or `custom`, `delivery` whether it was pushed to other devices

@@ -91,9 +91,7 @@ final class AppContainer {
         }
         AppMetrics.accounts(accountStore.accounts)
         chatListViewModel.prefetcher = { [weak self] chat in
-            // X Chat keeps no snapshot (decrypting needs the account's keys), so loading it ahead would be lost.
-            if case .x = chat.destination { return nil }
-            return self?.unfollowedChatViewModel(for: chat)
+            self?.unfollowedChatViewModel(for: chat)
         }
 
         if DemoData.shouldAutoLoad {

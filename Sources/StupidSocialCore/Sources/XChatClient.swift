@@ -546,7 +546,7 @@ public actor XChatClient: ChatListProvider {
     }
 
     /// A message event's `MessageEntryHolder`, or nil for other events.
-    private func plaintext(of event: XChatEvent) throws -> Data? {
+    func plaintext(of event: XChatEvent) throws -> Data? {
         guard let create = event.messageCreate else { return nil }
         guard let contents = create.data(100) else { throw SourceError.invalidResponse }
         // Without a key version (101) the message was sent unencrypted (109 is then true), such as to someone

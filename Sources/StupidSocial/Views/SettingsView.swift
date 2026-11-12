@@ -73,6 +73,8 @@ struct SettingsView: View {
                 }
             }
 
+            ChatStorageSection()
+
             Section {
                 Button {
                     openURL(URL(string: "https://stupidtech.net")!)
@@ -349,6 +351,48 @@ struct AccountDetailView: View {
             }
         case .debug:
             EmptyView()
+        }
+    }
+}
+
+/// How much space chats' history takes on this device, and clearing it, after a confirmation. Chats load from the
+/// networks again when opened or loaded ahead.
+struct ChatStorageSection: View {
+    @State private var size = ChatKit.store.size
+    @State private var isConfirming = false
+    @State private var error: String?
+
+    var body: some View {
+        Section {
+            LabeledContent("Chat History", value: ByteCountFormatter.string(fromByteCount: size, countStyle: .file))
+            Button("Clear Chat History", role: .destructive) {
+                isConfirming = true
+            }
+        } header: {
+            Text("Storage")
+        } footer: {
+            if let error {
+                Text(error)
+            } else {
+                Text("Messages are kept on this device so chats open without waiting. Messages waiting to send are kept.")
+            }
+        }
+        .onAppear {
+            size = ChatKit.store.size
+        }
+        .alert("Clear chat history?", isPresented: $isConfirming) {
+            Button("Cancel", role: .cancel) {}
+            Button("Clear Chat History", role: .destructive) {
+                do {
+                    try ChatKit.store.removeHistory()
+                    error = nil
+                } catch {
+                    self.error = error.localizedDescription
+                }
+                size = ChatKit.store.size
+            }
+        } message: {
+            Text("Chats load from their networks again. Nothing changes on the networks.")
         }
     }
 }

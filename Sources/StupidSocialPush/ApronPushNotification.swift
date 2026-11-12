@@ -1,4 +1,5 @@
 import Foundation
+import StupidChatKit
 
 /// What a decrypted Apron push shows (§4.9.3), worked out apart from UserNotifications so it can be tested.
 /// The title is the sender in a DM and "<sender> in <room>" in a room; the subtitle is the server.
@@ -55,6 +56,23 @@ public struct ApronPushNotification: Equatable, Sendable {
             senderId: message.from.userId,
             senderAvatarURL: registration.avatarURLs[message.from.userId],
             isDirect: isDirect,
+        )
+    }
+
+    /// The pushed message as the record its chat stores, in the Apron wire format `ApronChatAdapter` reads, and that
+    /// chat's key; `nil` when the push carries no message. A push is the message as created, so its `log_id` is its
+    /// `message_id`; any later snapshot replaces it (§2.3).
+    public static func record(payload: Data, registrations: [String: ApronPushRegistration]) -> (chatKey: String, record: ChatRecord)? {
+        guard let push = try? JSONDecoder().decode(Payload.self, from: payload),
+              let pushId = push.pushId, let registration = registrations[pushId], let message = push.message,
+              let id = Int64(message.messageId),
+              var object = (try? JSONSerialization.jsonObject(with: payload) as? [String: Any])?["message"] as? [String: Any]
+        else { return nil }
+        object["log_id"] = object["log_id"] ?? message.messageId
+        guard let data = try? JSONSerialization.data(withJSONObject: object) else { return nil }
+        return (
+            SharedChatStore.apronChatKey(serverURL: registration.serverURL, roomId: message.roomId),
+            ChatRecord(id: message.messageId, sortKey: id, version: id * 2, data: data),
         )
     }
 

@@ -1,5 +1,6 @@
 import Foundation
 @preconcurrency import Intents
+import OSLog
 import StupidSocialPush
 @preconcurrency import UserNotifications
 
@@ -83,14 +84,25 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
         contentHandler = nil
     }
 
-    /// Tries each registration's keys, since the `push_id` that names one is inside the ciphertext.
+    /// Tries each registration's keys, since the `push_id` that names one is inside the ciphertext. The message is
+    /// stored for its chat on the way, so the chat opens on it.
     private static func notification(for body: Data) -> ApronPushNotification? {
         let registrations = ApronPushStore().load()
         for registration in registrations.values {
             guard let payload = try? WebPushDecryptor.decrypt(body, keys: registration.keys) else { continue }
+            store(payload: payload, registrations: registrations)
             return ApronPushNotification.make(payload: payload, registrations: registrations)
         }
         return nil
+    }
+
+    private static func store(payload: Data, registrations: [String: ApronPushRegistration]) {
+        guard SharedChatStore.url != nil, let (chatKey, record) = ApronPushNotification.record(payload: payload, registrations: registrations) else { return }
+        do {
+            try SharedChatStore.open().write([record], chatKey: chatKey)
+        } catch {
+            Logger(subsystem: "tech.stupid.StupidSocial", category: "NotificationService").error("Apron message not stored: \(String(describing: type(of: error)), privacy: .public)")
+        }
     }
 
     /// The content updated from a donated incoming-message intent, so it shows the sender's avatar; `nil` when the

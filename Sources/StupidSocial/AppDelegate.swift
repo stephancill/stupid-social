@@ -21,6 +21,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             UNNotificationCategory(identifier: ApronPushNotification.categoryIdentifier, actions: [reply], intentIdentifiers: []),
         ])
         ChatReminderStore.startSync()
+        MainActor.assumeIsolated {
+            ChatBackgroundRefresh.register()
+        }
         // Issues a token without asking; alerts still need the user's permission, asked when a server offers push.
         application.registerForRemoteNotifications()
         return true

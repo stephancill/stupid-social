@@ -39,6 +39,7 @@ public struct ContentView: View {
             guard phase == .active else {
                 if phase == .background {
                     container.stopLiveFeeds()
+                    ChatBackgroundRefresh.schedule()
                 }
                 return
             }

@@ -28,10 +28,6 @@ public final class XChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, 
     /// The events last rendered by sequence id, with what their messages decrypted to (nil when they didn't).
     private var events: [String: XChatEvent] = [:]
     private var entries: [String: XChatEntry?] = [:]
-    /// What stored events decrypted to this run, by "<conversation>|<sequence id>": stored events stay encrypted, and
-    /// decrypting needs the conversation's keys, which the client has once the inbox loads.
-    private static var decrypted: [String: XChatEntry?] = [:]
-    private var decrypting: Set<String> = []
     private var people: [String: ChatUser] = [:]
     /// Sequence id → the text of its latest edit.
     private var editedTexts: [String: String] = [:]
@@ -118,8 +114,15 @@ public final class XChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, 
         ChatCursor(record.id)
     }
 
-    /// Events as records, still encrypted: messages, and reactions, edits and deletes related to the messages they
-    /// name, which decrypting tells apart. Read markers and the conversation token apply here.
+    /// What a record keeps: the event as X sent it, and its message decrypted, so a stored chat opens without the
+    /// conversation's keys (`plaintext` is nil when it didn't decrypt, or for events without a message).
+    struct StoredEvent: Codable {
+        let event: Data
+        let plaintext: Data?
+    }
+
+    /// Events as records, decrypted: messages, and reactions, edits and deletes related to the messages they name.
+    /// Read markers and the conversation token apply here.
     private func records(_ events: [XChatEvent]) async throws -> [ChatRecord] {
         var records: [ChatRecord] = []
         for event in events {
@@ -134,8 +137,10 @@ public final class XChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, 
                 }
             }
             var relatesTo: String?
+            var plaintext: Data?
             if event.messageCreate != nil {
-                switch await entry(of: event) {
+                plaintext = try? await client.plaintext(of: event)
+                switch plaintext.flatMap({ try? XChatEntry(plaintext: $0) }) {
                 case let .reaction(target, _, _), let .edit(target, _):
                     relatesTo = target
                 case .other:
@@ -148,20 +153,12 @@ public final class XChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, 
             } else {
                 continue
             }
-            records.append(ChatRecord(id: event.sequenceId, sortKey: event.sequence, relatesTo: relatesTo, data: ThriftCoder.encode(event.raw)))
+            try records.append(ChatRecord(
+                id: event.sequenceId, sortKey: event.sequence, relatesTo: relatesTo,
+                encoding: StoredEvent(event: ThriftCoder.encode(event.raw), plaintext: plaintext),
+            ))
         }
         return records
-    }
-
-    /// What the event decrypts to, once per run; nil when it doesn't.
-    private func entry(of event: XChatEvent) async -> XChatEntry? {
-        let key = "\(conversationId)|\(event.sequenceId)"
-        if let known = Self.decrypted[key] {
-            return known
-        }
-        let entry = try? await client.decrypt(event)
-        Self.decrypted[key] = .some(entry)
-        return entry
     }
 
     private func write(_ events: [XChatEvent]) async {
@@ -338,26 +335,16 @@ public final class XChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, 
 
     // MARK: Display
 
-    /// The stored stretch the chat shows. Events this run hasn't decrypted yet show once they have.
+    /// The stored stretch the chat shows.
     public func render(_ records: [ChatRecord]) -> ChatRendering {
-        events = Dictionary(records.compactMap { try? XChatEvent(ThriftCoder.decode($0.data)) }.map { ($0.sequenceId, $0) }, uniquingKeysWith: { _, latest in latest })
+        events = [:]
         entries = [:]
-        var undecrypted: [XChatEvent] = []
-        for event in events.values where event.messageCreate != nil {
-            if let entry = Self.decrypted["\(conversationId)|\(event.sequenceId)"] {
-                entries[event.sequenceId] = entry
-            } else if !decrypting.contains(event.sequenceId) {
-                undecrypted.append(event)
-            }
-        }
-        if !undecrypted.isEmpty {
-            decrypting.formUnion(undecrypted.map(\.sequenceId))
-            Task {
-                for event in undecrypted {
-                    _ = await entry(of: event)
-                    decrypting.remove(event.sequenceId)
-                }
-                onChange?()
+        for record in records {
+            guard let stored = try? record.decode(StoredEvent.self), let event = try? XChatEvent(ThriftCoder.decode(stored.event)) else { continue }
+            events[event.sequenceId] = event
+            if event.messageCreate != nil {
+                // `.some(nil)` keeps a message that didn't decrypt, so it shows as such.
+                entries[event.sequenceId] = .some(stored.plaintext.flatMap { try? XChatEntry(plaintext: $0) })
             }
         }
         let sorted = events.values.sorted { $0.sequence < $1.sequence }

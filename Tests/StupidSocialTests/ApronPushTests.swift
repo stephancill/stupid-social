@@ -47,6 +47,20 @@ final class ApronPushTests: XCTestCase {
         return Data(#"{"push_id":"t65S5XBst9bSDpjJ","message":{"message_id":"9","room_id":"\#(room)","from":\#(from),"body":\#(body)\#(reply)}}"#.utf8)
     }
 
+    /// What the extension stores reads back as the message, in the chat the app opens for its room, and the full
+    /// snapshot that arrives later replaces it.
+    func testPushedMessageIsStoredForItsRoomsChat() throws {
+        let (chatKey, record) = try XCTUnwrap(ApronPushNotification.record(payload: payload(room: "general"), registrations: registrations()))
+        XCTAssertEqual(chatKey, "\(Account.apronId(serverURL: serverURL))|apron:general")
+        XCTAssertEqual(record.id, "9")
+        let message = try record.decode(ApronMessage.self)
+        XCTAssertEqual(message.messageId, "9")
+        XCTAssertEqual(message.body?.text, "Deploy is done")
+        XCTAssertEqual(message.from.userId, "alice")
+        let snapshot = try XCTUnwrap(ApronChatAdapter.record(message))
+        XCTAssertEqual(snapshot.version, record.version, "the server's copy of the created message replaces it")
+    }
+
     func testRoomMessageIsTitledBySenderInRoom() throws {
         let notification = try XCTUnwrap(ApronPushNotification.make(payload: payload(room: "general"), registrations: registrations()))
         XCTAssertEqual(notification.title, "Alice in General")
