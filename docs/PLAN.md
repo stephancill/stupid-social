@@ -12,7 +12,7 @@ Build an iOS app with xtool that shows a combined social network notifications f
 - Manual account setup through a minimal settings form.
 - Credentials sync across Apple devices through iCloud Keychain.
 - Notification item cache is local-only in the MVP.
-- Background polling targets roughly 15 minutes where Apple permits it.
+- Background polling targets roughly 15 minutes where Apple permits it. Chats refresh in the background the same way, loading chats with new messages into the local chat store so they open on them.
 - Manual refresh is supported.
 - Instagram story posting is supported from the in-app story composer.
 - Unread Instagram direct message threads are shown in the main notification feed when Instagram is connected.

@@ -7,6 +7,7 @@ Sources/
   StupidSocial/                     # App UI layer (SwiftUI views)
     AppContainer.swift              # App-layer composition root
     AppDelegate.swift               # APNs token, notification taps, inline replies and foreground presentation
+    ChatBackgroundRefresh.swift     # BGAppRefreshTask: reloads the Chats list and loads changed chats ahead
     ChatControlServer.swift         # Command-line chat access on a Mac: token-checked JSON lines on 127.0.0.1
     StupidSocialApp.swift           # iOS @main entry point
     Views/
@@ -60,6 +61,7 @@ Sources/
     ApronPushStore.swift
     ApronPushNotification.swift
     ChatReminderPush.swift          # Reminder push registration (App Group) and the reminder notification's content
+    SharedChatStore.swift           # The chat store in the App Group, shared with the extension, which stores pushed Apron messages
     TelegramPushNotification.swift  # Telegram push → sender and text; TelegramAvatarStore for the extension
     CommunicationNotification.swift # INSendMessageIntent donation and content update, shared with Debug
     PushExtensionLog.swift          # What the extension did per push, shown in Settings → Debug
@@ -86,6 +88,7 @@ Sources/
       BackgroundActivity.swift      # Keeps a refresh running when the app is backgrounded; cancels it when iOS's time runs out
       ApronRoomNotifications.swift  # Per-room notification levels mapped to mute and wake scopes
       TelegramPushService.swift     # Telegram APNs registration (token type 1) after sign-in, at launch, on token change
+      TelegramLiveRows.swift        # Reloads Telegram's Chats rows after message updates, so changed chats load ahead
     Sources/                        # Network clients + notification sources
       NotificationSource.swift      # Protocol definition
       InstagramClient.swift / InstagramSession.swift / Instagram*Models.swift / Instagram*Parser.swift / InstagramNotificationSource.swift
@@ -212,12 +215,12 @@ Chat is one framework with an adapter per network; `docs/TECHNICAL_DESIGN.md` §
 
 - Shared chat code (`ChatViewModel`, `AdapterChatViewModel`, `ChatListViewModel`, `ChatsView`, `ChatView`, `ChatUIKitView` and its helpers) never names a network, casts to a network's type, or branches on `SocialNetwork` or `ChatSummary.Destination`. The one exception is `ChatsView`'s switch that turns a destination into a chat.
 - A network joins chat through a `ChatAdapter` (one conversation) and a `ChatListProvider` (its Chats rows). `AdapterChatViewModel` drives every adapter; don't subclass `ChatViewModel` for a network.
-- Adapters only translate between the network and the shared models (`ChatMessage`, `ChatEmbed`, `ChatReaction`, `ChatSummary`, `ChatInfo`). They hold no `@Published` state and do no UI work; they call `onChange` when what they show changes. State a network-specific screen needs (members, profiles) lives in that screen's own view model, which the adapter may keep current (`ApronRoomViewModel`).
-- Behavior users expect to match across chats belongs to the framework: connecting and reconnecting, polling, paging, unread counting and the divider, read-marker debouncing, snapshots, drafts, optimistic sending. An adapter supplies the network's part (`loadNewest`, `isAfterReadPosition`, `markRead` returning the send, `snapshot`); if the shared behavior doesn't fit, extend the framework.
+- Adapters only translate between the network and the shared models (`ChatRecord`, `ChatMessage`, `ChatEmbed`, `ChatReaction`, `ChatSummary`, `ChatInfo`). A record is the network's own message model, encoded; live updates and the results of actions are written to `history`, never kept as a message list. They hold no `@Published` state and do no UI work; they call `onChange` when what they show changes. State a network-specific screen needs (members, profiles) lives in that screen's own view model, which the adapter may keep current (`ApronRoomViewModel`).
+- Behavior users expect to match across chats belongs to the framework: connecting and reconnecting, polling, paging, the local chat store and loading ahead, unread counting and the divider, read-marker debouncing, drafts, the outbox and optimistic sending. An adapter supplies the network's part (`fetch` returning records, `render`, `isAfterReadPosition`, `markRead` returning the send, `state`); if the shared behavior doesn't fit, extend the framework.
 - An optional ability is its own protocol (`ChatEditing`, `ChatDeleting`, `ChatReactionSending`, `ChatReactionChoices`, `ChatLiveUpdating`, `ChatWindowing`, `ChatTyping`, `ChatMentioning`, `ChatCustomEmojis`, `ChatCommanding`, `ChatLinking`, `ChatButtonPressing`, `ChatStickerSending`, `ChatVoiceSending`, `ChatForwarding`, `ChatMessageLinking`, …), and the UI offers it exactly when the adapter conforms. A new network-specific need becomes such a protocol any network could adopt, never a special case in shared code or a flag that can disagree with the code.
 - Each account contributes its `ChatListProvider` through `AccountComponents.chatListProvider`, and the list scopes rows to that account. Live row changes use `updateChats(_:accountId:)` or `replaceChats(where:with:)`.
 - Adding a network takes its adapter, its `ChatListProvider` (and its line in `AccountComponents.chatListProvider`), a `ChatDestination` case and its case in `ChatsView`'s switch. If it needs more, extend the framework first.
-- Every chat has a `chatKey` (`<account id>|<adapter key>`), used for drafts and snapshots; two accounts can share a chat, so keys always include the account.
+- Every chat has a `chatKey` (`<account id>|<adapter key>`), used for drafts and as the chat's key in the store; two accounts can share a chat, so keys always include the account.
 - Framework behavior is tested in the kit's repository (`ChatViewModelTests`, `AdapterChatViewModelTests` with fake adapters, `ChatListViewModelTests`); network mapping is tested here against recorded pages without the UI.
 - The framework lives in `stupid-chatkit` (local checkout `../stupid-chatkit`; read its `README.md` and `docs/DESIGN.md` before changing it). Change it there, never in `.build/checkouts`. To work on both at once, point the dependency at the checkout (`.package(path: "../stupid-chatkit")`) and never commit that; to ship a change, tag a kit release (`git tag -a X.Y.Z`; a patch bump unless it breaks the kit's API, per its `AGENTS.md`), push the tag, then bump the version here (`swift package update stupid-chatkit`, raising `from:` when the app needs the new API) and commit `Package.resolved`.
 

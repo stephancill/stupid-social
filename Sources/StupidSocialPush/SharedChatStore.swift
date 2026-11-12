@@ -14,8 +14,19 @@ public enum SharedChatStore {
             .appending(path: "Library/Application Support/chat-store.sqlite")
     }
 
+    /// Raised whenever an adapter's records change shape (how `TelegramMessage` parses media, say): stored messages
+    /// keep the shape they were stored in, so a new format clears stored history and chats load again.
+    public static let recordFormat = 1
+    private static let recordFormatKey = "chatStoreRecordFormat"
+
     public static func open() throws -> ChatStore {
-        try ChatStore(url: url ?? ChatStore.defaultURL(), darwinNotificationName: darwinNotificationName)
+        let store = try ChatStore(url: url ?? ChatStore.defaultURL(), darwinNotificationName: darwinNotificationName)
+        let defaults = UserDefaults(suiteName: ApronPushStore.appGroup) ?? .standard
+        if defaults.integer(forKey: recordFormatKey) != recordFormat {
+            try store.removeHistory()
+            defaults.set(recordFormat, forKey: recordFormatKey)
+        }
+        return store
     }
 
     /// An Apron account's chat key for a room, as `ApronChatAdapter` names it (`Account.apronId`).
