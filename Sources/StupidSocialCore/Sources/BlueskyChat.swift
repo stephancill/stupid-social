@@ -263,6 +263,7 @@ extension BlueskyClient: ChatListProvider {
             namesSenderInPreview: isGroup,
             titleNamesPeople: true,
             isMuted: convo.muted == true,
+            latestMessageId: convo.lastMessage?.id,
         )
     }
 }

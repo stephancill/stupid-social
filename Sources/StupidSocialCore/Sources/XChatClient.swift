@@ -497,6 +497,7 @@ public actor XChatClient: ChatListProvider {
             namesSenderInPreview: conversation.isGroup,
             titleNamesPeople: conversation.name == nil,
             isMuted: conversation.isMuted,
+            latestMessageId: latest?.event.sequenceId,
         )
     }
 

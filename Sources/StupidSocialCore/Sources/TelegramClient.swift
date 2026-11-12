@@ -973,6 +973,7 @@ public actor TelegramClient: ChatListProvider {
                 isMuted: (dialog["notify_settings"]?.object?["mute_until"]?.int.map(TimeInterval.init)
                     ?? (peer.kind == .user ? muteDefaults.users : muteDefaults.groups)) > Date().timeIntervalSince1970,
                 presence: peer.kind == .user ? users[peer.id].flatMap(Self.userStatus) : nil,
+                latestMessageId: latest.map { String($0.id) },
             )
         }
     }

@@ -42,6 +42,7 @@ extension LinkedInClient: ChatListProvider {
             namesSenderInPreview: isGroup,
             titleNamesPeople: conversation.title?.isEmpty != false,
             isMuted: conversation.notificationStatus == "MUTE",
+            latestMessageId: conversation.messages?.elements.first?.entityUrn,
         )
     }
 }

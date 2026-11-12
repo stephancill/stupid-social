@@ -254,6 +254,7 @@ public final class DiscordChatList: ChatListProvider {
             namesSenderInPreview: !isDM,
             titleNamesPeople: channel.isPrivate && channel.name?.isEmpty != false,
             isMuted: gateway.isMuted(channel),
+            latestMessageId: channel.lastMessageId,
         )
     }
 

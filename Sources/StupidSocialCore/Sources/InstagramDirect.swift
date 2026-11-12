@@ -677,6 +677,7 @@ extension InstagramClient: ChatListProvider {
             namesSenderInPreview: isGroup,
             // A group's title may be a custom name or its members' names; the thread doesn't say which.
             titleNamesPeople: true,
+            latestMessageId: thread.messages.first?.id,
         )
     }
 }

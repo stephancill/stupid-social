@@ -50,6 +50,7 @@ public final class SpotifyMessagesSource: ChatListProvider {
                 destination: .spotify(chatId: chat.id),
                 namesSenderInPreview: chat.isGroup,
                 titleNamesPeople: !chat.isGroup,
+                latestMessageId: chat.latestMessage?.id,
             ))
         }
         return summaries

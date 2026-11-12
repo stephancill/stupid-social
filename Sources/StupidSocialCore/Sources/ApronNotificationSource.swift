@@ -128,6 +128,9 @@ public final class ApronNotificationSource: ChatListProvider {
                 titleNamesPeople: room.isNamedForMembers,
                 // A room set to None is muted on the server (§4.5.3).
                 isMuted: session.connection.mutedRooms.contains(room.roomId),
+                // The newest message of any kind, which a chat whose store holds it opens without fetching.
+                latestMessageId: (page.messages ?? []).filter { $0.roomId == nil || $0.roomId == room.roomId }
+                    .compactMap { $0.messageId.flatMap(Int64.init) }.max().map(String.init),
             ).scoped(to: Account.apronId(serverURL: session.serverURL)))
         }
         return summaries
