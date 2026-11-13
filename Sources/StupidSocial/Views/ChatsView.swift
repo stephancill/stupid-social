@@ -267,13 +267,13 @@ struct ChatsView: View {
             ))
         case let .spotify(chatId):
             if let makeChat = spotifyChat(chat.accountId, chatId, chat.title) {
-                NetworkChatView(viewModel: opened(makeChat(), chat: chat, quickLook: quickLook))
+                InfoChatView(viewModel: opened(makeChat(), chat: chat, quickLook: quickLook))
             } else {
                 ContentUnavailableView("Spotify Not Connected", systemImage: "music.note")
             }
         case let .instagram(threadFbid):
             if let makeChat = instagramChat(chat.accountId, threadFbid, chat.title) {
-                NetworkChatView(viewModel: opened(makeChat(), chat: chat, quickLook: quickLook))
+                InfoChatView(viewModel: opened(makeChat(), chat: chat, quickLook: quickLook))
             } else {
                 ContentUnavailableView("Instagram Not Connected", systemImage: "camera")
             }
@@ -285,13 +285,13 @@ struct ChatsView: View {
             }
         case let .x(conversationId):
             if let makeChat = xChat(chat.accountId, conversationId, chat.title) {
-                NetworkChatView(viewModel: opened(makeChat(), chat: chat, quickLook: quickLook))
+                InfoChatView(viewModel: opened(makeChat(), chat: chat, quickLook: quickLook))
             } else {
                 ContentUnavailableView("X Chat Locked", systemImage: "lock", description: Text("Enter your X Chat PIN in this X account's settings."))
             }
         case let .bluesky(convoId):
             if let makeChat = blueskyChat(chat.accountId, convoId, chat.title) {
-                NetworkChatView(viewModel: opened(makeChat(), chat: chat, quickLook: quickLook))
+                InfoChatView(viewModel: opened(makeChat(), chat: chat, quickLook: quickLook))
             } else {
                 ContentUnavailableView("Bluesky Not Connected", systemImage: "bubble.left.and.bubble.right")
             }
@@ -303,12 +303,12 @@ struct ChatsView: View {
             }
         case let .linkedin(conversationUrn):
             if let makeChat = linkedinChat(chat.accountId, conversationUrn, chat.title) {
-                NetworkChatView(viewModel: opened(makeChat(), chat: chat))
+                InfoChatView(viewModel: opened(makeChat(), chat: chat))
             } else {
                 ContentUnavailableView("LinkedIn Not Connected", systemImage: "bubble.left.and.bubble.right")
             }
         case let .demo(chatId):
-            NetworkChatView(viewModel: opened(AdapterChatViewModel(adapter: DemoChatAdapter(chatId: chatId), accountId: chat.accountId), chat: chat, quickLook: quickLook))
+            InfoChatView(viewModel: opened(AdapterChatViewModel(adapter: DemoChatAdapter(chatId: chatId), accountId: chat.accountId), chat: chat, quickLook: quickLook))
         }
     }
 }

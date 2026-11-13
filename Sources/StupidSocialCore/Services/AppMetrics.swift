@@ -86,6 +86,16 @@ public enum AppMetrics {
         }
     }
 
+    /// The user muted or unmuted a chat from its info.
+    public static func chatMuteChanged(network: ChatNetwork, muted: Bool, error: (any Error)?) {
+        outcome(muted ? "chat_mute" : "chat_unmute", network: network, error: error)
+    }
+
+    /// The user archived or unarchived a chat from its info.
+    public static func chatArchiveChanged(network: ChatNetwork, archived: Bool, error: (any Error)?) {
+        outcome(archived ? "chat_archive" : "chat_unarchive", network: network, error: error)
+    }
+
     private static func outcome(_ name: String, network: ChatNetwork, error: (any Error)?) {
         StupidMetrics.track(name, properties: ["network": network.rawValue, "outcome": error == nil ? "ok" : "error"])
         if let error {

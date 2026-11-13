@@ -182,6 +182,17 @@ public final class DiscordClient: @unchecked Sendable {
         return try await request("GET", "/channels/\(channelId)/messages/\(messageId)/reactions/\(name)", query: [URLQueryItem(name: "limit", value: "100"), URLQueryItem(name: "type", value: "0")])
     }
 
+    /// Mutes a channel or DM until turned back on, or unmutes it, as the web client's Mute Channel does: an override
+    /// in the user's settings for the channel's guild (`@me` for DMs). Unmuting drops the override. Returns the
+    /// guild's settings (scripts/discord-web-client.py `mute`, observed 2026-11-13).
+    func setMuted(channelId: String, guildId: String?, muted: Bool) async throws -> DiscordGuildSettings {
+        var override: [String: Any] = ["muted": muted]
+        if muted {
+            override["mute_config"] = ["selected_time_window": -1, "end_time": NSNull()]
+        }
+        return try await request("PATCH", "/users/@me/guilds/\(guildId ?? "@me")/settings", body: ["channel_overrides": [channelId: override]])
+    }
+
     /// Moves the read position to the message (`{"token": null}`, as the web client sends).
     func ack(channelId: String, messageId: String) async throws {
         try await requestNoContent("POST", "/channels/\(channelId)/messages/\(messageId)/ack", body: ["token": NSNull()])
@@ -358,6 +369,17 @@ public final class DiscordGateway: LiveConnecting {
 
     func guild(id: String?) -> DiscordGuild? {
         id.flatMap { guilds[$0] }
+    }
+
+    /// Mutes or unmutes the channel, keeping the settings Discord returns so its row shows it.
+    func setMuted(_ channel: DiscordChannel, muted: Bool) async throws {
+        let settings = try await client.setMuted(channelId: channel.id, guildId: channel.guildId, muted: muted)
+        guildSettings[channel.guildId ?? ""] = settings
+    }
+
+    /// Whether the channel's guild is muted, which a channel can't override.
+    func isGuildMuted(_ channel: DiscordChannel) -> Bool {
+        channel.guildId != nil && guildSettings[channel.guildId ?? ""]?.muted == true
     }
 
     func isMuted(_ channel: DiscordChannel) -> Bool {

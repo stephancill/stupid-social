@@ -378,6 +378,19 @@ def cmd_channels(args: argparse.Namespace) -> Any:
     ]
 
 
+def cmd_mute(args: argparse.Namespace) -> Any:
+    """As the web client's Mute Channel / Mute Conversation ("Until I turn it back on"): a channel override in
+    the user's settings for the channel's guild, `@me` for DMs. Returns that guild's settings."""
+    channel = guard(args.channel, args.expect_name)
+    guild = channel.get("guild_id") or "@me"
+    override: dict[str, Any] = {"muted": not args.off}
+    if not args.off:
+        override["mute_config"] = {"selected_time_window": -1, "end_time": None}
+    settings = api("PATCH", f"/users/@me/guilds/{guild}/settings", {"channel_overrides": {args.channel: override}})
+    mine = next((o for o in settings.get("channel_overrides") or [] if o.get("channel_id") == args.channel), None)
+    return {"guild_id": settings.get("guild_id"), "guild_muted": settings.get("muted"), "override": mine, "shape": shape(settings)}
+
+
 def cmd_dms(args: argparse.Namespace) -> Any:
     channels = api("GET", "/users/@me/channels")
     channels.sort(key=lambda c: int(c.get("last_message_id") or 0), reverse=True)
@@ -688,6 +701,10 @@ def main() -> None:
         if name == "react":
             p.add_argument("--emoji", required=True)
             p.add_argument("--remove", action="store_true")
+    p = sub.add_parser("mute", help="PATCH /users/@me/guilds/{guild or @me}/settings: mute a channel or DM for good, or unmute it")
+    p.add_argument("--channel", required=True)
+    p.add_argument("--expect-name", required=True)
+    p.add_argument("--off", action="store_true", help="unmute")
     p = sub.add_parser("ack")
     p.add_argument("--channel", required=True)
     p.add_argument("--message", required=True)

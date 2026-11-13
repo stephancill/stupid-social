@@ -6,7 +6,7 @@ import Foundation
 /// doesn't send. Files go through Discord's upload slots; stickers are the standard packs and the guild's own (any
 /// guild's with Nitro).
 @MainActor
-public final class DiscordChatAdapter: ChatAdapter, ChatWindowing, ChatReadOnlyAccess, ChatEditing, ChatDeleting, ChatReactionSending, ChatLiveUpdating, ChatReferenceResolving, ChatTyping, ChatMentioning, ChatCustomEmojis, ChatStickerSending, ChatForwarding, ChatVoiceSending, ChatAudioPreviewing, ChatMessageLinking {
+public final class DiscordChatAdapter: ChatAdapter, ChatWindowing, ChatReadOnlyAccess, ChatEditing, ChatDeleting, ChatReactionSending, ChatLiveUpdating, ChatReferenceResolving, ChatTyping, ChatMentioning, ChatCustomEmojis, ChatStickerSending, ChatForwarding, ChatVoiceSending, ChatAudioPreviewing, ChatMessageLinking, ChatMuting {
     public let network = ChatNetwork.discord
     public let canReply = true
     /// Read again once connected: a guild channel may not allow files.
@@ -720,5 +720,20 @@ public final class DiscordChatAdapter: ChatAdapter, ChatWindowing, ChatReadOnlyA
             return [.image(url: image.0, aspectRatio: image.1, alt: nil, link: nil, opensViewer: true)]
         }
         return []
+    }
+}
+
+// MARK: Muting
+
+public extension DiscordChatAdapter {
+    /// A channel in a muted server stays muted whatever its own setting.
+    var canMute: Bool {
+        guard let channel = gateway.channel(id: channelId) else { return false }
+        return !gateway.isGuildMuted(channel)
+    }
+
+    func setMuted(_ muted: Bool) async throws {
+        guard let channel = gateway.channel(id: channelId) else { throw SourceError.serviceError("This channel isn't available.") }
+        try await gateway.setMuted(channel, muted: muted)
     }
 }

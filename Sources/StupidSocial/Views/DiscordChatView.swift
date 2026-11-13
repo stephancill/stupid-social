@@ -34,11 +34,11 @@ struct DiscordChatView: View {
             keepsConnection: profileUserId != nil,
         )
         .navigationDestination(item: $profileUserId) { userId in
-            DiscordProfileView(viewModel: profile(userId), isOpenChat: userId == dmRecipient)
+            DiscordProfileView(viewModel: profile(userId), isOpenChat: userId == dmRecipient, chat: userId == dmRecipient ? viewModel : nil)
         }
         .navigationDestination(isPresented: $showsDetails) {
             if let details {
-                DiscordChannelDetailsView(details: details)
+                DiscordChannelDetailsView(details: details, chat: viewModel)
                     .environment(\.serverChats, serverChats)
             }
         }
@@ -48,6 +48,7 @@ struct DiscordChatView: View {
 /// A server channel's details: its name, server and topic, and the server's other channels.
 struct DiscordChannelDetailsView: View {
     let details: DiscordChannelDetails
+    @ObservedObject var chat: ChatViewModel
 
     var body: some View {
         List {
@@ -58,6 +59,7 @@ struct DiscordChannelDetailsView: View {
                 avatarURL: details.serverIconURL,
                 colorKey: details.colorKey,
             )
+            ChatSettingsSection(viewModel: chat)
             ServerChatsSection(label: "Show All Channels", filter: details.serverFilter)
         }
         .navigationBarTitleDisplayMode(.inline)
@@ -71,8 +73,11 @@ struct DiscordProfileView: View {
     @StateObject private var viewModel: DiscordProfileViewModel
     /// Message isn't offered from the DM it was opened from.
     private let isOpenChat: Bool
+    /// The DM with this person when the profile opened from its title, for muting it.
+    private let chat: ChatViewModel?
 
-    init(viewModel: @autoclosure @escaping () -> DiscordProfileViewModel, isOpenChat: Bool) {
+    init(viewModel: @autoclosure @escaping () -> DiscordProfileViewModel, isOpenChat: Bool, chat: ChatViewModel? = nil) {
+        self.chat = chat
         _viewModel = StateObject(wrappedValue: viewModel())
         self.isOpenChat = isOpenChat
     }
@@ -149,6 +154,9 @@ struct DiscordProfileView: View {
                 Section {
                     LabeledContent("Mutual Servers", value: "\(profile.mutualServers)")
                 }
+            }
+            if let chat {
+                ChatSettingsSection(viewModel: chat)
             }
             if let error = viewModel.errorMessage {
                 Section {

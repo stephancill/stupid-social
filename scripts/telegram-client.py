@@ -1331,6 +1331,12 @@ def main():
     members.add_argument("--peer", required=True)
     members.add_argument("--limit", type=int, default=200)
     members.add_argument("--json", action="store_true")
+    mute = sub.add_parser("mute", help="account.updateNotifySettings: mute a chat for good (mute_until max int) or unmute it (0), then read it back")
+    mute.add_argument("--peer", required=True)
+    mute.add_argument("--off", action="store_true", help="unmute")
+    archive = sub.add_parser("archive", help="folders.editPeerFolders: move a chat to the Archive (folder 1) or back to the main list (0)")
+    archive.add_argument("--peer", required=True)
+    archive.add_argument("--off", action="store_true", help="unarchive")
     peer_status = sub.add_parser("peer-status", help="a private chat's last-seen status, as messages.getPeerDialogs returns it")
     peer_status.add_argument("--peer", required=True)
     custom_emoji = sub.add_parser("custom-emoji", help="a chat's custom emoji (text entities and reactions) and their documents, without message text")
@@ -1614,6 +1620,18 @@ def main():
         sent = [u for u in result.get("updates", []) if u["_"] in ("updateNewMessage", "updateNewChannelMessage")]
         media = sent[0]["message"].get("media", {}) if sent else {}
         print(f"{result['_']}: sent {sticker_line(doc)}; message {sent[0]['message']['id'] if sent else '?'} media {media.get('_')} document {(media.get('document') or {}).get('id')}")
+    elif args.command == "mute":
+        notify_peer = {"_": "inputNotifyPeer", "peer": client.input_peer(args.peer)}
+        settings = {"_": "inputPeerNotifySettings", "mute_until": 0 if args.off else 2**31 - 1}
+        print("updateNotifySettings:", client.call({"_": "account.updateNotifySettings", "peer": notify_peer, "settings": settings}))
+        print("mute_until now:", client.call({"_": "account.getNotifySettings", "peer": notify_peer}).get("mute_until"))
+    elif args.command == "archive":
+        folder = 0 if args.off else 1
+        result = client.call({"_": "folders.editPeerFolders", "folder_peers": [{"_": "inputFolderPeer", "peer": client.input_peer(args.peer), "folder_id": folder}]})
+        # An updates with updateFolderPeers {folder_peers: [folderPeer {peer, folder_id}]}.
+        print(json.dumps([{"_": u.get("_"), "folder_ids": [fp.get("folder_id") for fp in u.get("folder_peers", [])]} for u in result.get("updates", [])], indent=1))
+        dialogs = client.call({"_": "messages.getPeerDialogs", "peers": [{"_": "inputDialogPeer", "peer": client.input_peer(args.peer)}]})
+        print("folder_id now:", [d.get("folder_id", 0) for d in dialogs["dialogs"]])
     elif args.command == "peer-status":
         result = client.call({"_": "messages.getPeerDialogs", "peers": [{"_": "inputDialogPeer", "peer": client.input_peer(args.peer)}]})
         user_id = int(args.peer.split(":")[1])

@@ -202,6 +202,12 @@ Observed X behavior:
 - On a Mac (the iPad app on Apple silicon), and in the simulator, the `stupid-social` command in `cli/` reads and sends chats through the running app: list chats, read a chat's latest messages, send text (optionally as a reply), mark a chat read, and watch a chat's new messages or every chat's row changes. It works for every network the Chats list shows and behaves as the chat screen does (drafts kept, read markers, the Chats row kept current).
 - Off by default: the user turns it on in Settings → Advanced → Command-Line Access, which shows the token the command pairs with and resets it. Attachments and reactions aren't supported from the command line.
 
+### Chat Info
+
+- Tapping a chat's title opens its details on every network: Apron rooms, Discord server channels and Telegram groups show their own details screen, the other person's profile opens in Telegram and Discord DMs, and other chats show the chat's picture, title and subtitle.
+- Where the network itself supports it, the details offer Mute (the network's mute, until turned off) and Archive or Unarchive (the network's archive, so the chat moves in the network's own apps too). Networks without an archive offer none: the app has no archive of its own. A change shows on the chat's row at once.
+- Mute: Telegram, X Chat, Discord (channels and DMs; not a channel in a muted server) and Bluesky. Archive: Telegram (not Saved Messages) and X Chat. Apron rooms keep their Notifications level instead. LinkedIn and Instagram are planned: their accounts couldn't be checked live.
+
 ### Sending
 
 - In every chat (Apron, Spotify, Instagram, Telegram, X, Bluesky), a sent message shows at once with a clock beside its time while it is sending, and the network's copy then takes its place without moving it. A photo shows from the picked image straight away. If sending fails, the message goes and its text and attachment return to the composer. Apron commands are the exception: they may not post a message, so the composer waits for them.

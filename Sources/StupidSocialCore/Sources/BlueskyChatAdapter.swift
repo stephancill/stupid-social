@@ -4,7 +4,7 @@ import Foundation
 /// sends text, reacts, and moves the read position as messages are read. Bluesky chats have no replies or
 /// attachments.
 @MainActor
-public final class BlueskyChatAdapter: ChatAdapter, ChatReactionSending {
+public final class BlueskyChatAdapter: ChatAdapter, ChatReactionSending, ChatMuting {
     public let network = ChatNetwork.bluesky
     public let canReply = false
     public let acceptsAttachments = false
@@ -224,5 +224,13 @@ public final class BlueskyChatAdapter: ChatAdapter, ChatReactionSending {
             imageURL: record.author?.avatar,
             link: record.postURL,
         )
+    }
+}
+
+// MARK: Muting
+
+public extension BlueskyChatAdapter {
+    func setMuted(_ muted: Bool) async throws {
+        try await client.setConvoMuted(convoId: convoId, muted: muted)
     }
 }

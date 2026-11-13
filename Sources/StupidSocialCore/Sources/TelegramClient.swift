@@ -1717,6 +1717,25 @@ public actor TelegramClient: ChatListProvider {
         _ = try await invoke(TLObject("messages.setTyping", ["peer": .object(peer.inputPeer), "action": .object(action)]))
     }
 
+    /// Mutes the chat for good (`mute_until` the largest date, as Telegram's apps do) or unmutes it (0, which also
+    /// overrides a muted default for its kind of chat): scripts/telegram-client.py `mute`.
+    public func setMuted(peer: TelegramPeer, muted: Bool) async throws {
+        try requireAccount()
+        _ = try await invoke(TLObject("account.updateNotifySettings", [
+            "peer": .object(TLObject("inputNotifyPeer", ["peer": .object(peer.inputPeer)])),
+            "settings": .object(TLObject("inputPeerNotifySettings", ["mute_until": .int(muted ? Int32.max : 0)])),
+        ]))
+    }
+
+    /// Moves the chat to the Archive (folder 1) or back to the main list (folder 0): scripts/telegram-client.py
+    /// `archive`.
+    public func setArchived(peer: TelegramPeer, archived: Bool) async throws {
+        try requireAccount()
+        _ = try await invoke(TLObject("folders.editPeerFolders", [
+            "folder_peers": .vector([.object(TLObject("inputFolderPeer", ["peer": .object(peer.inputPeer), "folder_id": .int(archived ? 1 : 0)]))]),
+        ]))
+    }
+
     public func markRead(peer: TelegramPeer, maxId: Int32) async throws {
         try requireAccount()
         if peer.kind == .channel {

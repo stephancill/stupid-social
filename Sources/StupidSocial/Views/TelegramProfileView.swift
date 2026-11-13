@@ -8,8 +8,11 @@ struct TelegramProfileView: View {
     @StateObject private var viewModel: TelegramProfileViewModel
     /// The chat the profile was opened from; Message isn't offered when it is already your chat with them.
     private let openChat: TelegramPeer?
+    /// The private chat with this person when the profile opened from its title, for muting and archiving it.
+    private let chat: ChatViewModel?
 
-    init(viewModel: @autoclosure @escaping () -> TelegramProfileViewModel, openChat: TelegramPeer? = nil) {
+    init(viewModel: @autoclosure @escaping () -> TelegramProfileViewModel, openChat: TelegramPeer? = nil, chat: ChatViewModel? = nil) {
+        self.chat = chat
         _viewModel = StateObject(wrappedValue: viewModel())
         self.openChat = openChat
     }
@@ -19,7 +22,19 @@ struct TelegramProfileView: View {
             if let profile = viewModel.profile {
                 content(profile)
             } else if let error = viewModel.errorMessage {
-                ContentUnavailableView("No Profile", systemImage: "person.crop.circle.badge.questionmark", description: Text(error))
+                let unavailable = ContentUnavailableView("No Profile", systemImage: "person.crop.circle.badge.questionmark", description: Text(error))
+                // The chat's mute and archive don't need the profile.
+                if let chat {
+                    List {
+                        Section {
+                            unavailable
+                        }
+                        .listRowBackground(Color.clear)
+                        ChatSettingsSection(viewModel: chat)
+                    }
+                } else {
+                    unavailable
+                }
             } else {
                 ProgressView()
             }
@@ -76,6 +91,9 @@ struct TelegramProfileView: View {
                     Text(AttributedString(linkingWebURLsIn: about))
                         .textSelection(.enabled)
                 }
+            }
+            if let chat {
+                ChatSettingsSection(viewModel: chat)
             }
         }
     }

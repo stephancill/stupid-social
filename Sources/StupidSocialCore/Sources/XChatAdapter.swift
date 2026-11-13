@@ -5,7 +5,7 @@ import Foundation
 /// Reactions, edits and deletes are events of their own, applied to the messages they name by sequence id.
 /// The user's messages show as seen once someone else's read marker passes them.
 @MainActor
-public final class XChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, ChatLiveUpdating, ChatReferenceResolving, ChatReadReceipts, ChatForwarding, ChatVoiceSending, ChatAudioPreviewing {
+public final class XChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, ChatLiveUpdating, ChatReferenceResolving, ChatReadReceipts, ChatForwarding, ChatVoiceSending, ChatAudioPreviewing, ChatMuting, ChatArchiving {
     public let network = ChatNetwork.x
     public let canReply = true
     public let acceptsAttachments = true
@@ -510,5 +510,17 @@ public final class XChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, 
             }
         }
         return current.map { sender, event in ChatReactor(user: person(sender), date: event.createdAt, isYou: sender == viewerId) }
+    }
+}
+
+// MARK: Muting and archiving
+
+public extension XChatAdapter {
+    func setMuted(_ muted: Bool) async throws {
+        try await client.setMuted(muted, conversationId: conversationId)
+    }
+
+    func setArchived(_ archived: Bool) async throws {
+        try await client.setArchived(archived, conversationId: conversationId)
     }
 }

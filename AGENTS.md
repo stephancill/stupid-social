@@ -18,6 +18,7 @@ Sources/
       SearchView.swift              # Cross-network profile search
       SearchBar.swift               # Shared search field modifier (Search, Chats) and the drawer field's fill fix
       CompactListRow.swift          # Shared row insets for the feed and Chats lists
+      ChatInfoView.swift            # Chat details for networks without their own screen; Mute and Archive section
       StoryComposerView.swift       # Full-screen story composer scaffold
       NotificationDetailView.swift  # Standard form-based notification detail
       ProfileDetailView.swift       # Actor profile detail

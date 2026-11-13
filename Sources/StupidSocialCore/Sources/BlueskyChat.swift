@@ -198,6 +198,12 @@ extension BlueskyClient {
         let _: BlueskyConvoResponse = try await chat("POST", "chat.bsky.convo.updateRead", body: ["convoId": convoId, "messageId": messageId])
     }
 
+    /// Mutes or unmutes the conversation for the viewer only (`chat.bsky.convo.muteConvo`/`unmuteConvo`, observed
+    /// 2026-11-13: both return the conversation with its new `muted`).
+    func setConvoMuted(convoId: String, muted: Bool) async throws {
+        let _: BlueskyConvoResponse = try await chat("POST", muted ? "chat.bsky.convo.muteConvo" : "chat.bsky.convo.unmuteConvo", body: ["convoId": convoId])
+    }
+
     /// Adds or removes one of the viewer's reactions and returns the message with its reactions.
     func setReaction(convoId: String, messageId: String, emoji: String, remove: Bool) async throws -> BlueskyChatMessage {
         let response: BlueskyReactionResponse = try await chat(

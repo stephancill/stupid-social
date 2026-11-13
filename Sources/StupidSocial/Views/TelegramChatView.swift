@@ -24,10 +24,10 @@ struct TelegramChatView: View {
             keepsConnection: showsMembers || profileTarget != nil,
         )
         .navigationDestination(isPresented: $showsMembers) {
-            TelegramMembersView(viewModel: members)
+            TelegramMembersView(viewModel: members, chat: viewModel)
         }
         .navigationDestination(item: $profileTarget) { target in
-            TelegramProfileView(viewModel: members.profile(for: target), openChat: members.peer)
+            TelegramProfileView(viewModel: members.profile(for: target), openChat: members.peer, chat: target == String(members.peer.id) && !members.isGroup ? viewModel : nil)
         }
         .onAppear {
             NotificationRouter.shared.telegramChatDidOpen(members.peer)
@@ -42,6 +42,8 @@ struct TelegramChatView: View {
 /// members, online ones first, then by when they were last seen.
 struct TelegramMembersView: View {
     @ObservedObject var viewModel: TelegramMembersViewModel
+    /// The group's chat, for muting and archiving it.
+    @ObservedObject var chat: ChatViewModel
     @State private var query = ""
     @State private var isEditing = false
 
@@ -54,6 +56,7 @@ struct TelegramMembersView: View {
                     .map(\.element)
                 List {
                     header
+                    ChatSettingsSection(viewModel: chat)
                     MembersSection(
                         query: $query,
                         hasResults: !members.isEmpty,
@@ -71,6 +74,7 @@ struct TelegramMembersView: View {
             } else if let error = viewModel.errorMessage {
                 List {
                     header
+                    ChatSettingsSection(viewModel: chat)
                     Section {
                         ContentUnavailableView("No Member List", systemImage: "person.2", description: Text(error))
                     }

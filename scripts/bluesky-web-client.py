@@ -327,7 +327,7 @@ def main() -> None:
         "command",
         choices=[
             "notifications", "load-notifications", "post-thread", "profile", "token-nonce",
-            "convos", "convo", "messages", "send", "mark-read", "react", "unreact",
+            "convos", "convo", "messages", "send", "mark-read", "react", "unreact", "mute", "unmute",
         ],
     )
     parser.add_argument("--account-id", help="The app's account id (bluesky-<uuid>) when several are signed in.")
@@ -350,7 +350,7 @@ def main() -> None:
     parser.add_argument("--emoji", help="react/unreact: the emoji.")
     parser.add_argument(
         "--expect-member",
-        help="send/mark-read/react/unreact: the other member's handle; refuses to write to any other chat.",
+        help="send/mark-read/react/unreact/mute/unmute: the other member's handle; refuses to write to any other chat.",
     )
     parser.add_argument("--show-text", action="store_true", help="messages: print the text of the viewer's own messages.")
     args = parser.parse_args()
@@ -372,7 +372,7 @@ def main() -> None:
         summarize_convos(value, viewer) if args.summary else write_output(value, args.output)
         return
 
-    if args.command in {"convo", "messages", "send", "mark-read", "react", "unreact"}:
+    if args.command in {"convo", "messages", "send", "mark-read", "react", "unreact", "mute", "unmute"}:
         if not args.convo:
             raise SystemExit("Pass --convo.")
         convo = chat(credentials, "GET", "chat.bsky.convo.getConvo", query={"convoId": args.convo})["convo"]
@@ -394,6 +394,11 @@ def main() -> None:
             if not args.text:
                 raise SystemExit("Pass --text.")
             value = chat(credentials, "POST", "chat.bsky.convo.sendMessage", body={"convoId": args.convo, "message": {"text": args.text}})
+        elif args.command in {"mute", "unmute"}:
+            name = "chat.bsky.convo.muteConvo" if args.command == "mute" else "chat.bsky.convo.unmuteConvo"
+            value = chat(credentials, "POST", name, body={"convoId": args.convo})
+            print("muted now:", value.get("convo", {}).get("muted"))
+            return
         elif args.command == "mark-read":
             body = {"convoId": args.convo}
             if args.message:

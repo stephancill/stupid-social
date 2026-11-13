@@ -55,6 +55,12 @@ OPS = {
     "GenerateXChatTokenMutation": "Qh3fZRjPPtPoHYR_2sCZsA",
     "InitializeXChatMediaUploadMutation": "6M543IPabOfZm7-yyIczdw",
     "FinalizeXChatMediaUploadMutation": "3O4jPQ2hwW9LbqCc-wFmqA",
+    # From the X Chat embed app (https://chat.x.com/embed-v1.json → abs.twimg.com/x-web/xchat/embed/, its dm-core
+    # asset), observed 2026-11-13.
+    "MuteConversationMutation": "9hq3baCBRMAG9JuLtb0ubg",
+    "UnmuteConversationMutation": "UCN8vZu2Mui2iDY0MSYfLA",
+    "ArchiveConversationMutation": "gej8xsEgeXQlYu4Oydkpfg",
+    "UnarchiveConversationMutation": "JIPT6zWrta18X6OEgl5Xhw",
 }
 SOCKET_URL = "wss://chat-ws.x.com/ws?token="
 # Message{2: MessageInstruction{2: KeepAliveInstruction{}}}, which X's client sends every 30 s.
@@ -599,6 +605,27 @@ class XChatClient:
             items += next_page.get("items") or []
             cursor = next_page.get("inboxCursor") or {}
         return items
+
+    def conversation_settings(self, participant: str, action: str | None) -> dict[str, Any]:
+        """A one-to-one conversation's mute and archive state, found by the other person's screen name, optionally
+        after muting, unmuting, archiving or unarchiving it (no conversation contents)."""
+        def find() -> dict[str, Any]:
+            for item in self.inbox_items():
+                detail = item["conversation_detail"]
+                names = [((pr.get("result") or {}).get("core") or {}).get("screen_name") for pr in detail.get("participants_results") or []]
+                if len(names) == 2 and participant.lower() in [n.lower() for n in names if n]:
+                    return detail
+            raise SystemExit(f"No one-to-one conversation with {participant}")
+        detail = find()
+        conversation_id = detail["conversation_id"]
+        result: dict[str, Any] = {"before": {"is_muted": detail.get("is_muted"), "is_archived": detail.get("is_archived")}}
+        if action:
+            name = {"mute": "MuteConversationMutation", "unmute": "UnmuteConversationMutation", "archive": "ArchiveConversationMutation", "unarchive": "UnarchiveConversationMutation"}[action]
+            variables = {"conversationIds": [conversation_id]} if action in ("mute", "unmute") else {"conversationId": conversation_id}
+            result["response"] = self.mutation(name, variables)
+            after = find()
+            result["after"] = {"is_muted": after.get("is_muted"), "is_archived": after.get("is_archived")}
+        return result
 
     def recover_keys(self) -> dict[str, Any]:
         """Recovers the newest key version's secret through Juicebox and saves it to logs/xchat-keys.json."""
@@ -1373,6 +1400,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", help="Write the full JSON response to this path (under logs/).")
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("viewer", help="Print the signed-in user's id length (not the id).")
+    settings = subparsers.add_parser("conversation-settings", help="A one-to-one conversation's mute and archive state; --action changes it.")
+    settings.add_argument("--participant", required=True, help="The other person's screen name; only a conversation agreed for testing.")
+    settings.add_argument("--action", choices=["mute", "unmute", "archive", "unarchive"])
     keys = subparsers.add_parser("public-keys", help="Summarize XChat key versions for users (default: the viewer).")
     keys.add_argument("user_ids", nargs="*")
     subparsers.add_parser("inbox", help="Fetch every inbox page; print the conversation count and unread counts.")
@@ -1459,7 +1489,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
     client = XChatClient(x_probe.load_credentials(args))
-    if args.command == "viewer":
+    if args.command == "conversation-settings":
+        result = client.conversation_settings(args.participant, args.action)
+    elif args.command == "viewer":
         result: Any = {"user_id_length": len(client.viewer_id())}
     elif args.command == "public-keys":
         users = client.public_keys(args.user_ids or [client.viewer_id()], juicebox=False)

@@ -251,6 +251,10 @@ public actor XChatClient: ChatListProvider {
         case socketToken = "GenerateXChatTokenMutation"
         case initializeMediaUpload = "InitializeXChatMediaUploadMutation"
         case finalizeMediaUpload = "FinalizeXChatMediaUploadMutation"
+        case mute = "MuteConversationMutation"
+        case unmute = "UnmuteConversationMutation"
+        case archive = "ArchiveConversationMutation"
+        case unarchive = "UnarchiveConversationMutation"
 
         var queryId: String {
             switch self {
@@ -263,6 +267,11 @@ public actor XChatClient: ChatListProvider {
             case .socketToken: "Qh3fZRjPPtPoHYR_2sCZsA"
             case .initializeMediaUpload: "6M543IPabOfZm7-yyIczdw"
             case .finalizeMediaUpload: "3O4jPQ2hwW9LbqCc-wFmqA"
+            // From the X Chat embed app's dm-core asset (https://chat.x.com/embed-v1.json), observed 2026-11-13.
+            case .mute: "9hq3baCBRMAG9JuLtb0ubg"
+            case .unmute: "UCN8vZu2Mui2iDY0MSYfLA"
+            case .archive: "gej8xsEgeXQlYu4Oydkpfg"
+            case .unarchive: "JIPT6zWrta18X6OEgl5Xhw"
             }
         }
     }
@@ -756,6 +765,17 @@ public actor XChatClient: ChatListProvider {
     }
 
     /// Moves the viewer's read marker, which X keeps per person, to `sequenceId`.
+    /// Mutes or unmutes the conversation for the viewer (`xchat_mute_conversation`/`xchat_unmute_conversation`, without
+    /// action signatures, as `scripts/xchat-client.py conversation-settings` validated, observed 2026-11-13).
+    func setMuted(_ muted: Bool, conversationId: String) async throws {
+        _ = try await mutation(muted ? .mute : .unmute, variables: ["conversationIds": [conversationId]])
+    }
+
+    /// Archives or unarchives the conversation for the viewer; the inbox then reports it in `is_archived`.
+    func setArchived(_ archived: Bool, conversationId: String) async throws {
+        _ = try await mutation(archived ? .archive : .unarchive, variables: ["conversationId": conversationId])
+    }
+
     func markRead(upTo sequenceId: String, conversationId: String) async throws {
         let keys = try xChatKeys()
         let messageId = UUID().uuidString.lowercased()

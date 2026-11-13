@@ -8,7 +8,7 @@ import Foundation
 /// custom emoji in text and reactions draw as their images, and voice messages play in the chat. The user's
 /// messages show as seen once Telegram's outbox read cursor passes them.
 @MainActor
-public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, ChatReactionSending, ChatUnseenReactions, ChatReadReceipts, ChatLiveUpdating, ChatReferenceResolving, ChatMentioning, ChatTyping, ChatCustomEmojis, ChatAudioPreviewing, ChatReactionChoices, ChatButtonPressing, ChatStickerSending, ChatVoiceSending, ChatForwarding, ChatMessageLinking {
+public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, ChatReactionSending, ChatUnseenReactions, ChatReadReceipts, ChatLiveUpdating, ChatReferenceResolving, ChatMentioning, ChatTyping, ChatCustomEmojis, ChatAudioPreviewing, ChatReactionChoices, ChatButtonPressing, ChatStickerSending, ChatVoiceSending, ChatForwarding, ChatMessageLinking, ChatMuting, ChatArchiving {
     public let network = ChatNetwork.telegram
     public let canReply = true
     public let acceptsAttachments = true
@@ -50,7 +50,7 @@ public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, 
     /// How far others have read the user's messages.
     private var readOutboxMaxId: Int32 = 0
     /// Telegram shows no receipts in the chat with yourself.
-    private var isSavedMessages = false
+    private(set) var isSavedMessages = false
     private var refreshTask: Task<Void, Never>?
     private var observer: UUID?
     private var statusObserver: UUID?
@@ -856,5 +856,22 @@ public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, 
     private func chatMention(_ mention: TelegramMention) -> ChatMessageMention {
         let userId = mention.userId ?? mention.username.flatMap { usernames[$0.lowercased()] }
         return ChatMessageMention(range: mention.range, userId: userId.map(String.init) ?? "@\(mention.username ?? "")")
+    }
+}
+
+// MARK: Muting and archiving
+
+public extension TelegramChatAdapter {
+    func setMuted(_ muted: Bool) async throws {
+        try await client.setMuted(peer: peer, muted: muted)
+    }
+
+    /// Telegram doesn't archive Saved Messages.
+    var canArchive: Bool {
+        !isSavedMessages
+    }
+
+    func setArchived(_ archived: Bool) async throws {
+        try await client.setArchived(peer: peer, archived: archived)
     }
 }
