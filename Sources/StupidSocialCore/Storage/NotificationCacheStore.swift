@@ -58,8 +58,11 @@ public final class NotificationCacheStore {
 
     /// Replaces one account's items, such as one Apron server's rooms after a live update.
     func replaceAccount(_ items: [NotificationItem], network: SocialNetwork, accountId: String, now: Date = Date()) throws {
-        let descriptor = FetchDescriptor<CachedNotification>()
-        for existing in try context.fetch(descriptor) where existing.networkRawValue == network.rawValue && existing.accountId == accountId {
+        // Filtered by the store rather than in Swift, which loaded every network's items on the main thread for each
+        // account a refresh replaced.
+        let networkRawValue = network.rawValue
+        let descriptor = FetchDescriptor<CachedNotification>(predicate: #Predicate { $0.networkRawValue == networkRawValue && $0.accountId == accountId })
+        for existing in try context.fetch(descriptor) {
             context.delete(existing)
         }
         var seenIds = Set<String>()
@@ -72,9 +75,9 @@ public final class NotificationCacheStore {
 
     /// Drops items of accounts that were removed, and items cached before accounts were scoped.
     func deleteAccounts(notIn accountIds: Set<String>) throws {
-        let descriptor = FetchDescriptor<CachedNotification>()
+        let descriptor = FetchDescriptor<CachedNotification>(predicate: #Predicate { !accountIds.contains($0.accountId) })
         var deleted = false
-        for item in try context.fetch(descriptor) where !accountIds.contains(item.accountId) {
+        for item in try context.fetch(descriptor) {
             context.delete(item)
             deleted = true
         }
@@ -84,8 +87,9 @@ public final class NotificationCacheStore {
     }
 
     func deleteAccount(network: SocialNetwork, accountId: String) throws {
-        let descriptor = FetchDescriptor<CachedNotification>()
-        for item in try context.fetch(descriptor) where item.networkRawValue == network.rawValue && item.accountId == accountId {
+        let networkRawValue = network.rawValue
+        let descriptor = FetchDescriptor<CachedNotification>(predicate: #Predicate { $0.networkRawValue == networkRawValue && $0.accountId == accountId })
+        for item in try context.fetch(descriptor) {
             context.delete(item)
         }
 

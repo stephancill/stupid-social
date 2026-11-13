@@ -752,4 +752,22 @@ final class TelegramTests: XCTestCase {
         XCTAssertEqual(list.chat(for: .telegram(peer: TelegramPeer(kind: .user, id: 7, accessHash: 0)))?.id, "telegram|t")
         XCTAssertNil(list.chat(for: .telegram(peer: TelegramPeer(kind: .chat, id: 7, accessHash: 0))))
     }
+
+    /// What the extension stores from a push decodes as the message the chat shows.
+    func testPushedTextIsAProvisionalTelegramMessage() throws {
+        let userInfo: [AnyHashable: Any] = [
+            "aps": ["alert": ["loc-key": "CHAT_MESSAGE_TEXT", "loc-args": ["Luke", "Defi Bets", "Ok"]]],
+            "custom": ["chat_id": "464969885", "chat_from_id": "42", "msg_id": "1757860"],
+        ]
+        let (peerKey, record) = try XCTUnwrap(TelegramPushedMessage.record(userInfo: userInfo))
+        XCTAssertEqual(peerKey, "telegram:chat:464969885")
+        XCTAssertEqual(record.id, "1757860")
+        let message = try record.decode(TelegramMessage.self)
+        XCTAssertEqual(message.text, "Ok")
+        XCTAssertEqual(message.senderId, 42)
+        XCTAssertFalse(message.isOutgoing)
+        var photo = userInfo
+        photo["aps"] = ["alert": ["loc-key": "CHAT_MESSAGE_PHOTO", "loc-args": ["Luke", "Defi Bets"]]]
+        XCTAssertNil(TelegramPushedMessage.record(userInfo: photo), "no text to show")
+    }
 }

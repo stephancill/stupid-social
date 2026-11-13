@@ -19,12 +19,18 @@ public enum SharedChatStore {
     public static let recordFormat = 1
     private static let recordFormatKey = "chatStoreRecordFormat"
 
+    /// The store as the extension opens it: it only adds messages, so it never clears history, even where it can't
+    /// read the app's record format (it read none on the simulator and cleared every chat, observed 2026-11-13).
     public static func open() throws -> ChatStore {
-        let store = try ChatStore(url: url ?? ChatStore.defaultURL(), darwinNotificationName: darwinNotificationName)
-        let defaults = UserDefaults(suiteName: ApronPushStore.appGroup) ?? .standard
-        if defaults.integer(forKey: recordFormatKey) != recordFormat {
+        try ChatStore(url: url ?? ChatStore.defaultURL(), darwinNotificationName: darwinNotificationName)
+    }
+
+    /// The store as the app opens it at launch, clearing stored history when the record format changed.
+    public static func openForApp() throws -> ChatStore {
+        let store = try open()
+        if UserDefaults.standard.integer(forKey: recordFormatKey) != recordFormat {
             try store.removeHistory()
-            defaults.set(recordFormat, forKey: recordFormatKey)
+            UserDefaults.standard.set(recordFormat, forKey: recordFormatKey)
         }
         return store
     }

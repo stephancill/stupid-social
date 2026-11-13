@@ -88,6 +88,42 @@ public struct TelegramPushNotification: Equatable, Sendable {
     }
 }
 
+/// A pushed text message as a provisional record of its chat (`ChatStore.writeProvisional`), so the chat opens on it
+/// before Telegram's copy loads. It is a `TelegramMessage` in the shape the app stores, with only what a push says:
+/// the message id (`custom.msg_id`), the sender and the text. Media and other pushes have no text to show and aren't
+/// stored.
+public struct TelegramPushedMessage: Encodable, Equatable, Sendable {
+    let id: Int32
+    let date: Date
+    let text: String
+    let caption: String
+    let embeds: [String] = []
+    let reactions: [String] = []
+    let reactors: [String] = []
+    let senderId: Int64?
+    let isOutgoing = false
+    let isService = false
+
+    /// The chat's peer key and the record, or `nil` for a push without a message id or text.
+    public static func record(userInfo: [AnyHashable: Any], date: Date = Date()) -> (peerKey: String, record: ChatRecord)? {
+        guard let chat = TelegramPushChat(userInfo: userInfo) else { return nil }
+        let fields = TelegramPushChat.fields(userInfo)
+        let alert = (userInfo["aps"] as? [String: Any])?["alert"] as? [String: Any]
+        let key = alert?["loc-key"] as? String ?? userInfo["loc_key"] as? String
+        let args = alert?["loc-args"] as? [String] ?? userInfo["loc_args"] as? [String] ?? []
+        guard key == "MESSAGE_TEXT" || key == "CHAT_MESSAGE_TEXT", let text = args.last,
+              let id = TelegramPushChat.id(fields["msg_id"]).flatMap({ Int32(exactly: $0) })
+        else { return nil }
+        let senderId: Int64? = switch chat {
+        case let .user(id): id
+        case .chat, .channel: TelegramPushChat.id(fields["chat_from_id"])
+        }
+        let message = TelegramPushedMessage(id: id, date: date, text: text, caption: text, senderId: senderId)
+        guard let record = try? ChatRecord(id: String(id), sortKey: Int64(id), encoding: message) else { return nil }
+        return ("telegram:\(chat.key)", record)
+    }
+}
+
 /// The chat a Telegram push is about, from its `custom` fields (core.telegram.org/api/push-updates), which may
 /// also come at the top level, as strings or numbers: a supergroup, a basic group, or else the sender of a private
 /// message. Apron pushes and the app's own notifications aren't Telegram's.

@@ -89,6 +89,8 @@ public final class FeedService {
         }
 
         try await RefreshTiming.measure("manual-cache-delete-expired") {
+            // Removed accounts' items go once a refresh, not once per source.
+            try cacheStore.deleteAccounts(notIn: Set(accountSources().map(\.accountId)))
             try cacheStore.deleteExpired()
         }
         logger.info("Manual refresh finished")
@@ -123,6 +125,7 @@ public final class FeedService {
             }
         }
         try await RefreshTiming.measure("foreground-cache-delete-expired") {
+            try cacheStore.deleteAccounts(notIn: Set(accountSources().map(\.accountId)))
             try cacheStore.deleteExpired()
         }
         logger.info("Foreground activation refresh finished")
@@ -138,7 +141,6 @@ public final class FeedService {
     /// Replaces one account's cached items, keeping the old ones when a refresh came back empty. Items of
     /// accounts that no longer exist go too.
     private func replaceCachedItems(of result: FetchResult) async throws {
-        try cacheStore.deleteAccounts(notIn: Set(accountSources().map(\.accountId)))
         guard !result.items.isEmpty else { return }
         try await RefreshTiming.measure("cache-replace-\(result.network.rawValue)") {
             try cacheStore.replaceAccount(result.items, network: result.network, accountId: result.accountId)

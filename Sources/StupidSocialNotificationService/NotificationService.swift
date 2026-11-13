@@ -20,6 +20,7 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
            let content = request.content.mutableCopy() as? UNMutableNotificationContent
         {
             telegram.prepare(content)
+            Self.storeTelegramMessage(userInfo: request.content.userInfo)
             self.contentHandler = contentHandler
             fallback = content
             nonisolated(unsafe) let prepared = content
@@ -94,6 +95,20 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
             return ApronPushNotification.make(payload: payload, registrations: registrations)
         }
         return nil
+    }
+
+    /// The pushed text in its chat under each account that has the chat stored, since the push doesn't say which
+    /// account it is for.
+    private static func storeTelegramMessage(userInfo: [AnyHashable: Any]) {
+        guard SharedChatStore.url != nil, let (peerKey, record) = TelegramPushedMessage.record(userInfo: userInfo) else { return }
+        do {
+            let store = try SharedChatStore.open()
+            for chatKey in try store.chatKeys(endingWith: "|\(peerKey)") {
+                try store.writeProvisional([record], chatKey: chatKey)
+            }
+        } catch {
+            Logger(subsystem: "tech.stupid.StupidSocial", category: "NotificationService").error("Telegram message not stored: \(String(describing: type(of: error)), privacy: .public)")
+        }
     }
 
     private static func store(payload: Data, registrations: [String: ApronPushRegistration]) {

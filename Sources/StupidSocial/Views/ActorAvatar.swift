@@ -9,7 +9,8 @@ struct ActorAvatar: View {
     var body: some View {
         Group {
             if let avatarURL = actor.avatarURL {
-                CachedAsyncImage(url: avatarURL) {
+                // Kept on disk by person, since some networks sign avatar URLs anew each time.
+                CachedAsyncImage(url: avatarURL, cacheKey: actor.avatarCacheKey, persist: true) {
                     ActorAvatarFallback(actor: actor)
                 } failure: {
                     ActorAvatarFallback(actor: actor)
@@ -45,5 +46,12 @@ private struct ActorAvatarFallback: View {
     private var initial: String {
         let value = DebugRedaction.actorName(actor, enabled: redactionEnabled)
         return value.first.map { String($0).uppercased() } ?? "?"
+    }
+}
+
+extension NotificationActor {
+    /// The person's avatar, whatever URL it comes from this time.
+    var avatarCacheKey: String {
+        "actor-avatar:\(network.rawValue):\(id)"
     }
 }

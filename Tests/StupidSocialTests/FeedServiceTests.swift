@@ -143,7 +143,7 @@ final class FeedServiceTests: XCTestCase {
         let cacheStore = try makeCacheStore()
         let service = makeService([
             DelayedNotificationFetcher(network: .x, delay: 0.5, items: [item(id: "x", network: .x, timestamp: Date(timeIntervalSince1970: 300))]),
-            DelayedNotificationFetcher(network: .farcaster, delay: 0.1, items: [item(id: "fc", network: .farcaster, timestamp: Date(timeIntervalSince1970: 200))]),
+            DelayedNotificationFetcher(network: .farcaster, delay: 0.4, items: [item(id: "fc", network: .farcaster, timestamp: Date(timeIntervalSince1970: 200))]),
         ], cacheStore: cacheStore)
 
         let clock = ContinuousClock()
@@ -151,8 +151,9 @@ final class FeedServiceTests: XCTestCase {
             try await service.foregroundActivationRefresh()
         }
 
+        // One after the other would take 0.9 s; the margin leaves room for the cache writes.
         let seconds = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18
-        XCTAssertLessThan(seconds, 0.55, "Foreground refresh should fetch sources concurrently")
+        XCTAssertLessThan(seconds, 0.8, "Foreground refresh should fetch sources concurrently")
     }
 
     /// iOS cancels a refresh whose background time runs out; that isn't a source failure.

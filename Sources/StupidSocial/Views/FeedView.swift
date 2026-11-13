@@ -264,13 +264,16 @@ struct FeedView: View {
             .map(\.element)
     }
 
-    /// Loads the avatars and previews of the rows below `index` before they scroll into view.
+    /// Loads the avatars and previews of the rows below `index` before they scroll into view, about two screens
+    /// ahead; avatars come from disk at once when they were seen before.
     private func preloadImages(after index: Int) {
         let items = notificationItems
-        let upcoming = items.dropFirst(index + 1).prefix(10)
+        let upcoming = items.dropFirst(index + 1).prefix(20)
         for displayItem in upcoming {
             for actor in displayItem.item.actors.prefix(5) {
-                actor.avatarURL.map(ImageCache.shared.preload)
+                if let url = actor.avatarURL {
+                    ImageCache.shared.preload(url: url, key: actor.avatarCacheKey, persist: true)
+                }
             }
             displayItem.item.target?.imageURL.map(ImageCache.shared.preload)
         }

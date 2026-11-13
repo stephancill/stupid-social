@@ -12,7 +12,7 @@ struct StupidSocialApp: App {
     init() {
         // Before any chat is made: shared with the notification extension, which stores pushed messages.
         do {
-            ChatKit.store = try SharedChatStore.open()
+            ChatKit.store = try SharedChatStore.openForApp()
         } catch {
             fatalError("Chat store failed to open: \(error)")
         }
