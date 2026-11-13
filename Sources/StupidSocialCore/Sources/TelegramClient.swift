@@ -6,9 +6,10 @@ import Synchronization
 struct TelegramMuteDefaults {
     let users: TimeInterval
     let groups: TimeInterval
+    let channels: TimeInterval
 }
 
-/// A user, basic group or supergroup, with the access hash its input peer needs.
+/// A user, basic group, supergroup or broadcast channel, with the access hash its input peer needs.
 public struct TelegramPeer: Hashable, Codable, Sendable {
     public enum Kind: String, Codable, Sendable {
         case user
@@ -224,6 +225,8 @@ public struct TelegramGroupInfo: Sendable, Equatable {
     public let memberCount: Int?
     /// Whether the account may change the title and description.
     public let canEdit: Bool
+    /// A broadcast channel, whose members are subscribers.
+    public let isBroadcast: Bool
 }
 
 public struct TelegramMemberList: Sendable {
@@ -255,6 +258,10 @@ public struct TelegramDialogState: Sendable {
     public let isSavedMessages: Bool
     /// A private chat with a bot.
     public let isBot: Bool
+    /// A broadcast channel, whose posts come from the channel rather than a person.
+    public let isBroadcast: Bool
+    /// False in a broadcast channel the account isn't allowed to post in.
+    public let canPost: Bool
     /// The user's messages with reactions they haven't seen.
     public let unreadReactionsCount: Int
 }
@@ -910,8 +917,6 @@ public actor TelegramClient: ChatListProvider {
         guard TelegramAPIConfig.bundled != nil, stored.account != nil else { throw SourceError.notConfigured }
     }
 
-    /// The main chat list (folder 0), or the Archive (folder 1), without broadcast channels. Leaving out
-    /// `folder_id` returns both folders mixed.
     /// The signed-in account's own profile photo as a `tgfile:` URL, `nil` without one
     /// (`scripts/telegram-client.py avatar --peer self`).
     public func ownAvatarURL() async throws -> URL? {
@@ -929,18 +934,22 @@ public actor TelegramClient: ChatListProvider {
         return await ChatListPage(chats: chats, archived: archived)
     }
 
-    /// When private chats and groups are muted until by default; a chat without its own `mute_until` follows
-    /// its kind's (`scripts/telegram-client.py notify-defaults`).
+    /// When private chats, groups and broadcast channels are muted until by default; a chat without its own
+    /// `mute_until` follows its kind's (`scripts/telegram-client.py notify-defaults`).
     func muteDefaults() async throws -> TelegramMuteDefaults {
         try requireAccount()
         async let users = invoke(TLObject("account.getNotifySettings", ["peer": .object(TLObject("inputNotifyUsers"))]))
         async let groups = invoke(TLObject("account.getNotifySettings", ["peer": .object(TLObject("inputNotifyChats"))]))
+        async let channels = invoke(TLObject("account.getNotifySettings", ["peer": .object(TLObject("inputNotifyBroadcasts"))]))
         return try await TelegramMuteDefaults(
             users: TimeInterval(users.object?["mute_until"]?.int ?? 0),
             groups: TimeInterval(groups.object?["mute_until"]?.int ?? 0),
+            channels: TimeInterval(channels.object?["mute_until"]?.int ?? 0),
         )
     }
 
+    /// The main chat list (folder 0), or the Archive (folder 1), including broadcast channels. Leaving out
+    /// `folder_id` returns both folders mixed.
     func chatSummaries(archived: Bool = false, limit: Int = 50, muteDefaults: TelegramMuteDefaults) async throws -> [ChatSummary] {
         try requireAccount()
         guard let result = try await invoke(TLObject("messages.getDialogs", [
@@ -959,15 +968,17 @@ public actor TelegramClient: ChatListProvider {
                   let peer = Self.peer(peerObject, users: users, chats: chats)
             else { return nil }
             let title: String
+            var isBroadcast = false
             switch peer.kind {
             case .user:
                 let user = users[peer.id]
                 title = user?.flag("self") == true ? "Saved Messages" : user.map(Self.name(of:)) ?? "Telegram"
             case .chat, .channel:
                 let chat = chats[peer.id]
-                if chat?.flag("broadcast") == true || chat?.name == "channelForbidden" || chat?.name == "chatForbidden" {
+                if chat?.name == "channelForbidden" || chat?.name == "chatForbidden" {
                     return nil
                 }
+                isBroadcast = chat?.flag("broadcast") == true
                 title = chat?["title"]?.string ?? "Group"
             }
             let top = messages["\(Self.peerKey(peerObject)):\(dialog["top_message"]?.int ?? 0)"]
@@ -976,7 +987,7 @@ public actor TelegramClient: ChatListProvider {
             if let latest, let body = preview, !latest.isService {
                 if latest.isOutgoing {
                     preview = "You: \(body)"
-                } else if peer.kind != .user, let sender = latest.senderId {
+                } else if peer.kind != .user, !isBroadcast, let sender = latest.senderId {
                     let name = users[sender].map { $0["first_name"]?.string ?? Self.name(of: $0) } ?? chats[sender]?["title"]?.string
                     preview = name.map { "\($0): \(body)" } ?? body
                 }
@@ -993,16 +1004,21 @@ public actor TelegramClient: ChatListProvider {
                 unreadCount: Int(dialog["unread_count"]?.int ?? 0),
                 unseenReactionCount: Int(dialog["unread_reactions_count"]?.int ?? 0),
                 destination: .telegram(peer: peer),
-                namesSenderInPreview: peer.kind != .user,
+                namesSenderInPreview: peer.kind != .user && !isBroadcast,
                 titleNamesPeople: peer.kind == .user,
                 // Muted chats have `mute_until` in the future (2147483647 for "forever"); without one, the chat
                 // follows the default for its kind.
                 isMuted: (dialog["notify_settings"]?.object?["mute_until"]?.int.map(TimeInterval.init)
-                    ?? (peer.kind == .user ? muteDefaults.users : muteDefaults.groups)) > Date().timeIntervalSince1970,
+                    ?? (peer.kind == .user ? muteDefaults.users : isBroadcast ? muteDefaults.channels : muteDefaults.groups)) > Date().timeIntervalSince1970,
                 presence: peer.kind == .user ? users[peer.id].flatMap(Self.userStatus) : nil,
                 latestMessageId: latest.map { String($0.id) },
             )
         }
+    }
+
+    /// Only a broadcast channel's creator and admins with `post_messages` may post in it.
+    static func canPost(inBroadcast chat: TLObject) -> Bool {
+        chat.flag("creator") || chat["admin_rights"]?.object?.flag("post_messages") == true
     }
 
     public func dialogState(peer: TelegramPeer) async throws -> TelegramDialogState {
@@ -1016,6 +1032,8 @@ public actor TelegramClient: ChatListProvider {
         var userStatus: ChatPresence?
         var isSavedMessages = false
         var isBot = false
+        var isBroadcast = false
+        var canPost = true
         if peer.kind == .user {
             let user = result.objects("users").first { $0["id"]?.long == peer.id }
             isSavedMessages = user?.flag("self") == true
@@ -1026,6 +1044,10 @@ public actor TelegramClient: ChatListProvider {
             let chat = result.objects("chats").first { $0["id"]?.long == peer.id }
             title = chat?["title"]?.string ?? "Group"
             memberCount = chat?["participants_count"]?.int.map(Int.init)
+            isBroadcast = chat?.flag("broadcast") == true
+            if isBroadcast, let chat {
+                canPost = Self.canPost(inBroadcast: chat)
+            }
         }
         return TelegramDialogState(
             title: title,
@@ -1036,6 +1058,8 @@ public actor TelegramClient: ChatListProvider {
             readOutboxMaxId: dialog["read_outbox_max_id"]?.int ?? 0,
             isSavedMessages: isSavedMessages,
             isBot: isBot,
+            isBroadcast: isBroadcast,
+            canPost: canPost,
             unreadReactionsCount: Int(dialog["unread_reactions_count"]?.int ?? 0),
         )
     }
@@ -1248,7 +1272,9 @@ public actor TelegramClient: ChatListProvider {
         let about = full["about"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines)
         let withheld = chat["banned_rights"]?.object?.flag("change_info") == true
             || chat["default_banned_rights"]?.object?.flag("change_info") == true
-        let canEdit = chat.flag("creator") || chat["admin_rights"]?.object?.flag("change_info") == true || !withheld
+        let isBroadcast = chat.flag("broadcast")
+        // A channel's subscribers have no banned rights, yet only its admins may change it.
+        let canEdit = chat.flag("creator") || chat["admin_rights"]?.object?.flag("change_info") == true || (!isBroadcast && !withheld)
         let avatar = { (big: Bool) in
             TelegramMediaParser.avatarURL(photo: chat["photo"]?.object, inputPeer: peer.inputPeer, key: peer.key, big: big)
         }
@@ -1259,6 +1285,7 @@ public actor TelegramClient: ChatListProvider {
             fullAvatarURL: avatar(true),
             memberCount: (chat["participants_count"]?.int ?? full["participants_count"]?.int).map(Int.init),
             canEdit: canEdit,
+            isBroadcast: isBroadcast,
         )
     }
 

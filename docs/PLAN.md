@@ -143,7 +143,7 @@ Observed X behavior:
 ### Telegram
 
 - Users sign in to their own Telegram account in Settings with their phone number, the login code Telegram sends (normally to their other Telegram app), and their two-step verification password when they have one.
-- Telegram chats appear on the Chats screen, not in the notifications feed: private chats, basic groups and supergroups from the main chat list, with the latest message and unread count. Broadcast channels are left out, since they are feeds rather than conversations.
+- Telegram chats appear on the Chats screen, not in the notifications feed: private chats, basic groups, supergroups and broadcast channels from the main chat list, with the latest message and unread count. A channel the user can't post in opens read-only.
 - Chats archived in Telegram stay archived: they are not in the main list but behind an Archived Chats row at the top of the Chats screen (as in Telegram), which shows their names and how many have unread messages, and opens a list of them. Search on the Chats screen includes archived chats.
 - A chat muted in Telegram (or an Apron room set to None) shows its unread count on a gray badge rather than blue.
 - Opening a chat shows its history (older pages load on scroll), and the user can send text messages, replies, photos and files. Reading moves Telegram's read cursor, so the chat is read on the user's other Telegram apps too.

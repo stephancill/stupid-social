@@ -28,13 +28,17 @@ public final class TelegramMembersViewModel: ObservableObject {
         guard isGroup else { return }
         errorMessage = nil
         async let info = try? client.groupInfo(peer: peer)
+        var failure: Error?
         do {
             members = try await client.members(peer: peer)
         } catch {
-            errorMessage = Self.errorText(error)
+            failure = error
         }
         if let info = await info {
             self.info = info
+        }
+        if let failure {
+            errorMessage = Self.errorText(failure, isBroadcast: self.info?.isBroadcast == true)
         }
     }
 
@@ -51,9 +55,9 @@ public final class TelegramMembersViewModel: ObservableObject {
         self.info = await (try? client.groupInfo(peer: peer)) ?? info
     }
 
-    private static func errorText(_ error: Error) -> String {
+    private static func errorText(_ error: Error, isBroadcast: Bool) -> String {
         if case let TelegramError.rpc(_, message) = error, message == "CHAT_ADMIN_REQUIRED" {
-            return "This group's admins have hidden its member list."
+            return isBroadcast ? "Only the channel's admins can see its subscribers." : "This group's admins have hidden its member list."
         }
         return error.localizedDescription
     }

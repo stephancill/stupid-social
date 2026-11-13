@@ -8,7 +8,7 @@ import Foundation
 /// custom emoji in text and reactions draw as their images, and voice messages play in the chat. The user's
 /// messages show as seen once Telegram's outbox read cursor passes them.
 @MainActor
-public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, ChatReactionSending, ChatUnseenReactions, ChatReadReceipts, ChatLiveUpdating, ChatReferenceResolving, ChatMentioning, ChatTyping, ChatCustomEmojis, ChatAudioPreviewing, ChatReactionChoices, ChatButtonPressing, ChatStickerSending, ChatVoiceSending, ChatForwarding, ChatMessageLinking, ChatMuting, ChatArchiving {
+public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, ChatReactionSending, ChatUnseenReactions, ChatReadReceipts, ChatLiveUpdating, ChatReferenceResolving, ChatMentioning, ChatTyping, ChatCustomEmojis, ChatAudioPreviewing, ChatReactionChoices, ChatButtonPressing, ChatStickerSending, ChatVoiceSending, ChatForwarding, ChatMessageLinking, ChatMuting, ChatArchiving, ChatReadOnlyAccess {
     public let network = ChatNetwork.telegram
     public let canReply = true
     public let acceptsAttachments = true
@@ -51,6 +51,9 @@ public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, 
     private var readOutboxMaxId: Int32 = 0
     /// Telegram shows no receipts in the chat with yourself.
     private(set) var isSavedMessages = false
+    /// A broadcast channel: posts come from the channel, and only its admins may post.
+    private var isBroadcast = false
+    public private(set) var isReadOnly = false
     private var refreshTask: Task<Void, Never>?
     private var observer: UUID?
     private var statusObserver: UUID?
@@ -111,6 +114,8 @@ public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, 
         let readOutboxMaxId: Int32
         let isSavedMessages: Bool
         let reactionChoices: [String]?
+        let isBroadcast: Bool?
+        let isReadOnly: Bool?
     }
 
     public func restore(state data: Data) {
@@ -122,8 +127,11 @@ public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, 
         readOutboxMaxId = state.readOutboxMaxId
         isSavedMessages = state.isSavedMessages
         reactionChoices = state.reactionChoices
+        isBroadcast = state.isBroadcast ?? false
+        isReadOnly = state.isReadOnly ?? false
         userStatus = listedStatus ?? state.userStatus
         info.title = state.title
+        info.showsSenderNames = peer.kind != .user && !isBroadcast
         info.subtitle = userStatus?.text ?? state.subtitle
     }
 
@@ -131,7 +139,7 @@ public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, 
         try? JSONEncoder().encode(State(
             names: names, avatars: avatars, readInboxMaxId: readInboxMaxId, title: info.title, subtitle: info.subtitle,
             userStatus: userStatus, usernames: usernames, readOutboxMaxId: readOutboxMaxId, isSavedMessages: isSavedMessages,
-            reactionChoices: reactionChoices,
+            reactionChoices: reactionChoices, isBroadcast: isBroadcast, isReadOnly: isReadOnly,
         ))
     }
 
@@ -195,7 +203,8 @@ public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, 
 
     /// Who can be mentioned; a group that hides its members just offers none.
     private func loadMembersIfNeeded() async {
-        guard peer.kind != .user, !hasLoadedMembers else { return }
+        // Only a channel's admins may list its subscribers.
+        guard peer.kind != .user, !hasLoadedMembers, !isReadOnly else { return }
         hasLoadedMembers = true
         guard let list = try? await client.members(peer: peer) else { return }
         members = list.members
@@ -215,8 +224,12 @@ public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, 
         }
         readOutboxMaxId = max(readOutboxMaxId, dialog.readOutboxMaxId)
         isSavedMessages = dialog.isSavedMessages
+        isBroadcast = dialog.isBroadcast
+        isReadOnly = !dialog.canPost
+        info.showsSenderNames = peer.kind != .user && !isBroadcast
         userStatus = dialog.userStatus
-        info.subtitle = dialog.memberCount.map { "\($0) members" } ?? (dialog.isBot ? "Bot" : userStatus?.text ?? "")
+        let noun = isBroadcast ? "subscribers" : "members"
+        info.subtitle = dialog.memberCount.map { "\($0) \(noun)" } ?? (dialog.isBot ? "Bot" : userStatus?.text ?? "")
     }
 
     public func startFollowing() async {
@@ -813,7 +826,8 @@ public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, 
             ChatUser(
                 id: message.senderId.map(String.init) ?? peer.key,
                 name: message.senderId.flatMap { names[$0] } ?? info.title,
-                avatarURL: (message.senderId ?? (peer.kind == .user ? peer.id : nil)).flatMap { avatars[$0] },
+                // A channel's posts carry no sender: they show the channel's picture.
+                avatarURL: (message.senderId ?? (peer.kind == .chat ? nil : peer.id)).flatMap { avatars[$0] },
             )
         }
         let embeds = message.embeds.map(Self.chatEmbed)

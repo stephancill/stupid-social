@@ -106,7 +106,10 @@ struct TelegramMembersView: View {
         if let info = viewModel.info {
             ChatDetailsHeader(
                 title: info.title,
-                subtitle: info.memberCount.map { $0 == 1 ? "1 member" : "\($0) members" },
+                subtitle: info.memberCount.map { count in
+                    let noun = info.isBroadcast ? "subscriber" : "member"
+                    return count == 1 ? "1 \(noun)" : "\(count) \(noun)s"
+                },
                 description: info.about,
                 avatarURL: info.avatarURL,
                 fullAvatarURL: info.fullAvatarURL,
