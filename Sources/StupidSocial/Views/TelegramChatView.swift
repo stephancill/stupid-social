@@ -56,7 +56,6 @@ struct TelegramMembersView: View {
                     .map(\.element)
                 List {
                     header
-                    ChatSettingsSection(viewModel: chat)
                     MembersSection(
                         query: $query,
                         hasResults: !members.isEmpty,
@@ -74,7 +73,6 @@ struct TelegramMembersView: View {
             } else if let error = viewModel.errorMessage {
                 List {
                     header
-                    ChatSettingsSection(viewModel: chat)
                     Section {
                         ContentUnavailableView("No Member List", systemImage: "person.2", description: Text(error))
                     }
@@ -113,7 +111,18 @@ struct TelegramMembersView: View {
                 avatarURL: info.avatarURL,
                 fullAvatarURL: info.fullAvatarURL,
                 colorKey: String(viewModel.peer.id),
-            )
+            ) {
+                if chat.hasChatSettings {
+                    DetailActionRow { ChatSettingsButtons(viewModel: chat) }
+                }
+            }
+        } else if chat.hasChatSettings {
+            // The chat's mute and archive don't need the group's details.
+            Section {
+                DetailActionRow { ChatSettingsButtons(viewModel: chat) }
+                    .frame(maxWidth: .infinity)
+                    .listRowBackground(Color.clear)
+            }
         }
     }
 

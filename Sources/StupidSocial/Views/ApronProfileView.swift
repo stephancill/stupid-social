@@ -46,7 +46,6 @@ struct ApronProfileView: View {
                     }
                     if viewModel.canMessage(user) {
                         messageButton(for: user)
-                            .padding(.top, 10)
                     }
                 }
                 .frame(maxWidth: .infinity)
@@ -65,23 +64,11 @@ struct ApronProfileView: View {
 
     @ViewBuilder
     private func messageButton(for user: ApronUser) -> some View {
-        Button {
-            Task { await openMessage(with: user) }
-        } label: {
-            // The icon keeps sizing the button while hidden, so the spinner doesn't enlarge it.
-            Image(systemName: "message.fill")
-                .opacity(isOpeningMessage ? 0 : 1)
-                .overlay {
-                    if isOpeningMessage {
-                        ProgressView()
-                    }
-                }
+        DetailActionRow {
+            DetailActionButton(title: "Message", systemImage: "message.fill", isWorking: isOpeningMessage) {
+                Task { await openMessage(with: user) }
+            }
         }
-        .buttonStyle(.bordered)
-        .buttonBorderShape(.circle)
-        .controlSize(.large)
-        .accessibilityLabel("Message")
-        .disabled(isOpeningMessage)
         if let messageError {
             Text(messageError)
                 .font(.footnote)

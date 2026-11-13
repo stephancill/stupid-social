@@ -30,7 +30,13 @@ struct TelegramProfileView: View {
                             unavailable
                         }
                         .listRowBackground(Color.clear)
-                        ChatSettingsSection(viewModel: chat)
+                        if chat.hasChatSettings {
+                            Section {
+                                DetailActionRow { ChatSettingsButtons(viewModel: chat) }
+                                    .frame(maxWidth: .infinity)
+                                    .listRowBackground(Color.clear)
+                            }
+                        }
                     }
                 } else {
                     unavailable
@@ -69,17 +75,18 @@ struct TelegramProfileView: View {
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
-                    if let peer = profile.peer, !profile.isYou, peer != openChat {
-                        Button {
-                            NotificationRouter.shared.pendingChat = .telegram(peer: peer)
-                        } label: {
-                            Image(systemName: "message.fill")
+                    let messagePeer = profile.peer.flatMap { !profile.isYou && $0 != openChat ? $0 : nil }
+                    if messagePeer != nil || chat?.hasChatSettings == true {
+                        DetailActionRow {
+                            if let messagePeer {
+                                DetailActionButton(title: "Message", systemImage: "message.fill") {
+                                    NotificationRouter.shared.pendingChat = .telegram(peer: messagePeer)
+                                }
+                            }
+                            if let chat {
+                                ChatSettingsButtons(viewModel: chat)
+                            }
                         }
-                        .buttonStyle(.bordered)
-                        .buttonBorderShape(.circle)
-                        .controlSize(.large)
-                        .accessibilityLabel("Message")
-                        .padding(.top, 10)
                     }
                 }
                 .frame(maxWidth: .infinity)
@@ -91,9 +98,6 @@ struct TelegramProfileView: View {
                     Text(AttributedString(linkingWebURLsIn: about))
                         .textSelection(.enabled)
                 }
-            }
-            if let chat {
-                ChatSettingsSection(viewModel: chat)
             }
         }
     }

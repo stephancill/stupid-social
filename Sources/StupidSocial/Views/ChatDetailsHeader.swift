@@ -2,14 +2,33 @@ import StupidChatKit
 import SwiftUI
 
 /// The top of a chat's member list: its photo, which opens full screen, its title and a line such as the member
-/// count, then its description. Laid out like a profile.
-struct ChatDetailsHeader: View {
+/// count, and any actions (a `DetailActionRow`), then its description. Laid out like a profile.
+struct ChatDetailsHeader<Actions: View>: View {
     let title: String
     let subtitle: String?
     let description: String?
     let avatarURL: URL?
     var fullAvatarURL: URL?
     let colorKey: String
+    @ViewBuilder var actions: () -> Actions
+
+    init(
+        title: String,
+        subtitle: String?,
+        description: String?,
+        avatarURL: URL?,
+        fullAvatarURL: URL? = nil,
+        colorKey: String,
+        @ViewBuilder actions: @escaping () -> Actions,
+    ) {
+        self.title = title
+        self.subtitle = subtitle
+        self.description = description
+        self.avatarURL = avatarURL
+        self.fullAvatarURL = fullAvatarURL
+        self.colorKey = colorKey
+        self.actions = actions
+    }
 
     var body: some View {
         Section {
@@ -26,6 +45,7 @@ struct ChatDetailsHeader: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
+                actions()
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 8)
@@ -36,6 +56,14 @@ struct ChatDetailsHeader: View {
                 Text(AttributedString(linkingWebURLsIn: description))
                     .textSelection(.enabled)
             }
+        }
+    }
+}
+
+extension ChatDetailsHeader where Actions == EmptyView {
+    init(title: String, subtitle: String?, description: String?, avatarURL: URL?, fullAvatarURL: URL? = nil, colorKey: String) {
+        self.init(title: title, subtitle: subtitle, description: description, avatarURL: avatarURL, fullAvatarURL: fullAvatarURL, colorKey: colorKey) {
+            EmptyView()
         }
     }
 }

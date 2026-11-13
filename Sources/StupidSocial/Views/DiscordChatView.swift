@@ -58,8 +58,11 @@ struct DiscordChannelDetailsView: View {
                 description: details.topic,
                 avatarURL: details.serverIconURL,
                 colorKey: details.colorKey,
-            )
-            ChatSettingsSection(viewModel: chat)
+            ) {
+                if chat.hasChatSettings {
+                    DetailActionRow { ChatSettingsButtons(viewModel: chat) }
+                }
+            }
             ServerChatsSection(label: "Show All Channels", filter: details.serverFilter)
         }
         .navigationBarTitleDisplayMode(.inline)
@@ -118,26 +121,22 @@ struct DiscordProfileView: View {
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
-                    if !profile.isYou, !isOpenChat {
-                        Button {
-                            Task {
-                                if let destination = await viewModel.openChat() {
-                                    NotificationRouter.shared.pendingChat = destination
+                    let canMessage = !profile.isYou && !isOpenChat
+                    if canMessage || chat?.hasChatSettings == true {
+                        DetailActionRow {
+                            if canMessage {
+                                DetailActionButton(title: "Message", systemImage: "message.fill", isWorking: viewModel.isOpeningChat) {
+                                    Task {
+                                        if let destination = await viewModel.openChat() {
+                                            NotificationRouter.shared.pendingChat = destination
+                                        }
+                                    }
                                 }
                             }
-                        } label: {
-                            if viewModel.isOpeningChat {
-                                ProgressView()
-                            } else {
-                                Image(systemName: "message.fill")
+                            if let chat {
+                                ChatSettingsButtons(viewModel: chat)
                             }
                         }
-                        .buttonStyle(.bordered)
-                        .buttonBorderShape(.circle)
-                        .controlSize(.large)
-                        .disabled(viewModel.isOpeningChat)
-                        .accessibilityLabel("Message")
-                        .padding(.top, 10)
                     }
                 }
                 .frame(maxWidth: .infinity)
@@ -154,9 +153,6 @@ struct DiscordProfileView: View {
                 Section {
                     LabeledContent("Mutual Servers", value: "\(profile.mutualServers)")
                 }
-            }
-            if let chat {
-                ChatSettingsSection(viewModel: chat)
             }
             if let error = viewModel.errorMessage {
                 Section {
