@@ -379,10 +379,13 @@ public final class DiscordChatAdapter: ChatAdapter, ChatWindowing, ChatReadOnlyA
         guard DiscordSnowflake.isAfter(message.id, readId),
               loaded.values.contains(where: { $0.author.id != meId && DiscordSnowflake.isAfter($0.id, readId) && !DiscordSnowflake.isAfter($0.id, message.id) })
         else { return nil }
-        readId = message.id
-        gateway.setRead(channelId: channelId, messageId: message.id)
-        return { [client, channelId, messageId = message.id] in
+        return { [weak self, client, channelId, messageId = message.id] in
             try await client.ack(channelId: channelId, messageId: messageId)
+            guard let self else { return }
+            if DiscordSnowflake.isAfter(messageId, readId) {
+                readId = messageId
+            }
+            gateway.setRead(channelId: channelId, messageId: messageId)
         }
     }
 

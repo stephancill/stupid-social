@@ -45,7 +45,7 @@ public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, 
     /// A group's members, offered while typing `@`; loaded once with the chat.
     private var members: [TelegramMember] = []
     private var hasLoadedMembers = false
-    /// Telegram's read cursor for incoming messages, locally ahead while a mark is pending.
+    /// Telegram's read cursor for incoming messages, as Telegram last confirmed it.
     private var readInboxMaxId: Int32 = 0
     /// How far others have read the user's messages.
     private var readOutboxMaxId: Int32 = 0
@@ -577,13 +577,17 @@ public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, 
         (Int32(message.id) ?? 0) > readInboxMaxId
     }
 
-    /// Moves Telegram's read cursor to the newest message shown when that passes an unread one.
+    /// Moves Telegram's read cursor to the newest message shown when that passes an unread one, once Telegram
+    /// accepts it.
     public func markRead(upTo message: ChatMessage) -> (@MainActor () async throws -> Void)? {
         guard let id = Int32(message.id), id > readInboxMaxId,
               loaded.values.contains(where: { !$0.isOutgoing && $0.id > readInboxMaxId && $0.id <= id })
         else { return nil }
-        readInboxMaxId = id
-        return { [client, peer] in try await client.markRead(peer: peer, maxId: id) }
+        return { [weak self, client, peer] in
+            try await client.markRead(peer: peer, maxId: id)
+            guard let self, id > readInboxMaxId else { return }
+            readInboxMaxId = id
+        }
     }
 
     private func apply(readOutboxMaxId maxId: Int32) {

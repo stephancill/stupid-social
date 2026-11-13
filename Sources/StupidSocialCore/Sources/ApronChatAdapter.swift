@@ -74,8 +74,6 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
     /// room; `ext.settings.read_receipts: "private"` only small private rooms; older servers none), and in the
     /// others one check on every message would read as nobody having read them.
     private var othersRead: Int64?
-    /// The cursor last sent to the server, so `activity` goes out only when it moves.
-    private var sentReadMessageId: Int64 = 0
     private var ownUserIds: Set<String>
     private var observerToken: UUID?
     private let pageSize = 50
@@ -1167,15 +1165,17 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
         return markRead(upTo: id)
     }
 
-    /// Advances the read cursor to a message the user has seen, and returns what tells the server (§4.6).
+    /// Returns what tells the server the user read up to a message, advancing the stored cursor once it's sent
+    /// (§4.6). A server without `activity` has no cursor to tell, so the stored one moves at once.
     private func markRead(upTo messageId: Int64) -> (@MainActor () async throws -> Void)? {
         guard (readCursor ?? 0) < messageId else { return nil }
-        service.readStore.markRead(messageId, serverURL: serverURL, roomId: roomId, serverTracksCursors: tracksCursors)
-        guard let session, session.server.has("activity") else { return nil }
-        return { [weak self, roomId] in
-            guard let self, messageId > sentReadMessageId else { return }
-            sentReadMessageId = messageId
+        guard let session, session.server.has("activity") else {
+            service.readStore.markRead(messageId, serverURL: serverURL, roomId: roomId, serverTracksCursors: tracksCursors)
+            return nil
+        }
+        return { [service, serverURL, roomId, tracksCursors] in
             try await session.connection.markRead(roomId: roomId, messageId: String(messageId))
+            service.readStore.markRead(messageId, serverURL: serverURL, roomId: roomId, serverTracksCursors: tracksCursors)
         }
     }
 

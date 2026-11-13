@@ -185,9 +185,10 @@ public final class InstagramChatAdapter: ChatAdapter, ChatReactionSending, ChatR
               loaded.values.contains(where: { $0.senderFbid != viewerFbid && ($0.sentAt ?? .distantPast) > (readAt ?? .distantPast) && ($0.sentAt ?? .distantFuture) <= shown }),
               let legacyThreadId
         else { return nil }
-        readAt = shown
-        return { [client, threadFbid, messageId = message.id] in
+        return { [weak self, client, threadFbid, messageId = message.id] in
             try await client.markDirectRead(threadFbid: threadFbid, threadId: legacyThreadId, messageId: messageId)
+            guard let self, shown > (readAt ?? .distantPast) else { return }
+            readAt = shown
         }
     }
 

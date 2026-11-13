@@ -122,9 +122,10 @@ public final class BlueskyChatAdapter: ChatAdapter, ChatReactionSending {
         guard let shown = message.timestamp, shown > (readAt ?? .distantPast),
               loaded.values.contains(where: { $0.sender.did != viewerDid && !$0.isDeleted && $0.sentAt > (readAt ?? .distantPast) && $0.sentAt <= shown })
         else { return nil }
-        readAt = shown
-        return { [client, convoId, messageId = message.id] in
+        return { [weak self, client, convoId, messageId = message.id] in
             try await client.markConvoRead(convoId: convoId, messageId: messageId)
+            guard let self, shown > (readAt ?? .distantPast) else { return }
+            readAt = shown
         }
     }
 

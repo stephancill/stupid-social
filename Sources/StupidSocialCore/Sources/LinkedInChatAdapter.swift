@@ -176,11 +176,12 @@ public final class LinkedInChatAdapter: ChatAdapter, ChatReactionSending, ChatEd
         guard let shown = message.timestamp, shown > (readAt ?? .distantPast) else { return nil }
         let fromOthers = loaded.values.filter { $0.sender.hostIdentityUrn != viewerUrn && !$0.isRecalled }
         guard fromOthers.contains(where: { $0.deliveredAt > (readAt ?? .distantPast) && $0.deliveredAt <= shown }) else { return nil }
-        readAt = shown
         // Read state is the whole conversation's: only mark it once nothing newer from the others is left.
         guard !fromOthers.contains(where: { $0.deliveredAt > shown }) else { return nil }
-        return { [client, conversationUrn] in
+        return { [weak self, client, conversationUrn] in
             try await client.setRead(conversationUrn: conversationUrn)
+            guard let self, shown > (readAt ?? .distantPast) else { return }
+            readAt = shown
         }
     }
 

@@ -322,9 +322,10 @@ public final class XChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, 
         guard let sequence = Int64(message.id), sequence > readUntil,
               events.values.contains(where: { $0.senderId != viewerId && $0.sequence > readUntil && $0.sequence <= sequence && $0.messageCreate != nil })
         else { return nil }
-        readUntil = sequence
-        return { [client, conversationId, sequenceId = message.id] in
+        return { [weak self, client, conversationId, sequenceId = message.id] in
             try await client.markRead(upTo: sequenceId, conversationId: conversationId)
+            guard let self, sequence > readUntil else { return }
+            readUntil = sequence
         }
     }
 

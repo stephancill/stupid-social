@@ -135,8 +135,11 @@ public final class SpotifyChatAdapter: ChatAdapter, ChatAudioPreviewing {
         guard let newest = loaded.values.filter({ $0.sender != viewerUsername }).compactMap(\.sentAt).max(),
               let shown = message.timestamp, shown >= newest, seenUpTo.map({ newest > $0 }) ?? true
         else { return nil }
-        seenUpTo = newest
-        return { [client, chatId] in try await client.markChatSeen(chatId: chatId) }
+        return { [weak self, client, chatId] in
+            try await client.markChatSeen(chatId: chatId)
+            guard let self, seenUpTo.map({ newest > $0 }) ?? true else { return }
+            seenUpTo = newest
+        }
     }
 
     // MARK: Display

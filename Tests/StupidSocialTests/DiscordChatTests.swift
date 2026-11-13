@@ -226,6 +226,9 @@ final class DiscordChatTests: XCTestCase {
 
         XCTAssertTrue(adapter.isAfterReadPosition(photo))
         XCTAssertNotNil(adapter.markRead(upTo: photo))
+        XCTAssertTrue(adapter.isAfterReadPosition(photo), "unread until Discord accepts the mark")
+        XCTAssertNotNil(adapter.markRead(upTo: photo), "a mark not yet accepted goes again")
+        dispatch(gateway, "MESSAGE_ACK", #"{"channel_id": "\#(general)", "message_id": "\#(photo.id)"}"#)
         XCTAssertFalse(adapter.isAfterReadPosition(photo))
         XCTAssertNil(adapter.markRead(upTo: photo), "already read")
 
