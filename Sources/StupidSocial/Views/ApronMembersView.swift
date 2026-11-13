@@ -17,6 +17,7 @@ struct ApronMembersView: View {
                 List {
                     header
                     notificationSection
+                    ServerChatsSection(label: "Show All Rooms", filter: viewModel.serverFilter)
                     MembersSection(
                         query: $query,
                         hasResults: !members.isEmpty,

@@ -296,3 +296,30 @@ extension DiscordChatList {
         chatList?.updateChats([summary(channel)], accountId: accountId)
     }
 }
+
+/// A server channel's details, opened from its chat's title: the channel, its topic and its server, whose
+/// channels "Show All Channels" lists.
+public struct DiscordChannelDetails {
+    public let title: String
+    public let topic: String?
+    public let serverName: String
+    public let serverIconURL: URL?
+    public let colorKey: String
+    public let serverFilter: ChatServerFilter
+
+    /// `nil` for DMs and group DMs, which have no server.
+    @MainActor
+    public init?(channelId: String, accountId: String, gateway: DiscordGateway) {
+        guard let channel = gateway.channel(id: channelId), let guildId = channel.guildId, let guild = gateway.guild(id: guildId) else { return nil }
+        let parent = channel.isThread ? gateway.channel(id: channel.parentId ?? "") : nil
+        title = channel.title
+        topic = channel.topic.flatMap { $0.isEmpty ? nil : $0 }
+        serverName = parent?.name.map { "\(guild.name) / \($0)" } ?? guild.name
+        serverIconURL = guild.iconURL
+        colorKey = guildId
+        serverFilter = ChatServerFilter(title: guild.name) { [weak gateway] chat in
+            guard chat.accountId == accountId, case let .discord(channelId) = chat.destination else { return false }
+            return gateway?.channel(id: channelId)?.guildId == guildId
+        }
+    }
+}

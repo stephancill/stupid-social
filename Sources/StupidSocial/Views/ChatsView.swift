@@ -16,9 +16,9 @@ struct ChatsView: View {
     let xChat: (_ accountId: String, _ conversationId: String, _ title: String) -> (() -> ChatViewModel)?
     /// The chat for a Bluesky account's conversation and title; `nil` when the account is gone.
     let blueskyChat: (_ accountId: String, _ convoId: String, _ title: String) -> (() -> ChatViewModel)?
-    /// The chat for a Discord account's channel and title, profiles from it, and the other person in a DM; `nil`
-    /// when the account is gone.
-    let discordChat: (_ accountId: String, _ channelId: String, _ title: String) -> (chat: () -> ChatViewModel, profile: (String) -> DiscordProfileViewModel, dmRecipient: String?)?
+    /// The chat for a Discord account's channel and title, profiles from it, the other person in a DM, and a
+    /// server channel's details; `nil` when the account is gone.
+    let discordChat: (_ accountId: String, _ channelId: String, _ title: String) -> (chat: () -> ChatViewModel, profile: (String) -> DiscordProfileViewModel, dmRecipient: String?, details: DiscordChannelDetails?)?
     /// The chat for a LinkedIn account's conversation and title; `nil` when the account is gone.
     let linkedinChat: (_ accountId: String, _ conversationUrn: String, _ title: String) -> (() -> ChatViewModel)?
     /// An account's settings, opened from the connection errors; `nil` for a connection that isn't an account.
@@ -125,7 +125,14 @@ struct ChatsView: View {
             }
         }
         .navigationDestination(isPresented: $isShowingArchive) {
-            ArchivedChatsView(viewModel: viewModel, destination: { AnyView(destination(for: $0)) }, quickLook: { AnyView(quickLook($0)) })
+            ChatFolderView(
+                viewModel: viewModel,
+                title: "Archived Chats",
+                chats: { $0.archivedChats },
+                empty: ContentUnavailableView("No Archived Chats", systemImage: "archivebox"),
+                destination: { AnyView(destination(for: $0)) },
+                quickLook: { AnyView(quickLook($0)) },
+            )
         }
         .navigationDestination(item: $settingsAccountId) { accountId in
             accountSettings(accountId)
@@ -153,6 +160,20 @@ struct ChatsView: View {
             guard selection == nil else { return }
             await viewModel.load()
         }
+    }
+
+    /// The Chats list filtered to one server's chats, archived ones included, searchable by name.
+    private func serverChats(_ filter: ChatServerFilter) -> some View {
+        ChatFolderView(
+            viewModel: viewModel,
+            title: filter.title,
+            chats: { ($0.chats + $0.archivedChats).filter(filter.includes) },
+            empty: ContentUnavailableView("No Chats", systemImage: "bubble.left.and.bubble.right"),
+            isSearchable: true,
+            hidesServerName: true,
+            destination: { AnyView(destination(for: $0)) },
+            quickLook: { AnyView(quickLook($0)) },
+        )
     }
 
     private func open(_ chat: ChatSummary) {
@@ -212,8 +233,14 @@ struct ChatsView: View {
         return viewModel.follow(chatViewModel, chatId: chat.id)
     }
 
-    @ViewBuilder
+    /// A chat as it opens; its room details offer the rest of its server's chats, but not in a quick look.
     private func destination(for chat: ChatSummary, quickLook: Bool = false) -> some View {
+        chatView(for: chat, quickLook: quickLook)
+            .environment(\.serverChats, quickLook ? nil : ServerChats { AnyView(serverChats($0)) })
+    }
+
+    @ViewBuilder
+    private func chatView(for chat: ChatSummary, quickLook: Bool) -> some View {
         switch chat.destination {
         case let .apron(serverURL, roomId):
             let focus = focus?.destination == chat.destination ? focus?.focus : nil
@@ -270,7 +297,7 @@ struct ChatsView: View {
             }
         case let .discord(channelId):
             if let make = discordChat(chat.accountId, channelId, chat.title) {
-                DiscordChatView(viewModel: opened(make.chat(), chat: chat, quickLook: quickLook), channelId: channelId, dmRecipient: make.dmRecipient, profile: make.profile)
+                DiscordChatView(viewModel: opened(make.chat(), chat: chat, quickLook: quickLook), dmRecipient: make.dmRecipient, details: make.details, profile: make.profile)
             } else {
                 ContentUnavailableView("Discord Not Connected", systemImage: "bubble.left.and.bubble.right")
             }
@@ -345,41 +372,109 @@ private struct ChatForwardPicker: View {
     }
 }
 
-/// Telegram's Archive folder: the chats the user archived there, newest first.
-private struct ArchivedChatsView: View {
+/// Some of the Chats list's rows in a list of their own, newest first: Telegram's Archive folder, or one server's
+/// chats.
+private struct ChatFolderView<Empty: View>: View {
     @ObservedObject var viewModel: ChatListViewModel
+    /// `nil` takes the name the rows show before their titles, such as their server's.
+    let title: String?
+    let chats: (ChatListViewModel) -> [ChatSummary]
+    let empty: Empty
+    var isSearchable = false
+    /// Rows leave out the server the title names: "general", not "Server / general".
+    var hidesServerName = false
     let destination: (ChatSummary) -> AnyView
     let quickLook: (ChatSummary) -> AnyView
     @State private var selection: ChatSummary?
+    @State private var query = ""
+
+    private var navigationTitle: String {
+        title ?? chats(viewModel).lazy.compactMap(\.titlePrefix).first ?? "Chats"
+    }
+
+    private var rows: [ChatSummary] {
+        let rows = chats(viewModel)
+        let query = query.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty else { return rows }
+        return rows.filter { $0.title.localizedStandardContains(query) || ($0.preview ?? "").localizedStandardContains(query) }
+    }
 
     var body: some View {
-        List(viewModel.archivedChats) { chat in
+        let rows = rows
+        List(rows) { chat in
             Button {
                 selection = chat
             } label: {
-                ChatRow(chat: chat)
+                ChatRow(chat: chat, hiddenPrefix: hidesServerName ? navigationTitle : nil)
             }
             .buttonStyle(.plain)
             .chatQuickLook(open: { selection = chat }, preview: { quickLook(chat) })
-            .listRowSeparator(chat.id == viewModel.archivedChats.first?.id ? .hidden : .automatic, edges: .top)
+            .listRowSeparator(chat.id == rows.first?.id ? .hidden : .automatic, edges: .top)
             .compactListRowInsets()
         }
         .listStyle(.plain)
         .overlay {
-            if viewModel.archivedChats.isEmpty {
-                ContentUnavailableView("No Archived Chats", systemImage: "archivebox")
+            if rows.isEmpty {
+                if query.isEmpty {
+                    empty
+                } else {
+                    ContentUnavailableView.search(text: query)
+                }
             }
         }
         .refreshable {
             await viewModel.load()
         }
-        .navigationTitle("Archived Chats")
+        .navigationTitle(navigationTitle)
+        .modifier(FolderSearch(isSearchable: isSearchable, query: $query))
         .navigationDestination(item: $selection) { chat in
             destination(chat)
         }
         .task(id: selection == nil) {
             guard selection == nil else { return }
             await viewModel.load()
+        }
+    }
+}
+
+private struct FolderSearch: ViewModifier {
+    let isSearchable: Bool
+    @Binding var query: String
+
+    func body(content: Content) -> some View {
+        if isSearchable {
+            content.searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always))
+        } else {
+            content
+        }
+    }
+}
+
+/// Builds the list of a server's chats, from the Chats list a room's details were opened from. A navigation
+/// destination doesn't inherit the environment of the view that pushes it, so the chat views pass it on to their
+/// details.
+struct ServerChats {
+    let view: (ChatServerFilter) -> AnyView
+}
+
+extension EnvironmentValues {
+    /// `nil` outside the Chats list, such as in a quick look.
+    @Entry var serverChats: ServerChats?
+}
+
+/// A room's details' link to its server's chats ("Show All Rooms"); nothing outside the Chats list.
+struct ServerChatsSection: View {
+    let label: String
+    let filter: ChatServerFilter
+    @Environment(\.serverChats) private var serverChats
+
+    var body: some View {
+        if let serverChats {
+            Section {
+                NavigationLink(label) {
+                    serverChats.view(filter)
+                }
+            }
         }
     }
 }
@@ -528,6 +623,8 @@ private struct ConnectionErrorsList: View {
 
 private struct ChatRow: View {
     let chat: ChatSummary
+    /// The start of the title prefix a list's title already says, such as its server's name, left out of the row.
+    var hiddenPrefix: String?
     @AppStorage("redactionEnabled") private var redactionEnabled = false
     private static let avatarSize: CGFloat = 48
     private static let spacing: CGFloat = 10
@@ -550,8 +647,15 @@ private struct ChatRow: View {
 
     private var title: Text {
         let title = Text(DebugRedaction.chatTitle(chat, enabled: redactionEnabled))
-        guard let prefix = chat.titlePrefix else { return title }
+        guard let prefix else { return title }
         return Text("\(prefix) / ").fontWeight(.regular).foregroundStyle(.secondary) + title
+    }
+
+    /// "Server / parent" shows as "parent" under a list titled with the server, and "Server" not at all.
+    private var prefix: String? {
+        guard let prefix = chat.titlePrefix, let hiddenPrefix else { return chat.titlePrefix }
+        if prefix == hiddenPrefix { return nil }
+        return prefix.hasPrefix("\(hiddenPrefix) / ") ? String(prefix.dropFirst(hiddenPrefix.count + 3)) : prefix
     }
 
     private func badge(_ content: some View) -> some View {

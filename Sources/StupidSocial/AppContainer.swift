@@ -153,12 +153,13 @@ final class AppContainer {
     }
 
     /// `nil` when the Discord account is gone.
-    func discordChatFactory(accountId: String, channelId: String, title: String) -> (chat: () -> ChatViewModel, profile: (String) -> DiscordProfileViewModel, dmRecipient: String?)? {
+    func discordChatFactory(accountId: String, channelId: String, title: String) -> (chat: () -> ChatViewModel, profile: (String) -> DiscordProfileViewModel, dmRecipient: String?, details: DiscordChannelDetails?)? {
         guard let gateway = services.component(id: accountId)?.discordGateway else { return nil }
         return (
             chat: { AdapterChatViewModel(adapter: DiscordChatAdapter(gateway: gateway, channelId: channelId, title: title), accountId: accountId) },
             profile: { DiscordProfileViewModel(gateway: gateway, userId: $0) },
             dmRecipient: DiscordProfileViewModel.dmRecipient(channelId: channelId, gateway: gateway),
+            details: DiscordChannelDetails(channelId: channelId, accountId: accountId, gateway: gateway),
         )
     }
 

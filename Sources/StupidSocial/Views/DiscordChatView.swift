@@ -1,32 +1,66 @@
 import StupidSocialCore
 import SwiftUI
 
-/// A Discord chat: the shared chat, with profiles from senders' avatars and mentions, and in a DM the other
-/// person's profile from the title.
+/// A Discord chat: the shared chat, with profiles from senders' avatars and mentions; the title opens the other
+/// person's profile in a DM, or a server channel's details.
 struct DiscordChatView: View {
     @StateObject private var viewModel: ChatViewModel
-    let channelId: String
     let profile: (_ userId: String) -> DiscordProfileViewModel
     let dmRecipient: String?
+    let details: DiscordChannelDetails?
     @State private var profileUserId: String?
+    @State private var showsDetails = false
+    @Environment(\.serverChats) private var serverChats
 
-    init(viewModel: @autoclosure @escaping () -> ChatViewModel, channelId: String, dmRecipient: String?, profile: @escaping (_ userId: String) -> DiscordProfileViewModel) {
+    init(viewModel: @autoclosure @escaping () -> ChatViewModel, dmRecipient: String?, details: DiscordChannelDetails?, profile: @escaping (_ userId: String) -> DiscordProfileViewModel) {
         _viewModel = StateObject(wrappedValue: viewModel())
-        self.channelId = channelId
         self.dmRecipient = dmRecipient
+        self.details = details
         self.profile = profile
+    }
+
+    private var onTitleTap: (() -> Void)? {
+        if let dmRecipient {
+            return { profileUserId = dmRecipient }
+        }
+        return details.map { _ in { showsDetails = true } }
     }
 
     var body: some View {
         ChatView(
             viewModel: viewModel,
-            onTitleTap: dmRecipient.map { recipient in { profileUserId = recipient } },
+            onTitleTap: onTitleTap,
             showProfile: { profileUserId = $0.id },
             keepsConnection: profileUserId != nil,
         )
         .navigationDestination(item: $profileUserId) { userId in
             DiscordProfileView(viewModel: profile(userId), isOpenChat: userId == dmRecipient)
         }
+        .navigationDestination(isPresented: $showsDetails) {
+            if let details {
+                DiscordChannelDetailsView(details: details)
+                    .environment(\.serverChats, serverChats)
+            }
+        }
+    }
+}
+
+/// A server channel's details: its name, server and topic, and the server's other channels.
+struct DiscordChannelDetailsView: View {
+    let details: DiscordChannelDetails
+
+    var body: some View {
+        List {
+            ChatDetailsHeader(
+                title: details.title,
+                subtitle: details.serverName,
+                description: details.topic,
+                avatarURL: details.serverIconURL,
+                colorKey: details.colorKey,
+            )
+            ServerChatsSection(label: "Show All Channels", filter: details.serverFilter)
+        }
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 

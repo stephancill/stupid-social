@@ -9,6 +9,7 @@ struct ApronChatView: View {
     /// A member to show on opening, such as from a link.
     private let profileUserId: String?
     @State private var hasShownLinkedProfile = false
+    @Environment(\.serverChats) private var serverChats
     /// The room marked on screen, so its notifications aren't shown; `nil` while the chat isn't showing.
     @State private var openRoomId: String?
 
@@ -32,6 +33,7 @@ struct ApronChatView: View {
         )
         .navigationDestination(isPresented: $showsMembers) {
             ApronMembersView(viewModel: room)
+                .environment(\.serverChats, serverChats)
         }
         .navigationDestination(item: $profileUser) { user in
             ApronProfileView(viewModel: room, user: user)

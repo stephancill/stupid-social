@@ -37,7 +37,7 @@ Sources/
       GitHubLoginWebView.swift      # GitHub WebView login
       DiscordConnectionView.swift   # Discord account setup
       DiscordLoginWebView.swift     # Discord WebView login: captures the web client's token
-      DiscordChatView.swift         # Discord chat: profiles from avatars, mentions and a DM's title; DiscordProfileView
+      DiscordChatView.swift         # Discord chat: profiles from avatars, mentions and a DM's title; channel details; DiscordProfileView
       LinkedInConnectionView.swift  # LinkedIn account setup
       LinkedInLoginWebView.swift    # LinkedIn WebView login: captures the li_at and JSESSIONID cookies
       BlueskyConnectionView.swift   # Bluesky OAuth setup

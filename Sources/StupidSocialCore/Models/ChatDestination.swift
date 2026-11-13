@@ -62,3 +62,16 @@ extension SourceError: ChatNotConnectedError {
         if case .notConfigured = self { true } else { false }
     }
 }
+
+/// One server's chats, which a room's details list ("Show All Rooms") as the Chats list filtered to them: the
+/// server's name and which rows are on it.
+public struct ChatServerFilter {
+    /// `nil` takes the name the server's rows show before their titles.
+    public let title: String?
+    public let includes: @MainActor (ChatSummary) -> Bool
+
+    public init(title: String?, includes: @escaping @MainActor (ChatSummary) -> Bool) {
+        self.title = title
+        self.includes = includes
+    }
+}

@@ -32,6 +32,12 @@ public final class ApronRoomViewModel: ObservableObject {
         self.roomId = roomId
     }
 
+    /// The server's rooms and direct chats in the Chats list: every row of the server's account.
+    public var serverFilter: ChatServerFilter {
+        let accountId = Account.apronId(serverURL: serverURL)
+        return ChatServerFilter(title: nil) { $0.accountId == accountId }
+    }
+
     /// Whether the user is reachable now, `nil` when the server doesn't say (§4.5.1). Your own entry follows
     /// your setting, since the server never reports your status as others see it to you.
     public func presence(of user: ApronUser) -> ApronPresence? {
