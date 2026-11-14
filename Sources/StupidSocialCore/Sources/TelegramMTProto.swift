@@ -173,6 +173,8 @@ actor MTProtoSession {
     private var receiveTask: Task<Void, Never>?
     private var pingTask: Task<Void, Never>?
     private(set) var isClosed = false
+    /// When the last packet arrived; a ping every 45 s keeps it recent while the socket is alive.
+    private var lastReceived = Date()
     private let schema = TLSchema.shared
     private let onUpdate: @Sendable (TLObject) -> Void
     private let onKeyChange: @Sendable (Int, TelegramDCKey) -> Void
@@ -220,6 +222,20 @@ actor MTProtoSession {
             }
         }
     }
+
+    /// Whether the session can take calls. A socket iOS dropped while the app was suspended stays silent, and a
+    /// call on it waits out `callTimeout`; a session that heard nothing for longer than a ping's interval is closed
+    /// instead, so the next call opens a new one at once.
+    func isUsable() -> Bool {
+        guard !isClosed else { return false }
+        guard Date().timeIntervalSince(lastReceived) < Self.quietLimit else {
+            close()
+            return false
+        }
+        return true
+    }
+
+    private static let quietLimit: TimeInterval = 60
 
     func close() {
         guard !isClosed else { return }
@@ -369,6 +385,7 @@ actor MTProtoSession {
         while !Task.isCancelled, !isClosed {
             do {
                 let packet = try await transport.receivePacket()
+                lastReceived = Date()
                 let message = try decrypt(packet)
                 await handle(messageId: message.messageId, seqNo: message.seqNo, body: message.body)
                 await flushAcks()

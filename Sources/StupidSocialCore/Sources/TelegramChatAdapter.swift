@@ -61,6 +61,7 @@ public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, 
     private var readOutboxObserver: UUID?
     private var deleteObserver: UUID?
     private var typingObserver: UUID?
+    private var reconnectObserver: UUID?
     /// Who is typing, in the order they started, and when each indication lapses.
     private var typingUsers: [(userId: Int64, expires: Date)] = []
     private var typingExpiryTask: Task<Void, Never>?
@@ -162,7 +163,8 @@ public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, 
             if reactionChoices == nil {
                 reactionChoices = try? await client.reactionChoices(peer: peer, isSavedMessages: isSavedMessages)
             }
-            await loadMembersIfNeeded()
+            // Only mentions need them, so the messages don't wait.
+            Task { await loadMembersIfNeeded() }
             return try Self.page(history)
         case let .before(cursor):
             guard let oldest = Int32(cursor.value) else { throw TelegramError.protocolViolation("bad cursor") }
@@ -249,6 +251,9 @@ public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, 
         typingObserver = await client.addTypingObserver(peer: peer) { [weak self] userId, isTyping in
             Task { @MainActor in self?.setTyping(userId: userId, isTyping: isTyping) }
         }
+        reconnectObserver = await client.addReconnectObserver { [weak self] in
+            Task { @MainActor in self?.onCatchUp?() }
+        }
         if peer.kind == .user {
             statusObserver = await client.addStatusObserver(userId: peer.id) { [weak self] status in
                 Task { @MainActor in self?.apply(status: status) }
@@ -258,7 +263,7 @@ public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, 
 
     public func stopFollowing() {
         refreshTask?.cancel()
-        for id in [observer, statusObserver, reactionObserver, readOutboxObserver, deleteObserver, typingObserver].compactMap(\.self) {
+        for id in [observer, statusObserver, reactionObserver, readOutboxObserver, deleteObserver, typingObserver, reconnectObserver].compactMap(\.self) {
             Task { [client] in await client.removeUpdateObserver(id) }
         }
         observer = nil
@@ -267,6 +272,7 @@ public final class TelegramChatAdapter: ChatAdapter, ChatEditing, ChatDeleting, 
         readOutboxObserver = nil
         deleteObserver = nil
         typingObserver = nil
+        reconnectObserver = nil
         typingUsers = []
         if updateTypingNames() {
             onChange?()

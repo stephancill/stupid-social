@@ -320,6 +320,8 @@ public actor TelegramClient: ChatListProvider {
     private var opening: Task<MTProtoSession, Error>?
     private var phoneLogin: (phone: String, hash: String)?
     private var observers: [UUID: @Sendable (TLObject) -> Void] = [:]
+    private var reconnectObservers: [UUID: @Sendable () -> Void] = [:]
+    private var hasOpenedSession = false
     /// Sessions on other DCs, for downloading files stored there.
     private var fileSessions: [Int: MTProtoSession] = [:]
     private var openingFileSessions: [Int: Task<MTProtoSession, Error>] = [:]
@@ -391,18 +393,39 @@ public actor TelegramClient: ChatListProvider {
     }
 
     private func session() async throws -> MTProtoSession {
-        if let current, await !current.isClosed {
+        if let current, await current.isUsable() {
             return current
         }
         if let opening {
             return try await opening.value
         }
+        let reconnecting = current != nil || hasOpenedSession
         let task = Task { try await openSession(dc: stored.homeDC) }
         opening = task
         defer { opening = nil }
         let session = try await task.value
         current = session
+        hasOpenedSession = true
+        if reconnecting {
+            for observer in reconnectObservers.values {
+                observer()
+            }
+        }
         return session
+    }
+
+    /// Opens the session ahead of the first call, as the app becomes active, so pushed updates resume and a chat
+    /// opened from a notification doesn't wait for the connection.
+    public func connect() async {
+        guard stored.account != nil else { return }
+        _ = try? await session()
+    }
+
+    /// Calls `observer` when a new session replaces one that closed: updates pushed in between were missed.
+    public func addReconnectObserver(_ observer: @escaping @Sendable () -> Void) -> UUID {
+        let id = UUID()
+        reconnectObservers[id] = observer
+        return id
     }
 
     /// Opens a session on `dc`. The first call, wrapped in `initConnection`, is `help.getConfig` on the home
@@ -482,7 +505,7 @@ public actor TelegramClient: ChatListProvider {
     /// A session on another DC, signed in there by exporting this account's authorization from the home DC
     /// (validated with the probe's `avatar`, which reads a DC 1 photo from a DC 4 account).
     private func fileSession(dc: Int) async throws -> MTProtoSession {
-        if let session = fileSessions[dc], await !session.isClosed {
+        if let session = fileSessions[dc], await session.isUsable() {
             return session
         }
         if let opening = openingFileSessions[dc] {
@@ -791,6 +814,7 @@ public actor TelegramClient: ChatListProvider {
 
     public func removeUpdateObserver(_ id: UUID) {
         observers[id] = nil
+        reconnectObservers[id] = nil
     }
 
     private func dispatch(_ update: TLObject) {

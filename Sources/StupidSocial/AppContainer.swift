@@ -115,6 +115,9 @@ final class AppContainer {
         apronLiveFeed.start()
         for component in services.components {
             component.liveConnection?.start()
+            if let telegram = component.telegramClient {
+                Task { await telegram.connect() }
+            }
         }
     }
 

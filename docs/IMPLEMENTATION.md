@@ -665,7 +665,7 @@ How the app works today, by topic: decisions and their reasons, endpoint and pro
 
 ### Connection
 - DC migration: `auth.sendCode` may answer `PHONE_MIGRATE_<n>` and the client moves DC; 2FA via SRP. Cross-DC file access uses `auth.exportAuthorization`/`importAuthorization`
-- Calls time out after 25 s by closing the session (a socket iOS dropped during suspension can stay silent); the client reconnects and retries
+- Calls time out after 25 s by closing the session (a socket iOS dropped during suspension can stay silent); the client reconnects and retries. So a call doesn't wait that out after the app resumes (a chat opened from a notification could wait the full 25 s for its messages), a session that received nothing for 60 s is closed before use (`MTProtoSession.isUsable`; the 45 s ping's pong keeps a live one recent) and a new one opens at once. The app opens the session as it becomes active (`TelegramClient.connect()` from `AppContainer.startLiveFeeds`), and a session replacing a closed one calls the reconnect observers, so an open chat catches up (`onCatchUp`) on updates it missed. A group's members load after the newest page returns, since only mentions need them
 - A failed write or ping in `MTProtoSession.send` closes the session so calls fail as `connectionLost` and reconnect-and-retry runs (raw transport errors such as `NWError` 57 "Socket is not connected" after iOS suspends sockets didn't trigger reconnect)
 
 ### Dialogs & messages
