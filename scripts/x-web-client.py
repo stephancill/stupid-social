@@ -384,7 +384,15 @@ class XWebClient:
         except json.JSONDecodeError as exc:
             raise SystemExit(f"Expected JSON for friendships/{path}, got {len(text)} bytes: {exc}") from exc
 
-    def notifications(self, count: int = 40, raw: bool = False) -> dict[str, Any]:
+    def prime_notifications(self) -> dict[str, Any]:
+        """Asks for the unread counts, as the web client does on load, before reading the timeline.
+
+        NotificationsTimeline left out a 27-minute-old notification until these two calls were made, then
+        returned it at once (observed 2026-11-15)."""
+        return {"unread_count": self.unread_count(), "badge_count": self.dm_unread_count()}
+
+    def notifications(self, count: int = 40, raw: bool = False, prime: bool = True) -> dict[str, Any]:
+        primed = self.prime_notifications() if prime else None
         variables = {"timeline_type": "All", "count": count}
         query = urllib.parse.urlencode(
             {
@@ -400,6 +408,7 @@ class XWebClient:
             return response
         summary = summarize_notifications(response)
         summary["top_cursor"] = notification_top_cursor(response)
+        summary["primed"] = primed
         return summary
 
     def unread_count(self) -> int:
@@ -407,7 +416,7 @@ class XWebClient:
             "GET",
             BASE_URL + "/i/api/2/notifications/all/unread_count.json",
         )
-        return int(response.get("unread_count") or 0)
+        return int(response["unreadCount"])
 
     def mark_notifications_read(self, cursor: str) -> dict[str, Any]:
         url = (
@@ -813,6 +822,7 @@ def build_parser() -> argparse.ArgumentParser:
     notifications = subparsers.add_parser("notifications", help="Fetch the X notifications feed and summarize grouped actor order.")
     notifications.add_argument("--count", type=int, default=40, help="Number of notifications to fetch (default 40).")
     notifications.add_argument("--raw", action="store_true", help="Return the full NotificationsTimeline response instead of the grouped summary.")
+    notifications.add_argument("--no-prime", action="store_true", help="Skip the unread-count calls made before the timeline, to reproduce missing notifications.")
     load_notifications = subparsers.add_parser(
         "load-notifications",
         help="Fetch X notifications, advance the server last-seen cursor, and verify the unread count.",
@@ -868,7 +878,7 @@ def main() -> None:
     if args.command == "bootstrap":
         result = client.bootstrap()
     elif args.command == "notifications":
-        result = client.notifications(count=args.count, raw=args.raw)
+        result = client.notifications(count=args.count, raw=args.raw, prime=not args.no_prime)
     elif args.command == "load-notifications":
         result = client.load_notifications(count=args.count)
     elif args.command == "unread-count":

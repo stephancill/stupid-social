@@ -317,6 +317,8 @@ public struct XClient {
             throw SourceError.notConfigured
         }
 
+        try await primeNotifications(credentials: credentials)
+
         let variables: [String: Any] = [
             "timeline_type": "All",
             "count": 40,
@@ -354,6 +356,17 @@ public struct XClient {
         }
         try await markNotificationsRead(cursor: cursor, credentials: credentials)
         return items
+    }
+
+    /// Asks for the unread counts, as X's web client does on load. `NotificationsTimeline` alone can leave out
+    /// notifications for a long time; these calls make it return them (observed 2026-11-15).
+    private func primeNotifications(credentials: XCredentials) async throws {
+        _ = try await unreadCount(credentials: credentials)
+
+        var request = URLRequest(url: URL(string: "https://x.com/i/api/2/badge_count/badge_count.json?supports_ntab_urt=1")!)
+        request.httpMethod = "GET"
+        request.allHTTPHeaderFields = headers(credentials: credentials)
+        _ = try await send(request)
     }
 
     private func markNotificationsRead(cursor: String, credentials: XCredentials) async throws {
