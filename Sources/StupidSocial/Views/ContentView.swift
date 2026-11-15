@@ -76,7 +76,9 @@ public struct ContentView: View {
             },
             social: socialStack(container: container),
         )
-        .ignoresSafeArea()
+        // Not the keyboard: the pages are hosting controllers inside the page controller's scroll view, which don't
+        // avoid the keyboard themselves, so the pager shrinks above it instead (chats place their own composer).
+        .ignoresSafeArea(.container)
         .sheet(item: $notificationRouter.linkRequest) { request in
             switch request {
             case let .link(link):
