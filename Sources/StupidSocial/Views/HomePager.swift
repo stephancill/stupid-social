@@ -28,6 +28,7 @@ struct HomePager<Chats: View, Social: View>: UIViewControllerRepresentable {
         controller.pageController.delegate = context.coordinator
         controller.pageController.setViewControllers([context.coordinator.controller(for: page)], direction: .forward, animated: false)
         controller.leftPage = context.coordinator.chats
+        controller.pages = [context.coordinator.chats, context.coordinator.social]
         return controller
     }
 
@@ -39,10 +40,15 @@ struct HomePager<Chats: View, Social: View>: UIViewControllerRepresentable {
         controller.setPagingEnabled(isPagingEnabled)
         // A page set from outside, such as by a tapped notification, and not by a swipe. Never mid-swipe: the page
         // controller switches its current page before the swipe settles and `page` catches up, and setting
-        // pages during the transition raises an exception (a crash in build 190).
+        // pages during the transition raises an exception (a crash in build 190). On the next turn of the run loop,
+        // not inside SwiftUI's update: Chats swapped in during launch's first update (a notification tapped with the
+        // app left on the feed) laid out without the top safe area, its bars under the status bar until relaunch.
         let target = coordinator.controller(for: page)
         if !coordinator.isTransitioning, controller.pageController.viewControllers?.first !== target {
-            controller.show(target)
+            DispatchQueue.main.async {
+                guard !coordinator.isTransitioning, controller.pageController.viewControllers?.first !== target else { return }
+                controller.show(target)
+            }
         }
     }
 
@@ -93,6 +99,8 @@ final class HomePagerController: UIViewController {
     let pageController = UIPageViewController(transitionStyle: .scroll, navigationOrientation: .horizontal)
     /// The page at progress 0; the other is at 1.
     weak var leftPage: UIViewController?
+    /// Both pages, which get the keyboard's height as a bottom safe area inset.
+    var pages: [UIViewController] = []
     private let dots = HomePageDotsView()
     private var offsetObservation: NSKeyValueObservation?
     /// The progress of the page shown when the scroll view was last at rest.
@@ -114,6 +122,37 @@ final class HomePagerController: UIViewController {
             dots.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             dots.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -4),
         ])
+
+        NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillChangeFrame), name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillChangeFrame), name: UIResponder.keyboardWillHideNotification, object: nil)
+    }
+
+    /// The pages are hosting controllers inside the page controller's scroll view, which don't avoid the keyboard
+    /// themselves, so forms in them get the keyboard's height as a bottom inset, animated with the keyboard. The
+    /// pager itself keeps its size: shrinking it left a black band under a chat while the keyboard rose, and
+    /// left the Chats list laid out at half height when a chat closed with the keyboard up. Chats ignore the
+    /// inset and place their composer on `keyboardLayoutGuide`.
+    @objc private func keyboardWillChangeFrame(_ notification: Notification) {
+        guard let info = notification.userInfo, let window = view.window else { return }
+        var overlap: CGFloat = 0
+        if notification.name != UIResponder.keyboardWillHideNotification,
+           let screenFrame = info[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect
+        {
+            let frame = view.convert(screenFrame, from: window.screen.coordinateSpace)
+            // A floating or undocked keyboard (iPad) doesn't reach the bottom edge and covers nothing to avoid.
+            if frame.maxY >= view.bounds.maxY - 1 {
+                overlap = max(0, view.bounds.maxY - frame.minY - view.safeAreaInsets.bottom)
+            }
+        }
+        guard pages.contains(where: { $0.additionalSafeAreaInsets.bottom != overlap }) else { return }
+        let duration = info[UIResponder.keyboardAnimationDurationUserInfoKey] as? TimeInterval ?? 0.25
+        let curve = info[UIResponder.keyboardAnimationCurveUserInfoKey] as? UInt ?? UInt(UIView.AnimationCurve.easeInOut.rawValue)
+        UIView.animate(withDuration: duration, delay: 0, options: [UIView.AnimationOptions(rawValue: curve << 16), .beginFromCurrentState]) {
+            for page in self.pages {
+                page.additionalSafeAreaInsets.bottom = overlap
+                page.view.layoutIfNeeded()
+            }
+        }
     }
 
     /// Shows a page without a swipe.
