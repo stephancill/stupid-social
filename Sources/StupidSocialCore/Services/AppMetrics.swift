@@ -26,8 +26,33 @@ public enum AppMetrics {
         let props = ["network": network.rawValue, "trigger": trigger]
         StupidMetrics.track("refresh", properties: props.merging(["outcome": error == nil ? "ok" : "error"]) { $1 }, value: milliseconds(duration))
         if let error {
-            StupidMetrics.error("source_error", error: error, properties: props)
+            var errorProps = props
+            if let path = decodingPath(error) {
+                errorProps["path"] = path
+            }
+            StupidMetrics.error("source_error", error: error, properties: errorProps)
         }
+    }
+
+    /// Where a `DecodingError` happened, as model key names, e.g. `notifications.[].cast.timestamp`. Array positions
+    /// become `[]` and dictionary keys (which can be ids) `{}`, so it never carries values. Kept to the last 64
+    /// characters, the most metrics allows for a property; the end names the field that failed.
+    static func decodingPath(_ error: any Error) -> String? {
+        guard let error = error as? DecodingError else { return nil }
+        let context: DecodingError.Context
+        switch error {
+        case let .typeMismatch(_, c), let .valueNotFound(_, c), let .dataCorrupted(c): context = c
+        case let .keyNotFound(key, c): context = DecodingError.Context(codingPath: c.codingPath + [key], debugDescription: "")
+        @unknown default: return nil
+        }
+        let path = context.codingPath.map { key -> String in
+            // Model keys are the app's own `CodingKey` types. The decoder's and standard library's own key types
+            // (`_CodingKey`, `_DictionaryCodingKey`) carry array positions and dictionary keys, which can be ids.
+            guard String(describing: type(of: key)).hasPrefix("_") else { return key.stringValue }
+            return key.intValue != nil ? "[]" : "{}"
+        }.joined(separator: ".")
+        guard !path.isEmpty else { return nil }
+        return path.count > 64 ? "…" + path.suffix(63) : path
     }
 
     static func sourceRefreshCancelled(network: SocialNetwork, trigger: String, duration: Duration) {
