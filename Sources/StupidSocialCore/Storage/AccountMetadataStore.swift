@@ -146,6 +146,7 @@ public struct ApronServerMetadata: Codable, Equatable, Identifiable {
     public var title: String?
     public var description: String?
     public var avatar: String?
+    public var signIn: ApronSignInOptions?
     public var status: AccountStatusSnapshot
 
     public var id: String {
@@ -170,6 +171,7 @@ public struct ApronServerMetadata: Codable, Equatable, Identifiable {
         title = info?.title
         description = info?.description
         avatar = info?.avatar
+        signIn = info?.signIn
         self.status = status
     }
 }

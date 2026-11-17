@@ -187,10 +187,13 @@ final class NotificationRouter: ObservableObject {
     }
 
     /// Joined rooms are the ones in the Chats list, so a link waits for the list: at launch, before the UI has
-    /// built it, and until its first load when there was no saved list or the saved one didn't decode.
+    /// built it, and until its first load when there was no saved list or the saved one didn't decode. A link to a
+    /// server the user hasn't added can't be to a joined room, so it doesn't wait (with no accounts, the list first
+    /// loads only once Chats is shown).
     private func routeWaitingLink() {
         guard let link = waitingLink, let chatList else { return }
-        guard chatList.hasLoaded else {
+        let isSavedServer = apronService?.server(for: link.serverURL) != nil
+        guard chatList.hasLoaded || !isSavedServer else {
             // `@Published` emits before the value is stored, so the check runs again on the next turn.
             chatListLoad = chatList.$hasLoaded.first(where: \.self).sink { [weak self] _ in
                 Task { @MainActor in self?.routeWaitingLink() }

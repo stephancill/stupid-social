@@ -93,24 +93,3 @@ struct BlueskyConnectionView: View {
         }
     }
 }
-
-private final class WebAuthenticationSession: NSObject, ASWebAuthenticationPresentationContextProviding {
-    private let session: ASWebAuthenticationSession
-
-    init(url: URL, callbackURLScheme: String, completion: @escaping (URL?) -> Void) {
-        session = ASWebAuthenticationSession(url: url, callbackURLScheme: callbackURLScheme) { callbackURL, _ in
-            completion(callbackURL)
-        }
-        super.init()
-        session.presentationContextProvider = self
-        session.prefersEphemeralWebBrowserSession = false
-    }
-
-    func start() {
-        session.start()
-    }
-
-    func presentationAnchor(for _: ASWebAuthenticationSession) -> ASPresentationAnchor {
-        UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first ?? ASPresentationAnchor()
-    }
-}

@@ -116,6 +116,78 @@ public final class ApronService {
         return try saveSignIn(session, token: token, requestedName: name)
     }
 
+    /// The server's `server` frame, read on a connection that signs nothing in, to show how it lets users sign in.
+    public func serverPreview(input: String) async throws -> ApronServerPreview {
+        guard let serverURL = Self.normalizeServerURL(input) else { throw ApronError.invalidURL }
+        let connection = ApronConnection(url: serverURL)
+        defer { connection.close() }
+        return try await ApronServerPreview(serverURL: serverURL, server: connection.connect())
+    }
+
+    /// Signs in on the server's passkey page (§4.10.1) or external sign-in page (§4.12), then records the server.
+    /// `openPage` shows the authorization URL in a sign-in session and returns the URL it redirected to. A new
+    /// account's passkey is added to the guest the begin's connection signed in, so only that connection can
+    /// finish it, and it stays open (and pinging) meanwhile. Any other code finishes on a new connection: servers
+    /// close one that hasn't signed in (the demo after 30 s), sooner than most people get through the page.
+    public func signInOnPage(
+        serverURL: URL,
+        method: ApronSignInMethod,
+        requestedName: String?,
+        openPage: @MainActor (URL) async throws -> URL,
+    ) async throws -> ApronServerMetadata {
+        let requestedName = requestedName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        let connection = ApronConnection(url: serverURL)
+        defer { connection.close() }
+        var server = try await connection.connect()
+        var signedInAsGuest = false
+        var begin: ApronAuthParams
+        var finish: ApronAuthParams
+        switch method {
+        case .passkey, .createPasskey:
+            let action = method == .createPasskey ? "register" : "login"
+            // Servers that let guests register (aprond) take a registration only from a guest, who becomes the
+            // account; others (the demo) take it either way (`scripts/apron-web-client.py auth-begin --guest`).
+            if method == .createPasskey, server.acceptedSchemes.contains("guest") {
+                _ = try await connection.request("auth", params: ApronAuthParams(scheme: "guest", name: requestedName, agent: agent), as: ApronAuthResult.self)
+                signedInAsGuest = true
+            }
+            begin = ApronAuthParams(scheme: "webauthn", name: requestedName, agent: agent, action: action, step: "begin")
+            finish = ApronAuthParams(scheme: "webauthn", agent: agent, action: action, step: "finish")
+        case let .external(option):
+            begin = ApronAuthParams(scheme: "external", name: requestedName, agent: agent)
+            begin.ext = option.map { .init(authExternal: .init(prefer: $0.id)) }
+            finish = ApronAuthParams(scheme: "external", agent: agent)
+        case .token, .guest:
+            preconditionFailure("\(method) signs in without a page")
+        }
+        let started = try await connection.request("auth", params: begin, as: ApronAuthResult.self)
+        // The app is on no server's domain, so a begin without a page can't go on (recipes/native_passkeys.md).
+        guard let page = started.external else { throw ApronError.noSignInPage }
+        let request = try ApronPageSignIn(pageURL: page.url, serverURL: serverURL)
+        let callbackURL = try await openPage(request.authorizationURL)
+        finish.code = try request.code(from: callbackURL)
+        finish.codeVerifier = request.codeVerifier
+        finish.redirectURI = ApronPageSignIn.redirectURI
+        finish.clientId = ApronPageSignIn.clientId
+        var finisher = connection
+        if !signedInAsGuest {
+            connection.close()
+            finisher = ApronConnection(url: serverURL)
+            server = try await finisher.connect()
+        }
+        defer { finisher.close() }
+        let result = try await finisher.request("auth", params: finish, as: ApronAuthResult.self)
+        guard let you = result.you, let token = result.token else {
+            throw ApronError.rpc(code: ApronError.deniedCode, message: "The server did not sign you in.")
+        }
+        _ = try keychainStore.saveApronToken(token, serverURL: serverURL)
+        let session = ApronSession(serverURL: serverURL, connection: finisher, server: server, you: you, issuedToken: true)
+        let metadata = try saveSignIn(session, token: nil, requestedName: requestedName ?? self.server(for: serverURL)?.requestedName)
+        // Connections signed in before use the earlier identity; the next use signs in with the new token.
+        closeSessions(for: serverURL)
+        return metadata
+    }
+
     public func updateToken(serverURL: URL, token: String) async throws {
         let token = token.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !token.isEmpty else { return }

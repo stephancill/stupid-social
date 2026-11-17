@@ -122,9 +122,11 @@ Observed X behavior:
 
 ### Apron
 
-- Users can add any number of [Apron Chat Protocol](https://github.com/shazow/apron) servers by WebSocket URL (for example `wss://server.apron.chat/`), with an optional bearer token and display name.
+- Users can add any number of [Apron Chat Protocol](https://github.com/shazow/apron) servers by WebSocket URL (for example `wss://server.apron.chat/`), entering only its address; the server names the account. Once the server is read, it replaces the address form.
 - A server is shown by the name and icon it gives itself (its host without one), and its server settings show its description. Where a server is picked or signed in to, its address shows too.
-- Without a token the app joins as a guest when the server offers it. Tokens are stored in Keychain like other credentials.
+- Adding a server, or opening a link to a server the user hasn't added, first reads how it lets users sign in. The server then shows as an invite does (its icon, name, address and description), its welcome text in a fixed-height box, and its ways to sign in and create an account (the first as the main button) with a token and guest access behind Other, in the server's order and with the server's labels. The methods are: passkey sign-in, a new account with a passkey, external sign-in (one button per way with `ext:auth_external`, such as GitHub), a token, and joining as a guest. A server's settings offer passkey and external sign-in again, such as after its sign-in expires. Email sign-in isn't supported.
+- Passkeys and external sign-in run on the server's own page, in the system sign-in sheet (never an embedded web view), and end in a bearer token. The app is on no server's domain, so it never runs the passkey itself.
+- Tokens are stored in Keychain like other credentials.
 - Apron rooms appear on the Chats screen, not in the notifications feed: every joined room, with its latest message and unread count, updated live while the app is open. Each row is titled "<server name> / <room name>", with the server name muted.
 - Opening an Apron room shows a live chat for that room, where the user can read recent history and send messages.
 - A room's details (opened from the chat's title) have Show All Rooms, which lists that server's rooms and direct chats as the Chats screen lays them out, newest first and searchable; tapping one opens it.

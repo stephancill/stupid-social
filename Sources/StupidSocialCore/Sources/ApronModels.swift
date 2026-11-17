@@ -9,6 +9,8 @@ public struct ApronServerInfo: Decodable, Equatable, Sendable {
     public let welcome: String?
     public let signup: [String]?
     public let ping: Double?
+    /// A label for each sign-in scheme, such as `{"external": "Acme SSO"}` (§3.2).
+    public let labels: [String: String]?
     public let ext: ApronServerExt?
     /// Push kinds and wake scopes; absent when the server doesn't push (§4.9).
     public let push: ApronPushInfo?
@@ -401,11 +403,19 @@ public struct ApronServerExt: Decodable, Equatable, Sendable {
     public let readCursorsDisabled: Bool
     /// `ext.emoji.catalog_url` (EXTENSIONS.md `ext:emoji`); use it only while the server lists `ext:emoji`.
     public let emojiCatalogURL: URL?
+    /// `ext.auth_external.options`, the ways external sign-in can go (`ext:auth_external`); use them only while
+    /// the server lists `ext:auth_external`.
+    public let externalSignInOptions: [ApronExternalSignInOption]
 
     private enum CodingKeys: String, CodingKey {
         case media
         case settings
         case emoji
+        case authExternal = "auth_external"
+    }
+
+    private struct AuthExternal: Decodable {
+        let options: [ApronExternalSignInOption]?
     }
 
     private struct Emoji: Decodable {
@@ -446,7 +456,15 @@ public struct ApronServerExt: Decodable, Equatable, Sendable {
         emojiCatalogURL = ApronEmojiCatalog.catalogURL(emoji?.catalogURL)
         mediaOrigins = (media?.origins ?? []).compactMap(URL.init(string:))
         uploadLimits = (media?.upload ?? [:]).compactMapValues(\.maxBytes)
+        let authExternal = try? container?.decodeIfPresent(AuthExternal.self, forKey: .authExternal)
+        externalSignInOptions = authExternal?.options ?? []
     }
+}
+
+/// One way a server's external sign-in can go, such as "GitHub" (`ext:auth_external`).
+public struct ApronExternalSignInOption: Codable, Hashable, Sendable {
+    public let id: String
+    public let label: String
 }
 
 /// Custom emoji (EXTENSIONS.md `ext:emoji`): the catalog a server's `catalog_url` returns, keyed by `:name:`.
@@ -554,14 +572,48 @@ public enum ApronLogId {
 
 struct ApronAuthParams: Encodable {
     let scheme: String
-    let token: String?
-    let name: String?
+    var token: String?
+    var name: String?
     let agent: String
+    /// `webauthn` (§4.10): `register` or `login`, and `begin` or `finish`.
+    var action: String?
+    var step: String?
+    /// A finish with a code from the server's page (§4.10.1, §4.12.2).
+    var code: String?
+    var codeVerifier: String?
+    var redirectURI: String?
+    var clientId: String?
+    var ext: Ext?
+
+    struct Ext: Encodable {
+        let authExternal: AuthExternal
+
+        struct AuthExternal: Encodable {
+            let prefer: String
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case authExternal = "auth_external"
+        }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case scheme, token, name, agent, action, step, code, ext
+        case codeVerifier = "code_verifier"
+        case redirectURI = "redirect_uri"
+        case clientId = "client_id"
+    }
 }
 
 struct ApronAuthResult: Decodable {
     let you: ApronUser?
     let token: String?
+    /// The sign-in page of an `external` begin, or a `webauthn` begin's passkey page (§4.12.1, §4.10.1).
+    let external: External?
+
+    struct External: Decodable {
+        let url: String
+    }
 }
 
 struct ApronRoomListParams: Encodable {

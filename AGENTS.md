@@ -47,7 +47,9 @@ Sources/
       FarcasterConnectionView.swift # Farcaster credential setup
       FarcasterExternalClientView.swift # Farcaster external client picker
       DebugConnectionView.swift     # Debug notifications toggle
-      ApronServersView.swift        # Apron add-server form (Add Account → Apron) and server detail
+      ApronServersView.swift        # Apron add-server form (Add Account → Apron): the server's sign-in methods; server detail
+      WebAuthenticationSession.swift # ASWebAuthenticationSession for OAuth pages: Bluesky, Apron passkey and external sign-in
+      ApronSignInChoices.swift      # A server as an invite shows it, and its sign-in methods: Add Account → Apron and links
       ApronLinkView.swift           # Confirmation sheet for opened Apron links
       ApronChatView.swift           # Apron chat: the shared chat plus members and profiles
       ApronMembersView.swift        # Apron room details (title, description, edit) and member list, opened from the chat title
@@ -120,6 +122,7 @@ Sources/
       DebugNotificationsClient.swift / DebugNotificationSource.swift
       DemoData.swift / DemoChats.swift  # Demo mode feed, story bar and chats (fake data, no credentials)
       ApronModels.swift / ApronClient.swift / ApronNotificationSource.swift  # Apron Chat Protocol WebSocket client
+      ApronPageSignIn.swift         # Apron sign-in methods, and passkey/external sign-in on the server's page (PKCE, state, resource)
       ApronLink.swift               # Apron links (link.apron.chat and apron:): parse, validate, write
       ApronChatAdapter.swift        # Apron room chat adapter: history, windows, live frames, typing, mentions, commands, reactions, read cursor
       TelegramTL.swift              # TL schema parsing and generic encoder/decoder
@@ -192,6 +195,7 @@ Outside `Sources/`: `NotificationService/` holds the extension's Info.plist and 
 - Keep UI very simple, restrained, and aligned with Apple's Human Interface Guidelines.
 - Prefer built-in SwiftUI and platform UI primitives over custom controls, custom styling, or bespoke interaction patterns.
 - Keep platform-specific code isolated behind small adapters or conditional compilation.
+- A loading or working state never changes a control's size or the layout around it. Show a spinner as an `.overlay` on the label (hidden with `.opacity(0)`, so it still sets the size), never as content beside or instead of it: a `ProgressView` is taller than a line of text, so a large button or a row grows while it spins. When changing a button, row or anything else that shows progress, check its loading state on the simulator for this.
 - Prefer native Apple APIs over extra dependencies unless the dependency clearly reduces risk or complexity.
 - Verify `stupid-app` build/run behavior after meaningful project changes when feasible.
 

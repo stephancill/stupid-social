@@ -14,6 +14,14 @@ public enum ApronError: LocalizedError, Equatable {
     case limited(message: String, retryAfter: Int, category: String?)
     /// The server closed the socket with this code and reason (docs/limits.md, Closed connections).
     case closedByServer(code: Int, reason: String)
+    /// The begin step gave no page to sign in on, or one the app refuses, such as a passkey begin without a
+    /// passkey page (§4.10.1).
+    case noSignInPage
+    case invalidSignInPage
+    /// The user declined on the server's page (`error=access_denied`) or closed it.
+    case signInDeclined
+    /// The page returned an error, a code without our `state`, or nothing to redeem (§4.12.2).
+    case signInFailed
 
     public static let deniedCode = -32001
     public static let retryAfterCode = -32002
@@ -30,6 +38,10 @@ public enum ApronError: LocalizedError, Equatable {
         case let .rejected(status, _): "The Apron server refused the connection (HTTP \(status))."
         case let .limited(message, retryAfter, _): "\(message). Try again in \(retryAfter) seconds."
         case let .closedByServer(code, reason): reason.isEmpty ? "The Apron server closed the connection (\(code))." : reason
+        case .noSignInPage: "This server's passkeys work only in its own apps and website. Sign in another way."
+        case .invalidSignInPage: "The server's sign-in page has an address the app can't open."
+        case .signInDeclined: "Sign-in was cancelled."
+        case .signInFailed: "Sign-in didn't finish. Try again."
         }
     }
 

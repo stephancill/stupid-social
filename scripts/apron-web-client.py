@@ -14,6 +14,8 @@ Examples:
   scripts/apron-web-client.py edit wss://server.apron.chat/ --room general --message 1724803200042 --text "hi again"
   scripts/apron-web-client.py seed ws://127.0.0.1:8765/ --count 999   # local load-test data
   scripts/apron-web-client.py upload ws://127.0.0.1:8080/ws --file photo.jpg   # needs embed:upload
+  scripts/apron-web-client.py auth-begin wss://server.apron.chat/ --action register   # passkey begin: public_key and/or external page
+  scripts/apron-web-client.py external-sign-in ws://localhost:8080/ws --action register --guest --token-file logs/apron-local/tokens/passkey
   scripts/apron-web-client.py email-signup ws://127.0.0.1:8090/ws --email alice@example.com --user-id alice --name Alice --token-file logs/apron-local/tokens/alice
   scripts/apron-web-client.py push-capture --port 8099   # local push endpoint that decrypts what it receives
   scripts/apron-web-client.py push-register ws://127.0.0.1:8080/ws --endpoint http://127.0.0.1:8099/p --wake mentions
@@ -61,10 +63,11 @@ class WebSocket:
         self.buffer = b""
         key = base64.b64encode(secrets.token_bytes(16)).decode()
         path = parsed.path or "/"
+        host_header = parsed.netloc.rsplit("@", 1)[-1]
         if parsed.query:
             path += "?" + parsed.query
         request = (
-            f"GET {path} HTTP/1.1\r\nHost: {host}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+            f"GET {path} HTTP/1.1\r\nHost: {host_header}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
             f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\nUser-Agent: apron-probe/1\r\n\r\n"
         )
         self.sock.sendall(request.encode())
@@ -708,6 +711,130 @@ def webpush_decrypt(body: bytes, keys: dict[str, str]) -> bytes:
     return padded[:-1]
 
 
+def server_origin(url: str) -> str:
+    """The server's origin (§4.12.1): https plus host and port, or http for ws on a loopback host."""
+    parsed = urllib.parse.urlparse(url)
+    scheme = "http" if parsed.scheme == "ws" else "https"
+    return f"{scheme}://{parsed.netloc}"
+
+
+def begin_params(args: argparse.Namespace) -> dict[str, Any]:
+    if args.scheme == "webauthn":
+        params: dict[str, Any] = {"scheme": "webauthn", "action": args.action, "step": "begin"}
+    else:
+        params = {"scheme": "external"}
+        if args.prefer:
+            params["ext"] = {"auth_external": {"prefer": args.prefer}}
+    if args.name:
+        params["name"] = args.name
+    return params
+
+
+def cmd_auth_begin(session: Session, args: argparse.Namespace) -> None:
+    """A passkey (§4.10) or external (§4.12) begin, with the server's offered schemes, labels and
+    `ext.auth_external` options; signs nothing in."""
+    server = session.wait_server()
+    print_json({key: server.get(key) for key in ("auth", "signup", "labels", "welcome")} | {"auth_external": (server.get("ext") or {}).get("auth_external")})
+    if args.guest:
+        print_json({"guest": session.request("auth", {"scheme": "guest", "name": args.name, "agent": "apron-probe/1"}).get("you")})
+    print_json(session.request("auth", begin_params(args)))
+
+
+def cmd_external_sign_in(session: Session, args: argparse.Namespace) -> None:
+    """The app's sign-in on the server's own page: a passkey page (§4.10.1) or external sign-in (§4.12), as
+    recipes/native_passkeys.md says. Begins, opens `external.url` with PKCE S256, `state` and `resource`, waits
+    for the redirect to a loopback `redirect_uri` (the app uses its own scheme), checks `state`, then finishes on a
+    new connection and keeps the token in --token-file. --client-id is the app's id."""
+    import http.server
+    import threading
+    import webbrowser
+
+    session.wait_server()
+    if args.guest:
+        # aprond takes a passkey registration only from a guest, whom it makes an account (SERVER.md, Passkeys).
+        session.request("auth", {"scheme": "guest", "name": args.name, "agent": "apron-probe/1"})
+    result = session.request("auth", begin_params(args))
+    external = result.get("external")
+    if not external:
+        raise SystemExit(f"begin returned no external page: {sorted(result)}")
+    page = urllib.parse.urlparse(external["url"])
+    if not (page.scheme == "https" or (page.scheme == "http" and page.hostname in ("localhost", "127.0.0.1", "::1"))):
+        raise SystemExit(f"refusing external url scheme {page.scheme!r}")
+    verifier = b64url(secrets.token_bytes(32))
+    state = b64url(secrets.token_bytes(16))
+    redirect_uri = f"http://127.0.0.1:{args.port}/signed-in"
+    query = urllib.parse.parse_qsl(page.query) + [
+        ("response_type", "code"),
+        ("client_id", args.client_id),
+        ("redirect_uri", redirect_uri),
+        ("code_challenge", b64url(hashlib.sha256(verifier.encode()).digest())),
+        ("code_challenge_method", "S256"),
+        ("state", state),
+        ("resource", server_origin(args.url)),
+    ]
+    authorize = page._replace(query=urllib.parse.urlencode(query)).geturl()
+    received: dict[str, str] = {}
+    done = threading.Event()
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            parsed = urllib.parse.urlparse(self.path)
+            if parsed.path != "/signed-in":
+                self.send_response(404)
+                self.end_headers()
+                return
+            received.update(urllib.parse.parse_qsl(parsed.query))
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"Signed in. You can close this tab.")
+            done.set()
+
+        def log_message(self, *_: Any) -> None:
+            pass
+
+    httpd = http.server.HTTPServer(("127.0.0.1", args.port), Handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    print(json.dumps({"authorize_url": authorize}), flush=True)
+    if not args.no_open:
+        webbrowser.open(authorize)
+    # The begin connection waits for the browser, so it keeps pinging (§1), or the server closes it.
+    interval = float(session.server.get("ping") or 30)
+    deadline = time.monotonic() + args.timeout
+    while not done.wait(min(interval, max(deadline - time.monotonic(), 0))):
+        if time.monotonic() >= deadline:
+            raise SystemExit("no redirect before --timeout")
+        session.ws.send_text(json.dumps({"method": "ping"}))
+    httpd.shutdown()
+    print_json({"redirect": {k: ("<code>" if k == "code" else v) for k, v in received.items() if k != "state"}, "state_matches": received.get("state") == state})
+    if received.get("state") != state:
+        raise SystemExit("state is not ours; dropping the code")
+    if "error" in received:
+        raise SystemExit(f"sign-in failed: {received['error']}")
+    finish: dict[str, Any] = {"code": received["code"], "code_verifier": verifier, "redirect_uri": redirect_uri, "client_id": args.client_id, "agent": "apron-probe/1"}
+    if args.scheme == "webauthn":
+        finish.update(scheme="webauthn", action=args.action, step="finish")
+    else:
+        finish["scheme"] = "external"
+    if args.guest:
+        # An addition's code works only on a connection signed in to its account: the guest's (§4.10.1).
+        signed_in = session.request("auth", finish)
+    else:
+        # A code finishes on any connection (§4.10.1, §4.12.2): a fresh one, as after the browser.
+        finisher = Session(args.url, args.verbose)
+        try:
+            finisher.wait_server()
+            signed_in = finisher.request("auth", finish)
+        finally:
+            finisher.ws.close()
+    if signed_in.get("token") and args.token_file:
+        token_path = Path(args.token_file)
+        token_path.parent.mkdir(parents=True, exist_ok=True)
+        token_path.write_text(signed_in["token"])
+        os.chmod(token_path, 0o600)
+    print_json(signed_in)
+
+
 def cmd_email_signup(session: Session, args: argparse.Namespace) -> None:
     """Signs in by email (§4.11) against a local server run with `--email.sender log`, reading the code from
     --code-log, and keeps the account's bearer token in --token-file. A new address creates the account with
@@ -1027,6 +1154,17 @@ def main() -> None:
     cursors = add("read-cursors", cmd_read_cursors)
     cursors.add_argument("--room", default="general")
     cursors.add_argument("--read", help="message_id to move this user's read cursor to in --room")
+    for name, handler in (("auth-begin", cmd_auth_begin), ("external-sign-in", cmd_external_sign_in)):
+        begin = add(name, handler)
+        begin.add_argument("--scheme", choices=["webauthn", "external"], default="webauthn")
+        begin.add_argument("--action", choices=["login", "register"], default="login")
+        begin.add_argument("--prefer", help="ext:auth_external option id")
+        begin.add_argument("--guest", action="store_true", help="sign in as a guest first (external-sign-in then finishes on that connection)")
+        if name == "external-sign-in":
+            begin.add_argument("--client-id", default="tech.stupid.StupidSocial")
+            begin.add_argument("--port", type=int, default=53682)
+            begin.add_argument("--timeout", type=float, default=300)
+            begin.add_argument("--no-open", action="store_true", help="print the URL without opening a browser")
     signup = add("email-signup", cmd_email_signup)
     signup.add_argument("--email", required=True)
     signup.add_argument("--user-id")

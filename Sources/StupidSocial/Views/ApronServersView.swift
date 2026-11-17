@@ -1,42 +1,56 @@
 import StupidSocialCore
 import SwiftUI
 
-/// Add Account → Apron: signs in to a server, which becomes an account.
+/// Add Account → Apron: the server's address, then, once it is read, the server as an invite shows it in place of
+/// the form, with its sign-in methods. Signing in makes it an account.
 struct ApronAddServerView: View {
     @ObservedObject var viewModel: ApronServersViewModel
     let onDone: () -> Void
 
     var body: some View {
+        Group {
+            if let preview = viewModel.preview {
+                server(preview)
+            } else {
+                addressForm
+            }
+        }
+        .navigationTitle("Apron")
+        .onAppear {
+            // Coming back here starts again from the address.
+            viewModel.message = nil
+            viewModel.clearPreview()
+            viewModel.reload()
+        }
+    }
+
+    private var canContinue: Bool {
+        !viewModel.isWorking && !viewModel.serverInput.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    private var addressForm: some View {
         Form {
             Section {
                 TextField(ApronServersViewModel.exampleServer, text: $viewModel.serverInput)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .keyboardType(.URL)
-                SecureField("Token (optional)", text: $viewModel.tokenInput)
-                TextField("Display name (optional)", text: $viewModel.nameInput)
-                    .autocorrectionDisabled()
-
+                    .submitLabel(.continue)
+                    .onSubmit {
+                        if canContinue {
+                            Task { await viewModel.loadPreview() }
+                        }
+                    }
                 Button {
-                    Task {
-                        if await viewModel.addServer() {
-                            onDone()
-                        }
-                    }
+                    Task { await viewModel.loadPreview() }
                 } label: {
-                    HStack {
-                        Text("Add Server")
-                        if viewModel.isWorking {
-                            Spacer()
-                            ProgressView()
-                        }
-                    }
+                    WorkingLabel(title: "Continue", isWorking: viewModel.isWorking)
                 }
-                .disabled(viewModel.isWorking || viewModel.serverInput.trimmingCharacters(in: .whitespaces).isEmpty)
+                .disabled(!canContinue)
             } header: {
-                Text("Add Server")
+                Text("Server")
             } footer: {
-                Text("Apron is an open chat protocol for small groups. Leave the token empty to join as a guest where the server allows it. Some servers only let guests read; get a token from the server's own app to post.")
+                Text("Apron is an open chat protocol for small groups. Enter a server's address to see how it lets you sign in.")
             }
 
             if let message = viewModel.message {
@@ -46,10 +60,43 @@ struct ApronAddServerView: View {
                 }
             }
         }
-        .navigationTitle("Apron")
-        .onAppear {
-            viewModel.message = nil
-            viewModel.reload()
+    }
+
+    private func server(_ preview: ApronServerPreview) -> some View {
+        ScrollView {
+            VStack(spacing: 20) {
+                ApronServerCard(preview: preview)
+                if let welcome = preview.server.welcome?.trimmingCharacters(in: .whitespacesAndNewlines), !welcome.isEmpty {
+                    ApronWelcomeText(text: welcome)
+                }
+                if let message = viewModel.message {
+                    Text(message)
+                        .foregroundStyle(.red)
+                        .multilineTextAlignment(.center)
+                }
+                ApronSignInChoices(options: preview.signIn, isWorking: viewModel.isWorking) { method, token in
+                    if await signIn(method, token: token) {
+                        onDone()
+                    }
+                }
+            }
+            // Two sizes: the server's name, and this one for everything else.
+            .font(.subheadline)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 24)
+            .padding(.vertical, 24)
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .background(Color(uiColor: .systemGroupedBackground))
+    }
+
+    private func signIn(_ method: ApronSignInMethod, token: String?) async -> Bool {
+        switch method {
+        case .token, .guest:
+            viewModel.tokenInput = token ?? ""
+            return await viewModel.addServer()
+        case .passkey, .createPasskey, .external:
+            return await viewModel.signInOnPage(method, openPage: WebAuthenticationSession.openApronPage)
         }
     }
 }
@@ -59,6 +106,7 @@ struct ApronServerDetailView: View {
     @ObservedObject var viewModel: ApronServersViewModel
     let server: ApronServerMetadata
     @State private var showRemoveConfirmation = false
+    @State private var running: ApronSignInMethod?
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -104,6 +152,23 @@ struct ApronServerDetailView: View {
                 ))
             } footer: {
                 Text("Mentions, replies and private rooms notify this device when the server supports push and you're signed in with a token. Choose what each room notifies about from its member list.")
+            }
+
+            if let options = server.signIn, case let methods = options.methods.filter({ $0.usesPage && $0 != .createPasskey }), !methods.isEmpty {
+                Section(server.status == .invalidCredentials ? "Sign In Again" : "Sign In") {
+                    ForEach(methods, id: \.self) { method in
+                        Button {
+                            running = method
+                            Task {
+                                defer { running = nil }
+                                _ = await viewModel.signInOnPage(method, server: server, openPage: WebAuthenticationSession.openApronPage)
+                            }
+                        } label: {
+                            WorkingLabel(title: options.title(for: method), isWorking: running == method)
+                        }
+                        .disabled(viewModel.isWorking)
+                    }
+                }
             }
 
             Section {
@@ -154,5 +219,22 @@ struct ApronServerDetailView: View {
         case .valid: "Valid"
         default: "Unavailable"
         }
+    }
+}
+
+/// A button title with a spinner after it while its action runs.
+private struct WorkingLabel: View {
+    let title: String
+    let isWorking: Bool
+
+    /// The spinner is an overlay at the row's trailing edge, so the row keeps its height.
+    var body: some View {
+        Text(title)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .overlay(alignment: .trailing) {
+                if isWorking {
+                    ProgressView()
+                }
+            }
     }
 }

@@ -1,7 +1,7 @@
 import Foundation
 
-/// The confirmation for an opened Apron link (SPEC.md §6): it shows the server, and only connects, signs in or
-/// joins when the user confirms.
+/// The confirmation for an opened Apron link (SPEC.md §6): it shows the server, and only signs in or joins when the
+/// user confirms. A new server is read as the sheet opens, to offer its sign-in methods.
 @MainActor
 public final class ApronLinkViewModel: ObservableObject {
     public enum Action: Equatable {
@@ -34,10 +34,19 @@ public final class ApronLinkViewModel: ObservableObject {
         case failed(String)
     }
 
+    /// A new server's `server` frame, read as the sheet opens to offer its sign-in methods.
+    public enum ServerState: Equatable {
+        case none
+        case loading
+        case loaded(ApronServerPreview)
+        case failed(String)
+    }
+
     public let link: ApronLink
     @Published public private(set) var isWorking = false
     @Published public var errorMessage: String?
     @Published public private(set) var preview: PreviewState = .none
+    @Published public private(set) var server: ServerState = .none
 
     private let service: ApronService
     private let chatList: ChatListViewModel
@@ -63,8 +72,8 @@ public final class ApronLinkViewModel: ObservableObject {
         return chatList.contains(destination) ? .openRoom : .joinRoom
     }
 
-    /// Looks up the link's room on a server the user already uses. A server the user hasn't used isn't contacted
-    /// until they confirm (PROTOCOL.md A.4), so its links show only what the link says.
+    /// Looks up the link's room on a server the user already uses. A new server's rooms aren't read before signing
+    /// in, so its links show only what the link says about the room.
     public func loadPreview() async {
         guard link.token == nil, savedServer != nil, let roomId = link.room, preview == .none else { return }
         preview = .loading
@@ -87,6 +96,42 @@ public final class ApronLinkViewModel: ObservableObject {
             preview = .unavailable
         } catch {
             preview = .failed(error.localizedDescription)
+        }
+    }
+
+    /// Reads a new server's sign-in methods as the sheet opens. This contacts a server the user hasn't used before
+    /// they confirm anything, which PROTOCOL.md A.4 advises against; the sheet says to add only servers they trust.
+    public func loadServer() async {
+        guard action == .addServer, server != .loading else { return }
+        if case .loaded = server { return }
+        server = .loading
+        do {
+            server = try await .loaded(service.serverPreview(input: link.serverURL.absoluteString))
+        } catch {
+            server = .failed(error.localizedDescription)
+        }
+    }
+
+    /// Adds the link's new server by signing in with one of its methods. Returns whether it signed in; a cancelled
+    /// page is no error.
+    public func signIn(_ method: ApronSignInMethod, token: String?, openPage: @MainActor (URL) async throws -> URL) async -> Bool {
+        isWorking = true
+        errorMessage = nil
+        defer { isWorking = false }
+        do {
+            switch method {
+            case .guest, .token:
+                _ = try await service.addServer(input: link.serverURL.absoluteString, token: method == .token ? token : nil, name: nil)
+            case .passkey, .createPasskey, .external:
+                _ = try await service.signInOnPage(serverURL: link.serverURL, method: method, requestedName: nil, openPage: openPage)
+            }
+            NotificationCenter.default.post(name: ApronLiveFeed.serversDidChangeNotification, object: nil)
+            return true
+        } catch ApronError.signInDeclined {
+            return false
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
         }
     }
 

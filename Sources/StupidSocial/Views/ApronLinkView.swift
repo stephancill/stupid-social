@@ -2,8 +2,8 @@ import StupidSocialCore
 import SwiftUI
 
 /// Confirms an opened Apron link, laid out like a group invite: what the link opens, the server's address, and one
-/// button. Nothing signs in or joins until the user taps it, and a server the user hasn't used isn't contacted
-/// before then (SPEC.md §6); a saved server previews the room.
+/// button, or for a new server its sign-in methods (`ApronSignInChoices`). Nothing signs in or joins until the user
+/// taps; a new server is read as the sheet opens, and a saved server previews the room.
 struct ApronLinkView: View {
     @StateObject private var viewModel: ApronLinkViewModel
     let openRoom: (ApronLink) -> Void
@@ -29,7 +29,7 @@ struct ApronLinkView: View {
         ScrollView {
             VStack(spacing: 20) {
                 header
-                if let description = roomPreview?.description {
+                if let description = roomPreview?.description ?? newServerDescription {
                     Text(markdown(description))
                         .multilineTextAlignment(.center)
                 }
@@ -48,8 +48,8 @@ struct ApronLinkView: View {
         }
         .scrollBounceBehavior(.basedOnSize)
         .safeAreaInset(edge: .bottom) {
-            if let buttonTitle {
-                confirmButton(buttonTitle)
+            if hasBottomBar {
+                bottomBar
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { buttonHeight = $0 }
             }
         }
@@ -57,9 +57,65 @@ struct ApronLinkView: View {
             closeButton
         }
         // Fits the content, as a group invite does; content taller than the screen scrolls.
-        .presentationDetents([.height(contentHeight + (buttonTitle == nil ? 0 : buttonHeight))])
+        .presentationDetents([.height(contentHeight + (hasBottomBar ? buttonHeight : 0))])
         .presentationDragIndicator(.visible)
-        .task { await viewModel.loadPreview() }
+        .task {
+            await viewModel.loadPreview()
+            await viewModel.loadServer()
+        }
+    }
+
+    private var hasBottomBar: Bool {
+        viewModel.action == .addServer || buttonTitle != nil
+    }
+
+    /// A new server's sign-in methods once it is read; otherwise the action's one button.
+    @ViewBuilder
+    private var bottomBar: some View {
+        if viewModel.action == .addServer {
+            Group {
+                switch viewModel.server {
+                case .none, .loading:
+                    ProgressView()
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                case let .loaded(server):
+                    ApronSignInChoices(options: server.signIn, isWorking: viewModel.isWorking) { method, token in
+                        guard await viewModel.signIn(method, token: token, openPage: WebAuthenticationSession.openApronPage) else { return }
+                        dismiss()
+                        if link.room != nil {
+                            openRoom(link)
+                        }
+                    }
+                    .font(.body)
+                case .failed:
+                    Button {
+                        Task { await viewModel.loadServer() }
+                    } label: {
+                        Text("Try Again").frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                }
+            }
+            .padding(.horizontal, 24)
+            .padding(.bottom, 8)
+        } else if let buttonTitle {
+            confirmButton(buttonTitle)
+        }
+    }
+
+    /// A new server's description, on a link to the server itself.
+    private var newServerDescription: String? {
+        guard link.room == nil, link.user == nil, viewModel.savedServer == nil,
+              let description = loadedServer?.server.description?.trimmingCharacters(in: .whitespacesAndNewlines), !description.isEmpty
+        else { return nil }
+        return description
+    }
+
+    private var loadedServer: ApronServerPreview? {
+        if case let .loaded(server) = viewModel.server { return server }
+        return nil
     }
 
     @ViewBuilder
@@ -114,7 +170,7 @@ struct ApronLinkView: View {
                 initialCircle(title, size: size)
                     .overlay(alignment: .bottomTrailing) {
                         Group {
-                            if viewModel.savedServer?.avatarURL != nil {
+                            if serverAvatarURL != nil {
                                 serverIcon(size: 30)
                             } else {
                                 NetworkBadgeIcon(network: .apron, size: 30)
@@ -130,18 +186,16 @@ struct ApronLinkView: View {
         .accessibilityHidden(true)
     }
 
-    @ViewBuilder
+    private var serverAvatarURL: URL? {
+        viewModel.savedServer?.avatarURL ?? loadedServer?.server.avatarURL
+    }
+
+    private var serverTitle: String {
+        viewModel.savedServer?.displayTitle ?? loadedServer?.displayTitle ?? link.host
+    }
+
     private func serverIcon(size: CGFloat) -> some View {
-        let name = viewModel.savedServer?.displayTitle ?? link.host
-        Group {
-            if let url = viewModel.savedServer?.avatarURL {
-                CachedAsyncImage(url: url) { initialCircle(name, size: size) } failure: { initialCircle(name, size: size) }
-            } else {
-                initialCircle(name, size: size)
-            }
-        }
-        .frame(width: size, height: size)
-        .clipShape(Circle())
+        ApronServerIcon(url: serverAvatarURL, name: serverTitle, size: size)
     }
 
     private func initialCircle(_ name: String, size: CGFloat) -> some View {
@@ -190,6 +244,13 @@ struct ApronLinkView: View {
             if let error = viewModel.errorMessage {
                 Text(error)
                     .foregroundStyle(.red)
+            } else if case let .failed(error) = viewModel.server {
+                Text("Couldn't read this server: \(error)")
+                    .foregroundStyle(.red)
+            }
+
+            if viewModel.action == .addServer, let welcome = loadedServer?.server.welcome?.trimmingCharacters(in: .whitespacesAndNewlines), !welcome.isEmpty {
+                ApronWelcomeText(text: welcome)
             }
         }
         .multilineTextAlignment(.center)
@@ -205,14 +266,15 @@ struct ApronLinkView: View {
                 }
             }
         } label: {
-            ZStack {
-                Text(title)
-                    .opacity(viewModel.isWorking ? 0 : 1)
-                if viewModel.isWorking {
-                    ProgressView()
+            // The spinner is an overlay on the hidden title, so the button keeps its size.
+            Text(title)
+                .opacity(viewModel.isWorking ? 0 : 1)
+                .overlay {
+                    if viewModel.isWorking {
+                        ProgressView()
+                    }
                 }
-            }
-            .frame(maxWidth: .infinity)
+                .frame(maxWidth: .infinity)
         }
         .buttonStyle(.borderedProminent)
         .controlSize(.large)
@@ -228,12 +290,15 @@ struct ApronLinkView: View {
         if let roomPreview { return roomPreview.title }
         if let room = link.room { return ApronLink.displayValue(room) }
         if let user = link.user { return ApronLink.displayValue(user) }
-        return viewModel.savedServer?.displayTitle ?? link.host
+        return serverTitle
     }
 
-    /// A saved server's name and the room's size; a new server has only its address, which shows below.
+    /// A saved server's name and the room's size; a new server's name once read, for a room or user, and its
+    /// address, which shows below.
     private var subtitle: String? {
-        guard let server = viewModel.savedServer else { return nil }
+        guard let server = viewModel.savedServer else {
+            return link.room != nil || link.user != nil ? loadedServer?.displayTitle : nil
+        }
         guard link.room != nil else {
             return link.user == nil ? "Signed in as \(server.user?.displayName ?? "a guest")" : server.displayTitle
         }

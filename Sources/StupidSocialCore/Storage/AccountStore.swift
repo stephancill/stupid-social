@@ -272,17 +272,23 @@ public struct ApronSignInInfo: Codable, Equatable, Sendable {
     public var title: String?
     public var description: String?
     public var avatar: String?
+    /// How the server lets users sign in, to sign in again from the server's settings.
+    public var signIn: ApronSignInOptions?
 
-    public init(user: ApronUser?, agent: String?, welcome: String?, title: String? = nil, description: String? = nil, avatar: String? = nil) {
+    public init(user: ApronUser?, agent: String?, welcome: String?, title: String? = nil, description: String? = nil, avatar: String? = nil, signIn: ApronSignInOptions? = nil) {
         self.user = user
         self.agent = agent
         self.welcome = welcome
         self.title = title
         self.description = description
         self.avatar = avatar
+        self.signIn = signIn
     }
 
     public init(user: ApronUser, server: ApronServerInfo) {
-        self.init(user: user, agent: server.agent, welcome: server.welcome, title: server.title, description: server.description, avatar: server.avatar)
+        self.init(
+            user: user, agent: server.agent, welcome: server.welcome, title: server.title, description: server.description,
+            avatar: server.avatar, signIn: ApronSignInOptions(server: server),
+        )
     }
 }

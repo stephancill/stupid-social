@@ -5,9 +5,10 @@ public final class ApronServersViewModel: ObservableObject {
     @Published public private(set) var servers: [ApronServerMetadata] = []
     @Published public var serverInput = ""
     @Published public var tokenInput = ""
-    @Published public var nameInput = ""
     @Published public private(set) var isWorking = false
     @Published public var message: String?
+    /// The entered server's `server` frame, read before signing in to show its sign-in methods.
+    @Published public private(set) var preview: ApronServerPreview?
 
     public static let exampleServer = "wss://server.apron.chat/"
 
@@ -53,14 +54,66 @@ public final class ApronServersViewModel: ObservableObject {
         message = nil
         defer { isWorking = false }
         do {
-            let server = try await service.addServer(input: serverInput, token: tokenInput, name: nameInput)
+            // The server that was read, which the form no longer shows; the server names the account.
+            let server = try await service.addServer(input: preview?.serverURL.absoluteString ?? serverInput, token: tokenInput, name: nil)
             serverInput = ""
             tokenInput = ""
-            nameInput = ""
+            preview = nil
             reload()
             NotificationCenter.default.post(name: ApronLiveFeed.serversDidChangeNotification, object: nil)
             message = "Signed in as \(server.user?.displayName ?? "guest")."
             return true
+        } catch {
+            message = error.localizedDescription
+            return false
+        }
+    }
+
+    /// Reads how the entered server lets users sign in, before signing in.
+    public func loadPreview() async {
+        isWorking = true
+        message = nil
+        defer { isWorking = false }
+        do {
+            preview = try await service.serverPreview(input: serverInput)
+        } catch {
+            preview = nil
+            message = error.localizedDescription
+        }
+    }
+
+    /// The entered address changed, so what was read for the last one no longer applies.
+    public func clearPreview() {
+        preview = nil
+    }
+
+    /// Signs in on the server's passkey or sign-in page: a new server from the preview, or `server` again.
+    public func signInOnPage(
+        _ method: ApronSignInMethod,
+        server: ApronServerMetadata? = nil,
+        openPage: @MainActor (URL) async throws -> URL,
+    ) async -> Bool {
+        guard let serverURL = server?.serverURL ?? preview?.serverURL else { return false }
+        isWorking = true
+        message = nil
+        defer { isWorking = false }
+        do {
+            let signedIn = try await service.signInOnPage(
+                serverURL: serverURL,
+                method: method,
+                requestedName: nil,
+                openPage: openPage,
+            )
+            if server == nil {
+                serverInput = ""
+                preview = nil
+            }
+            reload()
+            NotificationCenter.default.post(name: ApronLiveFeed.serversDidChangeNotification, object: nil)
+            message = "Signed in as \(signedIn.user?.displayName ?? "you")."
+            return true
+        } catch ApronError.signInDeclined {
+            return false
         } catch {
             message = error.localizedDescription
             return false
