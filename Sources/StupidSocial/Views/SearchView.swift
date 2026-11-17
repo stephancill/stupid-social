@@ -35,7 +35,9 @@ struct SearchView: View {
         .listStyle(.insetGrouped)
         #endif
         .navigationTitle("Search")
-        .searchBar(text: $viewModel.query)
+        // Under the title, as in Chats: the field `.automatic` floats at the bottom stayed under the keyboard in the
+        // home pager, whose pages don't follow the keyboard themselves (`HomePagerController`).
+        .searchBar(text: $viewModel.query, placement: .navigationBarDrawer(displayMode: .always))
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 filterMenu
