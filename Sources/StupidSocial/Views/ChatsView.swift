@@ -354,7 +354,7 @@ private struct ChatForwardPicker: View {
                     ContentUnavailableView.search(text: query)
                 }
             }
-            .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always))
+            .searchBar(text: $query, placement: .navigationBarDrawer(displayMode: .always))
             .navigationTitle("Forward To")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -443,7 +443,7 @@ private struct FolderSearch: ViewModifier {
 
     func body(content: Content) -> some View {
         if isSearchable {
-            content.searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always))
+            content.searchBar(text: $query, placement: .navigationBarDrawer(displayMode: .always))
         } else {
             content
         }
