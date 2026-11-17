@@ -14,6 +14,10 @@ struct PostCardView: View {
     var continuesThread = false
     /// Draws the thread line into the avatar from above, continuing the post directly above.
     var followsThread = false
+    /// A line above the post, such as who reposted it or that it's pinned.
+    var context: (text: String, systemImage: String)?
+    /// Opens the post here, in place of its page on the network.
+    var open: (() -> Void)?
 
     @Environment(\.openURL) private var openURL
     @Environment(\.scenePhase) private var scenePhase
@@ -22,8 +26,45 @@ struct PostCardView: View {
     @State private var composerMode: PostComposerMode?
     @State private var errorMessage: String?
     @State private var isUpdating = false
+    /// Reposting went to the network's own page; its result is loaded on return.
+    @State private var awaitsRepostPage = false
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if let context {
+                Label(context.text, systemImage: context.systemImage)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .padding(.leading, 20)
+                    .padding(.top, 6)
+            }
+            card
+        }
+        .task(id: isLoadingDetails) {
+            await loadEngagement()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active, awaitsRepostPage else { return }
+            awaitsRepostPage = false
+            Task { await loadEngagement(force: true) }
+        }
+        .sheet(item: $composerMode) { mode in
+            PostComposerView(mode: mode, target: target, author: author) { text in
+                try await send(mode: mode, text: text)
+            }
+        }
+        .alert("Couldn't Update Post", isPresented: Binding(
+            get: { errorMessage != nil },
+            set: { if !$0 { errorMessage = nil } },
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(errorMessage ?? "")
+        }
+    }
+
+    private var card: some View {
         HStack(alignment: .top, spacing: 10) {
             if let author {
                 ActorAvatar(actor: author, size: 40)
@@ -55,7 +96,11 @@ struct PostCardView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
                 .onTapGesture {
-                    if let postURL { openURL(postURL) }
+                    if let open {
+                        open()
+                    } else if let postURL {
+                        openURL(postURL)
+                    }
                 }
 
                 if engaging != nil, postURL != nil {
@@ -85,27 +130,6 @@ struct PostCardView: View {
             }
             .padding(.leading, 19)
         }
-        .task(id: isLoadingDetails) {
-            await loadEngagement()
-        }
-        .onChange(of: scenePhase) { _, phase in
-            // Reposting happens on X's own page; pick up the result on return.
-            guard phase == .active else { return }
-            Task { await loadEngagement(force: true) }
-        }
-        .sheet(item: $composerMode) { mode in
-            PostComposerView(mode: mode, target: target, author: author) { text in
-                try await send(mode: mode, text: text)
-            }
-        }
-        .alert("Couldn't Update Post", isPresented: Binding(
-            get: { errorMessage != nil },
-            set: { if !$0 { errorMessage = nil } },
-        )) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(errorMessage ?? "")
-        }
     }
 
     private var threadLine: some View {
@@ -121,6 +145,13 @@ struct PostCardView: View {
                 .foregroundStyle(.primary)
                 .lineLimit(1)
                 .layoutPriority(1)
+
+            if author?.isVerified == true {
+                Image(systemName: "checkmark.seal.fill")
+                    .font(.caption)
+                    .foregroundStyle(.blue)
+                    .accessibilityLabel("Verified")
+            }
 
             Text(handleAndTime)
                 .font(.subheadline)
@@ -227,6 +258,7 @@ struct PostCardView: View {
         guard let engaging, let current = engagement else { return }
         if reposted, let url = engaging.repostPageURL(postId: target.id) {
             AppMetrics.postEngaged(network: network, action: "repost", error: nil)
+            awaitsRepostPage = true
             openURL(url)
             return
         }
@@ -274,7 +306,7 @@ struct PostCardView: View {
 
     private var authorName: String {
         guard let author else { return network.displayName }
-        return DebugRedaction.actorName(author, enabled: redactionEnabled)
+        return DebugRedaction.displayName(author, enabled: redactionEnabled)
     }
 
     private var handleAndTime: String {
@@ -362,7 +394,7 @@ struct PostComposerView: View {
                     Section("Quoting") {
                         VStack(alignment: .leading, spacing: 4) {
                             if let author {
-                                Text(DebugRedaction.actorName(author, enabled: redactionEnabled))
+                                Text(DebugRedaction.displayName(author, enabled: redactionEnabled))
                                     .font(.subheadline.weight(.semibold))
                             }
                             if let quoted = target.text {

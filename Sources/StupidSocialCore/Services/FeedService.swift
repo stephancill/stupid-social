@@ -11,6 +11,7 @@ public struct FeedAccountSources {
     public var relationships: (any RelationshipMutating)?
     public var engagement: (any PostEngaging)?
     public var threads: (any PostThreadLoading)?
+    public var timelines: (any ProfileTimelineLoading)?
 
     public init(
         accountId: String,
@@ -21,6 +22,7 @@ public struct FeedAccountSources {
         relationships: (any RelationshipMutating)? = nil,
         engagement: (any PostEngaging)? = nil,
         threads: (any PostThreadLoading)? = nil,
+        timelines: (any ProfileTimelineLoading)? = nil,
     ) {
         self.accountId = accountId
         self.network = network
@@ -30,6 +32,7 @@ public struct FeedAccountSources {
         self.relationships = relationships
         self.engagement = engagement
         self.threads = threads
+        self.timelines = timelines
     }
 }
 
@@ -305,6 +308,12 @@ public final class FeedService {
     public func postThreads(network: SocialNetwork, accountId: String) -> (any PostThreadLoading)? {
         guard !DemoData.isDemoMode else { return nil }
         return sources(network: network, accountId: accountId)?.threads
+    }
+
+    /// Loading a profile's posts for the account's network, or nil when it doesn't support it.
+    public func profileTimelines(network: SocialNetwork, accountId: String?) -> (any ProfileTimelineLoading)? {
+        guard !DemoData.isDemoMode else { return nil }
+        return sources(network: network, accountId: accountId)?.timelines
     }
 
     private func targetDetailsCacheKey(for item: NotificationItem) -> String {

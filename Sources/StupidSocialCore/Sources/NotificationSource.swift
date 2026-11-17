@@ -92,6 +92,73 @@ public protocol PostThreadLoading: SocialSource {
     func fetchThread(postId: String) async throws -> PostThread
 }
 
+/// Which of a profile's timelines to load: everything it posted and reposted, newest first; its own posts, most
+/// liked first; or only its posts with photos and videos, newest or most liked first.
+public enum ProfileTimelineKind: String, CaseIterable, Hashable, Sendable {
+    case posts
+    case mostLiked
+    case media
+    case mediaMostLiked
+
+    public var isMedia: Bool {
+        self == .media || self == .mediaMostLiked
+    }
+
+    public var isMostLiked: Bool {
+        self == .mostLiked || self == .mediaMostLiked
+    }
+
+    public init(media: Bool, mostLiked: Bool) {
+        self = switch (media, mostLiked) {
+        case (false, false): .posts
+        case (false, true): .mostLiked
+        case (true, false): .media
+        case (true, true): .mediaMostLiked
+        }
+    }
+}
+
+/// One post on a profile's timeline.
+public struct ProfileTimelineItem: Identifiable, Hashable, Sendable {
+    public let post: PostThread.Post
+    /// The profile's name when the post is its repost of someone else's.
+    public let repostedBy: String?
+    public let isPinned: Bool
+    /// The first photo or video frame, else the link card's image, for the media grid.
+    public let thumbnailURL: URL?
+    public let isVideo: Bool
+    public let hasMultipleMedia: Bool
+
+    public init(post: PostThread.Post, repostedBy: String? = nil, isPinned: Bool = false, thumbnailURL: URL? = nil, isVideo: Bool = false, hasMultipleMedia: Bool = false) {
+        self.post = post
+        self.repostedBy = repostedBy
+        self.isPinned = isPinned
+        self.thumbnailURL = thumbnailURL
+        self.isVideo = isVideo
+        self.hasMultipleMedia = hasMultipleMedia
+    }
+
+    public var id: String {
+        post.target.id
+    }
+}
+
+/// A page of a profile's timeline, newest first; `nextCursor` loads the older page after it.
+public struct ProfileTimelinePage: Sendable {
+    public let items: [ProfileTimelineItem]
+    public let nextCursor: String?
+
+    public init(items: [ProfileTimelineItem], nextCursor: String?) {
+        self.items = items
+        self.nextCursor = nextCursor
+    }
+}
+
+/// Loading the posts on a profile, as its network's own profile page shows them.
+public protocol ProfileTimelineLoading: SocialSource {
+    func fetchProfileTimeline(userId: String, kind: ProfileTimelineKind, cursor: String?) async throws -> ProfileTimelinePage
+}
+
 public protocol RelationshipMutating: SocialSource {
     func setFollowing(profile: NetworkProfile, follow: Bool) async throws
     func setPostNotifications(profile: NetworkProfile, enabled: Bool) async throws

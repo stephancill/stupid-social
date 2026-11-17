@@ -29,3 +29,4 @@ __pycache__/
 
 # The CLI package's build output
 /cli/.build
+.swiftpm/xcode/package.xcworkspace/xcuserdata/

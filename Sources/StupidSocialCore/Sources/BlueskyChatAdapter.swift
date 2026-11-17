@@ -4,7 +4,7 @@ import Foundation
 /// sends text, reacts, and moves the read position as messages are read. Bluesky chats have no replies or
 /// attachments.
 @MainActor
-public final class BlueskyChatAdapter: ChatAdapter, ChatReactionSending, ChatMuting {
+public final class BlueskyChatAdapter: ChatAdapter, ChatReactionSending, ChatMuting, ChatProfileLinking {
     public let network = ChatNetwork.bluesky
     public let canReply = false
     public let acceptsAttachments = false
@@ -21,6 +21,7 @@ public final class BlueskyChatAdapter: ChatAdapter, ChatReactionSending, ChatMut
     /// DID → member.
     private var members: [String: ChatUser] = [:]
     private var viewerDid: String?
+    public private(set) var profileActor: NotificationActor?
     /// Where the viewer has read up to, locally ahead of Bluesky while a mark is pending.
     private var readAt: Date?
     /// Whether the chat itself (members, read position) came from Bluesky this visit.
@@ -45,6 +46,7 @@ public final class BlueskyChatAdapter: ChatAdapter, ChatReactionSending, ChatMut
         let title: String
         let subtitle: String
         let showsSenderNames: Bool
+        let profileActor: NotificationActor?
     }
 
     public func restore(state data: Data) {
@@ -52,6 +54,7 @@ public final class BlueskyChatAdapter: ChatAdapter, ChatReactionSending, ChatMut
         members = state.members
         viewerDid = state.viewerDid
         readAt = state.readAt
+        profileActor = state.profileActor
         info = ChatInfo(title: state.title, subtitle: state.subtitle, showsSenderNames: state.showsSenderNames, titleIsMemberNames: true)
     }
 
@@ -59,6 +62,7 @@ public final class BlueskyChatAdapter: ChatAdapter, ChatReactionSending, ChatMut
         try? JSONEncoder().encode(State(
             members: members, viewerDid: viewerDid, readAt: readAt,
             title: info.title, subtitle: info.subtitle, showsSenderNames: info.showsSenderNames,
+            profileActor: profileActor,
         ))
     }
 
@@ -103,6 +107,9 @@ public final class BlueskyChatAdapter: ChatAdapter, ChatReactionSending, ChatMut
         let others = convo.others(viewerDid: viewerDid)
         info.title = convo.title(viewerDid: viewerDid)
         info.showsSenderNames = convo.isGroup(viewerDid: viewerDid)
+        profileActor = info.showsSenderNames ? nil : others.first.map {
+            NotificationActor(id: $0.did, network: .bluesky, username: $0.handle, displayName: $0.displayName, avatarURL: $0.avatar)
+        }
         info.subtitle = info.showsSenderNames ? "\(convo.members.count) members" : others.first?.handle.map { "@\($0)" } ?? ""
     }
 

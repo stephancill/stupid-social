@@ -73,7 +73,9 @@ public struct ContentView: View {
                     isShowingChat: $isShowingChat,
                     openRequest: $notificationRouter.pendingChat,
                 )
-            },
+            }
+            // On the stack, so the chats it pushes have it too.
+            .environment(\.feedService, container.feedViewModel.service),
             social: socialStack(container: container),
         )
         // The keyboard too: the pager gives its pages the keyboard's height as a safe area inset itself.

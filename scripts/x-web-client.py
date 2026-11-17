@@ -36,7 +36,43 @@ TWEET_QUERY_IDS = {
     "CreateTweet": "l4hk8uVGvR-a8kzQ4nOhPA",
     "DeleteTweet": "nxpZCY2K-I6QoFHAHeojFQ",
     "TweetDetail": "qpemjmVMoTWDvcRT43JIVQ",
+    "UserTweets": "D6z-FJI2pKuwEeYYxVIGbg",
+    "UserMedia": "iTSlWbsmD00dAE7Sk9xvIw",
+    # The web profile's posts-only timeline, which takes its Popular sort (`sortByMostLiked`); `UserTweets` ignores it.
+    "UserOriginalsTimeline": "ZFKu1DFS63hgrkLzR3Hsdw",
+    # The web client's `fetchUserTweetsWithSortAndFilter`: `mode` "Likes" or "Latest", and `bucket` "Posts",
+    # "Replies", "Quotes", "OnlyVideo" or "Retweets".
+    "ProfileFilter": "_-RMD5S0IgQHXFZl3dxhPg",
+    "UserByScreenName": "AMIBMjtxEEATh4z8V9GtRg",
 }
+USER_BY_SCREEN_NAME_FEATURES = {
+    "hidden_profile_subscriptions_enabled": True,
+    "profile_label_improvements_pcf_label_in_post_enabled": True,
+    "responsive_web_profile_redirect_enabled": True,
+    "rweb_tipjar_consumption_enabled": False,
+    "verified_phone_label_enabled": False,
+    "subscriptions_verification_info_is_identity_verified_enabled": True,
+    "subscriptions_verification_info_verified_since_enabled": True,
+    "highlights_tweets_tab_ui_enabled": True,
+    "responsive_web_twitter_article_notes_tab_enabled": True,
+    "subscriptions_feature_can_gift_premium": False,
+    "creator_subscriptions_tweet_preview_api_enabled": True,
+    "responsive_web_graphql_timeline_navigation_enabled": True,
+}
+# The app's lookup before 2026-11-17, kept to compare: an older query id with fewer switches.
+LEGACY_USER_BY_SCREEN_NAME = (
+    "IGgvgiOx4QZndDHuD3x9TQ",
+    {"screen_name": None, "withSafetyModeUserFields": True},
+    {
+        "hidden_profile_subscriptions_enabled": True,
+        "rweb_tipjar_consumption_enabled": True,
+        "responsive_web_graphql_exclude_directive_enabled": True,
+        "highlights_tweets_tab_ui_enabled": True,
+        "responsive_web_twitter_article_notes_tab_enabled": True,
+        "creator_subscriptions_tweet_preview_api_enabled": True,
+        "responsive_web_graphql_timeline_navigation_enabled": True,
+    },
+)
 TWEET_FEATURES = {
     "creator_subscriptions_tweet_preview_api_enabled": True,
     "premium_content_api_read_enabled": False,
@@ -271,6 +307,71 @@ class XWebClient:
         query_id = TWEET_QUERY_IDS["TweetDetail"]
         response = self.request_json("GET", BASE_URL + f"/i/api/graphql/{query_id}/TweetDetail?{query}")
         return {"entries": summarize_thread(response), "raw": response}
+
+    def user(self, screen_name: str, legacy: bool = False) -> dict[str, Any]:
+        """A profile (`UserByScreenName`) as the web client fetches it, or with the app's old request (`legacy`);
+        summarizes the relationship and post-notification (bell) fields."""
+        if legacy:
+            query_id, variables, features = LEGACY_USER_BY_SCREEN_NAME
+            variables = {**variables, "screen_name": screen_name}
+            toggles = None
+        else:
+            query_id = TWEET_QUERY_IDS["UserByScreenName"]
+            variables = {"screen_name": screen_name, "withGrokTranslatedBio": True}
+            features = USER_BY_SCREEN_NAME_FEATURES
+            toggles = {"withAuxiliaryUserLabels": True, "withPayments": False}
+        params = {
+            "variables": json.dumps(variables, separators=(",", ":")),
+            "features": json.dumps(features, separators=(",", ":")),
+        }
+        if toggles is not None:
+            params["fieldToggles"] = json.dumps(toggles, separators=(",", ":"))
+        response = self.request_json("GET", BASE_URL + f"/i/api/graphql/{query_id}/UserByScreenName?{urllib.parse.urlencode(params)}")
+        result = ((response.get("data") or {}).get("user") or {}).get("result") or {}
+        legacy_fields = result.get("legacy") or {}
+        return {
+            "rest_id": result.get("rest_id"),
+            "relationship_perspectives": result.get("relationship_perspectives"),
+            "notifications_settings": result.get("notifications_settings"),
+            "legacy_notifications": legacy_fields.get("notifications"),
+            "legacy_following": legacy_fields.get("following"),
+            "result_keys": sorted(result.keys()),
+            "raw": response,
+        }
+
+    def user_timeline(
+        self,
+        operation: str,
+        user_id: str,
+        cursor: str | None = None,
+        count: int = 20,
+        most_liked: bool = False,
+        filter_variables: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """A profile's posts (`UserTweets`) or its media grid (`UserMedia`), one page, as X's web profile loads them.
+        `most_liked` sends `sortByMostLiked`, the web profile's Popular sort."""
+        variables: dict[str, Any] = {"userId": user_id, "count": count}
+        if cursor:
+            variables["cursor"] = cursor
+        if most_liked:
+            variables["sortByMostLiked"] = True
+        if operation == "ProfileFilter":
+            variables.update(filter_variables or {})
+        if operation in ("UserTweets", "UserOriginalsTimeline", "ProfileFilter"):
+            variables.update({"includePromotedContent": True, "withQuickPromoteEligibilityTweetFields": True, "withVoice": True})
+        else:
+            variables.update({"includePromotedContent": False, "withClientEventToken": False, "withBirdwatchNotes": False, "withVoice": True})
+        features = {**TWEET_FEATURES, "rweb_video_screen_enabled": False, "responsive_web_enhance_cards_enabled": False}
+        query = urllib.parse.urlencode(
+            {
+                "variables": json.dumps(variables, separators=(",", ":")),
+                "features": json.dumps(features, separators=(",", ":")),
+                "fieldToggles": json.dumps({"withArticlePlainText": False}, separators=(",", ":")),
+            }
+        )
+        query_id = TWEET_QUERY_IDS[operation]
+        response = self.request_json("GET", BASE_URL + f"/i/api/graphql/{query_id}/{operation}?{query}")
+        return {"entries": summarize_user_timeline(response), "raw": response}
 
     def tweet_mutation(self, operation: str, variables: dict[str, Any], features: dict[str, Any] | None = None) -> Any:
         query_id = TWEET_QUERY_IDS[operation]
@@ -636,6 +737,51 @@ def summarize_thread(response: dict[str, Any]) -> list[dict[str, Any]]:
     return summary
 
 
+def summarize_user_timeline(response: dict[str, Any]) -> list[dict[str, Any]]:
+    """Each `UserTweets`/`UserMedia` entry in order, from every instruction (`TimelinePinEntry`'s one entry,
+    `TimelineAddEntries`, and `TimelineAddToModule`'s items on later media pages): id, kind, posts and cursors."""
+    result = ((response.get("data") or {}).get("user") or {}).get("result") or {}
+    instructions = ((result.get("timeline") or {}).get("timeline") or {}).get("instructions") or []
+
+    def post(item_content: dict[str, Any]) -> dict[str, Any] | None:
+        tweet = ((item_content.get("tweet_results") or {}).get("result")) or {}
+        tweet = tweet.get("tweet") or tweet
+        legacy = tweet.get("legacy") or {}
+        if not legacy:
+            return None
+        user = ((tweet.get("core") or {}).get("user_results") or {}).get("result") or {}
+        retweeted = ((legacy.get("retweeted_status_result") or {}).get("result")) or {}
+        media = (legacy.get("extended_entities") or {}).get("media") or []
+        return {
+            "id": tweet.get("rest_id"),
+            "author": (user.get("core") or {}).get("screen_name"),
+            "retweet_of": (retweeted.get("tweet") or retweeted).get("rest_id"),
+            "in_reply_to": legacy.get("in_reply_to_status_id_str"),
+            "media": [m.get("type") for m in media],
+            "likes": ((retweeted.get("tweet") or retweeted).get("legacy") or legacy).get("favorite_count"),
+            "promoted": bool(item_content.get("promotedMetadata")),
+        }
+
+    summary = []
+    for instruction in instructions:
+        entries = instruction.get("entries") or ([instruction["entry"]] if instruction.get("entry") else [])
+        module_items = instruction.get("moduleItems") or []
+        row_base = {"instruction": instruction.get("type")}
+        for item in module_items:
+            summary.append({**row_base, "entry_id": item.get("entryId"), "posts": [p for p in [post(((item.get("item") or {}).get("itemContent")) or {})] if p]})
+        for entry in entries:
+            content = entry.get("content") or {}
+            row: dict[str, Any] = {**row_base, "entry_id": entry.get("entryId"), "type": content.get("entryType") or content.get("__typename")}
+            if content.get("itemContent"):
+                row["posts"] = [p for p in [post(content["itemContent"])] if p]
+            elif content.get("items"):
+                row["posts"] = [p for item in content["items"] for p in [post(((item.get("item") or {}).get("itemContent")) or {})] if p]
+            if content.get("cursorType"):
+                row["cursor"] = {"type": content.get("cursorType"), "value": content.get("value")}
+            summary.append(row)
+    return summary
+
+
 def post_preview(response: dict[str, Any]) -> dict[str, Any] | None:
     """A `TweetResultByRestId` post as the app previews it in chats: author, text, and each photo, video or GIF with
     its aspect ratio and the MP4 variant it plays (the highest bitrate up to 1 Mbps, else the lowest)."""
@@ -860,6 +1006,25 @@ def build_parser() -> argparse.ArgumentParser:
     thread = subparsers.add_parser("thread", help="Fetch the conversation around a post (TweetDetail).")
     thread.add_argument("tweet_id")
     thread.add_argument("--cursor")
+    user = subparsers.add_parser("user", help="Fetch a profile (UserByScreenName) and summarize following and bell state.")
+    user.add_argument("screen_name")
+    user.add_argument("--legacy", action="store_true", help="Send the app's old request (query id IGgvgiOx4QZndDHuD3x9TQ) to compare.")
+    for name, help_text in [
+        ("user-tweets", "Fetch one page of a profile's posts (UserTweets), as X's web profile shows them."),
+        ("user-media", "Fetch one page of a profile's media grid (UserMedia)."),
+        ("user-originals", "Fetch one page of a profile's own posts (UserOriginalsTimeline); --most-liked sorts by likes."),
+    ]:
+        timeline = subparsers.add_parser(name, help=help_text)
+        timeline.add_argument("user_id", help="Numeric X user id.")
+        timeline.add_argument("--cursor", help="A Bottom cursor from the previous page.")
+        timeline.add_argument("--count", type=int, default=20)
+        timeline.add_argument("--most-liked", action="store_true", help="Sort by most liked (sortByMostLiked), as the web profile's Popular sort.")
+    profile_filter = subparsers.add_parser("profile-filter", help="Fetch one page of ProfileFilter (the web profile's sort and filter).")
+    profile_filter.add_argument("user_id", help="Numeric X user id.")
+    profile_filter.add_argument("--mode", default="Likes", help="Likes or Latest.")
+    profile_filter.add_argument("--bucket", default="Posts", help="Posts, Replies, Quotes, OnlyVideo, Retweets, or a value to try.")
+    profile_filter.add_argument("--reverse", action="store_true", help="Oldest first.")
+    profile_filter.add_argument("--cursor", help="A Bottom cursor from the previous page.")
     reply = subparsers.add_parser("reply", help="Reply to a post (publishes a post).")
     reply.add_argument("tweet_id")
     reply.add_argument("text")
@@ -901,6 +1066,22 @@ def main() -> None:
         result = client.dm_unread_count()
     elif args.command == "thread":
         result = client.thread(args.tweet_id, cursor=args.cursor)
+    elif args.command == "user":
+        result = client.user(args.screen_name, legacy=args.legacy)
+        if args.summary:
+            result = {k: v for k, v in result.items() if k != "raw"}
+    elif args.command in ("user-tweets", "user-media", "user-originals"):
+        operation = {"user-tweets": "UserTweets", "user-media": "UserMedia", "user-originals": "UserOriginalsTimeline"}[args.command]
+        result = client.user_timeline(operation, args.user_id, cursor=args.cursor, count=args.count, most_liked=args.most_liked)
+        if args.summary:
+            result = result["entries"]
+    elif args.command == "profile-filter":
+        variables = {"mode": args.mode, "bucket": args.bucket}
+        if args.reverse:
+            variables["reverse"] = True
+        result = client.user_timeline("ProfileFilter", args.user_id, cursor=args.cursor, filter_variables=variables)
+        if args.summary:
+            result = result["entries"]
     elif args.command == "tweet":
         result = client.tweet(args.tweet_id)
     elif args.command == "post-preview":

@@ -18,10 +18,10 @@ Sources/
       SearchView.swift              # Cross-network profile search
       SearchBar.swift               # Shared search field modifier (Search, Chats) and the drawer field's fill fix
       CompactListRow.swift          # Shared row insets for the feed and Chats lists
-      ChatInfoView.swift            # Chat details for networks without their own screen; header action buttons (Message, Mute, Archive)
+      ChatInfoView.swift            # Chat details for networks without their own screen (or the person's profile); header action buttons (Message, Mute, Archive)
       StoryComposerView.swift       # Full-screen story composer scaffold
       NotificationDetailView.swift  # Standard form-based notification detail
-      ProfileDetailView.swift       # Actor profile detail
+      ProfileDetailView.swift       # The profile for search, notifications, stories and one-to-one chats; X Posts/Media
       PostCardView.swift            # A post laid out as on its network, with reply/repost/quote/like, and the reply/quote composer
       PostThreadView.swift          # A post's thread in post details: every earlier post, then the post, highlighted
       NetworkBadgeIcon.swift        # Shared social network icon badge
@@ -153,6 +153,7 @@ Sources/
     ViewModels/
       FeedViewModel.swift
       ProfileSearchViewModel.swift
+      ProfileTimelineViewModel.swift # A profile's Posts and Media pages; owns its loads so list rows can't cancel or repeat them
       StoryBarViewModel.swift
       SettingsViewModel.swift
       ApronServersViewModel.swift

@@ -75,3 +75,10 @@ public struct ChatServerFilter {
         self.includes = includes
     }
 }
+
+/// A one-to-one chat with someone who has a profile on the network, which the chat's title opens. Nil until the
+/// chat knows them, and for groups.
+@MainActor
+public protocol ChatProfileLinking: ChatAdapter {
+    var profileActor: NotificationActor? { get }
+}

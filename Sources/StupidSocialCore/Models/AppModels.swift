@@ -119,14 +119,17 @@ public struct NotificationActor: Hashable, Codable, Sendable {
     public let displayName: String?
     public let avatarURL: URL?
     public let timestamp: Date?
+    /// Whether the network marks them verified (X's checkmark); nil where it isn't known.
+    public let isVerified: Bool?
 
-    public init(id: String, network: SocialNetwork, username: String?, displayName: String?, avatarURL: URL?, timestamp: Date? = nil) {
+    public init(id: String, network: SocialNetwork, username: String?, displayName: String?, avatarURL: URL?, timestamp: Date? = nil, isVerified: Bool? = nil) {
         self.id = id
         self.network = network
         self.username = username
         self.displayName = displayName
         self.avatarURL = avatarURL
         self.timestamp = timestamp
+        self.isVerified = isVerified
     }
 }
 

@@ -23,6 +23,12 @@ enum DebugRedaction {
         return "Redacted"
     }
 
+    /// The name a post shows above it, as on its network: the display name, else the handle.
+    static func displayName(_ actor: NotificationActor, enabled: Bool) -> String {
+        guard enabled else { return actor.displayName.flatMap { $0.isEmpty ? nil : $0 } ?? actor.username ?? actor.id }
+        return "Redacted"
+    }
+
     static func actorName(_ actor: NotificationActor, enabled: Bool) -> String {
         guard enabled else { return actor.username ?? actor.displayName ?? actor.id }
         return "Redacted"

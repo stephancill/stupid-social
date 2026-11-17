@@ -48,6 +48,10 @@ public struct XClient {
         static let deleteRetweet = "ZyZigVsNiFO6v1dEks1eWg"
         static let createTweet = "l4hk8uVGvR-a8kzQ4nOhPA"
         static let tweetDetail = "qpemjmVMoTWDvcRT43JIVQ"
+        static let userTweets = "D6z-FJI2pKuwEeYYxVIGbg"
+        static let userMedia = "iTSlWbsmD00dAE7Sk9xvIw"
+        static let userOriginalsTimeline = "ZFKu1DFS63hgrkLzR3Hsdw"
+        static let userByScreenName = "AMIBMjtxEEATh4z8V9GtRg"
     }
 
     private static let tweetFeatures: [String: Any] = [
@@ -110,18 +114,23 @@ public struct XClient {
             throw SourceError.notConfigured
         }
 
-        let queryId = "IGgvgiOx4QZndDHuD3x9TQ"
-        let variables: [String: Any] = ["screen_name": screenName, "withSafetyModeUserFields": true]
+        // The web client's request (`fetchOneUserByScreenName`). The older `IGgvgiOx4QZndDHuD3x9TQ` answered with
+        // `legacy` and no `notifications_settings`, so the bell state never showed (observed 2026-11-17).
+        let variables: [String: Any] = ["screen_name": screenName, "withGrokTranslatedBio": true]
         let features: [String: Any] = [
             "hidden_profile_subscriptions_enabled": true,
-            "rweb_tipjar_consumption_enabled": true,
-            "responsive_web_graphql_exclude_directive_enabled": true,
+            "profile_label_improvements_pcf_label_in_post_enabled": true,
+            "responsive_web_profile_redirect_enabled": true,
+            "rweb_tipjar_consumption_enabled": false,
+            "verified_phone_label_enabled": false,
+            "subscriptions_verification_info_is_identity_verified_enabled": true,
+            "subscriptions_verification_info_verified_since_enabled": true,
             "highlights_tweets_tab_ui_enabled": true,
             "responsive_web_twitter_article_notes_tab_enabled": true,
+            "subscriptions_feature_can_gift_premium": false,
             "creator_subscriptions_tweet_preview_api_enabled": true,
             "responsive_web_graphql_timeline_navigation_enabled": true,
         ]
-
         guard
             let varsData = try? JSONSerialization.data(withJSONObject: variables),
             let featData = try? JSONSerialization.data(withJSONObject: features),
@@ -131,43 +140,20 @@ public struct XClient {
             throw SourceError.invalidResponse
         }
 
-        let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
-        let varsEncoded = varsJSON.addingPercentEncoding(withAllowedCharacters: allowed) ?? varsJSON
-        let featEncoded = featJSON.addingPercentEncoding(withAllowedCharacters: allowed) ?? featJSON
-
-        guard let url = URL(string: "https://x.com/i/api/graphql/\(queryId)/UserByScreenName?variables=\(varsEncoded)&features=\(featEncoded)") else {
-            throw SourceError.invalidResponse
-        }
+        var components = URLComponents(string: "https://x.com/i/api/graphql/\(TweetQueryIds.userByScreenName)/UserByScreenName")!
+        components.queryItems = [
+            URLQueryItem(name: "variables", value: varsJSON),
+            URLQueryItem(name: "features", value: featJSON),
+            URLQueryItem(name: "fieldToggles", value: #"{"withAuxiliaryUserLabels":true,"withPayments":false}"#),
+        ]
+        guard let url = components.url else { throw SourceError.invalidResponse }
 
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.allHTTPHeaderFields = headers(credentials: credentials)
 
         let data = try await send(request)
-
-        let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-        let decoded = try decoder.decode(XGraphQLUserResponse.self, from: data)
-        let result = decoded.data?.user?.result
-        guard let legacy = result?.legacy else {
-            throw SourceError.invalidResponse
-        }
-        return XProfileResponse(
-            idStr: result?.restId ?? "",
-            screenName: result?.core?.screenName ?? screenName,
-            name: result?.core?.name ?? "",
-            description: legacy.description,
-            followersCount: legacy.followersCount,
-            friendsCount: legacy.friendsCount,
-            statusesCount: legacy.statusesCount,
-            createdAt: result?.core?.createdAt.flatMap(Date.twitter),
-            verified: result?.isBlueVerified,
-            profileImageUrlHttps: result?.avatar?.imageUrl,
-            profileBannerUrl: legacy.profileBannerUrl,
-            isFollowing: result?.relationshipPerspectives?.following,
-            isFollowedBy: result?.relationshipPerspectives?.followedBy,
-            isNotifiedForPosts: result?.notificationsSettings?.notificationsEnabled,
-        )
+        return try XUserProfileParser.parse(data: data, screenName: screenName)
     }
 
     public func searchUsers(query: String) async throws -> [XProfileResponse] {
@@ -223,6 +209,8 @@ public struct XClient {
                 verified: user.isBlueVerified ?? user.legacy.verified,
                 profileImageUrlHttps: user.avatar?.imageUrl ?? user.legacy.profileImageUrlHttps,
                 profileBannerUrl: nil,
+                location: nil,
+                websiteURL: nil,
                 isFollowing: user.legacy.following,
                 isFollowedBy: nil,
                 isNotifiedForPosts: nil,
@@ -480,6 +468,68 @@ public struct XClient {
         return try XThreadParser.parse(data: data, focalId: tweetId)
     }
 
+    /// A page of a profile's posts and reposts (`UserTweets`), of its own posts most liked first
+    /// (`UserOriginalsTimeline` with `sortByMostLiked`, the web profile's Popular sort; `UserTweets` ignores it), or of
+    /// its posts with media (`UserMedia`), as X's web profile loads them (`scripts/x-web-client.py user-tweets` /
+    /// `user-originals --most-liked` / `user-media`).
+    func userTimeline(userId: String, kind: ProfileTimelineKind, cursor: String?) async throws -> ProfileTimelinePage {
+        guard let credentials = try credentialStore.loadXCredentials() else {
+            throw SourceError.notConfigured
+        }
+
+        var variables: [String: Any] = ["userId": userId, "count": 20, "withVoice": true]
+        if let cursor {
+            variables["cursor"] = cursor
+        }
+        let operation: String
+        let queryId: String
+        switch kind {
+        case .posts:
+            operation = "UserTweets"
+            queryId = TweetQueryIds.userTweets
+            variables["includePromotedContent"] = true
+            variables["withQuickPromoteEligibilityTweetFields"] = true
+        case .mostLiked, .mediaMostLiked:
+            operation = "UserOriginalsTimeline"
+            queryId = TweetQueryIds.userOriginalsTimeline
+            variables["sortByMostLiked"] = true
+            variables["includePromotedContent"] = true
+            variables["withQuickPromoteEligibilityTweetFields"] = true
+        case .media:
+            operation = "UserMedia"
+            queryId = TweetQueryIds.userMedia
+            variables["includePromotedContent"] = false
+            variables["withClientEventToken"] = false
+            variables["withBirdwatchNotes"] = false
+        }
+        var features = Self.tweetFeatures
+        features["rweb_video_screen_enabled"] = false
+        features["responsive_web_enhance_cards_enabled"] = false
+        guard
+            let varsData = try? JSONSerialization.data(withJSONObject: variables),
+            let featData = try? JSONSerialization.data(withJSONObject: features),
+            let varsJSON = String(data: varsData, encoding: .utf8),
+            let featJSON = String(data: featData, encoding: .utf8)
+        else {
+            throw SourceError.invalidResponse
+        }
+
+        var components = URLComponents(string: "https://x.com/i/api/graphql/\(queryId)/\(operation)")!
+        components.queryItems = [
+            URLQueryItem(name: "variables", value: varsJSON),
+            URLQueryItem(name: "features", value: featJSON),
+            URLQueryItem(name: "fieldToggles", value: #"{"withArticlePlainText":false}"#),
+        ]
+        guard let url = components.url else { throw SourceError.invalidResponse }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.allHTTPHeaderFields = headers(credentials: credentials)
+
+        let data = try await send(request)
+        return try XUserTimelineParser.parse(data: data)
+    }
+
     func setLiked(tweetId: String, liked: Bool) async throws {
         if liked {
             try await tweetMutation(operation: "FavoriteTweet", queryId: TweetQueryIds.favoriteTweet, variables: ["tweet_id": tweetId])
@@ -581,6 +631,10 @@ public struct XClient {
         }
         if http.statusCode == 401 || http.statusCode == 403 {
             throw SourceError.notConfigured
+        }
+        // Each query has its own allowance per 15 minutes, such as `UserTweets` (observed 2026-11-17).
+        if http.statusCode == 429 {
+            throw SourceError.serviceError("X is limiting requests for now. Try again in a few minutes.")
         }
         guard (200 ..< 300).contains(http.statusCode) else {
             throw SourceError.invalidResponse
@@ -730,57 +784,128 @@ public struct XProfileResponse {
     public let verified: Bool?
     public let profileImageUrlHttps: String?
     public let profileBannerUrl: String?
+    public var location: String?
+    public var websiteURL: URL?
     public let isFollowing: Bool?
     public let isFollowedBy: Bool?
     public let isNotifiedForPosts: Bool?
 }
 
-private struct XGraphQLUserResponse: Decodable {
-    let data: XGraphQLData?
-
-    struct XGraphQLData: Decodable {
-        let user: XGraphQLUser?
+/// Maps a `UserByScreenName` result. The current request has no `legacy`: counts are in `relationship_counts` and
+/// `tweet_counts`, the bio and the website's expanded link in `profile_bio`, and the bell in `notifications_settings`
+/// (`scripts/x-web-client.py user`, observed 2026-11-17).
+enum XUserProfileParser {
+    static func parse(data: Data, screenName: String) throws -> XProfileResponse {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let decoded = try decoder.decode(XGraphQLUserResponse.self, from: data)
+        guard let result = decoded.data?.user?.result, let id = result.restId else {
+            throw SourceError.serviceError("X profile lookup failed for @\(screenName).")
+        }
+        let bio = result.profileBio
+        return XProfileResponse(
+            idStr: id,
+            screenName: result.core?.screenName ?? screenName,
+            name: result.core?.name ?? "",
+            description: bio?.description.map { expandingLinks(in: $0, urls: bio?.entities?.description?.urls ?? []) },
+            followersCount: result.relationshipCounts?.followers,
+            friendsCount: result.relationshipCounts?.following,
+            statusesCount: result.tweetCounts?.tweets,
+            createdAt: result.core?.createdAt.flatMap(Date.twitter),
+            verified: result.isBlueVerified,
+            profileImageUrlHttps: result.avatar?.imageUrl,
+            profileBannerUrl: result.banner?.imageUrl,
+            location: result.location?.location.flatMap { $0.isEmpty ? nil : $0 },
+            websiteURL: bio?.entities?.url?.urls?.first?.expandedUrl.flatMap(URL.init(string:)),
+            isFollowing: result.relationshipPerspectives?.following,
+            isFollowedBy: result.relationshipPerspectives?.followedBy,
+            isNotifiedForPosts: result.notificationsSettings?.notificationsEnabled,
+        )
     }
 
-    struct XGraphQLUser: Decodable {
-        let result: XGraphQLResult?
+    /// The bio with its t.co links replaced by the URLs they expand to, as X shows them.
+    private static func expandingLinks(in text: String, urls: [XGraphQLUserResponse.EntityURL]) -> String {
+        urls.reduce(text) { text, link in
+            guard let short = link.url, let expanded = link.expandedUrl else { return text }
+            return text.replacingOccurrences(of: short, with: expanded)
+        }
+    }
+}
+
+struct XGraphQLUserResponse: Decodable {
+    let data: DataField?
+
+    struct DataField: Decodable {
+        let user: User?
     }
 
-    struct XGraphQLResult: Decodable {
+    struct User: Decodable {
+        let result: Result?
+    }
+
+    struct Result: Decodable {
         let restId: String?
-        let core: XGraphQLCore?
-        let legacy: XGraphQLLegacy?
+        let core: Core?
         let isBlueVerified: Bool?
-        let relationshipPerspectives: XGraphQLRelationship?
-        let notificationsSettings: XGraphQLNotificationsSettings?
-        let avatar: XGraphQLAvatar?
+        let relationshipPerspectives: Relationship?
+        let notificationsSettings: NotificationsSettings?
+        let avatar: ImageURL?
+        let banner: ImageURL?
+        let relationshipCounts: RelationshipCounts?
+        let tweetCounts: TweetCounts?
+        let profileBio: ProfileBio?
+        let location: Location?
     }
 
-    struct XGraphQLAvatar: Decodable {
+    struct ImageURL: Decodable {
         let imageUrl: String?
     }
 
-    struct XGraphQLNotificationsSettings: Decodable {
+    struct NotificationsSettings: Decodable {
         let notificationsEnabled: Bool?
     }
 
-    struct XGraphQLCore: Decodable {
+    struct Core: Decodable {
         let screenName: String?
         let name: String?
         let createdAt: String?
     }
 
-    struct XGraphQLLegacy: Decodable {
-        let description: String?
-        let followersCount: Int?
-        let friendsCount: Int?
-        let statusesCount: Int?
-        let profileBannerUrl: String?
-    }
-
-    struct XGraphQLRelationship: Decodable {
+    struct Relationship: Decodable {
         let following: Bool?
         let followedBy: Bool?
+    }
+
+    struct RelationshipCounts: Decodable {
+        let followers: Int?
+        let following: Int?
+    }
+
+    struct TweetCounts: Decodable {
+        let tweets: Int?
+    }
+
+    struct ProfileBio: Decodable {
+        let description: String?
+        let entities: Entities?
+    }
+
+    struct Entities: Decodable {
+        let description: URLs?
+        let url: URLs?
+    }
+
+    struct URLs: Decodable {
+        let urls: [EntityURL]?
+    }
+
+    struct EntityURL: Decodable {
+        let url: String?
+        let expandedUrl: String?
+    }
+
+    struct Location: Decodable {
+        let location: String?
     }
 }
 
@@ -1792,7 +1917,10 @@ enum XThreadParser {
 
     private static func post(from itemContent: XThreadResponse.ItemContent) -> PostThread.Post? {
         guard let result = itemContent.tweetResults?.result else { return nil }
-        let tweet = result.wrapped ?? result.direct
+        return post(from: result.wrapped ?? result.direct)
+    }
+
+    static func post(from tweet: XThreadResponse.Tweet) -> PostThread.Post? {
         guard let id = tweet.restId, let legacy = tweet.legacy else { return nil }
 
         let user = tweet.core?.userResults?.result
@@ -1804,6 +1932,7 @@ enum XThreadParser {
                 username: user.core?.screenName,
                 displayName: user.core?.name,
                 avatarURL: user.avatar?.imageUrl.flatMap { URL(string: $0.replacingOccurrences(of: "_normal", with: "")) },
+                isVerified: user.isBlueVerified == true || user.verification?.verified == true,
             )
         }
         let imageURLs = (legacy.extendedEntities?.media ?? []).compactMap { $0.mediaUrlHttps.flatMap(URL.init) }
@@ -1851,6 +1980,127 @@ enum XThreadParser {
         text.replacingOccurrences(of: "&lt;", with: "<")
             .replacingOccurrences(of: "&gt;", with: ">")
             .replacingOccurrences(of: "&amp;", with: "&")
+    }
+}
+
+// MARK: - Profile timelines (UserTweets, UserMedia)
+
+/// Maps a `UserTweets` or `UserMedia` page. Posts come as `tweet-<id>` entries, in `profile-conversation-…` modules
+/// (a self-thread) and in the `profile-grid-0` module, whose later pages add to it with `TimelineAddToModule`; the
+/// pinned post comes in `TimelinePinEntry`. Promoted posts and suggestions are left out, and a repost shows the
+/// reposted post. X returns a bottom cursor even at the end, so a page without posts ends the timeline.
+enum XUserTimelineParser {
+    static func parse(data: Data) throws -> ProfileTimelinePage {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let response = try decoder.decode(XUserTimelineResponse.self, from: data)
+        guard let instructions = response.data?.user?.result?.timeline?.timeline?.instructions else {
+            throw SourceError.invalidResponse
+        }
+
+        var items: [ProfileTimelineItem] = []
+        var seen = Set<String>()
+        var bottomCursor: String?
+        func add(_ itemContent: XThreadResponse.ItemContent?, isPinned: Bool) {
+            guard let item = itemContent.flatMap({ self.item(from: $0, isPinned: isPinned) }), seen.insert(item.id).inserted else { return }
+            items.append(item)
+        }
+
+        for instruction in instructions {
+            let isPinned = instruction.type == "TimelinePinEntry"
+            for moduleItem in instruction.moduleItems ?? [] {
+                add(moduleItem.item?.itemContent, isPinned: false)
+            }
+            for entry in (instruction.entries ?? []) + (instruction.entry.map { [$0] } ?? []) {
+                if entry.content.cursorType == "Bottom" {
+                    bottomCursor = entry.content.value
+                }
+                guard entry.entryId.hasPrefix("tweet-") || entry.entryId.hasPrefix("profile-") else { continue }
+                add(entry.content.itemContent, isPinned: isPinned)
+                for moduleItem in entry.content.items ?? [] {
+                    add(moduleItem.item?.itemContent, isPinned: false)
+                }
+            }
+        }
+        return ProfileTimelinePage(items: items, nextCursor: items.isEmpty ? nil : bottomCursor)
+    }
+
+    private static func item(from itemContent: XThreadResponse.ItemContent, isPinned: Bool) -> ProfileTimelineItem? {
+        guard let result = itemContent.tweetResults?.result else { return nil }
+        let tweet = result.wrapped ?? result.direct
+        var repostedBy: String?
+        var shown = tweet
+        if let reposted = tweet.legacy?.retweetedStatusResult?.result {
+            shown = reposted.wrapped ?? reposted.direct
+            let user = tweet.core?.userResults?.result?.core
+            repostedBy = user?.name ?? user?.screenName
+        }
+        guard let post = XThreadParser.post(from: shown) else { return nil }
+        let media = shown.legacy?.extendedEntities?.media ?? []
+        let cardImage = shown.card?.legacy?.bindingValues?
+            .first { ["photo_image_full_size_large", "thumbnail_image_large", "summary_photo_image_large", "player_image_large"].contains($0.key) }?
+            .value?.imageValue?.url
+        return ProfileTimelineItem(
+            post: post,
+            repostedBy: repostedBy,
+            isPinned: isPinned,
+            thumbnailURL: (media.first?.mediaUrlHttps ?? cardImage).flatMap(URL.init(string:)),
+            isVideo: media.first.map { $0.type == "video" || $0.type == "animated_gif" } ?? false,
+            hasMultipleMedia: media.count > 1,
+        )
+    }
+}
+
+struct XUserTimelineResponse: Decodable {
+    let data: DataField?
+
+    struct DataField: Decodable {
+        let user: User?
+    }
+
+    struct User: Decodable {
+        let result: Result?
+    }
+
+    struct Result: Decodable {
+        let timeline: Outer?
+    }
+
+    struct Outer: Decodable {
+        let timeline: Timeline?
+    }
+
+    struct Timeline: Decodable {
+        let instructions: [Instruction]
+    }
+
+    struct Instruction: Decodable {
+        let type: String?
+        let entries: [Entry]?
+        /// `TimelinePinEntry`'s one entry.
+        let entry: Entry?
+        /// `TimelineAddToModule`'s items, on later `UserMedia` pages.
+        let moduleItems: [ModuleItem]?
+    }
+
+    struct Entry: Decodable {
+        let entryId: String
+        let content: Content
+    }
+
+    struct Content: Decodable {
+        let itemContent: XThreadResponse.ItemContent?
+        let items: [ModuleItem]?
+        let cursorType: String?
+        let value: String?
+    }
+
+    struct ModuleItem: Decodable {
+        let item: Item?
+    }
+
+    struct Item: Decodable {
+        let itemContent: XThreadResponse.ItemContent?
     }
 }
 
@@ -1907,6 +2157,29 @@ struct XThreadResponse: Decodable {
         let legacy: Legacy?
         let noteTweet: NoteTweet?
         let quotedStatusResult: QuotedResult?
+        let card: Card?
+    }
+
+    /// A link card; its `binding_values` name its images.
+    struct Card: Decodable {
+        let legacy: CardLegacy?
+    }
+
+    struct CardLegacy: Decodable {
+        let bindingValues: [BindingValue]?
+    }
+
+    struct BindingValue: Decodable {
+        let key: String
+        let value: BindingValueContent?
+    }
+
+    struct BindingValueContent: Decodable {
+        let imageValue: ImageValue?
+    }
+
+    struct ImageValue: Decodable {
+        let url: String?
     }
 
     /// The post a post quotes; a class, since a struct can't contain itself.
@@ -1956,6 +2229,8 @@ struct XThreadResponse: Decodable {
         let extendedEntities: ExtendedEntities?
         let entities: Entities?
         let quotedStatusPermalink: Permalink?
+        /// The post a repost reposts.
+        let retweetedStatusResult: QuotedResult?
     }
 
     struct Entities: Decodable {

@@ -14,6 +14,7 @@ public final class AccountComponents {
     public private(set) var relationshipMutator: (any RelationshipMutating)?
     public private(set) var postEngager: (any PostEngaging)?
     public private(set) var threadLoader: (any PostThreadLoading)?
+    public private(set) var timelineLoader: (any ProfileTimelineLoading)?
 
     public private(set) var xClient: XClient?
     /// Posts that chats share, kept for every chat of the account.
@@ -54,6 +55,7 @@ public final class AccountComponents {
             relationshipMutator = source
             postEngager = source
             threadLoader = source
+            timelineLoader = source
             let chatClient = XChatClient(credentialStore: credentials)
             xChatClient = chatClient
             let unlock = XChatUnlockViewModel(client: chatClient, keychainStore: credentials)
@@ -149,6 +151,7 @@ public final class AccountComponents {
             relationships: relationshipMutator,
             engagement: postEngager,
             threads: threadLoader,
+            timelines: timelineLoader,
         )
     }
 

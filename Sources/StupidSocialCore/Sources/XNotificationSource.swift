@@ -1,6 +1,6 @@
 import Foundation
 
-public struct XNotificationSource: NotificationFetching, ProfileFetching, NotificationTargetDetailFetching, RelationshipMutating, PostEngaging, PostThreadLoading {
+public struct XNotificationSource: NotificationFetching, ProfileFetching, NotificationTargetDetailFetching, RelationshipMutating, PostEngaging, PostThreadLoading, ProfileTimelineLoading {
     public let network: SocialNetwork = .x
 
     private let client: XClient
@@ -88,6 +88,24 @@ public struct XNotificationSource: NotificationFetching, ProfileFetching, Notifi
         try await client.conversation(tweetId: postId)
     }
 
+    /// Media by likes is the most-liked posts with a photo, video or card image: `UserMedia` ignores
+    /// `sortByMostLiked`, and `ProfileFilter`, the web client's sorted filter, answers empty for every profile
+    /// (observed 2026-11-17). About one most-liked post in seven has media, so this reads up to four pages for some.
+    public func fetchProfileTimeline(userId: String, kind: ProfileTimelineKind, cursor: String?) async throws -> ProfileTimelinePage {
+        guard kind == .mediaMostLiked else {
+            return try await client.userTimeline(userId: userId, kind: kind, cursor: cursor)
+        }
+        var items: [ProfileTimelineItem] = []
+        var next = cursor
+        for _ in 0 ..< 4 {
+            let page = try await client.userTimeline(userId: userId, kind: kind, cursor: next)
+            items += page.items.filter { $0.thumbnailURL != nil }
+            next = page.nextCursor
+            if !items.isEmpty || next == nil { break }
+        }
+        return ProfileTimelinePage(items: items, nextCursor: next)
+    }
+
     private func networkProfile(from profile: XProfileResponse) -> NetworkProfile {
         NetworkProfile(
             id: profile.idStr,
@@ -95,6 +113,7 @@ public struct XNotificationSource: NotificationFetching, ProfileFetching, Notifi
             username: profile.screenName,
             displayName: profile.name,
             bio: profile.description,
+            location: profile.location,
             avatarURL: profile.profileImageUrlHttps.flatMap { urlString in
                 URL(string: urlString.replacingOccurrences(of: "_normal", with: ""))
             },
@@ -102,6 +121,7 @@ public struct XNotificationSource: NotificationFetching, ProfileFetching, Notifi
             followingCount: profile.friendsCount,
             postsCount: profile.statusesCount,
             joinedAt: profile.createdAt,
+            websiteURL: profile.websiteURL,
             isVerified: profile.verified,
             isMutualFollow: (profile.isFollowing == true && profile.isFollowedBy == true) ? true : nil,
             isFollowing: profile.isFollowing,

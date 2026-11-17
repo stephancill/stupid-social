@@ -5,7 +5,7 @@ import Foundation
 /// Reactions, edits and deletes are events of their own, applied to the messages they name by sequence id.
 /// The user's messages show as seen once someone else's read marker passes them.
 @MainActor
-public final class XChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, ChatLiveUpdating, ChatReferenceResolving, ChatReadReceipts, ChatForwarding, ChatVoiceSending, ChatAudioPreviewing, ChatMuting, ChatArchiving {
+public final class XChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, ChatLiveUpdating, ChatReferenceResolving, ChatReadReceipts, ChatForwarding, ChatVoiceSending, ChatAudioPreviewing, ChatMuting, ChatArchiving, ChatProfileLinking {
     public let network = ChatNetwork.x
     public let canReply = true
     public let acceptsAttachments = true
@@ -33,6 +33,7 @@ public final class XChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, 
     private var editedTexts: [String: String] = [:]
     private var deletedIds: Set<String> = []
     private var viewerId: String?
+    public private(set) var profileActor: NotificationActor?
     private var conversationToken: String?
     /// The viewer's read marker, locally ahead of X while a mark is pending.
     private var readUntil: Int64 = 0
@@ -63,6 +64,7 @@ public final class XChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, 
         let subtitle: String
         let showsSenderNames: Bool
         let titleIsMemberNames: Bool
+        let profileActor: NotificationActor?
     }
 
     public func restore(state data: Data) {
@@ -75,12 +77,14 @@ public final class XChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, 
         info.subtitle = state.subtitle
         info.showsSenderNames = state.showsSenderNames
         info.titleIsMemberNames = state.titleIsMemberNames
+        profileActor = state.profileActor
     }
 
     public func state() -> Data? {
         try? JSONEncoder().encode(State(
             people: people, viewerId: viewerId, readUntil: readUntil, othersReadUntil: othersReadUntil, title: info.title,
             subtitle: info.subtitle, showsSenderNames: info.showsSenderNames, titleIsMemberNames: info.titleIsMemberNames,
+            profileActor: profileActor,
         ))
     }
 
@@ -169,6 +173,11 @@ public final class XChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, 
         }
     }
 
+    private static func profileActor(of conversation: XChatConversationInfo) -> NotificationActor? {
+        guard !conversation.isGroup, let person = conversation.others.first else { return nil }
+        return NotificationActor(id: person.id, network: .x, username: person.screenName, displayName: person.name, avatarURL: person.avatarURL)
+    }
+
     private func apply(_ conversation: XChatConversationInfo) {
         for person in conversation.others {
             people[person.id] = ChatUser(id: person.id, name: person.name, avatarURL: person.avatarURL)
@@ -179,6 +188,7 @@ public final class XChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, 
             othersReadUntil = max(othersReadUntil, conversation.readEvents.filter { $0.senderId != viewerId }.compactMap(\.readUntil).max() ?? 0)
         }
         info.showsSenderNames = conversation.isGroup
+        profileActor = Self.profileActor(of: conversation)
         if conversation.isGroup {
             if let name = conversation.name {
                 info.title = name
@@ -192,6 +202,10 @@ public final class XChatAdapter: ChatAdapter, ChatEditing, ChatReactionSending, 
     /// missed.
     public func startFollowing() async {
         guard observation == nil else { return }
+        // A chat opened from the store skips the newest page; the inbox the Chats list loaded names the person.
+        if profileActor == nil, let conversation = try? await client.conversation(conversationId) {
+            profileActor = Self.profileActor(of: conversation)
+        }
         observation = liveFeed.connection.observe { [weak self] update in
             guard let self else { return }
             switch update {

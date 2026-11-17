@@ -4,7 +4,7 @@ import Foundation
 /// which the app doesn't use), sends text and replies, reacts, and moves the read receipt as messages are read.
 /// The user's messages show as seen once someone else's read receipt passes them.
 @MainActor
-public final class InstagramChatAdapter: ChatAdapter, ChatReactionSending, ChatReadReceipts, ChatForwarding, ChatVoiceSending, ChatAudioPreviewing {
+public final class InstagramChatAdapter: ChatAdapter, ChatReactionSending, ChatReadReceipts, ChatForwarding, ChatVoiceSending, ChatAudioPreviewing, ChatProfileLinking {
     public let network = ChatNetwork.instagram
     public let canReply = true
     public let acceptsAttachments = false
@@ -21,6 +21,7 @@ public final class InstagramChatAdapter: ChatAdapter, ChatReactionSending, ChatR
     /// Messaging id → person, from the thread's users and the viewer.
     private var people: [String: ChatUser] = [:]
     private var viewerFbid: String?
+    public private(set) var profileActor: NotificationActor?
     /// The legacy thread id the read mutation takes.
     private var legacyThreadId: String?
     /// Where the viewer's read receipt is, locally ahead of Instagram while a mark is pending.
@@ -50,6 +51,7 @@ public final class InstagramChatAdapter: ChatAdapter, ChatReactionSending, ChatR
         let subtitle: String
         let showsSenderNames: Bool
         let othersReadAt: Date?
+        let profileActor: NotificationActor?
     }
 
     public func restore(state data: Data) {
@@ -59,6 +61,7 @@ public final class InstagramChatAdapter: ChatAdapter, ChatReactionSending, ChatR
         legacyThreadId = state.legacyThreadId
         readAt = state.readAt
         othersReadAt = state.othersReadAt
+        profileActor = state.profileActor
         info = ChatInfo(title: state.title, subtitle: state.subtitle, showsSenderNames: state.showsSenderNames)
     }
 
@@ -66,6 +69,7 @@ public final class InstagramChatAdapter: ChatAdapter, ChatReactionSending, ChatR
         try? JSONEncoder().encode(State(
             people: people, viewerFbid: viewerFbid, legacyThreadId: legacyThreadId, readAt: readAt,
             title: info.title, subtitle: info.subtitle, showsSenderNames: info.showsSenderNames, othersReadAt: othersReadAt,
+            profileActor: profileActor,
         ))
     }
 
@@ -107,6 +111,12 @@ public final class InstagramChatAdapter: ChatAdapter, ChatReactionSending, ChatR
             people[fbid] = ChatUser(id: viewer.id ?? fbid, name: "You", avatarURL: viewer.profilePicUrl.flatMap(URL.init))
         }
         info.showsSenderNames = thread.isGroup == true
+        profileActor = thread.isGroup == true ? nil : thread.others.first.map {
+            NotificationActor(
+                id: $0.id, network: .instagram, username: $0.username, displayName: $0.fullName.flatMap { $0.isEmpty ? nil : $0 },
+                avatarURL: $0.profilePicUrl.flatMap(URL.init(string:)),
+            )
+        }
         if let threadTitle = thread.threadTitle, !threadTitle.isEmpty {
             info.title = threadTitle
         }
