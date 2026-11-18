@@ -426,6 +426,12 @@ public extension ApronConnection {
         return result.notJoined?.first { $0.roomId == roomId }.map { ApronRoomListing(room: $0, users: result.users ?? [], isJoined: false) }
     }
 
+    /// A room's threads, joined or not, most recently active first (§4.2.1).
+    func threads(of roomId: String) async throws -> [ApronRoom] {
+        let result = try await request("room_list", params: ApronRoomListParams(filter: "all", members: false, parentRoomId: roomId), as: ApronRoomListResult.self)
+        return (result.joined ?? []) + (result.notJoined ?? [])
+    }
+
     /// A window of a room's log with inclusive bounds: the oldest matches with `after`, otherwise the newest (§4.3.2).
     func history(roomId: String?, after: String? = nil, before: String? = nil, limit: Int) async throws -> ApronHistoryResult {
         try await request("history", params: ApronHistoryParams(roomId: roomId, after: after, before: before, limit: limit), as: ApronHistoryResult.self)

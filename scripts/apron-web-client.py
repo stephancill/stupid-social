@@ -233,6 +233,9 @@ def cmd_rooms(session: Session, args: argparse.Namespace) -> None:
         # One room, joined or not, as a link preview shows it before joining (§4.2.1).
         if args.room_id:
             params["room_id"] = args.room_id
+        # A room's threads, joined or not: rooms whose `parent_room_id` is it (§4.2.1).
+        if args.parent_room_id:
+            params["parent_room_id"] = args.parent_room_id
         output["room_list"] = session.request("room_list", params)
     session.drain(args.wait)
     output["notifications"] = session.notifications
@@ -1101,6 +1104,7 @@ def main() -> None:
     rooms = add("rooms", cmd_rooms)
     rooms.add_argument("--members", action="store_true")
     rooms.add_argument("--room-id")
+    rooms.add_argument("--parent-room-id", help="list only the threads of this room")
     history = add("history", cmd_history)
     history.add_argument("--room", required=True)
     history.add_argument("--limit", type=int, default=20)

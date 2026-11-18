@@ -95,6 +95,7 @@ public final class ApronNotificationSource: ChatListProvider {
         let own = service.readStore.ownUserIds(serverURL: session.serverURL).union([session.you.userId])
         let serverTitle = session.serverTitle
         let serverAvatarURL = (session.connection.server ?? session.server).avatarURL
+        let roomsById = Dictionary(rooms.map { ($0.roomId, $0) }, uniquingKeysWith: { first, _ in first })
         var summaries: [ChatSummary] = []
         for room in rooms where roomIds?.contains(room.roomId) ?? true {
             let page = if let firstPage {
@@ -117,7 +118,8 @@ public final class ApronNotificationSource: ChatListProvider {
                 id: Self.chatId(serverURL: session.serverURL, roomId: room.roomId),
                 network: .apron,
                 title: room.displayTitle(users: users, you: session.you.userId),
-                titlePrefix: serverTitle,
+                // A thread is named under its room, as Discord's are under their channel.
+                titlePrefix: room.parentRoomId.flatMap { roomsById[$0] }.map { "\(serverTitle) / \($0.displayTitle(users: users, you: session.you.userId))" } ?? serverTitle,
                 avatarURL: avatarURL,
                 avatarColorKey: others.count == 1 ? others[0].userId : nil,
                 preview: preview,

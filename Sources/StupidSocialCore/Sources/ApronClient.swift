@@ -333,6 +333,7 @@ public final class ApronConnection {
             firstLogId: logIds.min().map(String.init),
             lastLogId: logIds.max().map(String.init),
             more: false,
+            historyLogId: nil,
         )
     }
 

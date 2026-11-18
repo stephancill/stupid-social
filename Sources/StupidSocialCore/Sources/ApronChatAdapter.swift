@@ -57,6 +57,15 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
     private var memberIds: Set<String>?
     /// The server's joined rooms, by id, which `#room_id`s and links in messages read by name.
     private var knownRooms: [String: ApronRoom] = [:]
+    /// This room's threads, joined or not, by id: each shows as a card where it was started (§4.2).
+    private var threads: [String: ApronRoom] = [:]
+    /// The newest `log_id` of this room that history pages and live records brought (§4.3.3). Moves and edits
+    /// change the log without changing the latest message, which is all the Chats row tells the store, so a room
+    /// whose listed `latest_log_id` is past this catches up on its newest page.
+    private var checkpoint: Int64?
+    /// Whether the chat has been shown (rendered), and the room's threads listed since; chats loaded ahead list none.
+    private var hasRendered = false
+    private var listedThreadsSession: ObjectIdentifier?
     /// Messages that links in this chat point at, fetched once each: their card, or `nil` when the message can't be
     /// read here (another server without an account, a room you can't see, deleted).
     private var linkedMessages: [ApronLink: ChatEmbed?] = [:]
@@ -165,12 +174,15 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
         let emojiCatalogURL: URL?
         /// So read receipts render before the connection is up; only in rooms where another member's cursor arrived.
         let othersRead: Int64?
+        /// The newest log position the stored history has caught up to (`checkpoint`).
+        var checkpoint: Int64?
     }
 
     public func restore(state data: Data) {
         guard let state = try? JSONDecoder().decode(State.self, from: data) else { return }
         mediaOrigins = state.mediaOrigins
         othersRead = state.othersRead
+        checkpoint = state.checkpoint
         if let url = state.emojiCatalogURL {
             loadEmojiCatalog(url)
         }
@@ -187,6 +199,7 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
             mediaOrigins: mediaOrigins,
             emojiCatalogURL: emojiCatalogURL,
             othersRead: othersRead,
+            checkpoint: checkpoint,
         ))
     }
 
@@ -220,10 +233,15 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
     private func page(_ result: ApronHistoryResult, request: ChatPageRequest) throws -> ChatPage {
         var records: [ChatRecord] = []
         var moved: [String] = []
+        var movedIn: Set<String> = []
+        let historyStart = result.historyLogId.flatMap(Int64.init)
         for message in result.messages ?? [] {
             if message.roomId == nil || message.roomId == roomId {
                 if let record = try Self.record(message) {
                     records.append(record)
+                    if Self.movedIn(message, roomId: roomId, historyStart: historyStart) {
+                        movedIn.insert(record.id)
+                    }
                 }
             } else if let id = message.messageId {
                 moved.append(id)
@@ -238,13 +256,28 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
         let first = result.firstLogId.flatMap(Int64.init)
         let last = result.lastLogId.flatMap(Int64.init)
         let more = result.more ?? false
+        switch request {
+        case .newest, .after: advanceCheckpoint(last)
+        default: break
+        }
         let covers = first.flatMap { first in last.map { first ... max(first, $0) } }
         switch request {
         case .after:
-            return ChatPage(records: records, earlier: first.map { ChatCursor(String($0 - 1)) }, later: more ? last.map { ChatCursor(String($0 + 1)) } : nil, covers: covers, isComplete: false)
+            return ChatPage(records: records, earlier: first.map { ChatCursor(String($0 - 1)) }, later: more ? last.map { ChatCursor(String($0 + 1)) } : nil, covers: covers, isComplete: false, movedIn: movedIn)
         default:
-            return ChatPage(records: records, earlier: more ? first.map { ChatCursor(String($0 - 1)) } : nil, covers: covers, isComplete: false)
+            return ChatPage(records: records, earlier: more ? first.map { ChatCursor(String($0 - 1)) } : nil, covers: covers, isComplete: false, movedIn: movedIn)
         }
+    }
+
+    /// A message moved into the room (§4.4) keeps its id, the time it was sent, so it sorts by when it was said
+    /// but arrives at the log position of the move. Its snapshot says where it came from; a later edit doesn't,
+    /// but a message older than the room's history (a thread's creation) can only have moved in.
+    nonisolated static func movedIn(_ message: ApronMessage, roomId: String, historyStart: Int64?) -> Bool {
+        if let previous = message.prevRoomId, previous != roomId {
+            return true
+        }
+        guard let historyStart, let id = message.messageId.flatMap(Int64.init) else { return false }
+        return id < historyStart
     }
 
     // MARK: Connection
@@ -283,6 +316,7 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
                 users[user.userId] = user
             }
             knownRooms = Dictionary(listing.rooms.map { ($0.roomId, $0) }, uniquingKeysWith: { first, _ in first })
+            updateThreads(listing.rooms)
             if let directUser {
                 showNewDirectChat(with: directUser, you: session.you)
                 return
@@ -290,6 +324,7 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
             if let listed = listing.rooms.first(where: { $0.roomId == roomId }) {
                 applyRecord(listed)
                 setMembers(of: listed)
+                catchUpIfBehind(latest: listed.latestLogId.flatMap(Int64.init), on: session.connection)
             } else {
                 // Live deliveries only reach joined rooms (§3.4).
                 try? await session.connection.joinRoom(roomId: roomId)
@@ -297,6 +332,7 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
         }
         room.isConnected = true
         updateNotifications()
+        loadThreadsIfShown()
         onChange?()
     }
 
@@ -514,7 +550,15 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
         service.reactionStore.addOwnMessageIds(own, serverURL: serverURL, roomId: roomId)
         fetchMissingReferences()
         fetchLinkedMessages()
-        return ChatRendering(messages: (sortedSnapshots() + notices).map(chatMessage), reactions: reactions)
+        if !hasRendered {
+            hasRendered = true
+            loadThreadsIfShown()
+        }
+        let sorted = sortedSnapshots()
+        let lowest = sorted.compactMap { $0.messageId.flatMap(Int64.init) }.min()
+        let timeline = (sorted.map { (sortKey: $0.messageId.flatMap(Int64.init) ?? $0.sortKey, message: chatMessage($0)) } + threadCards(from: lowest))
+            .sorted { $0.sortKey < $1.sortKey }
+        return ChatRendering(messages: timeline.map(\.message) + notices.map(chatMessage), reactions: reactions)
     }
 
     private func sortedSnapshots() -> [ApronMessage] {
@@ -679,6 +723,9 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
             return
         }
         if method == "reactions", let record = try? JSONDecoder().decode(ApronReactionRecord.self, from: params) {
+            if record.roomId == roomId {
+                advanceCheckpoint(record.logId.flatMap(Int64.init))
+            }
             write { try Self.records(record, roomId: roomId) }
             return
         }
@@ -694,7 +741,14 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
             notices.append(message)
             onChange?()
         } else if message.roomId == roomId {
-            write { try Self.record(message).map { [$0] } ?? [] }
+            advanceCheckpoint(message.logId.flatMap(Int64.init))
+            do {
+                if let record = try Self.record(message) {
+                    try history?.write([record], movedIn: Self.movedIn(message, roomId: roomId, historyStart: nil) ? [record.id] : [])
+                }
+            } catch {
+                onError?(error)
+            }
         } else if let id = message.messageId {
             // Moved to another room (§4.4).
             try? history?.delete(ids: [id])
@@ -746,6 +800,118 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
         }
     }
 
+    // MARK: Catching up
+
+    private func advanceCheckpoint(_ logId: Int64?) {
+        guard let logId, logId > checkpoint ?? .min else { return }
+        checkpoint = logId
+    }
+
+    /// Stored history the chat opens from without fetching (its Chats row names a stored latest message) can miss
+    /// moves and edits since. When the room's log is past the checkpoint, the log since it is read forward
+    /// (§4.3.3 recovery), at most `catchUpPages` pages, which removes messages moved out and adds those moved in.
+    /// Without a checkpoint (history stored before there was one) the newest pages are read back instead. A newest
+    /// fetch the chat starts itself makes it unneeded, so this waits a moment for one.
+    private func catchUpIfBehind(latest: Int64?, on connection: ApronConnection) {
+        guard let latest, latest > checkpoint ?? .min, session?.server.has("history") == true else { return }
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            guard let self, latest > checkpoint ?? .min else { return }
+            do {
+                try await catchUp(on: connection)
+            } catch {
+                onError?(error)
+            }
+        }
+    }
+
+    private static let catchUpPages = 5
+
+    private func catchUp(on connection: ApronConnection) async throws {
+        var cursor: ChatPageRequest = if let checkpoint { .after(ChatCursor(String(checkpoint + 1))) } else { .newest }
+        for _ in 0 ..< Self.catchUpPages {
+            let result = switch cursor {
+            case let .after(after): try await connection.history(roomId: roomId, after: after.value, limit: pageSize)
+            case let .before(before): try await connection.history(roomId: roomId, before: before.value, limit: pageSize)
+            default: try await connection.history(roomId: roomId, limit: pageSize)
+            }
+            // Storing the page's records as live ones updates what is stored and places what moved in; `page`
+            // removes what moved out.
+            let page = try page(result, request: cursor)
+            try history?.write(page.records, movedIn: page.movedIn)
+            switch cursor {
+            case .after:
+                guard let later = page.later else { return }
+                cursor = .after(later)
+            default:
+                guard let earlier = page.earlier else { return }
+                cursor = .before(earlier)
+            }
+        }
+    }
+
+    // MARK: Threads
+
+    /// Keeps the listed rooms that are threads of this one; a thread left stays, as its card does in apron-web.
+    private func updateThreads(_ rooms: [ApronRoom]) {
+        var changed = false
+        for room in rooms where room.parentRoomId == roomId && threads[room.roomId] != room {
+            threads[room.roomId] = room
+            changed = true
+        }
+        if changed {
+            onChange?()
+        }
+    }
+
+    /// The joined listing holds only the threads the user joined; one listing of the room's threads per connection
+    /// adds the rest, once the chat is shown, since servers limit `room_list` (6 a minute on the demo) and the Chats
+    /// list loads chats ahead. A refusal leaves the joined ones.
+    private func loadThreadsIfShown() {
+        guard hasRendered, let session, session.server.has("rooms"), directUser == nil,
+              knownRooms[roomId]?.isNamedForMembers != true
+        else { return }
+        let connection = session.connection
+        guard listedThreadsSession != ObjectIdentifier(connection) else { return }
+        listedThreadsSession = ObjectIdentifier(connection)
+        Task { [weak self, roomId] in
+            guard let threads = try? await connection.threads(of: roomId) else { return }
+            self?.updateThreads(threads)
+        }
+    }
+
+    /// Each thread as a card at the place it was started, its `room_id` when that is a log id (as servers mint
+    /// them), among the messages from the oldest shown on. A card opens the thread through its link.
+    private func threadCards(from lowest: Int64?) -> [(sortKey: Int64, message: ChatMessage)] {
+        threads.values.compactMap { thread in
+            guard let anchor = Int64(thread.roomId), lowest.map({ anchor >= $0 }) ?? true else { return nil }
+            let title = (thread.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let message = ChatMessage(
+                id: "thread:\(thread.roomId)",
+                sender: ChatUser(id: "thread", name: "Thread", avatarURL: nil, isSystem: true),
+                timestamp: ApronLogId.date(thread.roomId),
+                text: nil,
+                embeds: [.card(
+                    title: title.isEmpty ? "Untitled" : title, subtitle: Self.threadSubtitle(thread.description),
+                    systemImage: "bubble.left.and.text.bubble.right", imageURL: nil,
+                    link: ApronLink(serverURL: serverURL, room: thread.roomId).webURL,
+                )],
+                isOwn: false,
+                isNotice: true,
+            )
+            return (anchor, message)
+        }
+    }
+
+    /// The first line of a thread's Markdown description, as text: what it's about or what started it.
+    nonisolated static func threadSubtitle(_ description: String?) -> String? {
+        guard let line = description?.split(whereSeparator: \.isNewline).lazy
+            .map({ $0.trimmingCharacters(in: .whitespaces).trimmingCharacters(in: CharacterSet(charactersIn: ">#*_ ")) })
+            .first(where: { !$0.isEmpty })
+        else { return nil }
+        return line.count > 120 ? String(line.prefix(119)) + "…" : line
+    }
+
     // MARK: Members
 
     /// Starts the member list from a listed room (§4.2.2).
@@ -771,6 +937,8 @@ public final class ApronChatAdapter: ChatAdapter, ChatReadOnlyAccess, ChatEditin
         for user in update.users ?? [] {
             users[user.userId] = user
         }
+        // New and edited threads reach the parent's members, joined or not (§4.2.3).
+        updateThreads((update.joined ?? []) + (update.updated ?? []))
         if let listed = update.joined?.first(where: { $0.roomId == roomId }) {
             applyRecord(listed)
             setMembers(of: listed)

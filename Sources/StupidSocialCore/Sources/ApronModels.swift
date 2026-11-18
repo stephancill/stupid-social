@@ -528,6 +528,8 @@ public struct ApronMessage: Codable, Hashable, Identifiable, Sendable {
     public let body: ApronMessageBody?
     public let replyTo: ApronMessageReference?
     public let deleted: Bool?
+    /// On the snapshot of a move: the room the message left (§4.4).
+    public let prevRoomId: String?
 
     enum CodingKeys: String, CodingKey {
         case messageId = "message_id"
@@ -537,6 +539,7 @@ public struct ApronMessage: Codable, Hashable, Identifiable, Sendable {
         case body
         case replyTo = "reply_to"
         case deleted
+        case prevRoomId = "prev_room_id"
     }
 
     /// Transient notices (no `message_id`) get a per-instance id so they still render.
@@ -621,11 +624,14 @@ struct ApronRoomListParams: Encodable {
     let members: Bool
     /// Lists only this room, in the array that matches the user's membership (§4.2.1).
     var roomId: String?
+    /// Lists only the threads of this room.
+    var parentRoomId: String?
 
     enum CodingKeys: String, CodingKey {
         case filter
         case members
         case roomId = "room_id"
+        case parentRoomId = "parent_room_id"
     }
 }
 
@@ -671,6 +677,8 @@ public struct ApronHistoryResult: Decodable, Sendable {
     public let firstLogId: String?
     public let lastLogId: String?
     public let more: Bool?
+    /// The inclusive lower bound of the room's retrievable history (§4.3.2); a thread's is its creation.
+    public let historyLogId: String?
 
     enum CodingKeys: String, CodingKey {
         case rooms
@@ -679,6 +687,7 @@ public struct ApronHistoryResult: Decodable, Sendable {
         case firstLogId = "first_log_id"
         case lastLogId = "last_log_id"
         case more
+        case historyLogId = "history_log_id"
     }
 }
 
