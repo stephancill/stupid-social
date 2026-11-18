@@ -102,7 +102,7 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
     private static func storeTelegramMessage(userInfo: [AnyHashable: Any]) {
         guard SharedChatStore.url != nil, let (peerKey, record) = TelegramPushedMessage.record(userInfo: userInfo) else { return }
         do {
-            let store = try SharedChatStore.open()
+            let store = try SharedChatStore.openForExtension()
             for chatKey in try store.chatKeys(endingWith: "|\(peerKey)") {
                 try store.writeProvisional([record], chatKey: chatKey)
             }
@@ -114,7 +114,7 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
     private static func store(payload: Data, registrations: [String: ApronPushRegistration]) {
         guard SharedChatStore.url != nil, let (chatKey, record) = ApronPushNotification.record(payload: payload, registrations: registrations) else { return }
         do {
-            try SharedChatStore.open().write([record], chatKey: chatKey)
+            try SharedChatStore.openForExtension().write([record], chatKey: chatKey)
         } catch {
             Logger(subsystem: "tech.stupid.StupidSocial", category: "NotificationService").error("Apron message not stored: \(String(describing: type(of: error)), privacy: .public)")
         }

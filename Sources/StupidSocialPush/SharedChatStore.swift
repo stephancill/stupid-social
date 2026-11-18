@@ -1,5 +1,6 @@
 import Foundation
 import StupidChatKit
+import Synchronization
 
 /// The chat store the app and its notification extension share, in the App Group container, so a message a push
 /// brings is stored before the user opens its chat.
@@ -23,6 +24,20 @@ public enum SharedChatStore {
     /// read the app's record format (it read none on the simulator and cleared every chat, observed 2026-11-13).
     public static func open() throws -> ChatStore {
         try ChatStore(url: url ?? ChatStore.defaultURL(), darwinNotificationName: darwinNotificationName)
+    }
+
+    private static let extensionStore = Mutex<ChatStore?>(nil)
+
+    /// The extension's store, opened on its first push and kept for the process: each store posts a Darwin
+    /// notification on writing that arrives after a store opened for one write is gone, which crashed the extension
+    /// before it showed the push (observed 2026-11-18), and reopening the database for every push is slow.
+    public static func openForExtension() throws -> ChatStore {
+        try extensionStore.withLock { store in
+            if let store { return store }
+            let opened = try open()
+            store = opened
+            return opened
+        }
     }
 
     /// The store as the app opens it at launch, clearing stored history when the record format changed.
