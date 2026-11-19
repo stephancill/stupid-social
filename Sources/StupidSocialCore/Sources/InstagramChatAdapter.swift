@@ -8,7 +8,9 @@ public final class InstagramChatAdapter: ChatAdapter, ChatReactionSending, ChatR
     public let network = ChatNetwork.instagram
     public let canReply = true
     public let acceptsAttachments = false
-    public let pollInterval: Duration? = .seconds(20)
+    /// Instagram's web client polls nothing: Direct pushes over its MQTT socket (`edge-chat.instagram.com`), which
+    /// this app doesn't speak yet. Until it does, a slow poll, so an open chat costs one request a minute.
+    public let pollInterval: Duration? = .seconds(60)
     public var onChange: (() -> Void)?
     public let acceptsReactions = true
     public private(set) var info: ChatInfo

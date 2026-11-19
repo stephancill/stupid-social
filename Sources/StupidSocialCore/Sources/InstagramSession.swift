@@ -259,12 +259,7 @@ extension InstagramClient {
         request.httpBody = body
         request.allHTTPHeaderFields = webHeaders(credentials: credentials, referer: Self.baseURL + "/").merging(headers) { _, new in new }
         configureRequest(&request)
-        let (data, response) = try await session.data(for: request, delegate: InstagramSessionExpiryRedirectGuard())
-        guard let http = response as? HTTPURLResponse else { throw SourceError.invalidResponse }
-        if instagramResponseExpiresSession(http) { throw SourceError.notConfigured }
-        if let claim = http.value(forHTTPHeaderField: "x-ig-set-www-claim") ?? http.value(forHTTPHeaderField: "x-ig-www-claim") {
-            wwwClaim = claim
-        }
+        let (data, http) = try await send(request)
         if http.statusCode == 401 || http.statusCode == 403 { throw SourceError.notConfigured }
         guard (200 ..< 300).contains(http.statusCode) else {
             if instagramBodyRequiresLogin(data) { throw SourceError.notConfigured }
@@ -283,12 +278,7 @@ extension InstagramClient {
         request.allHTTPHeaderFields = headers
         request.cachePolicy = .reloadIgnoringLocalCacheData
         configureRequest(&request)
-        let (data, response) = try await session.data(for: request, delegate: InstagramSessionExpiryRedirectGuard())
-        guard let http = response as? HTTPURLResponse else { throw SourceError.invalidResponse }
-        if instagramResponseExpiresSession(http) { throw SourceError.notConfigured }
-        if let claim = http.value(forHTTPHeaderField: "x-ig-set-www-claim") ?? http.value(forHTTPHeaderField: "x-ig-www-claim") {
-            wwwClaim = claim
-        }
+        let (data, http) = try await send(request)
         if http.statusCode == 401 || http.statusCode == 403 { throw SourceError.notConfigured }
         if let path = http.url?.path, path.hasPrefix("/accounts/login") || path.hasPrefix("/challenge/") {
             throw SourceError.notConfigured
@@ -298,6 +288,23 @@ extension InstagramClient {
             throw SourceError.serviceError(instagramRequestError(statusCode: http.statusCode, data: data))
         }
         return String(data: data, encoding: .utf8) ?? ""
+    }
+
+    /// Every request to Instagram goes through here: none while the account cools down, and a response that
+    /// says to slow down starts (or lengthens) the cooldown. A dead session is reported before anything else.
+    func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        try cooldown.check()
+        let (data, response) = try await session.data(for: request, delegate: InstagramSessionExpiryRedirectGuard())
+        guard let http = response as? HTTPURLResponse else { throw SourceError.invalidResponse }
+        if instagramResponseExpiresSession(http) { throw SourceError.notConfigured }
+        if let claim = http.value(forHTTPHeaderField: "x-ig-set-www-claim") ?? http.value(forHTTPHeaderField: "x-ig-www-claim") {
+            wwwClaim = claim
+        }
+        if instagramResponseIsRateLimited(statusCode: http.statusCode, data: data) {
+            throw SourceError.rateLimited(until: cooldown.start())
+        }
+        if (200 ..< 300).contains(http.statusCode) { cooldown.end() }
+        return (data, http)
     }
 
     func cookieHeader(credentials: InstagramCredentials) -> String {
@@ -514,6 +521,45 @@ func instagramBodyRequiresLogin(_ data: Data) -> Bool {
           let match = head.firstMatch(of: /<html[^>]*\bclass="([^"]*)"/)
     else { return false }
     return match.1.split(separator: " ").contains("not-logged-in")
+}
+
+/// Instagram's ways of saying "slow down" (observed 2026-10-25 and in the web client's bundles, 2026-11-20):
+/// HTTP 429; `{"spam": true}` (HTTP 400, also on read-only queries after a burst of mutations);
+/// `feedback_required` (an action block, which the web client shows as a restriction dialog); and
+/// "Please wait a few minutes before you try again." (HTTP 401 with `require_login`, which isn't a dead session).
+func instagramResponseIsRateLimited(statusCode: Int, data: Data) -> Bool {
+    if statusCode == 429 { return true }
+    guard statusCode >= 400, let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+    if object["spam"] as? Bool == true { return true }
+    guard let message = object["message"] as? String else { return false }
+    return message == "feedback_required" || message.localizedCaseInsensitiveContains("wait a few minutes")
+}
+
+/// How long an account sends nothing after Instagram says to slow down: 5 minutes, doubling each time it says so
+/// again, up to an hour. The first successful response after it ends starts over.
+struct InstagramCooldown {
+    static let first: TimeInterval = 5 * 60
+    static let longest: TimeInterval = 60 * 60
+
+    private(set) var until: Date?
+    private var strikes = 0
+
+    func check(now: Date = Date()) throws {
+        if let until, now < until { throw SourceError.rateLimited(until: until) }
+    }
+
+    mutating func start(now: Date = Date()) -> Date {
+        let length = min(Self.first * pow(2, Double(strikes)), Self.longest)
+        strikes += 1
+        let until = now.addingTimeInterval(length)
+        self.until = until
+        return until
+    }
+
+    mutating func end() {
+        strikes = 0
+        until = nil
+    }
 }
 
 final class InstagramSessionExpiryRedirectGuard: NSObject, URLSessionTaskDelegate, Sendable {

@@ -722,6 +722,16 @@ class InstagramWebClient:
             "tray_keys": sorted(tray.keys()) if tray else None,
             "tray_items": len(items),
             "invalid_items": invalid,
+            # The app builds the story bar from these alone and loads /stories/<username>/ only when a story opens.
+            "bar_fields": [
+                {
+                    "latest_reel_media": type(item.get("latest_reel_media")).__name__,
+                    "seen": type(item.get("seen")).__name__,
+                    "media_count": item.get("media_count"),
+                    "is_seen": bool(item.get("seen")) and (item.get("seen") or 0) >= (item.get("latest_reel_media") or 0),
+                }
+                for item in items
+            ],
         }
 
     def current_user(self) -> dict[str, Any]:

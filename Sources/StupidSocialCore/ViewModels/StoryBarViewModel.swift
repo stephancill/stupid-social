@@ -7,7 +7,6 @@ public final class StoryBarViewModel: ObservableObject {
     @Published public private(set) var ownInstagramStoryReel: InstagramStoryReel?
     @Published public private(set) var storyBarContentLoaded = false
     @Published public private(set) var storyBarLoading = false
-    @Published public private(set) var storyBarNextPageLoading = false
     @Published public var errorMessage: String?
 
     /// Every account's sources, read on each use so added and removed accounts take effect.
@@ -22,7 +21,6 @@ public final class StoryBarViewModel: ObservableObject {
     private var seenSyncObserver: NSObjectProtocol?
     private let chronologicalInstagramPrefixCount = 15
     private var orderedInstagramStoryReels: [InstagramStoryReel] = []
-    private var hasMoreInstagramStoryReels = false
     private var optimisticInstagramStorySlideID: String?
     private var inFlightStoryBarContentFetch: Task<Void, Never>?
 
@@ -79,14 +77,15 @@ public final class StoryBarViewModel: ObservableObject {
         storyBarLoading = false
     }
 
-    public func fetchStoryBarContent() async {
+    /// `.manual` fetches every source; automatic reasons let a source reuse what it fetched recently.
+    public func fetchStoryBarContent(reason: RefreshReason) async {
         if let inFlightStoryBarContentFetch {
             await inFlightStoryBarContentFetch.value
             return
         }
         let task = Task {
             await BackgroundActivity.run(reason: "Refresh stories") {
-                await self.performStoryBarContentFetch()
+                await self.performStoryBarContentFetch(reason: reason)
             }
         }
         inFlightStoryBarContentFetch = task
@@ -94,13 +93,13 @@ public final class StoryBarViewModel: ObservableObject {
         inFlightStoryBarContentFetch = nil
     }
 
-    private func performStoryBarContentFetch() async {
+    private func performStoryBarContentFetch(reason: RefreshReason) async {
         if DemoData.isDemoMode {
             loadDemoStoryBarItems()
             return
         }
         storyBarLoading = true
-        async let reels = instagramReels()
+        async let reels = instagramReels(reason: reason)
         async let spots = spotifyItems()
         async let github = githubItems()
         async let ownInstagramActor = instagramSource?.ownStoryActor()
@@ -120,62 +119,48 @@ public final class StoryBarViewModel: ObservableObject {
             }
             instagramReels.append(reel)
         }
+        // The bar shows the user's own story as soon as it has one, so it loads with the tray.
+        if let reel = ownReel, reel.slides.isEmpty {
+            ownReel = try? await instagramSource(forOwner: reel.user.id)?.loadStoryReel(id: reel.id)
+        }
         ownInstagramStoryReel = preservingOptimisticStorySlide(in: ownReel)
         orderedInstagramStoryReels = instagramReels
-        hasMoreInstagramStoryReels = instagramSources().contains { $0.hasMoreStoryReels }
         storyBarItems = mergedStoryBarItems(instagramReels: instagramReels, spotifyItems: fetchedSpots, githubItems: fetchedGitHub)
         storyBarContentLoaded = true
         storyBarLoading = false
     }
 
-    public func loadNextStoryBarPageIfNeeded(currentItem item: StoryBarItem) async {
-        switch item {
-        case let .instagram(reel):
-            guard reel.id == orderedInstagramStoryReels.last?.id else { return }
-        case .spotify, .github:
-            guard item.id == storyBarItems.last?.id else { return }
+    /// A reel with its slides, oldest first as the viewer shows them, loading them the first time. The bar keeps
+    /// them, so seeing and liking work on them. `nil` when they couldn't load.
+    public func loadInstagramReel(id: String) async -> InstagramStoryReel? {
+        if let reel = (orderedInstagramStoryReels + [ownInstagramStoryReel].compactMap(\.self)).first(where: { $0.id == id }), !reel.slides.isEmpty {
+            return storyItemWithOldestFirstSlides(reel)
         }
-        await loadNextStoryBarPage()
-    }
-
-    public func loadNextStoryBarPage() async {
-        guard !storyBarLoading, !storyBarNextPageLoading, hasMoreInstagramStoryReels else { return }
-        let sources = instagramSources().filter { $0.storiesEnabled && $0.hasMoreStoryReels }
-        guard !sources.isEmpty else { return }
-        storyBarNextPageLoading = true
-        defer { storyBarNextPageLoading = false }
-
+        guard let source = instagramSource(forOwner: id) else { return nil }
+        let loaded: InstagramStoryReel
         do {
-            var nextReels: [InstagramStoryReel] = []
-            for source in sources {
-                let page = try await source.fetchNextStoryReelPage()
-                for reel in page where instagramSourceByOwner[reel.user.id] == nil {
-                    instagramSourceByOwner[reel.user.id] = source
-                }
-                nextReels += page
-            }
-            hasMoreInstagramStoryReels = instagramSources().contains { $0.hasMoreStoryReels }
-            guard !nextReels.isEmpty else { return }
-
-            let existingReelIds = Set(orderedInstagramStoryReels.map(\.id))
-            var appendedReels = nextReels.filter { !existingReelIds.contains($0.id) }
-            if let ownInstagramStoryActor {
-                appendedReels.removeAll { reel in
-                    if reel.user.id == ownInstagramStoryActor.id {
-                        ownInstagramStoryReel = preservingOptimisticStorySlide(in: reel)
-                        return true
-                    }
-                    return false
-                }
-            }
-
-            var seenOwners = Set(orderedInstagramStoryReels.map(\.user.id))
-            appendedReels = appendedReels.filter { seenOwners.insert($0.user.id).inserted }
-            orderedInstagramStoryReels.append(contentsOf: appendedReels)
-            storyBarItems = mergedStoryBarItems(instagramReels: orderedInstagramStoryReels, spotifyItems: spotifyActivityItems, githubItems: githubActivityGroups)
+            loaded = try await source.loadStoryReel(id: id)
         } catch {
-            hasMoreInstagramStoryReels = instagramSources().contains { $0.hasMoreStoryReels }
+            if !Task.isCancelled {
+                AppMetrics.storySourceFailed(network: .instagram, error: error)
+            }
+            return nil
         }
+        if ownInstagramStoryReel?.id == id {
+            ownInstagramStoryReel = preservingOptimisticStorySlide(in: loaded)
+        }
+        if let index = orderedInstagramStoryReels.firstIndex(where: { $0.id == id }) {
+            // Seen here while the slides loaded: keep it seen.
+            let current = orderedInstagramStoryReels[index]
+            let reel = loaded.with(isSeen: current.isSeen || loaded.isSeen, seenTimestamp: max(current.seenTimestamp, loaded.seenTimestamp))
+            orderedInstagramStoryReels[index] = reel
+            storyBarItems = storyBarItems.map { item in
+                guard case let .instagram(existing) = item, existing.id == id else { return item }
+                return .instagram(reel)
+            }
+            return storyItemWithOldestFirstSlides(reel)
+        }
+        return storyItemWithOldestFirstSlides(loaded)
     }
 
     public func postInstagramStory(imageData: Data, width: Int, height: Int, mimeType: String, mentions: [InstagramStoryMentionPlacement] = [], closeFriends: Bool = false) async throws {
@@ -197,7 +182,7 @@ public final class StoryBarViewModel: ObservableObject {
             do {
                 try await instagramSource.postPhotoStory(imageData: imageData, width: width, height: height, mimeType: mimeType, mentions: mentions, closeFriends: closeFriends)
                 AppMetrics.storyPosted(error: nil)
-                await fetchStoryBarContent()
+                await fetchStoryBarContent(reason: .manual)
             } catch {
                 AppMetrics.storyPosted(error: error)
                 removeOptimisticInstagramStory(slideID: slideID)
@@ -209,7 +194,7 @@ public final class StoryBarViewModel: ObservableObject {
     public func deleteInstagramStory(mediaId: String, isVideo: Bool) async throws {
         guard let instagramSource else { throw SourceError.notConfigured }
         try await instagramSource.deleteStory(mediaId: mediaId, isVideo: isVideo)
-        await fetchStoryBarContent()
+        await fetchStoryBarContent(reason: .manual)
     }
 
     public func setInstagramStoryLiked(mediaId: String, liked: Bool) async throws {
@@ -310,12 +295,12 @@ public final class StoryBarViewModel: ObservableObject {
     }
 
     public func markInstagramReelAsSeen(reelId: String) {
-        if let reel = ownInstagramStoryReel, reel.id == reelId, !reel.isSeen {
+        if let reel = ownInstagramStoryReel, reel.id == reelId, !reel.isSeen, !reel.slides.isEmpty {
             Task {
                 if !DemoData.isDemoMode { await markSeenOnInstagram(slides: reel.slides) }
             }
 
-            ownInstagramStoryReel = InstagramStoryReel(id: reel.id, user: reel.user, slides: reel.slides, isSeen: true, seenTimestamp: reel.slides.map(\.takenAt).max() ?? reel.seenTimestamp, hasCloseFriendsMedia: reel.hasCloseFriendsMedia)
+            ownInstagramStoryReel = reel.with(isSeen: true, seenTimestamp: reel.slides.map(\.takenAt).max() ?? reel.seenTimestamp)
             return
         }
 
@@ -325,13 +310,13 @@ public final class StoryBarViewModel: ObservableObject {
         }) else { return }
 
         let storyItem = storyBarItems[itemIndex]
-        guard case let .instagram(reel) = storyItem, !reel.isSeen else { return }
+        guard case let .instagram(reel) = storyItem, !reel.isSeen, !reel.slides.isEmpty else { return }
 
         Task {
             if !DemoData.isDemoMode { await markSeenOnInstagram(slides: reel.slides) }
         }
 
-        let updated = InstagramStoryReel(id: reel.id, user: reel.user, slides: reel.slides, isSeen: true, seenTimestamp: reel.slides.map(\.takenAt).max() ?? reel.seenTimestamp, hasCloseFriendsMedia: reel.hasCloseFriendsMedia)
+        let updated = reel.with(isSeen: true, seenTimestamp: reel.slides.map(\.takenAt).max() ?? reel.seenTimestamp)
         if let orderedIndex = orderedInstagramStoryReels.firstIndex(where: { $0.id == reel.id }) {
             orderedInstagramStoryReels[orderedIndex] = updated
         }
@@ -388,7 +373,7 @@ public final class StoryBarViewModel: ObservableObject {
 
     /// Every Instagram account's tray, each person once (from the first account that follows them). `nil`
     /// when every account failed, so the bar keeps what it showed.
-    private func instagramReels() async -> [InstagramStoryReel]? {
+    private func instagramReels(reason: RefreshReason) async -> [InstagramStoryReel]? {
         let sources = instagramSources().filter(\.storiesEnabled)
         guard !sources.isEmpty else { return [] }
         var reels: [InstagramStoryReel] = []
@@ -397,7 +382,7 @@ public final class StoryBarViewModel: ObservableObject {
         for source in sources {
             do {
                 let fetched = try await RefreshTiming.measure("story-instagram-reels") {
-                    try await source.fetchStoryReels()
+                    try await source.fetchStoryReels(reason: reason)
                 }
                 for reel in fetched where owners[reel.user.id] == nil {
                     owners[reel.user.id] = source
@@ -494,13 +479,16 @@ public final class StoryBarViewModel: ObservableObject {
 
     private func storyItemWithOldestFirstSlides(_ item: StoryBarItem) -> StoryBarItem {
         guard case let .instagram(reel) = item else { return item }
-        let slides = reel.slides.sorted { lhs, rhs in
+        return .instagram(storyItemWithOldestFirstSlides(reel))
+    }
+
+    private func storyItemWithOldestFirstSlides(_ reel: InstagramStoryReel) -> InstagramStoryReel {
+        reel.with(slides: reel.slides.sorted { lhs, rhs in
             if lhs.takenAt == rhs.takenAt {
                 return lhs.id < rhs.id
             }
             return lhs.takenAt < rhs.takenAt
-        }
-        return .instagram(InstagramStoryReel(id: reel.id, user: reel.user, slides: slides, isSeen: reel.isSeen, seenTimestamp: reel.seenTimestamp, hasCloseFriendsMedia: reel.hasCloseFriendsMedia))
+        })
     }
 
     private func mergedStoryBarItems(instagramReels: [InstagramStoryReel], spotifyItems: [SpotifyActivityItem], githubItems: [GitHubActivityGroup]) -> [StoryBarItem] {
@@ -590,7 +578,7 @@ public final class StoryBarViewModel: ObservableObject {
             let slides = reel.slides.map { slide in
                 slide.id == mediaId ? transform(slide) : slide
             }
-            return InstagramStoryReel(id: reel.id, user: reel.user, slides: slides, isSeen: reel.isSeen, seenTimestamp: reel.seenTimestamp, hasCloseFriendsMedia: reel.hasCloseFriendsMedia)
+            return reel.with(slides: slides)
         }
 
         if let ownReel = ownInstagramStoryReel, ownReel.slides.contains(where: { $0.id == mediaId }) {
@@ -609,6 +597,6 @@ public final class StoryBarViewModel: ObservableObject {
 
 private extension InstagramStoryReel {
     var timestamp: Date {
-        Date(timeIntervalSince1970: slides.first?.takenAt ?? 0)
+        Date(timeIntervalSince1970: latestMediaAt)
     }
 }

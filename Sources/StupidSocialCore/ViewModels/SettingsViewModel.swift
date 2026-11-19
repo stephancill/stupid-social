@@ -108,6 +108,7 @@ public final class SettingsViewModel: ObservableObject {
         case .notConfigured: .notConfigured
         case .networkUnavailable: .networkUnavailable
         case .serviceError: .serviceError("Validation failed")
+        case .rateLimited: .rateLimited
         }
     }
 

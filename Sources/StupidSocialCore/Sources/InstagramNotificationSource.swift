@@ -6,9 +6,17 @@ public final class InstagramNotificationSource: NotificationFetching, ProfileFet
 
     private let client: InstagramClient
     private let metadataStore: AccountMetadataStore
-    private let storyPageSize = 15
     private var storyTrayEntries: [StoryTrayEntry] = []
-    private var nextStoryTrayIndex = 0
+    private var storyTrayFetchedAt: Date?
+    private var lastNotifications: (fetchedAt: Date, items: [NotificationItem])?
+    /// Reels whose story page has loaded, kept while the tray lists the same newest media for them.
+    private var loadedReels: [String: InstagramStoryReel] = [:]
+    private var reelLoads: [String: Task<InstagramStoryReel, Error>] = [:]
+
+    /// Automatic refreshes (opening the app) reuse what was fetched this recently; pull-to-refresh always fetches.
+    /// Instagram's web client fetches notifications and stories only when a page loads, and opening the app
+    /// many times an hour otherwise sent a burst of requests each time.
+    static let automaticRefreshInterval: TimeInterval = 5 * 60
 
     public init(client: InstagramClient, metadataStore: AccountMetadataStore) {
         self.client = client
@@ -17,10 +25,6 @@ public final class InstagramNotificationSource: NotificationFetching, ProfileFet
 
     public var storiesEnabled: Bool {
         metadataStore.instagramAccount?.storiesEnabled ?? true
-    }
-
-    public var hasMoreStoryReels: Bool {
-        nextStoryTrayIndex < storyTrayEntries.count
     }
 
     public func ownStoryActor() async -> NotificationActor? {
@@ -62,21 +66,23 @@ public final class InstagramNotificationSource: NotificationFetching, ProfileFet
         try await client.deleteStory(mediaId: mediaId, isVideo: isVideo)
     }
 
-    public func fetchNotifications(reason _: RefreshReason) async throws -> [NotificationItem] {
+    public func fetchNotifications(reason: RefreshReason) async throws -> [NotificationItem] {
+        if reason != .manual, let lastNotifications, Date().timeIntervalSince(lastNotifications.fetchedAt) < Self.automaticRefreshInterval {
+            return lastNotifications.items
+        }
         let account = await currentAccountForNotificationTargets()
         let categories = account?.enabledCategories ?? Set(InstagramNotificationCategory.allCases)
         let includeDirectMediaShares = account?.directMediaSharesEnabled ?? true
-        do {
-            return try await client.notifications(
+        let items = try await reportingStatus {
+            try await client.notifications(
                 enabledCategories: categories,
                 accountUsername: account?.username,
                 accountAvatarURL: account?.avatarURL,
                 includeDirectMediaShares: includeDirectMediaShares,
             )
-        } catch SourceError.notConfigured {
-            invalidateAccount()
-            throw SourceError.notConfigured
         }
+        lastNotifications = (Date(), items)
+        return items
     }
 
     private func currentAccountForNotificationTargets() async -> InstagramAccountMetadata? {
@@ -97,36 +103,34 @@ public final class InstagramNotificationSource: NotificationFetching, ProfileFet
         return updated
     }
 
-    public func fetchStoryReels() async throws -> [InstagramStoryReel] {
-        try await refreshStoryTray()
-        return try await fetchNextStoryReelPage()
+    /// Everyone in the tray, without their stories: `loadStoryReel(id:)` loads a person's stories when the viewer
+    /// gets to them, as Instagram's web client does, instead of a story page per person on every refresh.
+    public func fetchStoryReels(reason: RefreshReason) async throws -> [InstagramStoryReel] {
+        if reason == .manual || storyTrayFetchedAt.map({ Date().timeIntervalSince($0) >= Self.automaticRefreshInterval }) ?? true {
+            try await refreshStoryTray()
+        }
+        return storyTrayEntries.map(reel(for:))
     }
 
-    public func fetchNextStoryReelPage() async throws -> [InstagramStoryReel] {
-        guard nextStoryTrayIndex < storyTrayEntries.count else { return [] }
-
-        let endIndex = min(nextStoryTrayIndex + storyPageSize, storyTrayEntries.count)
-        let pageEntries = Array(storyTrayEntries[nextStoryTrayIndex ..< endIndex])
-        nextStoryTrayIndex = endIndex
-
-        return try await storyReels(from: pageEntries)
+    public func loadStoryReel(id: String) async throws -> InstagramStoryReel {
+        if let loaded = loadedReels[id], let entry = storyTrayEntries.first(where: { $0.reelId == id }) {
+            return reel(for: entry, slides: loaded.slides)
+        }
+        if let inFlight = reelLoads[id] { return try await inFlight.value }
+        guard let entry = storyTrayEntries.first(where: { $0.reelId == id }) else { throw SourceError.invalidResponse }
+        let task = Task { try await self.fetchStoryReel(entry) }
+        reelLoads[id] = task
+        defer { reelLoads[id] = nil }
+        let reel = try await task.value
+        loadedReels[id] = reel
+        return reel
     }
 
     private func refreshStoryTray() async throws {
-        let tray: [InstagramTrayItem]
-        do {
-            tray = try await RefreshTiming.measure("instagram-story-tray") {
+        let tray = try await reportingStatus {
+            try await RefreshTiming.measure("instagram-story-tray") {
                 try await client.reelsTray()
             }
-        } catch SourceError.notConfigured {
-            invalidateAccount()
-            throw SourceError.notConfigured
-        }
-
-        // Successful tray fetch means credentials are valid
-        if var account = metadataStore.instagramAccount, account.status != .valid {
-            account.status = .valid
-            metadataStore.instagramAccount = account
         }
 
         var trayEntries: [StoryTrayEntry] = []
@@ -139,121 +143,107 @@ public final class InstagramNotificationSource: NotificationFetching, ProfileFet
             if seenUserIds.contains(userId) { continue }
             seenUserIds.insert(userId)
 
-            trayEntries.append(StoryTrayEntry(item: item, reelId: reelId))
+            trayEntries.append(StoryTrayEntry(item: item, reelId: reelId, seen: Double(item.seen)))
         }
 
+        let latestMedia = Dictionary(trayEntries.map { ($0.reelId, $0.item.latestReelMedia) }, uniquingKeysWith: { first, _ in first })
+        loadedReels = loadedReels.filter { id, reel in
+            latestMedia[id].map { $0 == reel.latestMediaAt } ?? false
+        }
         storyTrayEntries = trayEntries
-        nextStoryTrayIndex = 0
+        storyTrayFetchedAt = Date()
     }
 
-    private func storyReels(from trayEntries: [StoryTrayEntry]) async throws -> [InstagramStoryReel] {
-        let fetched = try await fetchStoryReelsConcurrently(trayEntries)
-        var reels: [InstagramStoryReel] = []
-        for entry in trayEntries {
-            let item = entry.item
-            let userId = item.user.pk
+    /// Runs a request that tells whether the account works: a dead session marks it invalid, being rate limited
+    /// marks it so, and success marks it valid.
+    private func reportingStatus<T>(_ request: () async throws -> T) async throws -> T {
+        do {
+            let result = try await request()
+            setStatus(.valid)
+            return result
+        } catch SourceError.notConfigured {
+            setStatus(.invalidCredentials)
+            throw SourceError.notConfigured
+        } catch let SourceError.rateLimited(until) {
+            setStatus(.rateLimited)
+            throw SourceError.rateLimited(until: until)
+        }
+    }
 
-            let actor = NotificationActor(
-                id: String(userId),
-                network: .instagram,
-                username: item.user.username,
-                displayName: item.user.fullName,
-                avatarURL: item.user.profilePicUrl.flatMap(URL.init),
-            )
+    private func setStatus(_ status: AccountStatusSnapshot) {
+        guard var account = metadataStore.instagramAccount, account.status != status else { return }
+        account.status = status
+        metadataStore.instagramAccount = account
+    }
 
-            var slides: [InstagramStorySlide] = []
-            let reel = fetched[entry.reelId]
-            if let reel {
-                for media in reel.items ?? [] {
-                    if let imageURL = media.bestImageURL {
-                        let videoVersion = media.videoVersions?.first
-                        let videoURL: URL? = videoVersion.flatMap { URL(string: $0.url) }
-                        let embed = media.storyFeedMedia?.first { $0.url != nil }
-                        let music = media.storyMusicStickers?.compactMap(\.music).first
-                        let mentions = storyMentions(from: media)
-                        let links = media.storyLinkStickers?.compactMap(\.link) ?? []
-                        let mediaId = media.pk ?? media.id.split(separator: "_").first.map(String.init) ?? media.id
-                        slides.append(InstagramStorySlide(
-                            id: mediaId,
-                            imageURL: imageURL,
-                            videoURL: videoURL,
-                            isVideo: media.mediaType == 2,
-                            videoDuration: media.videoDuration,
-                            embedURL: embed?.url,
-                            embedLabel: embed?.label,
-                            music: music,
-                            mentions: mentions,
-                            links: links,
-                            ownerId: String(reel.user?.pk ?? userId),
-                            takenAt: media.takenAt ?? 0,
-                            isLiked: media.hasLiked ?? false,
-                        ))
-                    }
-                }
-            }
+    private func actor(for item: InstagramTrayItem) -> NotificationActor {
+        NotificationActor(
+            id: String(item.user.pk),
+            network: .instagram,
+            username: item.user.username,
+            displayName: item.user.fullName,
+            avatarURL: item.user.profilePicUrl.flatMap(URL.init),
+        )
+    }
 
-            if !slides.isEmpty {
-                slides.sort { $0.takenAt > $1.takenAt }
-                let latestSlideTakenAt = slides.first?.takenAt ?? 0
-                let isSeen = item.seen > 0 && Double(item.seen) >= latestSlideTakenAt
-                reels.append(InstagramStoryReel(
-                    id: entry.reelId,
-                    user: actor,
-                    slides: slides,
-                    isSeen: isSeen,
-                    seenTimestamp: Double(item.seen),
-                    hasCloseFriendsMedia: item.hasBestiesMedia,
-                ))
+    private func reel(for entry: StoryTrayEntry) -> InstagramStoryReel {
+        reel(for: entry, slides: loadedReels[entry.reelId]?.slides ?? [])
+    }
+
+    /// A tray entry as a reel. `seen` is when the viewer last saw the person's stories, so they are seen once it
+    /// reaches the newest one.
+    private func reel(for entry: StoryTrayEntry, slides: [InstagramStorySlide]) -> InstagramStoryReel {
+        let latestMediaAt = entry.item.latestReelMedia ?? slides.map(\.takenAt).max() ?? 0
+        return InstagramStoryReel(
+            id: entry.reelId,
+            user: actor(for: entry.item),
+            slides: slides,
+            isSeen: entry.seen > 0 && entry.seen >= latestMediaAt,
+            seenTimestamp: entry.seen,
+            hasCloseFriendsMedia: entry.item.hasBestiesMedia,
+            latestMediaAt: latestMediaAt,
+        )
+    }
+
+    private func fetchStoryReel(_ entry: StoryTrayEntry) async throws -> InstagramStoryReel {
+        guard let username = entry.item.user.username else { throw SourceError.invalidResponse }
+        let fetched = try await reportingStatus {
+            try await RefreshTiming.measure("instagram-story-reel") {
+                try await client.storyReel(username: username)
             }
         }
-
-        return reels
+        let userId = entry.item.user.pk
+        var slides: [InstagramStorySlide] = []
+        for media in fetched?.items ?? [] {
+            guard let imageURL = media.bestImageURL else { continue }
+            let videoVersion = media.videoVersions?.first
+            let embed = media.storyFeedMedia?.first { $0.url != nil }
+            slides.append(InstagramStorySlide(
+                id: media.pk ?? media.id.split(separator: "_").first.map(String.init) ?? media.id,
+                imageURL: imageURL,
+                videoURL: videoVersion.flatMap { URL(string: $0.url) },
+                isVideo: media.mediaType == 2,
+                videoDuration: media.videoDuration,
+                embedURL: embed?.url,
+                embedLabel: embed?.label,
+                music: media.storyMusicStickers?.compactMap(\.music).first,
+                mentions: storyMentions(from: media),
+                links: media.storyLinkStickers?.compactMap(\.link) ?? [],
+                ownerId: String(fetched?.user?.pk ?? userId),
+                takenAt: media.takenAt ?? 0,
+                isLiked: media.hasLiked ?? false,
+            ))
+        }
+        guard !slides.isEmpty else { throw SourceError.serviceError("These stories are no longer available.") }
+        slides.sort { $0.takenAt > $1.takenAt }
+        return reel(for: entry, slides: slides)
     }
 
     private struct StoryTrayEntry {
         let item: InstagramTrayItem
         let reelId: String
-    }
-
-    private static let storyFetchConcurrencyLimit = 3
-
-    private func fetchStoryReelsConcurrently(_ trayEntries: [StoryTrayEntry]) async throws -> [String: InstagramReel] {
-        let fetchers: [(reelId: String, username: String?, fetch: @MainActor () async throws -> InstagramReel?)] = trayEntries.map { entry in
-            (entry.reelId, entry.item.user.username, {
-                guard let username = entry.item.user.username else { return nil }
-                return try await RefreshTiming.measure("instagram-story-reel-\(username)") {
-                    try await self.client.storyReel(username: username)
-                }
-            })
-        }
-
-        var results: [String: InstagramReel] = [:]
-        var iterator = fetchers.makeIterator()
-
-        try await withThrowingTaskGroup(of: (String, InstagramReel?).self) { group in
-            var inFlight = 0
-            while let fetcher = iterator.next(), inFlight < Self.storyFetchConcurrencyLimit {
-                group.addTask {
-                    try await (fetcher.reelId, fetcher.fetch())
-                }
-                inFlight += 1
-            }
-
-            while let result = try await group.next() {
-                if let reel = result.1 {
-                    results[result.0] = reel
-                }
-                inFlight -= 1
-                if let fetcher = iterator.next() {
-                    group.addTask {
-                        try await (fetcher.reelId, fetcher.fetch())
-                    }
-                    inFlight += 1
-                }
-            }
-        }
-
-        return results
+        /// The tray's `seen`, moved forward when the user sees the stories here.
+        var seen: Double
     }
 
     private func storyMentions(from media: InstagramStoryMedia) -> [InstagramStoryMention] {
@@ -270,17 +260,15 @@ public final class InstagramNotificationSource: NotificationFetching, ProfileFet
         return mentions
     }
 
-    private func invalidateAccount() {
-        guard var account = metadataStore.instagramAccount else { return }
-        account.status = .invalidCredentials
-        metadataStore.instagramAccount = account
-    }
-
     public func markReelAsSeen(slides: [InstagramStorySlide]) async throws {
         let items = slides.map { slide in
             (mediaId: slide.id, ownerId: slide.ownerId, takenAt: slide.takenAt)
         }
         try await client.markStorySeen(mediaItems: items)
+        // Until the tray is fetched again, it would otherwise show these stories as unseen.
+        guard let ownerId = slides.first?.ownerId, let newest = slides.map(\.takenAt).max(),
+              let index = storyTrayEntries.firstIndex(where: { $0.reelId == ownerId }) else { return }
+        storyTrayEntries[index].seen = max(storyTrayEntries[index].seen, newest)
     }
 
     public func setStoryLiked(mediaId: String, liked: Bool) async throws {

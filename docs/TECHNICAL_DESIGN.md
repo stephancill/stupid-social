@@ -309,6 +309,7 @@ Design expectations:
 - Successful X and Bluesky full fetches advance provider-side read state before the source refresh completes. Instagram's activity `POST /api/v1/news/inbox/` has the equivalent activity-read side effect; Instagram DM threads are intentionally not marked read.
 - Farcaster foreground automatic refresh may fetch notifications because it does not alter server-side read state.
 - Foreground automatic refresh updates the local cache and visible feed immediately.
+- Sources may reuse a recent fetch for automatic refreshes (`RefreshReason.background`); Instagram does for 5 minutes, and loads story pages only when the viewer opens them. Manual refresh always fetches.
 
 ## Account Status And Errors
 

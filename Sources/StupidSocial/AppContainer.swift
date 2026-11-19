@@ -105,7 +105,7 @@ final class AppContainer {
         feedViewModel.loadCachedFeed()
         Task {
             await chatListViewModel.load()
-            await storyBarViewModel.fetchStoryBarContent()
+            await storyBarViewModel.fetchStoryBarContent(reason: .background)
         }
     }
 
@@ -249,7 +249,7 @@ final class AppContainer {
             await chatListViewModel.load()
             try? await feedService.foregroundActivationRefresh()
             feedViewModel.loadCachedFeed()
-            await storyBarViewModel.fetchStoryBarContent()
+            await storyBarViewModel.fetchStoryBarContent(reason: .manual)
         }
     }
 }

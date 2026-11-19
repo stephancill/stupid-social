@@ -273,7 +273,8 @@ The MVP should not attempt to merge or link X and Farcaster actors.
 ## Automatic And Refresh Behavior
 
 - Manual refresh is always available.
-- The app refreshes automatically when entering the foreground.
+- The app refreshes automatically when entering the foreground. Instagram is refreshed automatically at most every 5 minutes, and stories are loaded per person when they are opened, so opening the app often doesn't send Instagram a burst of requests; manual refresh always refreshes it.
+- When Instagram asks the app to slow down, the app sends that account nothing for a while (5 minutes, growing to an hour while it keeps asking) and shows the account as rate limited rather than signed out.
 - X foreground automatic refresh should full-fetch X notifications, then explicitly advance the server-side last-seen cursor.
 - Successful foreground/manual loads mark fetched X, Instagram activity, and Bluesky notifications read on their providers. Instagram DMs remain unread until the user opens the conversation.
 - Farcaster foreground automatic refresh may fetch notifications because Hypersnap does not alter server-side notification state.

@@ -162,7 +162,7 @@ public struct ContentView: View {
     private func foregroundRefreshFeedAndStories(container: AppContainer) async {
         await container.settingsViewModel.repairAccountIdentities()
         async let feedRefresh = container.feedViewModel.refreshOnForegroundActivation()
-        async let storyRefresh: Void = container.storyBarViewModel.fetchStoryBarContent()
+        async let storyRefresh: Void = container.storyBarViewModel.fetchStoryBarContent(reason: .background)
         _ = await (feedRefresh, storyRefresh)
         // Sources mark accounts invalid during refresh; reload so the Settings badge reflects it.
         container.settingsViewModel.loadStatuses()
@@ -172,7 +172,7 @@ public struct ContentView: View {
         let feedViewModel = container.feedViewModel
         guard !feedViewModel.isRefreshing, !feedViewModel.isForegroundRefreshing else { return }
         async let feedRefresh = container.feedViewModel.refresh()
-        async let storyRefresh: Void = container.storyBarViewModel.fetchStoryBarContent()
+        async let storyRefresh: Void = container.storyBarViewModel.fetchStoryBarContent(reason: .manual)
         _ = await (feedRefresh, storyRefresh)
         container.settingsViewModel.loadStatuses()
     }

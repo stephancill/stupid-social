@@ -53,6 +53,8 @@ public final class InstagramClient {
     /// The MQTT web device id the Direct inbox query is scoped to.
     var directDeviceID: String?
     var directPageLoads: [String: Task<Void, Error>] = [:]
+    /// Set when Instagram says to slow down; no request goes out for the account until it ends.
+    var cooldown = InstagramCooldown()
 
     public init(credentialStore: KeychainCredentialStore, session: URLSession = defaultSession) {
         self.credentialStore = credentialStore
@@ -350,10 +352,7 @@ public final class InstagramClient {
         uploadRequest.allHTTPHeaderFields = uploadHeaders
         configureRequest(&uploadRequest)
 
-        let (uploadData, uploadResponse) = try await session.data(for: uploadRequest)
-        guard let uploadHTTP = uploadResponse as? HTTPURLResponse else {
-            throw SourceError.invalidResponse
-        }
+        let (uploadData, uploadHTTP) = try await send(uploadRequest)
         guard (200 ..< 300).contains(uploadHTTP.statusCode) else {
             throw SourceError.serviceError(instagramPublishError(step: "upload", statusCode: uploadHTTP.statusCode, data: uploadData))
         }
@@ -387,10 +386,7 @@ public final class InstagramClient {
         storyConfigureRequest.allHTTPHeaderFields = configureHeaders
         configureRequest(&storyConfigureRequest)
 
-        let (configureData, configureResponse) = try await session.data(for: storyConfigureRequest)
-        guard let configureHTTP = configureResponse as? HTTPURLResponse else {
-            throw SourceError.invalidResponse
-        }
+        let (configureData, configureHTTP) = try await send(storyConfigureRequest)
         guard (200 ..< 300).contains(configureHTTP.statusCode) else {
             throw SourceError.serviceError(instagramPublishError(step: "configure", statusCode: configureHTTP.statusCode, data: configureData))
         }
@@ -417,10 +413,7 @@ public final class InstagramClient {
         ]
         configureRequest(&request)
 
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw SourceError.invalidResponse
-        }
+        let (data, http) = try await send(request)
         guard (200 ..< 300).contains(http.statusCode),
               let result = try? JSONDecoder().decode(InstagramDeleteMediaResponse.self, from: data),
               result.status == "ok", result.didDelete == true

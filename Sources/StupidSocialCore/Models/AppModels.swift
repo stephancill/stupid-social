@@ -52,6 +52,7 @@ public enum AccountStatus: Equatable, Sendable {
     case iCloudUnavailable
     case networkUnavailable
     case serviceError(String)
+    case rateLimited
 
     public var label: String {
         switch self {
@@ -61,6 +62,7 @@ public enum AccountStatus: Equatable, Sendable {
         case .iCloudUnavailable: "iCloud unavailable"
         case .networkUnavailable: "Network unavailable"
         case let .serviceError(message): "Service error: \(message)"
+        case .rateLimited: "Rate limited"
         }
     }
 }
@@ -511,14 +513,30 @@ public struct InstagramStoryReel: Identifiable, Hashable, Sendable {
     public let isSeen: Bool
     public let seenTimestamp: Double
     public let hasCloseFriendsMedia: Bool
+    /// When the newest slide was posted, known before the slides load.
+    public let latestMediaAt: Double
 
-    public init(id: String, user: NotificationActor, slides: [InstagramStorySlide], isSeen: Bool = false, seenTimestamp: Double = 0, hasCloseFriendsMedia: Bool = false) {
+    public init(id: String, user: NotificationActor, slides: [InstagramStorySlide], isSeen: Bool = false, seenTimestamp: Double = 0, hasCloseFriendsMedia: Bool = false, latestMediaAt: Double? = nil) {
         self.id = id
         self.user = user
         self.slides = slides
         self.isSeen = isSeen
         self.seenTimestamp = seenTimestamp
         self.hasCloseFriendsMedia = hasCloseFriendsMedia
+        self.latestMediaAt = latestMediaAt ?? slides.map(\.takenAt).max() ?? 0
+    }
+
+    /// The same reel with other slides or seen state.
+    public func with(slides: [InstagramStorySlide]? = nil, isSeen: Bool? = nil, seenTimestamp: Double? = nil) -> InstagramStoryReel {
+        InstagramStoryReel(
+            id: id,
+            user: user,
+            slides: slides ?? self.slides,
+            isSeen: isSeen ?? self.isSeen,
+            seenTimestamp: seenTimestamp ?? self.seenTimestamp,
+            hasCloseFriendsMedia: hasCloseFriendsMedia,
+            latestMediaAt: max(latestMediaAt, (slides ?? self.slides).map(\.takenAt).max() ?? 0),
+        )
     }
 }
 
@@ -651,7 +669,7 @@ public enum StoryBarItem: Identifiable, Hashable, Sendable {
     public var timestamp: Date {
         switch self {
         case let .instagram(reel):
-            Date(timeIntervalSince1970: reel.slides.first?.takenAt ?? 0)
+            Date(timeIntervalSince1970: reel.latestMediaAt)
         case let .spotify(item): item.timestamp
         case let .github(group): group.timestamp
         }

@@ -216,9 +216,10 @@ public extension RelationshipMutating {
 }
 
 public protocol StoryFetching: SocialSource {
-    var hasMoreStoryReels: Bool { get }
-    func fetchStoryReels() async throws -> [InstagramStoryReel]
-    func fetchNextStoryReelPage() async throws -> [InstagramStoryReel]
+    /// Every reel in the tray; their slides may not have loaded yet.
+    func fetchStoryReels(reason: RefreshReason) async throws -> [InstagramStoryReel]
+    /// One reel with its slides.
+    func loadStoryReel(id: String) async throws -> InstagramStoryReel
 }
 
 public protocol StoryPosting: SocialSource {
@@ -269,6 +270,8 @@ public enum SourceError: LocalizedError {
     case endpointSpikeRequired
     case invalidResponse
     case serviceError(String)
+    /// The network asked the client to slow down; it sends nothing for the account until `until`.
+    case rateLimited(until: Date)
 
     public var errorDescription: String? {
         switch self {
@@ -277,6 +280,7 @@ public enum SourceError: LocalizedError {
         case .endpointSpikeRequired: "X endpoint discovery must be completed before this is implemented."
         case .invalidResponse: "The service returned an invalid response."
         case let .serviceError(message): message
+        case let .rateLimited(until): "Rate limited. Trying again after \(until.formatted(date: .omitted, time: .shortened))."
         }
     }
 }

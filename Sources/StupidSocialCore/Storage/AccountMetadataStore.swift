@@ -219,6 +219,7 @@ public enum AccountStatusSnapshot: String, Codable, Equatable, Sendable {
     case iCloudUnavailable
     case networkUnavailable
     case serviceError
+    case rateLimited
 }
 
 /// One account's metadata in the per-network shapes the sources read and write. Reads come from the

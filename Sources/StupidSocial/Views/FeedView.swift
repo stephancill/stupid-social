@@ -53,11 +53,6 @@ struct FeedView: View {
                             startSlideIndex: storyViewModel.storyViewerStartSlideIndex(for: selectedItem, in: items),
                         )
                     },
-                    onItemAppear: { item in
-                        Task {
-                            await storyViewModel.loadNextStoryBarPageIfNeeded(currentItem: item)
-                        }
-                    },
                 )
             }
 
@@ -213,6 +208,9 @@ struct FeedView: View {
                 onInstagramStoryLike: { mediaId, liked in
                     try await storyViewModel.setInstagramStoryLiked(mediaId: mediaId, liked: liked)
                 },
+                loadInstagramReel: { reelId in
+                    await storyViewModel.loadInstagramReel(id: reelId)
+                },
             )
         }
         .fullScreenCover(isPresented: $showingStoryComposer) {
@@ -321,12 +319,6 @@ struct FeedView: View {
         guard reminderId(of: displayItem) == nil else { return nil }
         guard let target = displayItem.item.target else { return nil }
         return NotificationTargetURL.resolve(network: displayItem.item.network, target: target)
-    }
-
-    private func foregroundRefreshFeedAndStories() async {
-        async let feedRefresh = viewModel.refreshOnForegroundActivation()
-        async let storyRefresh: Void = storyViewModel.fetchStoryBarContent()
-        _ = await (feedRefresh, storyRefresh)
     }
 }
 
@@ -523,8 +515,6 @@ private struct StoriesBar: View {
     let onComposeTap: () -> Void
     let onOwnStoryTap: () -> Void
     let onItemTap: (StoryBarItem, [StoryBarItem]) -> Void
-    let onItemAppear: (StoryBarItem) -> Void
-    @State private var pageIndex: Int?
     @State private var pagerOffset = StoryPagerOffset()
     @ScaledMetric(relativeTo: .caption2) private var rowHeight: CGFloat = 112
 
@@ -537,22 +527,35 @@ private struct StoriesBar: View {
         let rows = modes.map { StoryRowContent(mode: $0, items: filteredItems(for: $0)) }
         let pageCount = modes.count > 1 ? modes.count * Self.cycles : modes.count
 
-        ScrollView(.vertical, showsIndicators: false) {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(0 ..< pageCount, id: \.self) { index in
-                    storyRow(rows[index % rows.count])
-                        .frame(height: rowHeight, alignment: .top)
+        // The position is only ever set here (on appear and when the modes change), never bound: a
+        // `scrollPosition(id:)` binding is written as each row passes the top mid-drag, and the
+        // re-render it causes re-applies that id, snapping the pager a page ahead for a frame.
+        ScrollViewReader { proxy in
+            ScrollView(.vertical, showsIndicators: false) {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(0 ..< pageCount, id: \.self) { index in
+                        storyRow(rows[index % rows.count])
+                            .frame(height: rowHeight, alignment: .top)
+                    }
                 }
+                .scrollTargetLayout()
             }
-            .scrollTargetLayout()
-        }
-        .scrollPosition(id: $pageIndex, anchor: .top)
-        .scrollTargetBehavior(.paging)
-        .scrollBounceBehavior(.basedOnSize)
-        .onScrollGeometryChange(for: CGFloat.self) { geometry in
-            geometry.contentOffset.y
-        } action: { _, newValue in
-            pagerOffset.value = newValue
+            .scrollTargetBehavior(.paging)
+            .scrollBounceBehavior(.basedOnSize)
+            .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                geometry.contentOffset.y
+            } action: { _, newValue in
+                pagerOffset.value = newValue
+            }
+            .onAppear {
+                scroll(proxy, toPage: startPageIndex(modeIndex: 0, modeCount: modes.count))
+            }
+            .onChange(of: modes) { oldModes, newModes in
+                let currentPage = Int((pagerOffset.value / rowHeight).rounded())
+                let currentMode = oldModes.isEmpty ? nil : oldModes[((currentPage % oldModes.count) + oldModes.count) % oldModes.count]
+                let modeIndex = currentMode.flatMap(newModes.firstIndex(of:)) ?? 0
+                scroll(proxy, toPage: startPageIndex(modeIndex: modeIndex, modeCount: newModes.count))
+            }
         }
         .frame(height: rowHeight)
         .clipped()
@@ -560,14 +563,6 @@ private struct StoriesBar: View {
             if modes.count > 1 {
                 StoryPagerDots(modeCount: modes.count, rowHeight: rowHeight, offset: pagerOffset)
             }
-        }
-        .onAppear {
-            pageIndex = startPageIndex(modeIndex: 0, modeCount: modes.count)
-        }
-        .onChange(of: modes) { oldModes, newModes in
-            let currentMode = pageIndex.flatMap { oldModes.isEmpty ? nil : oldModes[$0 % oldModes.count] }
-            let modeIndex = currentMode.flatMap(newModes.firstIndex(of:)) ?? 0
-            pageIndex = startPageIndex(modeIndex: modeIndex, modeCount: newModes.count)
         }
         .padding(.vertical, 8)
         .listRowInsets(EdgeInsets())
@@ -596,9 +591,6 @@ private struct StoriesBar: View {
                     ForEach(row.items) { item in
                         storyBubble(for: item)
                             .contentShape(Rectangle())
-                            .onAppear {
-                                onItemAppear(item)
-                            }
                             .onTapGesture {
                                 let viewerItems = row.items.filter { $0.isSeen == item.isSeen }
                                 onItemTap(item, viewerItems)
@@ -643,6 +635,11 @@ private struct StoriesBar: View {
 
     private func showsOwnInstagramBubble(in mode: StoryBarFeedMode) -> Bool {
         ownInstagramActor != nil && (mode == .general || mode == .instagram)
+    }
+
+    private func scroll(_ proxy: ScrollViewProxy, toPage page: Int?) {
+        guard let page else { return }
+        proxy.scrollTo(page, anchor: .top)
     }
 
     private func startPageIndex(modeIndex: Int, modeCount: Int) -> Int? {

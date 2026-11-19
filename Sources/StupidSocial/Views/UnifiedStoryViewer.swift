@@ -18,6 +18,8 @@ struct UnifiedStoryViewer: View {
     let onGitHubItemSeen: (String) -> Void
     let onInstagramStoryDelete: (String, Bool) async throws -> Void
     let onInstagramStoryLike: (String, Bool) async throws -> Void
+    /// A reel with its slides, oldest first; `nil` when they couldn't load.
+    let loadInstagramReel: (String) async -> InstagramStoryReel?
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -55,6 +57,7 @@ struct UnifiedStoryViewer: View {
     @State private var likingInstagramSlideIds: Set<String> = []
     @State private var likeErrorMessage: String?
     @State private var loadedInstagramSlideIds: Set<String> = []
+    @State private var loadingInstagramReelIds: Set<String> = []
 
     enum PlayerStatus: Equatable {
         case idle
@@ -82,6 +85,7 @@ struct UnifiedStoryViewer: View {
         onGitHubItemSeen: @escaping (String) -> Void,
         onInstagramStoryDelete: @escaping (String, Bool) async throws -> Void,
         onInstagramStoryLike: @escaping (String, Bool) async throws -> Void,
+        loadInstagramReel: @escaping (String) async -> InstagramStoryReel?,
     ) {
         self.items = items
         self.startIndex = startIndex
@@ -94,6 +98,7 @@ struct UnifiedStoryViewer: View {
         self.onGitHubItemSeen = onGitHubItemSeen
         self.onInstagramStoryDelete = onInstagramStoryDelete
         self.onInstagramStoryLike = onInstagramStoryLike
+        self.loadInstagramReel = loadInstagramReel
         _viewerItems = State(initialValue: items)
         _currentItemIndex = State(initialValue: startIndex)
         _currentSlideIndex = State(initialValue: startSlideIndex)
@@ -277,6 +282,8 @@ struct UnifiedStoryViewer: View {
 
     private func markCurrentItemSeen() {
         guard let item = currentItem, !seenItems.contains(currentItemIndex) else { return }
+        // Seen once its slides have loaded and show; loading them marks it again.
+        if case let .instagram(reel) = item, reel.slides.isEmpty { return }
         seenItems.insert(currentItemIndex)
         switch item {
         case let .instagram(reel):
@@ -562,6 +569,7 @@ struct UnifiedStoryViewer: View {
     }
 
     private var currentInstagramSlideIsReady: Bool {
+        if case let .instagram(reel) = currentItem, reel.slides.isEmpty { return false }
         guard let slide = currentInstagramSlide else { return true }
         if slide.isVideo {
             return playerStatus == .playing || playerStatus == .finished || playerStatus == .unavailable
@@ -1062,10 +1070,44 @@ struct UnifiedStoryViewer: View {
     }
 
     private func preloadAdjacentInstagramStories() {
+        loadInstagramReelIfNeeded(itemIndex: currentItemIndex)
+        loadInstagramReelIfNeeded(itemIndex: currentItemIndex + 1)
         preloadInstagramSlide(itemIndex: currentItemIndex, slideIndex: currentSlideIndex - 1)
         preloadInstagramSlide(itemIndex: currentItemIndex, slideIndex: currentSlideIndex + 1)
         preloadInstagramSlide(itemIndex: currentItemIndex - 1, slideIndex: 0)
         preloadInstagramSlide(itemIndex: currentItemIndex + 1, slideIndex: 0)
+    }
+
+    /// A person's stories load when the viewer reaches them, or the person before them; the tray only lists who has
+    /// stories. If they can't load, the viewer moves on.
+    private func loadInstagramReelIfNeeded(itemIndex: Int) {
+        guard viewerItems.indices.contains(itemIndex), case let .instagram(reel) = viewerItems[itemIndex],
+              reel.slides.isEmpty, !loadingInstagramReelIds.contains(reel.id) else { return }
+        let itemID = viewerItems[itemIndex].id
+        loadingInstagramReelIds.insert(reel.id)
+        Task {
+            let loaded = await loadInstagramReel(reel.id)
+            loadingInstagramReelIds.remove(reel.id)
+            guard let index = viewerItems.firstIndex(where: { $0.id == itemID }) else { return }
+            let isCurrent = index == currentItemIndex
+            guard let loaded, !loaded.slides.isEmpty else {
+                if isCurrent { goToNextItem() }
+                return
+            }
+            viewerItems[index] = .instagram(loaded)
+            likedInstagramSlideIds.formUnion(loaded.slides.filter(\.isLiked).map(\.id))
+            guard isCurrent else {
+                preloadInstagramSlide(itemIndex: index, slideIndex: 0)
+                return
+            }
+            let resumeIndex = loaded.slides.firstIndex { $0.takenAt > loaded.seenTimestamp } ?? 0
+            if resumeIndex != currentSlideIndex {
+                currentSlideIndex = resumeIndex
+            } else {
+                prepareForCurrentItem()
+            }
+            scheduleCurrentItemSeenMark()
+        }
     }
 
     private func preloadInstagramSlide(itemIndex: Int, slideIndex: Int) {
@@ -1706,6 +1748,10 @@ private struct GitHubStoryContent: View {
             }
         } else {
             Color.gray.opacity(0.3)
+                .overlay {
+                    ProgressView()
+                        .tint(.white)
+                }
         }
     }
 

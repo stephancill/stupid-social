@@ -118,10 +118,87 @@ final class AccountIdentityTests: XCTestCase {
         let source = InstagramNotificationSource(client: InstagramClient(credentialStore: store, session: makeSession()), metadataStore: metadata)
         IdentityURLProtocol.handler = { _ in (503, "unavailable") }
         do {
-            _ = try await source.fetchStoryReels()
+            _ = try await source.fetchStoryReels(reason: .manual)
             XCTFail("Expected the page request to fail")
         } catch { XCTAssertEqual(metadata.instagramAccount, original) }
         XCTAssertNotNil(try store.loadInstagramCredentials())
+    }
+
+    func testInstagramRecognizesRateLimitResponses() {
+        XCTAssertTrue(instagramResponseIsRateLimited(statusCode: 429, data: Data()))
+        XCTAssertTrue(instagramResponseIsRateLimited(statusCode: 400, data: Data(#"{"spam":true,"status":"fail"}"#.utf8)))
+        XCTAssertTrue(instagramResponseIsRateLimited(statusCode: 400, data: Data(#"{"message":"feedback_required","feedback_title":"Try Again Later","status":"fail"}"#.utf8)))
+        XCTAssertTrue(instagramResponseIsRateLimited(statusCode: 401, data: Data(#"{"message":"Please wait a few minutes before you try again.","require_login":true,"status":"fail"}"#.utf8)))
+        XCTAssertFalse(instagramResponseIsRateLimited(statusCode: 401, data: Data(#"{"message":"","require_login":true,"status":"fail"}"#.utf8)))
+        XCTAssertFalse(instagramResponseIsRateLimited(statusCode: 400, data: Data(#"{"message":"checkpoint_required","status":"fail"}"#.utf8)))
+        XCTAssertFalse(instagramResponseIsRateLimited(statusCode: 200, data: Data(#"{"spam":true}"#.utf8)))
+    }
+
+    func testInstagramCooldownDoublesUpToAnHourAndEndsOnSuccess() throws {
+        var cooldown = InstagramCooldown()
+        let now = Date(timeIntervalSince1970: 1000)
+        XCTAssertNoThrow(try cooldown.check(now: now))
+        XCTAssertEqual(cooldown.start(now: now), now.addingTimeInterval(5 * 60))
+        XCTAssertThrowsError(try cooldown.check(now: now.addingTimeInterval(60)))
+        XCTAssertNoThrow(try cooldown.check(now: now.addingTimeInterval(5 * 60)))
+        XCTAssertEqual(cooldown.start(now: now), now.addingTimeInterval(10 * 60))
+        for _ in 0 ..< 5 {
+            _ = cooldown.start(now: now)
+        }
+        XCTAssertEqual(cooldown.start(now: now), now.addingTimeInterval(60 * 60))
+        cooldown.end()
+        XCTAssertNoThrow(try cooldown.check(now: now))
+        XCTAssertEqual(cooldown.start(now: now), now.addingTimeInterval(5 * 60))
+    }
+
+    @MainActor
+    func testInstagramRateLimitPausesRequestsAndKeepsTheAccountSignedIn() async throws {
+        let (store, suite) = try makeStore()
+        defer { cleanUp(store: store, suite: suite) }
+        _ = try store.saveInstagramCredentials(InstagramCredentials(sessionId: "session", csrfToken: "csrf", dsUserId: "42", mid: nil))
+        let accounts = makeTestAccountStore(suite: suite).store
+        accounts.save(Account(id: "instagram", network: .instagram, remoteId: "42"))
+        let metadata = accounts.metadata(for: "instagram")
+        metadata.instagramAccount = InstagramAccountMetadata(accountId: "42", username: "example", status: .valid)
+        let source = InstagramNotificationSource(client: InstagramClient(credentialStore: store, session: makeSession()), metadataStore: metadata)
+        IdentityURLProtocol.requestCount = 0
+        IdentityURLProtocol.handler = { _ in (401, #"{"message":"Please wait a few minutes before you try again.","require_login":true,"status":"fail"}"#) }
+        for _ in 0 ..< 2 {
+            do {
+                _ = try await source.fetchStoryReels(reason: .manual)
+                XCTFail("Expected a rate limit")
+            } catch SourceError.rateLimited {} catch {
+                XCTFail("Expected a rate limit, got \(error)")
+            }
+        }
+        XCTAssertEqual(IdentityURLProtocol.requestCount, 1, "No request goes out while the account cools down")
+        XCTAssertEqual(metadata.instagramAccount?.status, .rateLimited)
+        XCTAssertNotNil(try store.loadInstagramCredentials())
+    }
+
+    @MainActor
+    func testInstagramStoriesComeFromTheTrayAndAutomaticRefreshesReuseIt() async throws {
+        let (store, suite) = try makeStore()
+        defer { cleanUp(store: store, suite: suite) }
+        _ = try store.saveInstagramCredentials(InstagramCredentials(sessionId: "session", csrfToken: "csrf", dsUserId: "42", mid: nil))
+        let accounts = makeTestAccountStore(suite: suite).store
+        accounts.save(Account(id: "instagram", network: .instagram, remoteId: "42"))
+        let source = InstagramNotificationSource(client: InstagramClient(credentialStore: store, session: makeSession()), metadataStore: accounts.metadata(for: "instagram"))
+        let tray = #"[{"id":"7","latest_reel_media":2000,"seen":1500,"user":{"pk":"7","username":"friend"}},{"id":"8","latest_reel_media":1000,"seen":1000,"user":{"pk":"8","username":"other"}}]"#
+        IdentityURLProtocol.requestCount = 0
+        IdentityURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/", "Story pages load only when a story is opened")
+            return (200, instagramHomepage.replacingOccurrences(of: #""tray":[]"#, with: #""tray":\#(tray)"#))
+        }
+        let reels = try await source.fetchStoryReels(reason: .background)
+        XCTAssertEqual(reels.map(\.id), ["7", "8"])
+        XCTAssertEqual(reels.map(\.slides.count), [0, 0])
+        XCTAssertEqual(reels.map(\.isSeen), [false, true])
+        XCTAssertEqual(reels.first?.latestMediaAt, 2000)
+        _ = try await source.fetchStoryReels(reason: .background)
+        XCTAssertEqual(IdentityURLProtocol.requestCount, 1)
+        _ = try await source.fetchStoryReels(reason: .manual)
+        XCTAssertEqual(IdentityURLProtocol.requestCount, 2)
     }
 
     @MainActor
