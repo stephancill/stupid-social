@@ -73,11 +73,18 @@ final class ProfileMediaViewerController: UIViewController, UIPageViewController
 
     private var chromeHidden = false
     private var timelineObservation: AnyCancellable?
+    /// Controllers for the current page and those beside it, by page key.
+    private var prepared: [String: ProfileMediaPageController] = [:]
 
     private static let dismissDistance: CGFloat = 120
     private static let dismissVelocity: CGFloat = 800
     /// Pages from the end at which the grid's next page loads.
     private static let loadMoreDistance = 4
+    /// Pages readied on each side of the current one: more ahead, the way people swipe.
+    private static let preparedAhead = 2
+    private static let preparedBehind = 1
+    /// Pages past the readied ones whose photos (or video posters) are downloaded ahead.
+    private static let warmedAhead = 4
 
     init(timeline: ProfileTimelineViewModel, kind: ProfileTimelineKind, itemId: String, caption: ProfileMediaCaptionModel) {
         self.timeline = timeline
@@ -158,11 +165,33 @@ final class ProfileMediaViewerController: UIViewController, UIPageViewController
         pager.viewControllers?.first as? ProfileMediaPageController
     }
 
+    /// The page's controller: the one prepared ahead when there is one, so its photo and video are already loading.
     private func pageController(_ page: ProfileMediaPage) -> ProfileMediaPageController {
+        if let prepared = prepared[page.key] {
+            return prepared
+        }
         let controller = ProfileMediaPageController(page: page)
         controller.onTap = { [weak self] in self?.setChromeHidden(!(self?.chromeHidden ?? false)) }
         controller.onPlaybackChange = { [weak self] in self?.updatePlayButton() }
+        prepared[page.key] = controller
         return controller
+    }
+
+    /// Readies the pages beside the current one (loading their photos, buffering their videos), so swiping to
+    /// them shows them at once, and warms the cache with the photos a few pages further on. Controllers further
+    /// away are let go, so only a few players hold video at a time.
+    private func prepareNeighbors() {
+        guard let index = currentIndex else { return }
+        let kept = pages[max(0, index - Self.preparedBehind) ... min(pages.count - 1, index + Self.preparedAhead)]
+        let keys = Set(kept.map(\.key))
+        prepared = prepared.filter { keys.contains($0.key) || $0.value === currentPageController }
+        for page in kept {
+            pageController(page).loadViewIfNeeded()
+        }
+        let warmed = pages.dropFirst(index + Self.preparedAhead + 1).prefix(Self.warmedAhead)
+        for page in warmed {
+            ImageCache.shared.preload(url: page.media.imageURL)
+        }
     }
 
     func pageViewController(_: UIPageViewController, viewControllerBefore viewController: UIViewController) -> UIViewController? {
@@ -191,6 +220,7 @@ final class ProfileMediaViewerController: UIViewController, UIPageViewController
         if let index = currentIndex, index + Self.loadMoreDistance >= pages.count {
             timeline.loadMore(kind)
         }
+        prepareNeighbors()
     }
 
     /// A later page of the grid adds pages; the pager asks again for the page after the current one, which it
@@ -202,6 +232,7 @@ final class ProfileMediaViewerController: UIViewController, UIPageViewController
         if wasLast, currentIndex != pages.count - 1 {
             pager.setViewControllers([current], direction: .forward, animated: false)
         }
+        prepareNeighbors()
     }
 
     // MARK: Chrome
@@ -330,6 +361,8 @@ final class ProfileMediaPageController: UIViewController, UIScrollViewDelegate {
     private var playerLayer: AVPlayerLayer?
     private var loadTask: Task<Void, Never>?
     private var statusObservation: NSKeyValueObservation?
+    private var readyObservation: NSKeyValueObservation?
+    private var hasPrerolled = false
     private var isVisible = false
 
     init(page: ProfileMediaPage) {
@@ -469,9 +502,20 @@ final class ProfileMediaPageController: UIViewController, UIScrollViewDelegate {
         statusObservation = player.observe(\.timeControlStatus) { [weak self] _, _ in
             Task { @MainActor in self?.onPlaybackChange?() }
         }
+        readyObservation = player.observe(\.currentItem?.status, options: [.initial, .new]) { [weak self] _, _ in
+            Task { @MainActor in self?.prerollIfReady() }
+        }
         if isVisible {
             player.play()
         }
+    }
+
+    /// A page readied beside the current one loads its video's first seconds while paused, so it starts at once
+    /// when swiped to. AVPlayer only prerolls a ready item that isn't playing.
+    private func prerollIfReady() {
+        guard let player, !isVisible, !hasPrerolled, player.rate == 0, player.currentItem?.status == .readyToPlay else { return }
+        hasPrerolled = true
+        player.preroll(atRate: 1)
     }
 
     // MARK: Zoom
