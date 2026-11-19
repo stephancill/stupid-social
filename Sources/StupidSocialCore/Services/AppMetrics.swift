@@ -141,7 +141,7 @@ public enum AppMetrics {
         }
     }
 
-    /// A post was liked, unliked, reposted (`repost` opens the network when it can't be done here), unreposted,
+    /// A post was liked, unliked, reposted or bookmarked (each opens the network when it can't be done here), unreposted, unbookmarked,
     /// replied to or quoted from a notification.
     public static func postEngaged(network: SocialNetwork, action: String, error: (any Error)?) {
         StupidMetrics.track("post_engage", properties: ["network": network.rawValue, "action": action, "outcome": error == nil ? "ok" : "error"])

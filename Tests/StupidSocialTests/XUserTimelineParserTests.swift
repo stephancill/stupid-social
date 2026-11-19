@@ -34,6 +34,21 @@ final class XUserTimelineParserTests: XCTestCase {
         XCTAssertEqual(timeline.nextCursor, "next")
     }
 
+    func testEngagementTakesBookmarks() throws {
+        var post = tweet(id: "10", user: "jack", text: "Saved")
+        var legacy = try XCTUnwrap(post["legacy"] as? [String: Any])
+        legacy["bookmark_count"] = 26
+        legacy["bookmarked"] = true
+        post["legacy"] = legacy
+        let page = page([["type": "TimelineAddEntries", "entries": [item("tweet-10", post)]]])
+
+        let engagement = try XCTUnwrap(XUserTimelineParser.parse(data: page).items.first?.post.engagement)
+
+        XCTAssertEqual(engagement.bookmarkCount, 26)
+        XCTAssertTrue(engagement.isBookmarked)
+        XCTAssertEqual(engagement.likeCount, 3)
+    }
+
     func testLaterMediaPageAddsToTheGridAndUsesCardImages() throws {
         var card = tweet(id: "8", user: "jack", text: "A link")
         card["card"] = ["legacy": ["binding_values": [

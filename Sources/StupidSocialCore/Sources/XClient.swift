@@ -46,6 +46,7 @@ public struct XClient {
         static let favoriteTweet = "lI07N6Otwv1PhnEgXILM7A"
         static let unfavoriteTweet = "ZYKSe-w7KEslx3JhSIk5LA"
         static let deleteRetweet = "ZyZigVsNiFO6v1dEks1eWg"
+        static let deleteBookmark = "Wlmlj2-xzyS1GN3a6cj-mQ"
         static let createTweet = "l4hk8uVGvR-a8kzQ4nOhPA"
         static let tweetDetail = "qpemjmVMoTWDvcRT43JIVQ"
         static let userTweets = "D6z-FJI2pKuwEeYYxVIGbg"
@@ -390,6 +391,8 @@ public struct XClient {
             likeCount: legacy.favoriteCount ?? 0,
             isLiked: legacy.favorited ?? false,
             isReposted: legacy.retweeted ?? false,
+            bookmarkCount: legacy.bookmarkCount ?? 0,
+            isBookmarked: legacy.bookmarked ?? false,
         )
     }
 
@@ -541,6 +544,12 @@ public struct XClient {
     /// Undoes the viewer's repost. Reposting itself isn't available to this client (see `docs/IMPLEMENTATION.md`).
     func deleteRetweet(tweetId: String) async throws {
         try await tweetMutation(operation: "DeleteRetweet", queryId: TweetQueryIds.deleteRetweet, variables: ["source_tweet_id": tweetId])
+    }
+
+    /// Removes the post from the viewer's bookmarks. Bookmarking isn't available to this client (see
+    /// `docs/IMPLEMENTATION.md`).
+    func deleteBookmark(tweetId: String) async throws {
+        try await tweetMutation(operation: "DeleteBookmark", queryId: TweetQueryIds.deleteBookmark, variables: ["tweet_id": tweetId])
     }
 
     /// Posts `text`, as a reply to `replyTo` or quoting `quoting` (`CreateTweet`).
@@ -1044,6 +1053,8 @@ private struct XTweetResultResponse: Decodable {
         let quoteCount: Int?
         let favorited: Bool?
         let retweeted: Bool?
+        let bookmarkCount: Int?
+        let bookmarked: Bool?
     }
 }
 
@@ -1953,6 +1964,8 @@ enum XThreadParser {
             likeCount: legacy.favoriteCount ?? 0,
             isLiked: legacy.favorited ?? false,
             isReposted: legacy.retweeted ?? false,
+            bookmarkCount: legacy.bookmarkCount ?? 0,
+            isBookmarked: legacy.bookmarked ?? false,
         )
         return PostThread.Post(target: target, engagement: engagement)
     }
@@ -2249,6 +2262,8 @@ struct XThreadResponse: Decodable {
         let quoteCount: Int?
         let favorited: Bool?
         let retweeted: Bool?
+        let bookmarkCount: Int?
+        let bookmarked: Bool?
         let extendedEntities: ExtendedEntities?
         let entities: Entities?
         let quotedStatusPermalink: Permalink?

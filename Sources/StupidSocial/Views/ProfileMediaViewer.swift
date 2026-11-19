@@ -1,15 +1,20 @@
 import AVFoundation
 import Combine
 import StupidSocialCore
+import SwiftUI
 import UIKit
 
 /// One photo or video of a post in the viewer: the viewer pages through every one of every post in the grid.
 struct ProfileMediaPage: Hashable {
-    let itemId: String
+    let post: PostThread.Post
     let index: Int
     let count: Int
     let media: ProfileTimelineItem.Media
     let caption: String?
+
+    var itemId: String {
+        post.target.id
+    }
 
     var key: String {
         "\(itemId)#\(index)"
@@ -22,21 +27,23 @@ extension ProfileTimelineItem {
         let caption = post.target.text?.trimmingCharacters(in: .whitespacesAndNewlines)
         let shown = !media.isEmpty ? media : thumbnailURL.map { [ProfileTimelineItem.Media(imageURL: $0)] } ?? []
         return shown.enumerated().map { index, media in
-            ProfileMediaPage(itemId: id, index: index, count: shown.count, media: media, caption: caption?.isEmpty == false ? caption : nil)
+            ProfileMediaPage(post: post, index: index, count: shown.count, media: media, caption: caption?.isEmpty == false ? caption : nil)
         }
     }
 }
 
 @MainActor
 enum ProfileMediaViewer {
-    /// Opens the media grid of `kind` full screen at the post's first photo or video.
-    static func present(timeline: ProfileTimelineViewModel, kind: ProfileTimelineKind, itemId: String) {
+    /// Opens the media grid of `kind` full screen at the post's first photo or video, with each post's counts and
+    /// actions when `engaging` is given.
+    static func present(timeline: ProfileTimelineViewModel, kind: ProfileTimelineKind, itemId: String, network: SocialNetwork, engaging: (any PostEngaging)?) {
         let window = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first
         guard var presenter = window?.rootViewController else { return }
         while let presented = presenter.presentedViewController {
             presenter = presented
         }
-        let viewer = ProfileMediaViewerController(timeline: timeline, kind: kind, itemId: itemId)
+        let caption = ProfileMediaCaptionModel(network: network, engaging: engaging)
+        let viewer = ProfileMediaViewerController(timeline: timeline, kind: kind, itemId: itemId, caption: caption)
         presenter.present(viewer, animated: true)
     }
 
@@ -58,10 +65,12 @@ final class ProfileMediaViewerController: UIViewController, UIPageViewController
     private let pager = UIPageViewController(transitionStyle: .scroll, navigationOrientation: .horizontal, options: [.interPageSpacing: 12])
     private let closeButton = UIButton(type: .system)
     private let playButton = UIButton(type: .system)
-    private let captionView = UIView()
-    private let captionGradient = CAGradientLayer()
-    private let captionLabel = UILabel()
-    private let counterLabel = UILabel()
+    private let caption: ProfileMediaCaptionModel
+    private let captionController: UIHostingController<ProfileMediaCaptionView>
+    private var captionView: UIView {
+        captionController.view
+    }
+
     private var chromeHidden = false
     private var timelineObservation: AnyCancellable?
 
@@ -70,9 +79,11 @@ final class ProfileMediaViewerController: UIViewController, UIPageViewController
     /// Pages from the end at which the grid's next page loads.
     private static let loadMoreDistance = 4
 
-    init(timeline: ProfileTimelineViewModel, kind: ProfileTimelineKind, itemId: String) {
+    init(timeline: ProfileTimelineViewModel, kind: ProfileTimelineKind, itemId: String, caption: ProfileMediaCaptionModel) {
         self.timeline = timeline
         self.kind = kind
+        self.caption = caption
+        captionController = UIHostingController(rootView: ProfileMediaCaptionView(model: caption))
         pages = ProfileMediaViewer.pages(timeline.timeline(kind).items)
         currentKey = pages.first { $0.itemId == itemId }?.key ?? pages.first?.key ?? ""
         super.init(nibName: nil, bundle: nil)
@@ -137,11 +148,6 @@ final class ProfileMediaViewerController: UIViewController, UIPageViewController
         showCurrentPage()
     }
 
-    override func viewDidLayoutSubviews() {
-        super.viewDidLayoutSubviews()
-        captionGradient.frame = captionView.bounds
-    }
-
     // MARK: Pages
 
     private var currentIndex: Int? {
@@ -180,12 +186,7 @@ final class ProfileMediaViewerController: UIViewController, UIPageViewController
     }
 
     private func showCurrentPage() {
-        let page = currentPageController?.page
-        captionLabel.text = page?.caption
-        captionLabel.isHidden = page?.caption == nil
-        counterLabel.text = page.map { "\($0.index + 1) of \($0.count)" }
-        counterLabel.isHidden = (page?.count ?? 0) < 2
-        captionView.isHidden = captionLabel.isHidden && counterLabel.isHidden
+        caption.page = currentPageController?.page
         updatePlayButton()
         if let index = currentIndex, index + Self.loadMoreDistance >= pages.count {
             timeline.loadMore(kind)
@@ -206,35 +207,18 @@ final class ProfileMediaViewerController: UIViewController, UIPageViewController
     // MARK: Chrome
 
     private func setUpCaption() {
+        caption.onTap = { [weak self] in self?.setChromeHidden(true) }
+        captionController.sizingOptions = .intrinsicContentSize
+        captionController.view.backgroundColor = .clear
+        addChild(captionController)
         captionView.translatesAutoresizingMaskIntoConstraints = false
-        // Taps fall through to the page, so a tap on the text hides it too.
-        captionView.isUserInteractionEnabled = false
-        captionGradient.colors = [UIColor.black.withAlphaComponent(0).cgColor, UIColor.black.withAlphaComponent(0.75).cgColor]
-        captionView.layer.addSublayer(captionGradient)
         view.addSubview(captionView)
-
-        captionLabel.font = .preferredFont(forTextStyle: .subheadline)
-        captionLabel.adjustsFontForContentSizeCategory = true
-        captionLabel.textColor = .white
-        captionLabel.numberOfLines = 8
-        counterLabel.font = .preferredFont(forTextStyle: .footnote)
-        counterLabel.adjustsFontForContentSizeCategory = true
-        counterLabel.textColor = .secondaryLabel
-
-        let stack = UIStackView(arrangedSubviews: [captionLabel, counterLabel])
-        stack.axis = .vertical
-        stack.spacing = 6
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        captionView.addSubview(stack)
         NSLayoutConstraint.activate([
             captionView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             captionView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             captionView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            stack.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 16),
-            stack.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -16),
-            stack.topAnchor.constraint(equalTo: captionView.topAnchor, constant: 40),
-            stack.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -12),
         ])
+        captionController.didMove(toParent: self)
     }
 
     private func configure(_ button: UIButton, systemImage: String, label: String, action: Selector) {
@@ -551,5 +535,87 @@ private extension URL {
         guard var components = URLComponents(url: self, resolvingAgainstBaseURL: false), components.query != nil else { return self }
         components.query = nil
         return components.url ?? self
+    }
+}
+
+/// What the viewer's caption shows: the current page's post, and each post's engagement as it changes here, so a
+/// like stays when paging through the post's other photos and back.
+@MainActor
+final class ProfileMediaCaptionModel: ObservableObject {
+    @Published var page: ProfileMediaPage?
+    @Published var engagements: [String: PostEngagement] = [:]
+    let network: SocialNetwork
+    let engaging: (any PostEngaging)?
+    var onTap: (() -> Void)?
+
+    init(network: SocialNetwork, engaging: (any PostEngaging)?) {
+        self.network = network
+        self.engaging = engaging
+    }
+
+    func engagement(of page: ProfileMediaPage) -> Binding<PostEngagement?> {
+        Binding(
+            get: { self.engagements[page.itemId] ?? page.post.engagement },
+            set: { self.engagements[page.itemId] = $0 },
+        )
+    }
+
+    func reload(_ page: ProfileMediaPage) async {
+        guard let engaging, let loaded = try? await engaging.fetchEngagement(postId: page.itemId) else { return }
+        engagements[page.itemId] = loaded
+    }
+}
+
+/// The post's text, which photo of the post this is, and its counts and actions, over a gradient at the bottom of
+/// the viewer. Tapping the text or the gradient hides it with the rest of the viewer's buttons.
+struct ProfileMediaCaptionView: View {
+    @ObservedObject var model: ProfileMediaCaptionModel
+
+    var body: some View {
+        if let page = model.page {
+            VStack(alignment: .leading, spacing: 12) {
+                if page.caption != nil || page.count > 1 {
+                    VStack(alignment: .leading, spacing: 6) {
+                        if let caption = page.caption {
+                            Text(caption)
+                                .font(.subheadline)
+                                .foregroundStyle(.white)
+                                .lineLimit(8)
+                        }
+                        if page.count > 1 {
+                            Text("\(page.index + 1) of \(page.count)")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                if let engaging = model.engaging, let postURL = NotificationTargetURL.resolve(network: model.network, target: page.post.target) {
+                    PostActionBar(
+                        target: page.post.target,
+                        author: page.post.target.author,
+                        network: model.network,
+                        postURL: postURL,
+                        engaging: engaging,
+                        engagement: model.engagement(of: page),
+                        reload: { await model.reload(page) },
+                    )
+                    // Each post its own bar: a composer or alert open for one post doesn't carry over to the next.
+                    .id(page.itemId)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 40)
+            .padding(.bottom, 12)
+            .background {
+                LinearGradient(colors: [.black.opacity(0), .black.opacity(0.75)], startPoint: .top, endPoint: .bottom)
+                    .ignoresSafeArea()
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                model.onTap?()
+            }
+        }
     }
 }

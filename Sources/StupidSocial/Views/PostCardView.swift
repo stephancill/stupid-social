@@ -20,14 +20,8 @@ struct PostCardView: View {
     var open: (() -> Void)?
 
     @Environment(\.openURL) private var openURL
-    @Environment(\.scenePhase) private var scenePhase
     @AppStorage("redactionEnabled") private var redactionEnabled = false
     @State private var engagement: PostEngagement?
-    @State private var composerMode: PostComposerMode?
-    @State private var errorMessage: String?
-    @State private var isUpdating = false
-    /// Reposting went to the network's own page; its result is loaded on return.
-    @State private var awaitsRepostPage = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -43,24 +37,6 @@ struct PostCardView: View {
         }
         .task(id: isLoadingDetails) {
             await loadEngagement()
-        }
-        .onChange(of: scenePhase) { _, phase in
-            guard phase == .active, awaitsRepostPage else { return }
-            awaitsRepostPage = false
-            Task { await loadEngagement(force: true) }
-        }
-        .sheet(item: $composerMode) { mode in
-            PostComposerView(mode: mode, target: target, author: author) { text in
-                try await send(mode: mode, text: text)
-            }
-        }
-        .alert("Couldn't Update Post", isPresented: Binding(
-            get: { errorMessage != nil },
-            set: { if !$0 { errorMessage = nil } },
-        )) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(errorMessage ?? "")
         }
     }
 
@@ -103,8 +79,16 @@ struct PostCardView: View {
                     }
                 }
 
-                if engaging != nil, postURL != nil {
-                    actionBar
+                if let engaging, let postURL {
+                    PostActionBar(
+                        target: target,
+                        author: author,
+                        network: network,
+                        postURL: postURL,
+                        engaging: engaging,
+                        engagement: $engagement,
+                        reload: { await loadEngagement(force: true) },
+                    )
                 } else if let likeCount = details?.likeCount ?? target.likeCount {
                     countLabel(systemImage: "heart", count: likeCount)
                         .font(.caption)
@@ -160,60 +144,6 @@ struct PostCardView: View {
         }
     }
 
-    private var actionBar: some View {
-        HStack {
-            Button {
-                composerMode = .reply
-            } label: {
-                countLabel(systemImage: "bubble.left", count: engagement?.replyCount)
-            }
-            .accessibilityLabel("Reply")
-
-            Spacer()
-
-            Menu {
-                if engagement?.isReposted == true {
-                    Button("Undo Repost", systemImage: "arrow.2.squarepath") {
-                        Task { await setReposted(false) }
-                    }
-                } else {
-                    Button("Repost", systemImage: "arrow.2.squarepath") {
-                        Task { await setReposted(true) }
-                    }
-                }
-                Button("Quote", systemImage: "square.and.pencil") {
-                    composerMode = .quote
-                }
-            } label: {
-                countLabel(systemImage: "arrow.2.squarepath", count: engagement.map { $0.repostCount + $0.quoteCount })
-                    .foregroundStyle(engagement?.isReposted == true ? Color.green : Color.secondary)
-            }
-            .accessibilityLabel("Repost")
-
-            Spacer()
-
-            Button {
-                Task { await toggleLike() }
-            } label: {
-                countLabel(systemImage: engagement?.isLiked == true ? "heart.fill" : "heart", count: engagement?.likeCount)
-                    .foregroundStyle(engagement?.isLiked == true ? Color.pink : Color.secondary)
-            }
-            .accessibilityLabel(engagement?.isLiked == true ? "Unlike" : "Like")
-
-            Spacer()
-
-            if let postURL {
-                ShareLink(item: postURL) {
-                    Image(systemName: "square.and.arrow.up")
-                }
-            }
-        }
-        .buttonStyle(.borderless)
-        .font(.subheadline)
-        .foregroundStyle(.secondary)
-        .disabled(engagement == nil || isUpdating)
-    }
-
     private func countLabel(systemImage: String, count: Int?) -> some View {
         HStack(spacing: 4) {
             Image(systemName: systemImage)
@@ -234,63 +164,6 @@ struct PostCardView: View {
         guard let engaging, postURL != nil, force || (engagement == nil && !isLoadingDetails) else { return }
         if let loaded = try? await engaging.fetchEngagement(postId: target.id) {
             engagement = loaded
-        }
-    }
-
-    private func toggleLike() async {
-        guard let engaging, let current = engagement else { return }
-        let liked = !current.isLiked
-        engagement?.isLiked = liked
-        engagement?.likeCount += liked ? 1 : -1
-        isUpdating = true
-        defer { isUpdating = false }
-        do {
-            try await engaging.setLiked(postId: target.id, liked: liked)
-            AppMetrics.postEngaged(network: network, action: liked ? "like" : "unlike", error: nil)
-        } catch {
-            engagement = current
-            errorMessage = error.localizedDescription
-            AppMetrics.postEngaged(network: network, action: liked ? "like" : "unlike", error: error)
-        }
-    }
-
-    private func setReposted(_ reposted: Bool) async {
-        guard let engaging, let current = engagement else { return }
-        if reposted, let url = engaging.repostPageURL(postId: target.id) {
-            AppMetrics.postEngaged(network: network, action: "repost", error: nil)
-            awaitsRepostPage = true
-            openURL(url)
-            return
-        }
-        engagement?.isReposted = reposted
-        engagement?.repostCount += reposted ? 1 : -1
-        isUpdating = true
-        defer { isUpdating = false }
-        do {
-            try await engaging.setReposted(postId: target.id, reposted: reposted)
-            AppMetrics.postEngaged(network: network, action: reposted ? "repost" : "unrepost", error: nil)
-        } catch {
-            engagement = current
-            errorMessage = error.localizedDescription
-            AppMetrics.postEngaged(network: network, action: reposted ? "repost" : "unrepost", error: error)
-        }
-    }
-
-    private func send(mode: PostComposerMode, text: String) async throws {
-        guard let engaging else { return }
-        do {
-            switch mode {
-            case .reply:
-                try await engaging.reply(to: target.id, text: text)
-                engagement?.replyCount += 1
-            case .quote:
-                try await engaging.quote(postId: target.id, text: text)
-                engagement?.quoteCount += 1
-            }
-            AppMetrics.postEngaged(network: network, action: mode.rawValue, error: nil)
-        } catch {
-            AppMetrics.postEngaged(network: network, action: mode.rawValue, error: error)
-            throw error
         }
     }
 

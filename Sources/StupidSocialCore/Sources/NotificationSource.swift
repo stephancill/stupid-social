@@ -37,14 +37,33 @@ public struct PostEngagement: Hashable, Sendable {
     public var likeCount: Int
     public var isLiked: Bool
     public var isReposted: Bool
+    /// Nil where the network has no bookmarks.
+    public var bookmarkCount: Int?
+    public var isBookmarked: Bool
 
-    public init(replyCount: Int, repostCount: Int, quoteCount: Int, likeCount: Int, isLiked: Bool, isReposted: Bool) {
+    public init(replyCount: Int, repostCount: Int, quoteCount: Int, likeCount: Int, isLiked: Bool, isReposted: Bool, bookmarkCount: Int? = nil, isBookmarked: Bool = false) {
         self.replyCount = replyCount
         self.repostCount = repostCount
         self.quoteCount = quoteCount
         self.likeCount = likeCount
         self.isLiked = isLiked
         self.isReposted = isReposted
+        self.bookmarkCount = bookmarkCount
+        self.isBookmarked = isBookmarked
+    }
+}
+
+/// Bookmarking posts, privately, to read later.
+public protocol PostBookmarking: PostEngaging {
+    func setBookmarked(postId: String, bookmarked: Bool) async throws
+    /// The network's own page for bookmarking, when bookmarking can't be done from here; `setBookmarked` then
+    /// only removes.
+    func bookmarkPageURL(postId: String) -> URL?
+}
+
+public extension PostBookmarking {
+    func bookmarkPageURL(postId _: String) -> URL? {
+        nil
     }
 }
 

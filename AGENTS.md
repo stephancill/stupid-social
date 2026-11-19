@@ -22,9 +22,10 @@ Sources/
       StoryComposerView.swift       # Full-screen story composer scaffold
       NotificationDetailView.swift  # Standard form-based notification detail
       ProfileDetailView.swift       # The profile for search, notifications, stories and one-to-one chats; X Posts/Media
-      PostCardView.swift            # A post laid out as on its network, with reply/repost/quote/like, and the reply/quote composer
+      PostCardView.swift            # A post laid out as on its network, with its action bar, and the reply/quote composer
+      PostActionBar.swift           # A post's counts and actions: reply, repost/quote, like, bookmark, share
       PostThreadView.swift          # A post's thread in post details: every earlier post, then the post, highlighted
-      ProfileMediaViewer.swift      # Full-screen pager for a profile's Media grid: zoom, tap for the caption, swipe through posts
+      ProfileMediaViewer.swift      # Full-screen pager for a profile's Media grid: zoom, caption with the action bar, swipe through posts
       NetworkBadgeIcon.swift        # Shared social network icon badge
       ActorAvatar.swift             # Shared notification actor avatar with initial fallback
       CookieLoginWebView.swift      # LoginSheet scaffold and the cookie-capturing login page (GitHub, X)

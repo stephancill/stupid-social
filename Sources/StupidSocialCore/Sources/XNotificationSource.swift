@@ -1,6 +1,6 @@
 import Foundation
 
-public struct XNotificationSource: NotificationFetching, ProfileFetching, NotificationTargetDetailFetching, RelationshipMutating, PostEngaging, PostThreadLoading, ProfileTimelineLoading {
+public struct XNotificationSource: NotificationFetching, ProfileFetching, NotificationTargetDetailFetching, RelationshipMutating, PostBookmarking, PostThreadLoading, ProfileTimelineLoading {
     public let network: SocialNetwork = .x
 
     private let client: XClient
@@ -74,6 +74,17 @@ public struct XNotificationSource: NotificationFetching, ProfileFetching, Notifi
         var components = URLComponents(string: "https://x.com/intent/retweet")!
         components.queryItems = [URLQueryItem(name: "tweet_id", value: postId)]
         return components.url
+    }
+
+    /// X turns away `CreateBookmark` from this client as it does `CreateRetweet`, so bookmarking opens the post on
+    /// X; removing a bookmark works here.
+    public func setBookmarked(postId: String, bookmarked: Bool) async throws {
+        guard !bookmarked else { throw SourceError.unsupported }
+        try await client.deleteBookmark(tweetId: postId)
+    }
+
+    public func bookmarkPageURL(postId: String) -> URL? {
+        URL(string: "https://x.com/i/status/\(postId)")
     }
 
     public func reply(to postId: String, text: String) async throws {

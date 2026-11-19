@@ -33,6 +33,8 @@ TWEET_QUERY_IDS = {
     "UnfavoriteTweet": "ZYKSe-w7KEslx3JhSIk5LA",
     "CreateRetweet": "mbRO74GrOvSfRcJnlMapnQ",
     "DeleteRetweet": "ZyZigVsNiFO6v1dEks1eWg",
+    "CreateBookmark": "aoDbu3RHznuiSkQ9aNM67Q",
+    "DeleteBookmark": "Wlmlj2-xzyS1GN3a6cj-mQ",
     "CreateTweet": "l4hk8uVGvR-a8kzQ4nOhPA",
     "DeleteTweet": "nxpZCY2K-I6QoFHAHeojFQ",
     "TweetDetail": "qpemjmVMoTWDvcRT43JIVQ",
@@ -274,7 +276,7 @@ class XWebClient:
         result = ((response.get("data") or {}).get("tweetResult") or {}).get("result") or {}
         result = result.get("tweet") or result
         legacy = result.get("legacy") or {}
-        fields = ["favorited", "retweeted", "favorite_count", "retweet_count", "reply_count", "quote_count"]
+        fields = ["favorited", "retweeted", "bookmarked", "favorite_count", "retweet_count", "reply_count", "quote_count", "bookmark_count"]
         return {
             "typename": result.get("__typename"),
             "rest_id": result.get("rest_id"),
@@ -390,6 +392,15 @@ class XWebClient:
         if liked:
             return self.tweet_mutation("FavoriteTweet", {"tweet_id": tweet_id})
         return self.tweet_mutation("UnfavoriteTweet", {"tweet_id": tweet_id})
+
+    def set_bookmarked(self, tweet_id: str, bookmarked: bool) -> Any:
+        """Bookmarks are private: only the viewer sees them, and `bookmark_count` counts everyone's.
+
+        `DeleteBookmark` works; `CreateBookmark` answers an empty 404, as `CreateRetweet` does: the web client
+        also sends `x-client-transaction-id` (behind `rweb_client_transaction_id_enabled`), which this client
+        doesn't generate (observed 2026-11-19).
+        """
+        return self.tweet_mutation("CreateBookmark" if bookmarked else "DeleteBookmark", {"tweet_id": tweet_id})
 
     def set_retweeted(self, tweet_id: str, retweeted: bool) -> Any:
         if retweeted:
@@ -998,6 +1009,8 @@ def build_parser() -> argparse.ArgumentParser:
     for name, help_text in [
         ("like", "Like a post."),
         ("unlike", "Remove your like from a post."),
+        ("bookmark", "Bookmark a post."),
+        ("unbookmark", "Remove a post from your bookmarks."),
         ("retweet", "Repost a post."),
         ("unretweet", "Undo your repost of a post."),
         ("delete-tweet", "Delete one of your own posts."),
@@ -1088,6 +1101,8 @@ def main() -> None:
         result = post_preview(client.tweet(args.tweet_id)["raw"]) or {"status": "unavailable"}
     elif args.command in ("like", "unlike"):
         result = client.set_liked(args.tweet_id, args.command == "like")
+    elif args.command in ("bookmark", "unbookmark"):
+        result = client.set_bookmarked(args.tweet_id, args.command == "bookmark")
     elif args.command in ("retweet", "unretweet"):
         result = client.set_retweeted(args.tweet_id, args.command == "retweet")
     elif args.command == "delete-tweet":
