@@ -318,6 +318,8 @@ class InstagramWebClient:
         "__relay_internal__pv__IGDThreadListActionsEnabledGKrelayprovider": True,
         "__relay_internal__pv__IGDEnableOffMsysChatThemesQErelayprovider": False,
         "__relay_internal__pv__IGDInitialMessagePageCountrelayprovider": 20,
+        # Without it IGDThreadDetailQuery fails with missing_required_variable_value (observed 2026-11-20).
+        "__relay_internal__pv__IGDSafetyNoticesWebEnabledrelayprovider": False,
     }
 
     def direct_page(self, path: str) -> str:
@@ -472,18 +474,22 @@ class InstagramWebClient:
             f"/direct/t/{urllib.parse.quote(thread_fbid)}/",
             "xig_direct_text_send_with_slide_messaging_response",
             {
-                "commands": None,
-                "forwarded_from_thread_id": None,
+                # The web client's variables (observed 2026-11-20): without `replied_to_client_context`, `sampled`
+                # and `send_attribution` the send fails with field_exception (1675030).
                 "ig_thread_igid": thread_fbid,
-                "is_forwarded_from_own_message": None,
-                "mentioned_user_ids": None,
-                "mentions": None,
                 "offline_threading_id": offline_threading_id(),
                 "recipient_igids": None,
+                "replied_to_client_context": None,
                 "replied_to_item_id": None,
                 "reply_to_message_id": reply_to_message_id,
-                "send_attribution": None,
+                "sampled": None,
                 "text": {"sensitive_string_value": text},
+                "mentions": [],
+                "mentioned_user_ids": [],
+                "commands": None,
+                "forwarded_from_thread_id": None,
+                "is_forwarded_from_own_message": None,
+                "send_attribution": "igd_web_chat_tab:in_thread",
             },
         )
         if not (result.get("data") or {}).get("xig_direct_text_send_with_slide_messaging_response"):
@@ -551,17 +557,19 @@ class InstagramWebClient:
                 page_path,
                 "xig_direct_text_send_with_slide_messaging_response",
                 {
-                    "commands": None,
-                    "forwarded_from_thread_id": source_thread_fbid,
                     "ig_thread_igid": target_thread_fbid,
-                    "is_forwarded_from_own_message": own,
-                    "mentioned_user_ids": None,
-                    "mentions": None,
                     "offline_threading_id": offline_threading_id(),
                     "recipient_igids": None,
+                    "replied_to_client_context": None,
                     "replied_to_item_id": None,
                     "reply_to_message_id": None,
-                    "send_attribution": None,
+                    "sampled": None,
+                    "mentions": [],
+                    "mentioned_user_ids": [],
+                    "commands": None,
+                    "forwarded_from_thread_id": source_thread_fbid,
+                    "is_forwarded_from_own_message": own,
+                    "send_attribution": "igd_web_chat_tab:in_thread",
                     "text": {"sensitive_string_value": node.get("text_body") or ""},
                 },
             )

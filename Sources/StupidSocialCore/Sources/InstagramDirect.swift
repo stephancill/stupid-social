@@ -280,7 +280,35 @@ extension InstagramClient {
         "__relay_internal__pv__IGDThreadListActionsEnabledGKrelayprovider": true,
         "__relay_internal__pv__IGDEnableOffMsysChatThemesQErelayprovider": false,
         "__relay_internal__pv__IGDInitialMessagePageCountrelayprovider": 20,
+        // Without it IGDThreadDetailQuery fails with missing_required_variable_value (observed 2026-11-20).
+        "__relay_internal__pv__IGDSafetyNoticesWebEnabledrelayprovider": false,
     ]
+
+    /// `IGDirectTextSendMutation`'s variables as the web client sends them (observed 2026-11-20); its older
+    /// shape, without `replied_to_client_context`, `sampled` and `send_attribution`, fails with field_exception.
+    private static func textSendVariables(
+        threadFbid: String,
+        text: String,
+        replyToMessageId: String? = nil,
+        forward: InstagramDirectForward? = nil,
+    ) -> [String: Any] {
+        [
+            "ig_thread_igid": threadFbid,
+            "offline_threading_id": offlineThreadingID(),
+            "recipient_igids": NSNull(),
+            "replied_to_client_context": NSNull(),
+            "replied_to_item_id": NSNull(),
+            "reply_to_message_id": replyToMessageId ?? NSNull(),
+            "sampled": NSNull(),
+            "text": ["sensitive_string_value": text],
+            "mentions": [String](),
+            "mentioned_user_ids": [String](),
+            "commands": NSNull(),
+            "forwarded_from_thread_id": forward?.threadFbid ?? NSNull(),
+            "is_forwarded_from_own_message": forward?.isOwn ?? NSNull(),
+            "send_attribution": "igd_web_chat_tab:in_thread",
+        ]
+    }
 
     private static func threadPage(_ threadFbid: String) -> String {
         "/direct/t/\(threadFbid)/"
@@ -435,20 +463,7 @@ extension InstagramClient {
 
     func sendDirectText(threadFbid: String, text: String, replyToMessageId: String?) async throws -> InstagramDirectSentMessage {
         let credentials = try directCredentials()
-        let variables: [String: Any] = [
-            "commands": NSNull(),
-            "forwarded_from_thread_id": NSNull(),
-            "ig_thread_igid": threadFbid,
-            "is_forwarded_from_own_message": NSNull(),
-            "mentioned_user_ids": NSNull(),
-            "mentions": NSNull(),
-            "offline_threading_id": Self.offlineThreadingID(),
-            "recipient_igids": NSNull(),
-            "replied_to_item_id": NSNull(),
-            "reply_to_message_id": replyToMessageId ?? NSNull(),
-            "send_attribution": NSNull(),
-            "text": ["sensitive_string_value": text],
-        ]
+        let variables = Self.textSendVariables(threadFbid: threadFbid, text: text, replyToMessageId: replyToMessageId)
         guard let sent = try await directGraphQL(
             InstagramDirectSentMessage.self,
             credentials: credentials,
@@ -486,20 +501,7 @@ extension InstagramClient {
         } else {
             operation = "IGDirectTextSendMutation"
             rootField = "xig_direct_text_send_with_slide_messaging_response"
-            variables = [
-                "commands": NSNull(),
-                "forwarded_from_thread_id": forward.threadFbid,
-                "ig_thread_igid": threadFbid,
-                "is_forwarded_from_own_message": forward.isOwn,
-                "mentioned_user_ids": NSNull(),
-                "mentions": NSNull(),
-                "offline_threading_id": Self.offlineThreadingID(),
-                "recipient_igids": NSNull(),
-                "replied_to_item_id": NSNull(),
-                "reply_to_message_id": NSNull(),
-                "send_attribution": NSNull(),
-                "text": ["sensitive_string_value": forward.text ?? ""],
-            ]
+            variables = Self.textSendVariables(threadFbid: threadFbid, text: forward.text ?? "", forward: forward)
         }
         guard let sent = try await directGraphQL(
             InstagramDirectSentMessage.self, credentials: credentials, operation: operation, pagePath: Self.threadPage(threadFbid), rootField: rootField, variables: variables,
