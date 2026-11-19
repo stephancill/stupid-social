@@ -2,9 +2,39 @@ import StupidSocialCore
 import SwiftUI
 import WebKit
 
-private func hasRequiredInstagramCookies(_ cookies: [HTTPCookie]) -> Bool {
-    let names = Set(cookies.map(\.name))
-    return names.isSuperset(of: ["sessionid", "csrftoken", "ds_user_id", "mid", "rur", "ig_did"])
+/// The cookies the app can't work without. `mid`, `rur` and `ig_did` are kept when present, but a login isn't held
+/// back for them: Instagram sets `rur` only after some logins, and waiting for it left the page sitting signed in.
+private let requiredInstagramCookies: Set<String> = ["sessionid", "csrftoken", "ds_user_id"]
+
+/// Why a login can't finish, shown below the page.
+enum InstagramLoginProblem: Equatable {
+    /// Instagram still asks to verify the login after its check ran here.
+    case checkpoint
+    /// Signed in, but without the session cookies the app needs.
+    case missingCookies
+
+    var message: String {
+        switch self {
+        case .checkpoint:
+            "Instagram wants to verify this login. Finish the check in the Instagram app or at instagram.com, then try again."
+        case .missingCookies:
+            "Instagram signed in but didn't share the session this app needs. Try again."
+        }
+    }
+}
+
+/// Retries the page the login is on and holds what stopped it.
+@MainActor
+final class InstagramLoginController: ObservableObject {
+    @Published var problem: InstagramLoginProblem?
+    weak var webView: WKWebView?
+    var onRetry: () -> Void = {}
+
+    func retry() {
+        problem = nil
+        onRetry()
+        webView?.load(URLRequest(url: URL(string: "https://www.instagram.com/")!))
+    }
 }
 
 struct InstagramLoginWebView: View {
@@ -13,11 +43,14 @@ struct InstagramLoginWebView: View {
     var initialCredentials: InstagramCredentials?
     var onLoginSuccess: (InstagramCredentials) -> Void
 
+    @StateObject private var controller = InstagramLoginController()
+
     var body: some View {
         LoginSheet(title: "Log in to Instagram") {
             InstagramLoginWKWebView(
                 url: URL(string: initialCredentials == nil ? "https://www.instagram.com/accounts/login/" : "https://www.instagram.com/")!,
                 initialCredentials: initialCredentials,
+                controller: controller,
                 onCookiesFound: { cookies in
                     for cookie in cookies {
                         HTTPCookieStorage.shared.setCookie(cookie)
@@ -27,7 +60,21 @@ struct InstagramLoginWebView: View {
                     dismiss()
                 },
             )
-            .ignoresSafeArea()
+            .ignoresSafeArea(edges: controller.problem == nil ? .all : [.top, .horizontal])
+            .safeAreaInset(edge: .bottom) {
+                if let problem = controller.problem {
+                    VStack(spacing: 12) {
+                        Text(problem.message)
+                            .font(.callout)
+                            .multilineTextAlignment(.center)
+                        Button("Try Again") { controller.retry() }
+                            .buttonStyle(.borderedProminent)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(.bar)
+                }
+            }
         }
     }
 
@@ -98,6 +145,7 @@ private func cookies(from credentials: InstagramCredentials?) -> [HTTPCookie] {
 private struct InstagramLoginWKWebView: UIViewRepresentable {
     let url: URL
     let initialCredentials: InstagramCredentials?
+    let controller: InstagramLoginController
     let onCookiesFound: ([HTTPCookie]) -> Void
 
     func makeUIView(context: Context) -> WKWebView {
@@ -106,6 +154,8 @@ private struct InstagramLoginWKWebView: UIViewRepresentable {
 
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
+        controller.webView = webView
+        controller.onRetry = { [coordinator = context.coordinator] in coordinator.reset() }
         loadInstagramLogin(url: url, initialCredentials: initialCredentials, webView: webView)
         return webView
     }
@@ -113,17 +163,31 @@ private struct InstagramLoginWKWebView: UIViewRepresentable {
     func updateUIView(_: WKWebView, context _: Context) {}
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onCookiesFound: onCookiesFound)
+        Coordinator(controller: controller, onCookiesFound: onCookiesFound)
     }
 
     class Coordinator: NSObject, WKNavigationDelegate {
+        let controller: InstagramLoginController
         let onCookiesFound: ([HTTPCookie]) -> Void
         private var hasNotified = false
-        /// The challenge opens once; reopening it from every page it passes through would loop.
+        /// The challenge opens once per try; reopening it from every page it passes through would loop.
         private var hasOpenedChallenge = false
 
-        init(onCookiesFound: @escaping ([HTTPCookie]) -> Void) {
+        init(controller: InstagramLoginController, onCookiesFound: @escaping ([HTTPCookie]) -> Void) {
+            self.controller = controller
             self.onCookiesFound = onCookiesFound
+        }
+
+        /// Try Again: the challenge may open once more.
+        @MainActor func reset() {
+            hasOpenedChallenge = false
+        }
+
+        /// Shows a problem and counts it once while it stays shown.
+        @MainActor private func show(_ problem: InstagramLoginProblem) {
+            guard controller.problem != problem else { return }
+            controller.problem = problem
+            AppMetrics.instagramLogin(outcome: problem == .checkpoint ? "checkpoint_unresolved" : "missing_cookies")
         }
 
         func webView(_ webView: WKWebView, didFinish _: WKNavigation!) {
@@ -140,19 +204,31 @@ private struct InstagramLoginWKWebView: UIViewRepresentable {
 
         private func checkForAuthCookies(webView: WKWebView) {
             webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
-                guard hasRequiredInstagramCookies(cookies) else { return }
+                let names = Set(cookies.map(\.name))
+                // Without a session the page is still on the way to signing in (sign-up, password reset).
+                guard names.contains("sessionid") else { return }
                 Task { @MainActor in
+                    guard names.isSuperset(of: requiredInstagramCookies) else {
+                        self.show(.missingCookies)
+                        return
+                    }
                     // The homepage still renders signed in for a session under a security checkpoint, so its
                     // cookies would be saved again and fail every API call. Resolve the checkpoint here first.
                     if let challenge = await self.pendingChallengeURL(webView: webView) {
-                        // Still locked after the challenge ran: stay put rather than save cookies that can't work.
-                        guard !self.hasOpenedChallenge else { return }
+                        // Still locked after the challenge ran: say so rather than save cookies that can't work.
+                        guard !self.hasOpenedChallenge else {
+                            self.show(.checkpoint)
+                            return
+                        }
                         self.hasOpenedChallenge = true
+                        AppMetrics.instagramLogin(outcome: "checkpoint")
                         webView.load(URLRequest(url: challenge))
                         return
                     }
                     guard !self.hasNotified else { return }
                     self.hasNotified = true
+                    self.controller.problem = nil
+                    AppMetrics.instagramLogin(outcome: "ok")
                     self.onCookiesFound(cookies)
                 }
             }

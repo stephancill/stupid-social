@@ -199,6 +199,13 @@ public enum AppMetrics {
         StupidMetrics.error("account_connect_failed", error: error, properties: ["network": network.rawValue])
     }
 
+    /// How an Instagram login page ended: `ok`, `checkpoint` (Instagram asked for verification and the challenge
+    /// opened), `checkpoint_unresolved` (still asking after it ran) or `missing_cookies` (signed in without the
+    /// session cookies the app needs).
+    public static func instagramLogin(outcome: String) {
+        StupidMetrics.track("instagram_login", properties: ["outcome": outcome])
+    }
+
     static func accountRemoved(network: SocialNetwork) {
         StupidMetrics.track("account_remove", properties: ["network": network.rawValue])
     }
