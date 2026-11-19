@@ -120,6 +120,25 @@ public enum ProfileTimelineKind: String, CaseIterable, Hashable, Sendable {
 
 /// One post on a profile's timeline.
 public struct ProfileTimelineItem: Identifiable, Hashable, Sendable {
+    /// A photo, video or GIF in the post, as the full-screen media viewer shows it.
+    public struct Media: Hashable, Sendable {
+        /// The photo at its largest, or a video's poster.
+        public let imageURL: URL
+        public let videoURL: URL?
+        public let isGIF: Bool
+        /// Width over height.
+        public let aspectRatio: Double?
+        public let altText: String?
+
+        public init(imageURL: URL, videoURL: URL? = nil, isGIF: Bool = false, aspectRatio: Double? = nil, altText: String? = nil) {
+            self.imageURL = imageURL
+            self.videoURL = videoURL
+            self.isGIF = isGIF
+            self.aspectRatio = aspectRatio
+            self.altText = altText
+        }
+    }
+
     public let post: PostThread.Post
     /// The profile's name when the post is its repost of someone else's.
     public let repostedBy: String?
@@ -128,14 +147,17 @@ public struct ProfileTimelineItem: Identifiable, Hashable, Sendable {
     public let thumbnailURL: URL?
     public let isVideo: Bool
     public let hasMultipleMedia: Bool
+    /// Every photo and video in the post, in order; empty when only a link card has an image.
+    public let media: [Media]
 
-    public init(post: PostThread.Post, repostedBy: String? = nil, isPinned: Bool = false, thumbnailURL: URL? = nil, isVideo: Bool = false, hasMultipleMedia: Bool = false) {
+    public init(post: PostThread.Post, repostedBy: String? = nil, isPinned: Bool = false, thumbnailURL: URL? = nil, isVideo: Bool = false, hasMultipleMedia: Bool = false, media: [Media] = []) {
         self.post = post
         self.repostedBy = repostedBy
         self.isPinned = isPinned
         self.thumbnailURL = thumbnailURL
         self.isVideo = isVideo
         self.hasMultipleMedia = hasMultipleMedia
+        self.media = media
     }
 
     public var id: String {

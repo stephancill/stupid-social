@@ -53,7 +53,36 @@ final class XUserTimelineParserTests: XCTestCase {
         XCTAssertTrue(timeline.items[0].isVideo)
         XCTAssertTrue(timeline.items[0].hasMultipleMedia)
         XCTAssertEqual(timeline.items[1].thumbnailURL, URL(string: "https://pbs.twimg.com/card/8.jpg"))
+        XCTAssertTrue(timeline.items[1].media.isEmpty)
         XCTAssertEqual(timeline.nextCursor, "more")
+    }
+
+    /// The viewer shows photos at X's large size and plays the best MP4 up to the full-screen bitrate.
+    func testMediaTakesLargePhotosAndVideoVariants() throws {
+        var post = tweet(id: "9", user: "jack", text: "Both")
+        var legacy = try XCTUnwrap(post["legacy"] as? [String: Any])
+        legacy["extended_entities"] = ["media": [
+            ["type": "photo", "media_url_https": "https://pbs.twimg.com/media/9a.jpg", "original_info": ["width": 2000, "height": 1000], "ext_alt_text": "A view"],
+            ["type": "video", "media_url_https": "https://pbs.twimg.com/ext_tw_video_thumb/9/pu/img/9b.jpg", "video_info": ["duration_millis": 5000, "variants": [
+                ["content_type": "application/x-mpegURL", "url": "https://video.twimg.com/9.m3u8"],
+                ["content_type": "video/mp4", "bitrate": 832_000, "url": "https://video.twimg.com/9-low.mp4"],
+                ["content_type": "video/mp4", "bitrate": 2_176_000, "url": "https://video.twimg.com/9-high.mp4"],
+                ["content_type": "video/mp4", "bitrate": 10_368_000, "url": "https://video.twimg.com/9-max.mp4"],
+            ]]],
+        ]]
+        post["legacy"] = legacy
+        let page = page([["type": "TimelineAddEntries", "entries": [item("tweet-9", post)]]])
+
+        let media = try XCTUnwrap(XUserTimelineParser.parse(data: page).items.first?.media)
+
+        XCTAssertEqual(media.count, 2)
+        XCTAssertEqual(media[0].imageURL, URL(string: "https://pbs.twimg.com/media/9a.jpg?name=large"))
+        XCTAssertNil(media[0].videoURL)
+        XCTAssertEqual(media[0].aspectRatio, 2)
+        XCTAssertEqual(media[0].altText, "A view")
+        XCTAssertEqual(media[1].imageURL, URL(string: "https://pbs.twimg.com/ext_tw_video_thumb/9/pu/img/9b.jpg"))
+        XCTAssertEqual(media[1].videoURL, URL(string: "https://video.twimg.com/9-high.mp4"))
+        XCTAssertFalse(media[1].isGIF)
     }
 
     /// X returns a bottom cursor even past the last post.

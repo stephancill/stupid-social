@@ -2047,7 +2047,30 @@ enum XUserTimelineParser {
             thumbnailURL: (media.first?.mediaUrlHttps ?? cardImage).flatMap(URL.init(string:)),
             isVideo: media.first.map { $0.type == "video" || $0.type == "animated_gif" } ?? false,
             hasMultipleMedia: media.count > 1,
+            media: media.compactMap { XPostParser.media(from: $0, maxBitrate: maxBitrate) }.map { item in
+                ProfileTimelineItem.Media(
+                    imageURL: item.videoURL == nil ? largeImageURL(item.imageURL) : item.imageURL,
+                    videoURL: item.videoURL,
+                    isGIF: item.kind == .gif,
+                    aspectRatio: item.aspectRatio,
+                    altText: item.altText,
+                )
+            },
         )
+    }
+
+    /// Full-screen videos stream, so they can play a higher bitrate than chats, which load whole files.
+    static let maxBitrate = 2_500_000
+
+    /// `media_url_https` is X's medium size (up to 1200 pixels); `name=large` is up to 2048, as x.com's own photo
+    /// viewer loads it.
+    static func largeImageURL(_ url: URL) -> URL {
+        guard url.host() == "pbs.twimg.com", url.path().hasPrefix("/media/"),
+              var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              components.queryItems == nil
+        else { return url }
+        components.queryItems = [URLQueryItem(name: "name", value: "large")]
+        return components.url ?? url
     }
 }
 

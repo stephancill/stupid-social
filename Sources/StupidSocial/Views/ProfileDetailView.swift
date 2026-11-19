@@ -513,7 +513,7 @@ private struct ProfileTimelineSection: View {
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 1), count: 3), spacing: 1) {
                         ForEach(media) { item in
                             Button {
-                                open(item)
+                                ProfileMediaViewer.present(timeline: viewModel, kind: kind, itemId: item.id)
                             } label: {
                                 ProfileMediaThumbnail(item: item)
                             }

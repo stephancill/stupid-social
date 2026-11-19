@@ -127,7 +127,7 @@ enum XPostParser {
             isVerified: author.isBlueVerified == true || author.verification?.verified == true,
             postedAt: legacy.createdAt.flatMap(Date.twitter),
             text: text(of: tweet),
-            media: (legacy.extendedEntities?.media ?? []).compactMap(media(from:)),
+            media: (legacy.extendedEntities?.media ?? []).compactMap { media(from: $0) },
             replyCount: legacy.replyCount,
             // X's repost count leaves out quotes, which it counts apart.
             repostCount: legacy.retweetCount,
@@ -150,7 +150,7 @@ enum XPostParser {
         return text
     }
 
-    private static func media(from item: XThreadResponse.Media) -> XPost.Media? {
+    static func media(from item: XThreadResponse.Media, maxBitrate: Int = XPostParser.maxBitrate) -> XPost.Media? {
         guard let imageURL = item.mediaUrlHttps.flatMap(URL.init(string:)) else { return nil }
         let kind: XPost.Media.Kind = switch item.type {
         case "video": .video

@@ -24,6 +24,7 @@ Sources/
       ProfileDetailView.swift       # The profile for search, notifications, stories and one-to-one chats; X Posts/Media
       PostCardView.swift            # A post laid out as on its network, with reply/repost/quote/like, and the reply/quote composer
       PostThreadView.swift          # A post's thread in post details: every earlier post, then the post, highlighted
+      ProfileMediaViewer.swift      # Full-screen pager for a profile's Media grid: zoom, tap for the caption, swipe through posts
       NetworkBadgeIcon.swift        # Shared social network icon badge
       ActorAvatar.swift             # Shared notification actor avatar with initial fallback
       CookieLoginWebView.swift      # LoginSheet scaffold and the cookie-capturing login page (GitHub, X)
