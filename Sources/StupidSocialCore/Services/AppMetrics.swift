@@ -161,6 +161,11 @@ public enum AppMetrics {
         StupidMetrics.error("background_refresh_schedule_failed", error: error)
     }
 
+    /// A message the notification extension left in the chat inbox couldn't be stored.
+    public static func chatInboxImportFailed(_ error: any Error) {
+        StupidMetrics.error("chat_inbox_import_failed", error: error)
+    }
+
     // MARK: Chat reminders
 
     /// A reminder was set: `delay` is the preset or `custom`, `delivery` whether it was pushed to other devices

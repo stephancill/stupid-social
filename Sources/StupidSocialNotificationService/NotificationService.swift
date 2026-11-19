@@ -100,21 +100,18 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
     /// The pushed text in its chat under each account that has the chat stored, since the push doesn't say which
     /// account it is for.
     private static func storeTelegramMessage(userInfo: [AnyHashable: Any]) {
-        guard SharedChatStore.url != nil, let (peerKey, record) = TelegramPushedMessage.record(userInfo: userInfo) else { return }
+        guard SharedChatStore.inboxURL != nil, let (peerKey, record) = TelegramPushedMessage.record(userInfo: userInfo) else { return }
         do {
-            let store = try SharedChatStore.openForExtension()
-            for chatKey in try store.chatKeys(endingWith: "|\(peerKey)") {
-                try store.writeProvisional([record], chatKey: chatKey)
-            }
+            try SharedChatStore.leaveProvisional(record, chatKeySuffix: "|\(peerKey)")
         } catch {
             Logger(subsystem: "tech.stupid.StupidSocial", category: "NotificationService").error("Telegram message not stored: \(String(describing: type(of: error)), privacy: .public)")
         }
     }
 
     private static func store(payload: Data, registrations: [String: ApronPushRegistration]) {
-        guard SharedChatStore.url != nil, let (chatKey, record) = ApronPushNotification.record(payload: payload, registrations: registrations) else { return }
+        guard SharedChatStore.inboxURL != nil, let (chatKey, record) = ApronPushNotification.record(payload: payload, registrations: registrations) else { return }
         do {
-            try SharedChatStore.openForExtension().write([record], chatKey: chatKey)
+            try SharedChatStore.leave(record, chatKey: chatKey)
         } catch {
             Logger(subsystem: "tech.stupid.StupidSocial", category: "NotificationService").error("Apron message not stored: \(String(describing: type(of: error)), privacy: .public)")
         }

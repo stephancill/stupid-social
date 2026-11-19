@@ -10,13 +10,17 @@ struct StupidSocialApp: App {
     private let modelContainer: ModelContainer
 
     init() {
-        // Before any chat is made: shared with the notification extension, which stores pushed messages.
+        // Before any chat is made. In the app's own container; the notification extension leaves pushed messages
+        // in an App Group inbox instead (`SharedChatStore`).
+        let chatStore: ChatStore
         do {
-            ChatKit.store = try SharedChatStore.openForApp()
+            chatStore = try SharedChatStore.openForApp()
         } catch {
             fatalError("Chat store failed to open: \(error)")
         }
+        ChatKit.store = chatStore
         AppMetrics.configure()
+        ChatInbox.start(store: chatStore)
         ChatKit.onEvent = AppMetrics.chat
         ChatKit.networkIcon = { network, size in AnyView(NetworkBadgeIcon(network: network, size: size)) }
         // Apron links open in the app, never in a browser.

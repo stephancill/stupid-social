@@ -9,6 +9,7 @@ Sources/
     AppDelegate.swift               # APNs token, notification taps, inline replies and foreground presentation
     ChatBackgroundRefresh.swift     # BGAppRefreshTask: reloads the Chats list and loads changed chats ahead
     ChatControlServer.swift         # Command-line chat access on a Mac: token-checked JSON lines on 127.0.0.1
+    ChatInbox.swift                 # Moves messages the notification extension left in the App Group inbox into the chat store
     StupidSocialApp.swift           # iOS @main entry point
     Views/
       ContentView.swift             # Root view, container wiring
@@ -66,7 +67,7 @@ Sources/
     ApronPushStore.swift
     ApronPushNotification.swift
     ChatReminderPush.swift          # Reminder push registration (App Group) and the reminder notification's content
-    SharedChatStore.swift           # The chat store in the App Group, shared with the extension, which stores pushed Apron messages
+    SharedChatStore.swift           # Opens the app's chat store; the App Group inbox where the extension leaves pushed messages
     TelegramPushNotification.swift  # Telegram push → sender and text; TelegramAvatarStore for the extension
     CommunicationNotification.swift # INSendMessageIntent donation and content update, shared with Debug
     PushExtensionLog.swift          # What the extension did per push, shown in Settings → Debug
