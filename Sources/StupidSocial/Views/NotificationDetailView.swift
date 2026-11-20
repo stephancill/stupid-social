@@ -372,6 +372,12 @@ private struct MessageBubbleView: View {
 
                     if let imageURL = target.imageURL {
                         MessagePreviewImage(url: imageURL)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                let pages = MediaViewerPage.pages(itemId: target.id, post: nil, media: [ProfileTimelineItem.Media(imageURL: imageURL)], caption: nil)
+                                MediaViewer.present(pages: pages, network: actors.first?.network ?? .instagram, engaging: nil)
+                            }
+                            .accessibilityAddTraits(.isButton)
                     }
                 }
                 .padding(.horizontal, 12)
@@ -557,7 +563,16 @@ private struct TargetPostView: View {
             }
 
             if !displayImageURLs.isEmpty {
-                ImageCarousel(imageURLs: displayImageURLs)
+                ImageCarousel(imageURLs: displayImageURLs) { index in
+                    let post = PostThread.Post(target: target, engagement: details?.engagement)
+                    let pages = MediaViewerPage.pages(
+                        itemId: target.id,
+                        post: post,
+                        media: displayImageURLs.map { ProfileTimelineItem.Media(imageURL: $0) },
+                        caption: details?.text ?? target.text,
+                    )
+                    MediaViewer.present(pages: pages, startKey: pages.indices.contains(index) ? pages[index].key : nil, network: fallbackNetwork, engaging: nil)
+                }
             }
 
             if isLoadingDetails, showsInlineLoadingRow {
@@ -698,21 +713,35 @@ private struct GitHubRepoDetailView: View {
 
 struct ImageCarousel: View {
     let imageURLs: [URL]
+    /// Opens the media viewer at the photo tapped; without it a tap goes to the post.
+    var open: ((Int) -> Void)?
 
     var body: some View {
         if imageURLs.count == 1, let imageURL = imageURLs.first {
-            PostImage(url: imageURL)
+            tappable(PostImage(url: imageURL), index: 0)
         } else {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 10) {
-                    ForEach(imageURLs, id: \.self) { imageURL in
-                        PostImage(url: imageURL)
+                    ForEach(Array(imageURLs.enumerated()), id: \.offset) { index, imageURL in
+                        tappable(PostImage(url: imageURL), index: index)
                             .containerRelativeFrame(.horizontal, count: 1, spacing: 10)
                     }
                 }
                 .scrollTargetLayout()
             }
             .scrollTargetBehavior(.viewAligned)
+        }
+    }
+
+    @ViewBuilder
+    private func tappable(_ image: some View, index: Int) -> some View {
+        if let open {
+            image
+                .contentShape(Rectangle())
+                .onTapGesture { open(index) }
+                .accessibilityAddTraits(.isButton)
+        } else {
+            image
         }
     }
 }

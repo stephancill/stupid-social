@@ -18,6 +18,9 @@ struct PostCardView: View {
     var context: (text: String, systemImage: String)?
     /// Opens the post here, in place of its page on the network.
     var open: (() -> Void)?
+    /// The post's photos and videos as the media viewer plays them, such as from a profile's timeline; otherwise the
+    /// viewer shows the images.
+    var media: [ProfileTimelineItem.Media]?
 
     @Environment(\.openURL) private var openURL
     @AppStorage("redactionEnabled") private var redactionEnabled = false
@@ -66,7 +69,7 @@ struct PostCardView: View {
                     }
 
                     if !imageURLs.isEmpty {
-                        ImageCarousel(imageURLs: imageURLs)
+                        ImageCarousel(imageURLs: imageURLs, open: openMedia(at:))
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -199,6 +202,14 @@ struct PostCardView: View {
 
     private var redactionActors: [NotificationActor] {
         fallbackActors + [author].compactMap(\.self)
+    }
+
+    /// The post's photos and videos full screen, at the one tapped, with its counts and actions.
+    private func openMedia(at index: Int) {
+        let shown = media.flatMap { $0.count == imageURLs.count ? $0 : nil } ?? imageURLs.map { ProfileTimelineItem.Media(imageURL: $0) }
+        let post = PostThread.Post(target: target, engagement: engagement ?? details?.engagement)
+        let pages = MediaViewerPage.pages(itemId: target.id, post: post, media: shown, caption: text)
+        MediaViewer.present(pages: pages, startKey: pages.indices.contains(index) ? pages[index].key : nil, network: network, engaging: engaging)
     }
 
     private var imageURLs: [URL] {

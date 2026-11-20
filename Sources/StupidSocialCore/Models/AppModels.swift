@@ -449,6 +449,8 @@ public struct NetworkProfilePost: Identifiable, Hashable, Codable, Sendable {
     public let caption: String?
     public let isVideo: Bool
     public let isCarousel: Bool
+    /// Nil when the author hides likes, or the network didn't say.
+    public let likeCount: Int?
 
     private enum CodingKeys: String, CodingKey {
         case id
@@ -459,9 +461,10 @@ public struct NetworkProfilePost: Identifiable, Hashable, Codable, Sendable {
         case caption
         case isVideo
         case isCarousel
+        case likeCount
     }
 
-    public init(id: String, imageURL: URL?, thumbnailURL: URL? = nil, media: [NetworkProfilePostMedia] = [], url: URL?, caption: String? = nil, isVideo: Bool = false, isCarousel: Bool = false) {
+    public init(id: String, imageURL: URL?, thumbnailURL: URL? = nil, media: [NetworkProfilePostMedia] = [], url: URL?, caption: String? = nil, isVideo: Bool = false, isCarousel: Bool = false, likeCount: Int? = nil) {
         self.id = id
         self.imageURL = imageURL
         self.thumbnailURL = thumbnailURL
@@ -470,11 +473,13 @@ public struct NetworkProfilePost: Identifiable, Hashable, Codable, Sendable {
         self.caption = caption
         self.isVideo = isVideo
         self.isCarousel = isCarousel
+        self.likeCount = likeCount
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
+        likeCount = try container.decodeIfPresent(Int.self, forKey: .likeCount)
         imageURL = try container.decodeIfPresent(URL.self, forKey: .imageURL)
         thumbnailURL = try container.decodeIfPresent(URL.self, forKey: .thumbnailURL)
         let decodedMedia = try container.decodeIfPresent([NetworkProfilePostMedia].self, forKey: .media) ?? []

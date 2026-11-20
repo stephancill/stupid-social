@@ -14,6 +14,7 @@ import hashlib
 import json
 import secrets
 import plistlib
+import re
 import subprocess
 import time
 import urllib.error
@@ -321,6 +322,40 @@ def summarize_messages(value: dict[str, Any], viewer: str, show_text: bool) -> N
         print(f"- {message.get('id')} {kind} own={own} at {message.get('sentAt')} reactions={reactions} embed={embed} facets={len(message.get('facets') or [])} {text}")
 
 
+PUBLIC_APPVIEW = "https://public.api.bsky.app/xrpc"
+
+
+def public_get(name: str, query: dict[str, str]) -> Any:
+    url = f"{PUBLIC_APPVIEW}/{name}?{urllib.parse.urlencode(query)}"
+    with urllib.request.urlopen(urllib.request.Request(url, headers={"Accept": "application/json"}), timeout=20) as response:
+        return json.loads(response.read())
+
+
+def post_preview(link: str | None, output: Path | None) -> None:
+    """A post as chats draw it, from the public AppView without signing in: the handle in the link resolves to a
+    DID (`com.atproto.identity.resolveHandle`), since `getPosts` answers a handle in an at:// URI with an error."""
+    match = re.match(r"https://(?:www\.)?bsky\.app/profile/([^/]+)/post/([A-Za-z0-9]+)", link or "")
+    if not match:
+        raise SystemExit("Pass --url https://bsky.app/profile/<handle or did>/post/<rkey>.")
+    actor, rkey = match.groups()
+    did = actor if actor.startswith("did:") else public_get("com.atproto.identity.resolveHandle", {"handle": actor})["did"]
+    value = public_get("app.bsky.feed.getPosts", {"uris": f"at://{did}/app.bsky.feed.post/{rkey}"})
+    if output:
+        write_output(value, output)
+    for post in value.get("posts", []):
+        embed = post.get("embed") or {}
+        author = post.get("author") or {}
+        print(json.dumps({
+            "uri": post.get("uri"),
+            "author": {k: author.get(k) for k in ("handle", "displayName")} | {"avatar": bool(author.get("avatar")), "verified": (author.get("verification") or {}).get("verifiedStatus")},
+            "createdAt": (post.get("record") or {}).get("createdAt"),
+            "text_length": len((post.get("record") or {}).get("text") or ""),
+            "embed": embed.get("$type"),
+            "media": embed.get("media", {}).get("$type") if embed.get("$type", "").endswith("recordWithMedia#view") else None,
+            "counts": {k: post.get(k) for k in ("replyCount", "repostCount", "quoteCount", "likeCount")},
+        }, indent=2))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Fetch Bluesky API responses using simulator OAuth credentials.")
     parser.add_argument(
@@ -328,8 +363,10 @@ def main() -> None:
         choices=[
             "notifications", "load-notifications", "post-thread", "profile", "token-nonce",
             "convos", "convo", "messages", "send", "mark-read", "react", "unreact", "mute", "unmute",
+            "post-preview",
         ],
     )
+    parser.add_argument("--url", help="post-preview: a bsky.app post link, /profile/<handle or did>/post/<rkey>.")
     parser.add_argument("--account-id", help="The app's account id (bluesky-<uuid>) when several are signed in.")
     parser.add_argument("--output", type=Path, help="Write raw JSON response to this path.")
     parser.add_argument("--limit", type=int, default=50)
@@ -357,6 +394,10 @@ def main() -> None:
 
     if args.command == "token-nonce":
         token_nonce_probe(auth_server_url=args.auth_server, stale_nonce=args.stale_nonce)
+        return
+
+    if args.command == "post-preview":
+        post_preview(args.url, args.output)
         return
 
     credentials = load_simulator_credentials(args.account_id)

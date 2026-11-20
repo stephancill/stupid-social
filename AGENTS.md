@@ -16,7 +16,7 @@ Sources/
       FeedView.swift                # Main list + StoriesBar + story viewer triggers
       HomePager.swift               # UIPageViewController pager: Chats to the left of the feed
       ChatsView.swift               # Chats list across Apron rooms, Spotify chats and Instagram threads
-      SearchView.swift              # Cross-network profile search
+      SearchView.swift              # Cross-network profile search and recently opened profiles
       SearchBar.swift               # Shared search field modifier (Search, Chats) and the drawer field's fill fix
       CompactListRow.swift          # Shared row insets for the feed and Chats lists
       ChatInfoView.swift            # Chat details for networks without their own screen (or the person's profile); header action buttons (Message, Mute, Archive)
@@ -26,7 +26,7 @@ Sources/
       PostCardView.swift            # A post laid out as on its network, with its action bar, and the reply/quote composer
       PostActionBar.swift           # A post's counts and actions: reply, repost/quote, like, bookmark, share
       PostThreadView.swift          # A post's thread in post details: every earlier post, then the post, highlighted
-      ProfileMediaViewer.swift      # Full-screen pager for a profile's Media grid: zoom, caption with the action bar, swipe through posts
+      MediaViewer.swift             # Full-screen media pager from anywhere (profile grids, post cards, notifications, chat posts): zoom, caption with the action bar
       NetworkBadgeIcon.swift        # Shared social network icon badge
       ActorAvatar.swift             # Shared notification actor avatar with initial fallback
       CookieLoginWebView.swift      # LoginSheet scaffold and the cookie-capturing login page (GitHub, X)
@@ -92,6 +92,7 @@ Sources/
       ApronPushService.swift        # Apron push registration through the push.stupidtech.net relay
       ChatReminderPush.swift        # Chat reminders pushed to the user's other devices, scheduled on the relay
       AppMetrics.swift              # Every anonymous usage event and error sent to metrics.stupidtech.net
+      MediaDownloads.swift          # The media viewer's saves: the original photo or MP4 (a Bluesky HLS video's uploaded blob) as a file
       BackgroundActivity.swift      # Keeps a refresh running when the app is backgrounded; cancels it when iOS's time runs out
       ApronRoomNotifications.swift  # Per-room notification levels mapped to mute and wake scopes
       TelegramPushService.swift     # Telegram APNs registration (token type 1) after sign-in, at launch, on token change
@@ -142,7 +143,10 @@ Sources/
       XChatClient.swift             # X Chat (encrypted X DMs): GraphQL inbox/history/send/read, replies, media upload, Juicebox key recovery
       XChatAdapter.swift            # X Chat adapter: decrypted history, live events, send, reactions, read marker
       XChatMedia.swift              # X Chat media: xchatmedia: URLs, the URLProtocol that downloads, decrypts and caches them; outgoing media metadata
-      XPost.swift                   # X posts in every chat: TweetResultByRestId → XPost, its .post embed, XPostResolver (ChatKit.resolveLink), XPostCache (on disk)
+      XPost.swift                   # X posts in every chat: TweetResultByRestId → XPost and its .post embed
+      InstagramPost.swift           # Instagram posts in every chat: shortcode → media info → InstagramPost and its .post embed
+      BlueskyPost.swift             # Bluesky posts in every chat, from the public AppView: BlueskyPost and its .post embed
+      LinkedPosts.swift             # LinkedPostResolver (ChatKit.resolveLink) over each network's source, LinkedPostCache (on disk)
     Resources/
       TelegramSchema.tl             # Telegram TL schema (scripts/telegram-schema.py); TelegramAPI.json is gitignored
     Storage/

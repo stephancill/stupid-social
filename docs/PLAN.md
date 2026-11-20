@@ -252,6 +252,12 @@ Observed X behavior:
 
 From a notification or search result, the user should be able to view an account detail screen.
 
+The search page lists the profiles recently opened from search while its field is empty, newest first, kept on the device; each can be removed, or all cleared.
+
+Tapping a post's photo or video anywhere (a profile's grid or posts, a notification, a post in a chat) opens it full screen in one media viewer that pages through the post's media (and, on a profile, the next posts), with the post's text and, where the account can act on the post, its reply, repost, like, bookmark and share actions. An Instagram profile's grid can be sorted by likes, among the posts loaded so far.
+
+Links to X, Instagram and Bluesky posts in any chat draw as the post (author, text, media, counts, the quoted post), loaded ahead from the Chats list and kept on the device.
+
 The account detail should show:
 
 - Name

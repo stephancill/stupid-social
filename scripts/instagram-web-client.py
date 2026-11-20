@@ -862,6 +862,15 @@ class InstagramWebClient:
             headers=self.web_headers(),
         )
 
+    def rest_media_info(self, shortcode: str) -> dict[str, Any]:
+        """A post as chats draw it (`post-preview`): `/api/v1/media/<id>/info/`, the id decoded from the shortcode."""
+        self._ensure_bootstrapped()
+        return self.request_json_with_refresh(
+            "GET",
+            BASE_URL + f"/api/v1/media/{media_id_from_shortcode(shortcode)}/info/",
+            headers=self.web_headers(),
+        )
+
     def rest_search_users(self, query: str) -> dict[str, Any]:
         self._ensure_bootstrapped()
         query = query.strip()
@@ -1563,6 +1572,44 @@ class InstagramHTTPError(Exception):
         super().__init__(f"HTTP {status_code} {method} {url}\n{truncate(body, 1200)}")
 
 
+SHORTCODE_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+
+
+def media_id_from_shortcode(shortcode: str) -> int:
+    """A post's media id: its shortcode (the `/p/<code>/` in links) read as base 64 in Instagram's alphabet."""
+    value = 0
+    for character in shortcode[:11]:
+        value = value * 64 + SHORTCODE_ALPHABET.index(character)
+    return value
+
+
+def summarize_post(item: dict[str, Any]) -> dict[str, Any]:
+    """What a post card needs, without the caption's text."""
+    def media(entry: dict[str, Any]) -> dict[str, Any]:
+        candidates = (entry.get("image_versions2") or {}).get("candidates") or []
+        return {
+            "media_type": entry.get("media_type"),
+            "size": [entry.get("original_width"), entry.get("original_height")],
+            "image": bool(candidates),
+            "video": bool(entry.get("video_versions")),
+            "video_duration": entry.get("video_duration"),
+        }
+    user = item.get("user") or {}
+    caption = item.get("caption") or {}
+    return {
+        "code": item.get("code"),
+        "media_type": item.get("media_type"),
+        "product_type": item.get("product_type"),
+        "taken_at": item.get("taken_at"),
+        "user": {k: user.get(k) for k in ("username", "full_name", "is_verified")} | {"profile_pic": bool(user.get("profile_pic_url"))},
+        "caption_length": len(caption.get("text") or ""),
+        "like_count": item.get("like_count"),
+        "comment_count": item.get("comment_count"),
+        "like_and_view_counts_disabled": item.get("like_and_view_counts_disabled"),
+        "media": [media(m) for m in item.get("carousel_media") or [item]],
+    }
+
+
 def load_credentials(args: argparse.Namespace) -> dict[str, Any]:
     if args.credentials_json:
         return json.loads(args.credentials_json)
@@ -1801,6 +1848,9 @@ def build_parser() -> argparse.ArgumentParser:
     username_profile = subparsers.add_parser("profile-username", help="Call web-visible /api/v1/users/web_profile_info/.")
     username_profile.add_argument("username", help="Instagram username.")
 
+    post_preview = subparsers.add_parser("post-preview", help="One post by its shortcode (/api/v1/media/<id>/info/), summarized as chats draw it.")
+    post_preview.add_argument("shortcode", help="The code in instagram.com/p/<code>/ or /reel/<code>/.")
+
     search_users = subparsers.add_parser("search-users", help="Call web-visible /web/search/topsearch/ for users.")
     search_users.add_argument("query", help="Search query.")
 
@@ -1966,6 +2016,11 @@ def main() -> None:
         result = client.direct_unsend(args.thread_fbid, args.message_id)
     elif args.command == "profile-username":
         result = client.rest_profile_by_username(args.username)
+    elif args.command == "post-preview":
+        info = client.rest_media_info(args.shortcode)
+        items = info.get("items") or []
+        # --raw-output prints the whole item (with --output, a fixture); otherwise what a post card needs.
+        result = items[0] if args.raw_output and items else {"items": [summarize_post(i) for i in items]}
     elif args.command == "search-users":
         result = client.rest_search_users(args.query)
     elif args.command == "mention-search":

@@ -1,4 +1,4 @@
-import AVKit
+import Combine
 import StupidSocialCore
 import SwiftUI
 import UIKit
@@ -24,7 +24,10 @@ struct ProfileDetailView: View {
     @State private var isLoadingMorePosts = false
     @State private var errorMessage: String?
     @State private var postsErrorMessage: String?
-    @State private var selectedPost: NetworkProfilePost?
+    /// Instagram's grid by likes: the loaded posts, most liked first; Instagram has no such order of its own.
+    @State private var instagramMostLiked = false
+    /// The grid's posts as the media viewer pages through them, so one opened keeps up as more load.
+    @State private var instagramPages = CurrentValueSubject<[MediaViewerPage], Never>([])
     @State private var autoLoadedPostCursors: Set<String> = []
     @State private var isMutatingRelationship = false
     @State private var openedTimelineItem: ProfileTimelineItem?
@@ -146,9 +149,6 @@ struct ProfileDetailView: View {
                 timeline?.loadMore(timelineKind)
             }
         }
-        .navigationDestination(item: $selectedPost) { post in
-            InstagramPostDetailView(post: post)
-        }
         .navigationDestination(item: $openedTimelineItem) { item in
             ProfilePostView(
                 item: item,
@@ -257,17 +257,27 @@ struct ProfileDetailView: View {
     @ViewBuilder
     private func instagramPosts(_ profile: NetworkProfile) -> some View {
         if !profile.posts.isEmpty {
-            Section("Posts") {
+            Section {
+                Picker("Sort By", selection: $instagramMostLiked) {
+                    Text("Latest").tag(false)
+                    Text("Most Liked").tag(true)
+                }
+                .pickerStyle(.menu)
+
                 VStack(spacing: 0) {
+                    let posts = instagramPosts(of: profile)
                     LazyVGrid(columns: postGridColumns, spacing: 1) {
-                        ForEach(profile.posts) { post in
+                        ForEach(posts) { post in
                             Button {
-                                selectedPost = post
+                                openInstagramMedia(post, in: posts)
                             } label: {
                                 ProfilePostThumbnail(post: post)
                             }
                             .buttonStyle(.plain)
                         }
+                    }
+                    .onChange(of: posts, initial: true) { _, posts in
+                        instagramPages.send(Self.mediaPages(posts))
                     }
 
                     if profile.hasMorePosts {
@@ -304,6 +314,12 @@ struct ProfileDetailView: View {
                     }
                 }
                 .listRowInsets(EdgeInsets())
+            } header: {
+                Text("Posts")
+            } footer: {
+                if instagramMostLiked {
+                    Text("The most liked of the \(profile.posts.count) latest posts. Scroll to load more.")
+                }
             }
         } else if let postsErrorMessage {
             Section("Posts") {
@@ -312,6 +328,41 @@ struct ProfileDetailView: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    /// The loaded posts, most liked first when sorted by likes (posts hiding their likes last), else as loaded.
+    private func instagramPosts(of profile: NetworkProfile) -> [NetworkProfilePost] {
+        guard instagramMostLiked else { return profile.posts }
+        return profile.posts.enumerated()
+            .sorted { ($0.element.likeCount ?? -1, -$0.offset) > ($1.element.likeCount ?? -1, -$1.offset) }
+            .map(\.element)
+    }
+
+    private static func mediaPages(_ posts: [NetworkProfilePost]) -> [MediaViewerPage] {
+        posts.flatMap { post in
+            MediaViewerPage.pages(
+                itemId: post.id,
+                post: nil,
+                media: post.media.map { ProfileTimelineItem.Media(imageURL: $0.imageURL, videoURL: $0.videoURL) },
+                caption: post.caption,
+                link: post.url,
+                counts: post.likeCount.map { MediaViewerPage.Counts(likes: $0) },
+            )
+        }
+    }
+
+    /// Every loaded post's photos and videos, in the grid's order, at the post tapped; nearing the end loads more.
+    private func openInstagramMedia(_ post: NetworkProfilePost, in posts: [NetworkProfilePost]) {
+        let pages = Self.mediaPages(posts)
+        instagramPages.send(pages)
+        MediaViewer.present(
+            pages: pages,
+            startKey: pages.first { $0.itemId == post.id }?.key,
+            network: .instagram,
+            engaging: nil,
+            updates: instagramPages.eraseToAnyPublisher(),
+            loadMore: { Task { await loadMorePosts(autoTriggered: true) } },
+        )
     }
 
     private func name(of profile: NetworkProfile) -> String {
@@ -505,6 +556,7 @@ private struct ProfileTimelineSection: View {
                         engaging: engaging,
                         context: context(of: item),
                         open: { open(item) },
+                        media: item.media.isEmpty ? nil : item.media,
                     )
                 }
             case .media, .mediaMostLiked:
@@ -513,7 +565,7 @@ private struct ProfileTimelineSection: View {
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 1), count: 3), spacing: 1) {
                         ForEach(media) { item in
                             Button {
-                                ProfileMediaViewer.present(timeline: viewModel, kind: kind, itemId: item.id, network: network, engaging: engaging)
+                                MediaViewer.present(timeline: viewModel, kind: kind, itemId: item.id, network: network, engaging: engaging)
                             } label: {
                                 ProfileMediaThumbnail(item: item)
                             }
@@ -719,117 +771,6 @@ private extension NetworkProfile {
             postsNextCursor: page.nextCursor,
             hasMorePosts: page.hasMore,
         )
-    }
-}
-
-private struct InstagramPostDetailView: View {
-    let post: NetworkProfilePost
-    @Environment(\.openURL) private var openURL
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                postMediaView
-
-                VStack(alignment: .leading, spacing: 10) {
-                    if let caption = post.caption, !caption.isEmpty {
-                        Text(caption)
-                            .font(.body)
-                    }
-
-                    if let url = post.url {
-                        Button {
-                            openURL(url)
-                        } label: {
-                            HStack(spacing: 6) {
-                                Text("View on Instagram")
-                                Image(systemName: "arrow.up.forward.square")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        .font(.subheadline.weight(.medium))
-                    }
-                }
-                .padding(.horizontal)
-            }
-            .padding(.bottom, 16)
-        }
-        .navigationTitle("Post")
-        #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-        #endif
-    }
-
-    @ViewBuilder
-    private var postMediaView: some View {
-        let media = post.media.isEmpty ? fallbackMedia : post.media
-        GeometryReader { proxy in
-            let side = proxy.size.width
-            if media.count == 1, let item = media.first {
-                InstagramPostMediaView(media: item)
-                    .frame(width: side, height: side)
-            } else {
-                ScrollView(.horizontal) {
-                    LazyHStack(spacing: 1) {
-                        ForEach(media) { item in
-                            InstagramPostMediaView(media: item)
-                                .frame(width: side, height: side)
-                        }
-                    }
-                }
-            }
-        }
-        .aspectRatio(1, contentMode: .fit)
-    }
-
-    private var fallbackMedia: [NetworkProfilePostMedia] {
-        post.imageURL.map {
-            [NetworkProfilePostMedia(
-                id: post.id,
-                imageURL: $0,
-                thumbnailURL: post.thumbnailURL,
-                isVideo: post.isVideo,
-            )]
-        } ?? []
-    }
-}
-
-private struct InstagramPostMediaView: View {
-    let media: NetworkProfilePostMedia
-    @State private var player: AVPlayer?
-
-    var body: some View {
-        ZStack {
-            Color.black
-            if media.isVideo, let videoURL = media.videoURL {
-                VideoPlayer(player: player ?? AVPlayer(url: videoURL))
-                    .onAppear {
-                        let activePlayer = player ?? AVPlayer(url: videoURL)
-                        player = activePlayer
-                        activePlayer.play()
-                    }
-                    .onDisappear {
-                        player?.pause()
-                    }
-            } else {
-                CachedAsyncImage(url: media.imageURL, contentMode: .fit) {
-                    placeholder
-                } failure: {
-                    placeholder
-                }
-            }
-        }
-        .clipped()
-    }
-
-    private var placeholder: some View {
-        Rectangle()
-            .fill(Color.secondary.opacity(0.15))
-            .overlay {
-                Image(systemName: "photo")
-                    .foregroundStyle(.secondary)
-            }
     }
 }
 

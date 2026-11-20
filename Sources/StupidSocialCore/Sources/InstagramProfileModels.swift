@@ -186,6 +186,11 @@ struct InstagramMediaInfoItem: Decodable {
     let carouselMedia: [InstagramMediaInfoItem]?
     let user: InstagramMediaUser?
     let mediaType: Int?
+    let commentCount: Int?
+    let likeAndViewCountsDisabled: Bool?
+    let originalWidth: Int?
+    let originalHeight: Int?
+    let videoDuration: Double?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -193,6 +198,11 @@ struct InstagramMediaInfoItem: Decodable {
         case code
         case takenAt = "taken_at"
         case likeCount = "like_count"
+        case commentCount = "comment_count"
+        case likeAndViewCountsDisabled = "like_and_view_counts_disabled"
+        case originalWidth = "original_width"
+        case originalHeight = "original_height"
+        case videoDuration = "video_duration"
         case caption
         case imageVersions2 = "image_versions2"
         case videoVersions = "video_versions"
@@ -214,6 +224,11 @@ struct InstagramMediaInfoItem: Decodable {
         carouselMedia = try? container.decodeIfPresent([InstagramMediaInfoItem].self, forKey: .carouselMedia)
         user = try? container.decodeIfPresent(InstagramMediaUser.self, forKey: .user)
         mediaType = try container.decodeIfPresent(Int.self, forKey: .mediaType)
+        commentCount = try? container.decodeIfPresent(Int.self, forKey: .commentCount)
+        likeAndViewCountsDisabled = try? container.decodeIfPresent(Bool.self, forKey: .likeAndViewCountsDisabled)
+        originalWidth = try? container.decodeIfPresent(Int.self, forKey: .originalWidth)
+        originalHeight = try? container.decodeIfPresent(Int.self, forKey: .originalHeight)
+        videoDuration = try? container.decodeIfPresent(Double.self, forKey: .videoDuration)
     }
 
     var bestImageURLs: [URL] {
@@ -274,6 +289,7 @@ struct InstagramMediaInfoItem: Decodable {
             caption: caption?.text,
             isVideo: media.first?.isVideo ?? (mediaType == 2),
             isCarousel: mediaType == 8 || media.count > 1,
+            likeCount: likeAndViewCountsDisabled == true ? nil : likeCount,
         )
     }
 }
@@ -287,12 +303,14 @@ struct InstagramMediaUser: Decodable {
     let username: String?
     let fullName: String?
     let profilePicUrl: String?
+    let isVerified: Bool?
 
     enum CodingKeys: String, CodingKey {
         case pk
         case username
         case fullName = "full_name"
         case profilePicUrl = "profile_pic_url"
+        case isVerified = "is_verified"
     }
 
     init(from decoder: Decoder) throws {
@@ -305,5 +323,6 @@ struct InstagramMediaUser: Decodable {
         username = try container.decodeIfPresent(String.self, forKey: .username)
         fullName = try container.decodeIfPresent(String.self, forKey: .fullName)
         profilePicUrl = try container.decodeIfPresent(String.self, forKey: .profilePicUrl)
+        isVerified = try? container.decodeIfPresent(Bool.self, forKey: .isVerified)
     }
 }

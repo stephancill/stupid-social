@@ -61,9 +61,39 @@ final class AppContainer {
             return [ChatListSource(provider: apronSource, accountId: nil, label: SocialNetwork.apron.displayName)] + services.chatListSources
         })
         services.chatList = chatListViewModel
-        // Links to X posts draw as the post in every chat, loaded through the first signed-in X account.
-        ChatKit.resolveLink = { [services] url in
-            services.components.lazy.compactMap(\.xPostResolver).first?.embed(for: url)
+        // Links to posts draw as the post in every chat: X and Instagram posts loaded through the first signed-in
+        // account of the network, Bluesky posts from its public AppView.
+        let linkedPosts = LinkedPostResolver(sources: [
+            LinkedPostSource(
+                network: "x",
+                key: { [services] url in services.components.contains { $0.xClient != nil } ? XPost.id(in: url) : nil },
+                load: { [services] id in
+                    guard let client = services.components.lazy.compactMap(\.xClient).first else { return nil }
+                    return try await client.post(id: id).map(LinkedPost.x)
+                },
+            ),
+            LinkedPostSource(
+                network: "instagram",
+                key: { [services] url in services.components.contains { $0.instagramClient != nil } ? InstagramPost.shortcode(in: url) : nil },
+                load: { [services] code in
+                    guard let client = services.components.lazy.compactMap(\.instagramClient).first else { return nil }
+                    return try await client.post(shortcode: code).map(LinkedPost.instagram)
+                },
+            ),
+            LinkedPostSource(
+                network: "bluesky",
+                key: { url in BlueskyPost.reference(in: url).map { "\($0.actor.lowercased())/\($0.rkey)" } },
+                load: { key in
+                    let parts = key.split(separator: "/", maxSplits: 1).map(String.init)
+                    guard parts.count == 2 else { return nil }
+                    return try await BlueskyPost.load(actor: parts[0], rkey: parts[1]).map(LinkedPost.bluesky)
+                },
+            ),
+        ])
+        ChatKit.resolveLink = { url in linkedPosts.embed(for: url) }
+        // A post's photos and videos in a chat open in the app's media viewer, as on a profile.
+        ChatKit.openPostMedia = { [services] post, index in
+            MediaViewer.present(chatPost: post, at: index, xEngaging: services.components.first { $0.network == .x }?.postEngager)
         }
 
         settingsViewModel = SettingsViewModel(

@@ -11,7 +11,9 @@ struct SearchView: View {
 
     var body: some View {
         List {
-            if viewModel.filteredResults.isEmpty {
+            if viewModel.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !viewModel.recentProfiles.isEmpty {
+                recentSection
+            } else if viewModel.filteredResults.isEmpty {
                 emptyState
                     .listRowSeparator(.hidden)
                     .listRowBackground(Color.clear)
@@ -24,6 +26,7 @@ struct SearchView: View {
                                 feedService: viewModel.service,
                                 initialProfile: profile,
                             )
+                            .onAppear { viewModel.recordVisit(profile) }
                         } label: {
                             ProfileSearchRow(profile: profile, redactionEnabled: redactionEnabled)
                         }
@@ -45,6 +48,33 @@ struct SearchView: View {
         }
         .onChange(of: viewModel.query) { _, _ in
             viewModel.scheduleSearch()
+        }
+    }
+
+    /// Profiles opened from search, while the field is empty: swipe one away, or clear them all.
+    private var recentSection: some View {
+        Section {
+            ForEach(viewModel.recentProfiles) { recent in
+                NavigationLink {
+                    ProfileDetailView(actor: recent.actor, feedService: viewModel.service, initialProfile: recent.profile)
+                        .onAppear { viewModel.recordVisit(recent.profile) }
+                } label: {
+                    ProfileSearchRow(profile: recent.profile, redactionEnabled: redactionEnabled)
+                }
+            }
+            .onDelete { offsets in
+                for recent in offsets.map({ viewModel.recentProfiles[$0] }) {
+                    viewModel.removeRecent(recent)
+                }
+            }
+        } header: {
+            HStack {
+                Text("Recent")
+                Spacer()
+                Button("Clear") { viewModel.clearRecents() }
+                    .font(.subheadline)
+                    .textCase(nil)
+            }
         }
     }
 
