@@ -17,6 +17,11 @@ public final class ApronReadStore: NSObject {
     private let serverKey = "apronServerReadCursors"
     private let ownUsersKey = "apronOwnUserIds"
     private let ownUsersCloudKey = "com.stupid.apron.ownusers"
+    /// Decoded cursors, since chats read them for every message on every scroll frame and decoding the defaults'
+    /// dictionaries each time cost most of a frame (observed 2026-11-20). Dropped whenever the defaults change.
+    private let cacheLock = NSLock()
+    private var cachedLocal: [String: Int64]?
+    private var cachedServer: [String: Int64]?
 
     public init(defaults: UserDefaults = .standard, kvStore: NSUbiquitousKeyValueStore = .default) {
         self.defaults = defaults
@@ -28,6 +33,12 @@ public final class ApronReadStore: NSObject {
             selector: #selector(remoteDidChange),
             name: NSUbiquitousKeyValueStore.didChangeExternallyNotification,
             object: kvStore,
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(defaultsDidChange),
+            name: UserDefaults.didChangeNotification,
+            object: defaults,
         )
         _ = mergeRemote()
     }
@@ -116,11 +127,29 @@ public final class ApronReadStore: NSObject {
     }
 
     private var localCursors: [String: Int64] {
-        Self.decode(defaults.dictionary(forKey: localKey))
+        cached(\.cachedLocal, key: localKey)
     }
 
     private var serverCursors: [String: Int64] {
-        Self.decode(defaults.dictionary(forKey: serverKey))
+        cached(\.cachedServer, key: serverKey)
+    }
+
+    private func cached(_ slot: ReferenceWritableKeyPath<ApronReadStore, [String: Int64]?>, key: String) -> [String: Int64] {
+        cacheLock.withLock {
+            if let cursors = self[keyPath: slot] {
+                return cursors
+            }
+            let cursors = Self.decode(defaults.dictionary(forKey: key))
+            self[keyPath: slot] = cursors
+            return cursors
+        }
+    }
+
+    @objc private func defaultsDidChange() {
+        cacheLock.withLock {
+            cachedLocal = nil
+            cachedServer = nil
+        }
     }
 
     private static func decode(_ dictionary: [String: Any]?) -> [String: Int64] {
