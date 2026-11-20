@@ -407,21 +407,32 @@ public actor TelegramClient: ChatListProvider {
         current = session
         hasOpenedSession = true
         if reconnecting {
-            for observer in reconnectObservers.values {
-                observer()
-            }
+            catchUp()
         }
         return session
     }
 
-    /// Opens the session ahead of the first call, as the app becomes active, so pushed updates resume and a chat
-    /// opened from a notification doesn't wait for the connection.
-    public func connect() async {
-        guard stored.account != nil else { return }
-        _ = try? await session()
+    private func catchUp() {
+        for observer in reconnectObservers.values {
+            observer()
+        }
     }
 
-    /// Calls `observer` when a new session replaces one that closed: updates pushed in between were missed.
+    /// Opens the session ahead of the first call, as the app becomes active, so pushed updates resume and a chat
+    /// opened from a notification doesn't wait for the connection. A session that outlived the background still
+    /// missed what Telegram pushed while the app was suspended (observed 2026-11-20: a chat open across a minute in
+    /// the background never heard of the messages sent meanwhile), so observers catch up as after a reconnect.
+    public func connect() async {
+        guard stored.account != nil else { return }
+        let previous = current
+        guard let session = try? await session() else { return }
+        if let previous, session === previous {
+            catchUp()
+        }
+    }
+
+    /// Calls `observer` when a new session replaces one that closed, or one outlived the app's time in the
+    /// background: updates pushed in between were missed.
     public func addReconnectObserver(_ observer: @escaping @Sendable () -> Void) -> UUID {
         let id = UUID()
         reconnectObservers[id] = observer

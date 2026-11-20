@@ -10,6 +10,7 @@ final class TelegramLiveRows {
     private let accountId: String
     private weak var chatList: ChatListViewModel?
     private var observer: UUID?
+    private var reconnectObserver: UUID?
     private var reload: Task<Void, Never>?
     private var lastReload: Date = .distantPast
     /// Updates come in bursts; a busy account reloads the dialogs at most this often.
@@ -22,6 +23,10 @@ final class TelegramLiveRows {
         self.chatList = chatList
         Task {
             observer = await client.addMessageObserver { [weak self] in
+                Task { @MainActor in self?.scheduleReload() }
+            }
+            // Messages that came while updates were missed change rows too.
+            reconnectObserver = await client.addReconnectObserver { [weak self] in
                 Task { @MainActor in self?.scheduleReload() }
             }
         }
@@ -46,9 +51,10 @@ final class TelegramLiveRows {
 
     func stop() {
         reload?.cancel()
-        if let observer {
-            Task { [client] in await client.removeUpdateObserver(observer) }
+        for id in [observer, reconnectObserver].compactMap(\.self) {
+            Task { [client] in await client.removeUpdateObserver(id) }
         }
         observer = nil
+        reconnectObserver = nil
     }
 }
