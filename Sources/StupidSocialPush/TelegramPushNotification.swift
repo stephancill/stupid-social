@@ -8,6 +8,7 @@ public struct TelegramPushNotification: Equatable, Sendable {
     /// The sender's name in a private chat, "<sender> in <group>" in a group.
     public let title: String
     public let body: String
+    /// The sender's user id, or the group's for a reaction push, which doesn't say who reacted.
     public let senderId: Int64
     /// The person who sent it, where the push names them apart from the chat; `nil` for a group push that names
     /// only the group.
@@ -51,8 +52,20 @@ public struct TelegramPushNotification: Equatable, Sendable {
             title = sender
         case let .chat(groupId), let .channel(groupId):
             // A group message from a person; posts and messages sent as a channel or group have no person.
-            guard id("chat_from_broadcast_id") == nil, id("chat_from_group_id") == nil, let from = id("chat_from_id") else { return nil }
-            senderId = from
+            guard id("chat_from_broadcast_id") == nil, id("chat_from_group_id") == nil else { return nil }
+            if let from = id("chat_from_id") {
+                senderId = from
+            } else if fields["react_emoji"] != nil, let groupName = key == nil ? alert?["title"] as? String : args.dropFirst().first {
+                // A reaction to the user's message names the group but not who reacted (only in the text, observed
+                // 2026-11-20), so the group is the sender, with its photo.
+                senderId = groupId
+                senderName = nil
+                group = Group(id: groupId, name: groupName)
+                title = groupName
+                break
+            } else {
+                return nil
+            }
             if let key {
                 guard key.hasPrefix("CHAT_"), args.count >= 2 else { return nil }
                 senderName = args[0]

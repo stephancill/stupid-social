@@ -695,6 +695,24 @@ final class TelegramTests: XCTestCase {
         XCTAssertEqual(push?.senderName, "Ann")
     }
 
+    func testGroupReactionPushShowsTheGroupAsTheSender() throws {
+        // As observed: top-level fields, no `custom`, no `chat_from_id`.
+        let userInfo: [AnyHashable: Any] = [
+            "aps": ["alert": ["title": "Friends", "body": "Ann: 👍 to your \"hi\""], "mutable-content": 1],
+            "chat_id": "99", "msg_id": "7", "react_emoji": "👍",
+        ]
+        let push = TelegramPushNotification.make(userInfo: userInfo) { _, _ in nil }
+        XCTAssertEqual(push?.title, "Friends")
+        XCTAssertEqual(push?.body, "Ann: 👍 to your \"hi\"")
+        XCTAssertNil(push?.senderName)
+        XCTAssertEqual(push?.group, TelegramPushNotification.Group(id: 99, name: "Friends"))
+        XCTAssertEqual(push?.conversationId, "chat:99")
+        XCTAssertNil(TelegramPushedMessage.record(userInfo: userInfo), "a reaction is not a message")
+
+        let withoutSender = try ["aps": XCTUnwrap(userInfo["aps"]), "chat_id": "99", "msg_id": "7"] as [AnyHashable: Any]
+        XCTAssertNil(TelegramPushNotification.make(userInfo: withoutSender) { _, _ in nil }, "only reactions go without a sender")
+    }
+
     func testPushWithTopLevelFieldsAndLocalizedAlert() {
         let userInfo: [AnyHashable: Any] = [
             "aps": ["alert": ["title": "Ann", "body": "hi there"]],
