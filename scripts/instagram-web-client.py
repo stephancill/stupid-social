@@ -16,7 +16,10 @@ import json
 import os
 import random
 import re
+import socket
+import ssl
 import string
+import struct
 import sys
 import time
 import urllib.error
@@ -320,6 +323,7 @@ class InstagramWebClient:
         "__relay_internal__pv__IGDInitialMessagePageCountrelayprovider": 20,
         # Without it IGDThreadDetailQuery fails with missing_required_variable_value (observed 2026-11-20).
         "__relay_internal__pv__IGDSafetyNoticesWebEnabledrelayprovider": False,
+        "__relay_internal__pv__IGDHideSeenWhenReadReceiptsOffGKrelayprovider": False,
     }
 
     def direct_page(self, path: str) -> str:
@@ -346,6 +350,101 @@ class InstagramWebClient:
         if doc_id := self.doc_ids.get(operation):
             return doc_id
         raise SystemExit(f"Could not discover doc ID for {operation} from {page_path}")
+
+    def direct_live(self, seconds: float, doc_id: str | None = None) -> dict[str, Any]:
+        """Listens for Direct changes the way the web client does: gateway.instagram.com/ws/lightspeed with the
+        page's cookies, then a sync request from the inbox's iris_inactive_subscription_uq_seq_id for
+        IGDSlideDeltaProcessorQuery. Prints each delta's type, thread and seq id, never message text."""
+        inbox = self.direct_inbox()
+        mailbox = (inbox.get("data") or {}).get("get_slide_mailbox_for_iris_subscription") or {}
+        seq_id = int(mailbox["iris_inactive_subscription_uq_seq_id"])
+        viewer_fbid = mailbox.get("id")
+        doc_id = doc_id or self.direct_doc_id("IGDSlideDeltaProcessorQuery", "/direct/inbox/")
+        state = self._state()
+        device_id = self.direct_device_id
+        if not (state.actor_id and device_id):
+            raise SystemExit("missing actorID or Direct device id")
+        query = urllib.parse.urlencode(
+            {
+                "x-dgw-appid": INSTAGRAM_DGW_APP_ID,
+                "x-dgw-appversion": "0",
+                "x-dgw-authtype": "6:0",
+                "x-dgw-version": "5",
+                "x-dgw-uuid": state.actor_id,
+                "x-dgw-tier": "prod",
+                "x-dgw-deviceid": device_id,
+            },
+            safe=":",
+        )
+        cookies = "; ".join(f"{c.name}={c.value}" for c in self.cookie_jar if c.domain.endswith("instagram.com"))
+        socket_ = WebSocket(
+            f"wss://gateway.instagram.com/ws/lightspeed?{query}",
+            {"Origin": BASE_URL, "User-Agent": self.user_agent, "Cookie": cookies, "Cache-Control": "no-cache", "Pragma": "no-cache"},
+        )
+        request = {
+            "app_id": INSTAGRAM_DGW_APP_ID,
+            "device_id": device_id,
+            "payload": json.dumps(
+                {
+                    "database": DIRECT_SYNC_DATABASE,
+                    "epoch_id": 0,
+                    "failure_count": 0,
+                    "last_applied_cursor": json.dumps({"seq_id": seq_id}, separators=(",", ":")),
+                    "sync_params": json.dumps(
+                        {"user_agent": "WMI Web", "snapshot_at_ms": int(time.time() * 1000), "prevalidated_graphql_doc_id": doc_id},
+                        separators=(",", ":"),
+                    ),
+                    "version": -3,
+                },
+                separators=(",", ":"),
+            ),
+            "request_id": 1,
+            "type": 2,
+        }
+        socket_.send(dgw_frame(DGW_ESTABLISH, b"{}") + dgw_frame(DGW_DATA, (0x8000).to_bytes(2, "little") + json.dumps(request, separators=(",", ":")).encode()))
+        events: list[dict[str, Any]] = [{"connected": True, "seq_id": seq_id}]
+        print(json.dumps(events[0]), flush=True)
+        deadline = time.time() + seconds
+        next_ping = time.time() + 10
+        socket_.sock.settimeout(1)
+        while time.time() < deadline:
+            if time.time() >= next_ping:
+                socket_.send(bytes([DGW_PING]))
+                next_ping = time.time() + 10
+            try:
+                message = socket_.receive()
+            except (socket.timeout, TimeoutError):
+                continue
+            for kind, _, payload in dgw_frames(message):
+                if kind == DGW_DATA:
+                    ack = int.from_bytes(payload[:2], "little")
+                    if ack & 0x8000:
+                        socket_.send(dgw_frame(DGW_ACK, (ack & 0x7FFF).to_bytes(2, "little")))
+                    body = json.loads(payload[2:])
+                    if "payload" not in body:
+                        event = {"data": {k: v for k, v in body.items() if k != "payload"}}
+                    else:
+                        deltas, newest = direct_sync_deltas(base64.b64decode(body["payload"]))
+                        event = {
+                            "request_id": body.get("request_id"),
+                            "seq_id": newest,
+                            "deltas": [
+                                {
+                                    "type": delta.get("__typename"),
+                                    "thread_fbid": delta.get("thread_fbid") or (delta.get("message") or {}).get("thread_fbid"),
+                                    "uq_seq_id": delta.get("uq_seq_id"),
+                                    "from_viewer": (delta.get("message") or {}).get("sender_fbid") == viewer_fbid if delta.get("message") else None,
+                                }
+                                for delta in deltas
+                            ],
+                        }
+                elif kind == DGW_PONG:
+                    continue
+                else:
+                    event = {"frame": kind, "payload": payload[:200].decode(errors="replace")}
+                events.append(event)
+                print(json.dumps(event), flush=True)
+        return {"events": len(events)}
 
     def direct_graphql(self, operation: str, page_path: str, root_field: str, variables: dict[str, Any]) -> dict[str, Any]:
         doc_id = self.direct_doc_id(operation, page_path)
@@ -1299,6 +1398,151 @@ def response_expires_session(headers: Any) -> bool:
     return False
 
 
+class WebSocket:
+    """A minimal RFC 6455 client (binary messages, no extensions), enough for Instagram's DGW gateway."""
+
+    def __init__(self, url: str, headers: dict[str, str], timeout: float = 30) -> None:
+        parts = urllib.parse.urlsplit(url)
+        raw = socket.create_connection((parts.hostname, parts.port or 443), timeout=timeout)
+        self.sock = ssl.create_default_context().wrap_socket(raw, server_hostname=parts.hostname)
+        key = base64.b64encode(os.urandom(16)).decode()
+        request = [f"GET {parts.path}?{parts.query} HTTP/1.1", f"Host: {parts.hostname}", "Upgrade: websocket", "Connection: Upgrade", f"Sec-WebSocket-Key: {key}", "Sec-WebSocket-Version: 13"]
+        request += [f"{name}: {value}" for name, value in headers.items()]
+        self.sock.sendall(("\r\n".join(request) + "\r\n\r\n").encode())
+        response = b""
+        while b"\r\n\r\n" not in response:
+            chunk = self.sock.recv(4096)
+            if not chunk:
+                raise SystemExit("websocket closed during handshake")
+            response += chunk
+        head, self.buffer = response.split(b"\r\n\r\n", 1)
+        status = head.split(b"\r\n", 1)[0].decode()
+        if " 101 " not in status + " ":
+            raise SystemExit(f"websocket handshake failed: {status}")
+
+    def send(self, payload: bytes, opcode: int = 2) -> None:
+        mask = os.urandom(4)
+        length = len(payload)
+        header = bytes([0x80 | opcode])
+        if length < 126:
+            header += bytes([0x80 | length])
+        elif length < 65536:
+            header += bytes([0x80 | 126]) + struct.pack(">H", length)
+        else:
+            header += bytes([0x80 | 127]) + struct.pack(">Q", length)
+        self.sock.sendall(header + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(payload)))
+
+    def _read(self, count: int) -> bytes:
+        while len(self.buffer) < count:
+            chunk = self.sock.recv(65536)
+            if not chunk:
+                raise ConnectionError("websocket closed")
+            self.buffer += chunk
+        data, self.buffer = self.buffer[:count], self.buffer[count:]
+        return data
+
+    def receive(self) -> bytes:
+        """The next whole data message; answers WebSocket pings and raises on close."""
+        message = b""
+        while True:
+            first, second = self._read(2)
+            opcode, length = first & 0x0F, second & 0x7F
+            if length == 126:
+                length = struct.unpack(">H", self._read(2))[0]
+            elif length == 127:
+                length = struct.unpack(">Q", self._read(8))[0]
+            payload = self._read(length)
+            if opcode == 8:
+                code = struct.unpack(">H", payload[:2])[0] if len(payload) >= 2 else None
+                raise ConnectionError(f"websocket closed by server: {code} {payload[2:].decode(errors='replace')}")
+            if opcode == 9:
+                self.send(payload, opcode=10)
+                continue
+            if opcode == 10:
+                continue
+            message += payload
+            if first & 0x80:
+                return message
+
+
+# DGW (Meta's gateway framing, observed 2026-11-20 on gateway.instagram.com/ws/lightspeed; types from the web
+# client's DGWConstants): ping 9 and pong 10 are a single byte; every other frame is type, stream id (2 bytes,
+# little-endian), payload length (3 bytes, little-endian), payload. Establish-stream (15) carries JSON headers.
+# A data frame (13) starts with a 16-bit little-endian id whose top bit asks for an ack; an ack frame (12)
+# carries that id back.
+DGW_ESTABLISH, DGW_DATA, DGW_ACK, DGW_PING, DGW_PONG = 15, 13, 12, 9, 10
+INSTAGRAM_DGW_APP_ID = "936619743392459"
+# The Direct sync database and the delta subscription's request type, from the web client's request.
+DIRECT_SYNC_DATABASE = 223
+
+
+def dgw_frame(kind: int, payload: bytes, stream: int = 0) -> bytes:
+    return bytes([kind]) + stream.to_bytes(2, "little") + len(payload).to_bytes(3, "little") + payload
+
+
+def dgw_frames(message: bytes) -> list[tuple[int, int, bytes]]:
+    frames, index = [], 0
+    while index < len(message):
+        kind = message[index]
+        if kind in (DGW_PING, DGW_PONG):
+            frames.append((kind, 0, b""))
+            index += 1
+            continue
+        stream = int.from_bytes(message[index + 1 : index + 3], "little")
+        length = int.from_bytes(message[index + 3 : index + 6], "little")
+        frames.append((kind, stream, message[index + 6 : index + 6 + length]))
+        index += 6 + length
+    return frames
+
+
+def protobuf_fields(data: bytes) -> list[tuple[int, Any]]:
+    """Top-level fields of a protobuf message: varints as ints, length-delimited fields as bytes."""
+    fields, index = [], 0
+    def varint() -> int:
+        nonlocal index
+        result = shift = 0
+        while True:
+            byte = data[index]
+            index += 1
+            result |= (byte & 0x7F) << shift
+            shift += 7
+            if byte < 0x80:
+                return result
+    while index < len(data):
+        key = varint()
+        number, wire = key >> 3, key & 7
+        if wire == 0:
+            fields.append((number, varint()))
+        elif wire == 2:
+            length = varint()
+            fields.append((number, data[index : index + length]))
+            index += length
+        else:
+            raise ValueError(f"unsupported protobuf wire type {wire}")
+    return fields
+
+
+def direct_sync_deltas(payload: bytes) -> tuple[list[dict[str, Any]], int | None]:
+    """The GraphQL deltas and the newest seq id in a sync payload: field 2 { field 3 (repeated) { 1: database,
+    2: JSON array of IGDSlideDeltaProcessorQuery results, 3: seq id } }, or field 2 { 1 { 1: database, 2, 3: seq } }
+    for the response to the sync request."""
+    deltas, newest = [], None
+    for number, value in protobuf_fields(payload):
+        if number != 2 or not isinstance(value, bytes):
+            continue
+        for inner_number, inner in protobuf_fields(value):
+            if not isinstance(inner, bytes):
+                continue
+            fields = protobuf_fields(inner)
+            for field, item in fields:
+                if field == 2 and isinstance(item, bytes) and item[:1] == b"[":
+                    for result in json.loads(item):
+                        deltas += ((result.get("data") or {}).get("slide_delta_processor") or [])
+                if field == 3 and isinstance(item, int):
+                    newest = max(newest or 0, item)
+    return deltas, newest
+
+
 class SessionExpiryRedirectHandler(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
         if response_expires_session(headers):
@@ -1543,6 +1787,9 @@ def build_parser() -> argparse.ArgumentParser:
     direct_voice.add_argument("--duration", type=float, required=True, help="Seconds.")
     direct_voice.add_argument("--levels", help="Comma-separated waveform levels from 0 to 1; 64 by default, rising and falling.")
     direct_voice.add_argument("--expect-participant", required=True, help="Only send when the thread matches this name.")
+    direct_live = subparsers.add_parser("direct-live", help="Listen for Direct changes on the web client's realtime socket (prints types and ids only).")
+    direct_live.add_argument("--seconds", type=float, default=60)
+    direct_live.add_argument("--doc-id", help="IGDSlideDeltaProcessorQuery's doc id, when the iPhone bundle doesn't carry it.")
     direct_unsend = subparsers.add_parser("direct-unsend", help="Unsend one of your messages (IGDMessageUnsendDialogOffMsysMutation).")
     direct_unsend.add_argument("thread_fbid")
     direct_unsend.add_argument("message_id", help="mid.$...")
@@ -1708,6 +1955,8 @@ def main() -> None:
         client.guard_participant(client.direct_thread_info(args.thread_fbid), args.expect_participant)
         levels = [float(v) for v in args.levels.split(",")] if args.levels else [abs((i % 16) - 8) / 8 for i in range(64)]
         result = client.direct_send_voice(args.thread_fbid, args.file, args.duration, levels)
+    elif args.command == "direct-live":
+        result = client.direct_live(args.seconds, args.doc_id)
     elif args.command == "direct-unsend":
         client.guard_participant(client.direct_thread_info(args.thread_fbid), args.expect_participant)
         result = client.direct_unsend(args.thread_fbid, args.message_id)

@@ -1,4 +1,7 @@
 import Foundation
+import OSLog
+
+private let directLogger = Logger(subsystem: "tech.stupid.StupidSocial", category: "InstagramDirect")
 
 // Instagram Direct through the web inbox's GraphQL operations ("IGD Off-Msys"). The `direct_v2` REST inbox
 // answers 404 with a logged-out page for accounts on the new web inbox. Users and messages carry two ids: the
@@ -282,6 +285,9 @@ extension InstagramClient {
         "__relay_internal__pv__IGDInitialMessagePageCountrelayprovider": 20,
         // Without it IGDThreadDetailQuery fails with missing_required_variable_value (observed 2026-11-20).
         "__relay_internal__pv__IGDSafetyNoticesWebEnabledrelayprovider": false,
+        // Same for the thread detail query since 2026-11-20; it comes from a fragment, so the query's own module
+        // doesn't list it. Compare against the web client's request when a Direct query starts failing.
+        "__relay_internal__pv__IGDHideSeenWhenReadReceiptsOffGKrelayprovider": false,
     ]
 
     /// `IGDirectTextSendMutation`'s variables as the web client sends them (observed 2026-11-20); its older
@@ -591,6 +597,10 @@ extension InstagramClient {
             throw SourceError.invalidResponse
         }
         if let error = (envelope["errors"] as? [[String: Any]])?.first {
+            // Which query and doc id failed, and the variable names sent (never their values): a missing provided
+            // variable or a doc id from another page's bundle fails the whole query.
+            let names = variables.keys.sorted().joined(separator: ",")
+            directLogger.error("\(operation, privacy: .public) doc \(docID, privacy: .public) failed: \(error["message"] as? String ?? "", privacy: .public); variables \(names, privacy: .public)")
             throw SourceError.serviceError(error["message"] as? String ?? "Instagram Direct request failed.")
         }
         guard let root = (envelope["data"] as? [String: Any])?[rootField], !(root is NSNull) else { return nil }
