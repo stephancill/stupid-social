@@ -6,10 +6,6 @@
 	<array>
 		<string>tech.stupid.StupidSocial.chatRefresh</string>
 	</array>
-	<key>UIBackgroundModes</key>
-	<array>
-		<string>fetch</string>
-	</array>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
@@ -67,7 +63,7 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>219</string>
+	<string>220</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>NSAppTransportSecurity</key>
@@ -84,6 +80,10 @@
 	<key>NSUserActivityTypes</key>
 	<array>
 		<string>INSendMessageIntent</string>
+	</array>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
 	</array>
 	<key>UIDesignRequiresCompatibility</key>
 	<false/>
