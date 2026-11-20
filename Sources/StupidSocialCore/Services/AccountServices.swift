@@ -24,6 +24,7 @@ public final class AccountComponents {
     public private(set) var xChatLiveFeed: XChatLiveFeed?
     public private(set) var instagramClient: InstagramClient?
     public private(set) var instagramSource: InstagramNotificationSource?
+    public private(set) var instagramLiveFeed: InstagramLiveFeed?
     public private(set) var spotifyClient: SpotifyClient?
     public private(set) var spotifyActivitySource: SpotifyActivitySource?
     public private(set) var spotifyMessagesSource: SpotifyMessagesSource?
@@ -81,6 +82,7 @@ public final class AccountComponents {
             let source = InstagramNotificationSource(client: client, metadataStore: metadata)
             instagramClient = client
             instagramSource = source
+            instagramLiveFeed = InstagramLiveFeed(client: client, accountId: account.id, chatList: chatList)
             notificationSource = source
             profileFetcher = source
             targetDetailFetcher = source
@@ -162,7 +164,7 @@ public final class AccountComponents {
 
     /// The connection the account keeps open while the app is in the foreground, when its network pushes updates.
     public var liveConnection: (any LiveConnecting)? {
-        xChatLiveFeed ?? discordGateway ?? linkedinLiveFeed
+        xChatLiveFeed ?? discordGateway ?? linkedinLiveFeed ?? instagramLiveFeed
     }
 
     /// Stops what runs in the background, when the account goes away.

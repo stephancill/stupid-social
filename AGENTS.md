@@ -88,6 +88,7 @@ Sources/
       XChatLiveFeed.swift           # Foreground X Chat WebSocket: pushed events for open chats and the Chats list
       LiveConnection.swift          # One foreground connection per account: lifecycle, reconnect backoff, observers, catch-up
       LinkedInLiveFeed.swift        # Foreground LinkedIn realtime stream (SSE): messages, reactions, typing, conversations
+      InstagramLiveFeed.swift       # Foreground Instagram Direct realtime socket (gateway.instagram.com lightspeed): new messages, changed threads
       ApronPushService.swift        # Apron push registration through the push.stupidtech.net relay
       ChatReminderPush.swift        # Chat reminders pushed to the user's other devices, scheduled on the relay
       AppMetrics.swift              # Every anonymous usage event and error sent to metrics.stupidtech.net
@@ -101,7 +102,8 @@ Sources/
       InstagramProfile.swift       # Current web profile/posts queries and runtime configuration
       InstagramHomepage.swift      # Authenticated viewer and preloaded stories tray parsing
       InstagramDirect.swift        # Direct inbox/thread/send/read via web GraphQL, Chats list rows
-      InstagramChatAdapter.swift   # Instagram Direct chat adapter: history, polling, send, replies, reactions, read receipt
+      InstagramChatAdapter.swift   # Instagram Direct chat adapter: history, pushed messages, send, replies, reactions, read receipt
+      InstagramRealtime.swift      # Direct's realtime socket: DGW framing, the sync payload (protobuf) and its deltas
       GitHubClient.swift
       GitHubActivitySource.swift
       GitHubNotificationSource.swift

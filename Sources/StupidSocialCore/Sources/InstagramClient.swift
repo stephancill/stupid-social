@@ -53,6 +53,8 @@ public final class InstagramClient {
     /// The MQTT web device id the Direct inbox query is scoped to.
     var directDeviceID: String?
     var directPageLoads: [String: Task<Void, Error>] = [:]
+    /// The newest inbox's `iris_inactive_subscription_uq_seq_id`, where the realtime subscription starts.
+    var directIrisSeqId: Int?
     /// Set when Instagram says to slow down; no request goes out for the account until it ends.
     var cooldown = InstagramCooldown()
 

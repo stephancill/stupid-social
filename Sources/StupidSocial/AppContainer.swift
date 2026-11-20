@@ -145,8 +145,9 @@ final class AppContainer {
 
     /// `nil` when the Instagram account is gone.
     func instagramChatFactory(accountId: String, threadFbid: String, title: String) -> (() -> ChatViewModel)? {
-        guard let client = services.component(id: accountId)?.instagramClient else { return nil }
-        return { AdapterChatViewModel(adapter: InstagramChatAdapter(client: client, threadFbid: threadFbid, title: title), accountId: accountId) }
+        guard let component = services.component(id: accountId), let client = component.instagramClient else { return nil }
+        let liveFeed = component.instagramLiveFeed
+        return { AdapterChatViewModel(adapter: InstagramChatAdapter(client: client, threadFbid: threadFbid, title: title, liveFeed: liveFeed), accountId: accountId) }
     }
 
     /// `nil` when the Bluesky account is gone.

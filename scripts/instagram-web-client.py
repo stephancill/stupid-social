@@ -359,7 +359,11 @@ class InstagramWebClient:
         mailbox = (inbox.get("data") or {}).get("get_slide_mailbox_for_iris_subscription") or {}
         seq_id = int(mailbox["iris_inactive_subscription_uq_seq_id"])
         viewer_fbid = mailbox.get("id")
-        doc_id = doc_id or self.direct_doc_id("IGDSlideDeltaProcessorQuery", "/direct/inbox/")
+        if not doc_id:
+            # The iPhone pages don't carry it; the bootloader's IGDMqttSetupWithSlideMailbox.react scripts do.
+            doc_id = self.doc_ids.get("IGDSlideDeltaProcessorQuery") or self.bootload_doc_ids(["IGDMqttSetupWithSlideMailbox.react"]).get("IGDSlideDeltaProcessorQuery")
+        if not doc_id:
+            raise SystemExit("Could not discover IGDSlideDeltaProcessorQuery")
         state = self._state()
         device_id = self.direct_device_id
         if not (state.actor_id and device_id):
@@ -1789,7 +1793,7 @@ def build_parser() -> argparse.ArgumentParser:
     direct_voice.add_argument("--expect-participant", required=True, help="Only send when the thread matches this name.")
     direct_live = subparsers.add_parser("direct-live", help="Listen for Direct changes on the web client's realtime socket (prints types and ids only).")
     direct_live.add_argument("--seconds", type=float, default=60)
-    direct_live.add_argument("--doc-id", help="IGDSlideDeltaProcessorQuery's doc id, when the iPhone bundle doesn't carry it.")
+    direct_live.add_argument("--doc-id", help="IGDSlideDeltaProcessorQuery's doc id; by default from the bootloader, as the iPhone web client gets it.")
     direct_unsend = subparsers.add_parser("direct-unsend", help="Unsend one of your messages (IGDMessageUnsendDialogOffMsysMutation).")
     direct_unsend.add_argument("thread_fbid")
     direct_unsend.add_argument("message_id", help="mid.$...")

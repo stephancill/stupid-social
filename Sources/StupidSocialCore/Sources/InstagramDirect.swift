@@ -9,6 +9,8 @@ private let directLogger = Logger(subsystem: "tech.stupid.StupidSocial", categor
 
 struct InstagramDirectMailbox: Decodable {
     let id: String
+    /// Where the realtime subscription starts: changes after this seq id are pushed.
+    let irisInactiveSubscriptionUqSeqId: String?
     let threadsByFolder: InstagramDirectThreadConnection
 }
 
@@ -336,6 +338,7 @@ extension InstagramClient {
         ) else {
             throw SourceError.serviceError("Instagram Direct returned no inbox.")
         }
+        directIrisSeqId = mailbox.irisInactiveSubscriptionUqSeqId.flatMap(Int.init)
         var threads = mailbox.threadsByFolder.threads
         var pageInfo = mailbox.threadsByFolder.pageInfo
         for _ in 1 ..< max(pages, 1) {
@@ -616,6 +619,109 @@ extension InstagramClient {
         try await loadDirectPage(credentials: credentials, path: pagePath)
         if let docID = docIds[operation] { return docID }
         throw SourceError.serviceError("Could not discover Instagram operation \(operation).")
+    }
+
+    // MARK: Realtime
+
+    /// The web client's app id on the realtime gateway (`x-dgw-appid` and the sync request's `app_id`).
+    static let realtimeAppID = "936619743392459"
+    /// The Direct sync database the web client subscribes to.
+    static let directSyncDatabase = 223
+
+    struct RealtimeSubscription {
+        let request: URLRequest
+        /// The establish-stream and sync request frames, sent as one WebSocket message.
+        let opening: Data
+    }
+
+    /// What the web client sends to follow Direct (probe `direct-live`, observed 2026-11-20): the lightspeed
+    /// socket, authenticated by the cookies, and a sync request from the inbox's `iris_inactive_subscription_uq_seq_id`
+    /// for `IGDSlideDeltaProcessorQuery`. The inbox is read first, so the subscription starts where it ends.
+    func directRealtimeSubscription() async throws -> RealtimeSubscription {
+        let credentials = try directCredentials()
+        try cooldown.check()
+        _ = try await directInbox()
+        guard let seqId = directIrisSeqId else {
+            throw SourceError.serviceError("Instagram Direct's inbox had no realtime sequence id.")
+        }
+        let deviceID = try await resolveDirectDeviceID(credentials: credentials)
+        let docID = try await directDeltaDocID(credentials: credentials)
+        guard let actorID = webState?.actorID else {
+            throw SourceError.serviceError("Instagram's homepage had no actor id.")
+        }
+        var components = URLComponents(string: "wss://gateway.instagram.com/ws/lightspeed")!
+        components.percentEncodedQuery = [
+            "x-dgw-appid=\(Self.realtimeAppID)",
+            "x-dgw-appversion=0",
+            "x-dgw-authtype=6:0",
+            "x-dgw-version=5",
+            "x-dgw-uuid=\(actorID)",
+            "x-dgw-tier=prod",
+            "x-dgw-deviceid=\(deviceID)",
+        ].joined(separator: "&")
+        var request = URLRequest(url: components.url!)
+        request.setValue(cookieHeader(credentials: credentials), forHTTPHeaderField: "Cookie")
+        request.setValue(Self.baseURL, forHTTPHeaderField: "Origin")
+        request.setValue(Self.webUserAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        configureRequest(&request)
+
+        let snapshotAt = Int(Date().timeIntervalSince1970 * 1000)
+        let payload = jsonString([
+            "database": Self.directSyncDatabase,
+            "epoch_id": 0,
+            "failure_count": 0,
+            "last_applied_cursor": jsonString(["seq_id": seqId]),
+            "sync_params": jsonString(["user_agent": "WMI Web", "snapshot_at_ms": snapshotAt, "prevalidated_graphql_doc_id": docID]),
+            "version": -3,
+        ])
+        let body = try JSONSerialization.data(withJSONObject: [
+            "app_id": Self.realtimeAppID,
+            "device_id": deviceID,
+            "payload": payload,
+            "request_id": 1,
+            "type": 2,
+        ])
+        let opening = InstagramDGW.frame(InstagramDGW.establishStream, Data("{}".utf8)) + InstagramDGW.dataFrame(body)
+        return RealtimeSubscription(request: request, opening: opening)
+    }
+
+    /// The iPhone web client's pages don't carry `IGDSlideDeltaProcessorQuery`: it loads
+    /// `IGDMqttSetupWithSlideMailbox.react` through the bootloader, whose scripts do (observed 2026-11-20).
+    private func directDeltaDocID(credentials: InstagramCredentials) async throws -> String {
+        let operation = "IGDSlideDeltaProcessorQuery"
+        if let docID = docIds[operation] { return docID }
+        try await bootloadDocIds(credentials: credentials, modules: ["IGDMqttSetupWithSlideMailbox.react"])
+        if let docID = docIds[operation] { return docID }
+        throw SourceError.serviceError("Could not discover Instagram operation \(operation).")
+    }
+
+    /// Doc ids from modules the web client loads on demand. The bootloader answers a POST with the page's ajax
+    /// fields with the modules' script URLs (a GET is error 1357004, observed 2026-11-07).
+    private func bootloadDocIds(credentials: InstagramCredentials, modules: [String]) async throws {
+        let state = try await ensureBootstrappedState(credentials: credentials)
+        var fields = ["__a": "1", "__user": state.userID ?? "0", "__comet_req": "7", "__req": Self.requestID(count: requestCount), "dpr": "3"]
+        let optional: [String: String?] = ["__rev": state.revision, "__spin_r": state.revision, "__hs": state.hasteSession, "__hsi": state.hsi, "lsd": state.lsd, "fb_dtsg": state.fbDtsg]
+        for (key, value) in optional {
+            if let value { fields[key] = value }
+        }
+        fields["jazoest"] = jazoest(csrfToken: state.csrfToken ?? credentials.csrfToken)
+        requestCount += 1
+        var components = URLComponents(string: Self.baseURL + "/ajax/bootloader-endpoint/")!
+        components.queryItems = [URLQueryItem(name: "modules", value: modules.joined(separator: ","))]
+        let data = try await webJSONRequest(
+            credentials: credentials,
+            method: "POST",
+            url: components.url!,
+            headers: ["Content-Type": "application/x-www-form-urlencoded"],
+            body: formURLEncoded(fields).data(using: .utf8),
+        )
+        let text = String(data: data, encoding: .utf8) ?? ""
+        let urls = Set(text.matches(of: /https:\\?\/\\?\/[^"]+?\.js[^"]*/).map { String($0.0).replacingOccurrences(of: "\\/", with: "/") })
+        for url in urls.sorted().compactMap(URL.init(string:)) {
+            guard let source = try? await webTextRequest(credentials: credentials, method: "GET", url: url, headers: baseAssetHeaders(credentials: credentials)) else { continue }
+            docIds.merge(parseDocIds(source: source)) { _, new in new }
+        }
     }
 
     /// The MQTT web device id the inbox query is scoped to, from any Direct page.

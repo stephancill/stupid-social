@@ -1,23 +1,26 @@
 import Foundation
 
-/// One Instagram Direct thread: pages its history, is polled for new messages (the web gets them over MQTT,
-/// which the app doesn't use), sends text and replies, reacts, and moves the read receipt as messages are read.
-/// The user's messages show as seen once someone else's read receipt passes them.
+/// One Instagram Direct thread: pages its history, follows the account's realtime socket (`InstagramLiveFeed`)
+/// for new messages, sends text and replies, reacts, and moves the read receipt as messages are read. The user's
+/// messages show as seen once someone else's read receipt passes them.
 @MainActor
-public final class InstagramChatAdapter: ChatAdapter, ChatReactionSending, ChatReadReceipts, ChatForwarding, ChatVoiceSending, ChatAudioPreviewing, ChatProfileLinking {
+public final class InstagramChatAdapter: ChatAdapter, ChatReactionSending, ChatReadReceipts, ChatForwarding, ChatVoiceSending, ChatAudioPreviewing, ChatProfileLinking, ChatLiveUpdating {
     public let network = ChatNetwork.instagram
     public let canReply = true
     public let acceptsAttachments = false
-    /// Instagram's web client polls nothing: Direct pushes over its MQTT socket (`edge-chat.instagram.com`), which
-    /// this app doesn't speak yet. Until it does, a slow poll, so an open chat costs one request a minute.
-    public let pollInterval: Duration? = .seconds(60)
     public var onChange: (() -> Void)?
+    public var onConnectionLost: ((Error?) -> Void)?
+    public var onError: ((Error) -> Void)?
+    public var onCatchUp: (() -> Void)?
     public let acceptsReactions = true
     public private(set) var info: ChatInfo
     public var history: ChatHistory?
 
     private let client: InstagramClient
     private let threadFbid: String
+    private let liveFeed: InstagramLiveFeed?
+    private var observation: UUID?
+    private var pendingCatchUp: Task<Void, Never>?
     /// The messages last rendered: the stretch the chat shows.
     private var loaded: [String: InstagramDirectMessage] = [:]
     /// Messaging id → person, from the thread's users and the viewer.
@@ -31,10 +34,17 @@ public final class InstagramChatAdapter: ChatAdapter, ChatReactionSending, ChatR
     /// The furthest anyone else has read.
     private var othersReadAt: Date?
 
-    public init(client: InstagramClient, threadFbid: String, title: String) {
+    public init(client: InstagramClient, threadFbid: String, title: String, liveFeed: InstagramLiveFeed? = nil) {
         self.client = client
         self.threadFbid = threadFbid
+        self.liveFeed = liveFeed
         info = ChatInfo(title: title, subtitle: "")
+    }
+
+    /// The realtime socket pushes new messages, as it does to Instagram's web client, which polls nothing; a slow
+    /// poll covers anything it misses. Without it, one request a minute.
+    public var pollInterval: Duration? {
+        liveFeed == nil ? .seconds(60) : .seconds(300)
     }
 
     public var key: String {
@@ -123,6 +133,50 @@ public final class InstagramChatAdapter: ChatAdapter, ChatReactionSending, ChatR
             info.title = threadTitle
         }
         info.subtitle = thread.isGroup == true ? "\(thread.others.count + 1) members" : ""
+    }
+
+    // MARK: Live
+
+    public func startFollowing() async {
+        guard observation == nil, let connection = liveFeed?.connection else { return }
+        observation = connection.observe { [weak self] update in
+            guard let self else { return }
+            switch update {
+            case let .event(deltas): handle(deltas)
+            case .catchUp: onCatchUp?()
+            }
+        }
+    }
+
+    public func stopFollowing() {
+        observation.map { liveFeed?.connection.removeObserver($0) }
+        observation = nil
+        pendingCatchUp?.cancel()
+        pendingCatchUp = nil
+    }
+
+    /// A new message is written as pushed. Other changes to this thread (reactions, unsends, read receipts) don't
+    /// carry what the chat shows, so the newest page loads, once per burst.
+    func handle(_ deltas: [InstagramDirectDelta]) {
+        var needsNewest = false
+        for delta in deltas where delta.threadFbid == threadFbid {
+            if delta.typename == "SlideUQPPNewMessage", let message = delta.message {
+                do {
+                    try history?.write([Self.record(message)])
+                } catch {
+                    onError?(error)
+                }
+            } else {
+                needsNewest = true
+            }
+        }
+        guard needsNewest, pendingCatchUp == nil else { return }
+        pendingCatchUp = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            guard let self, !Task.isCancelled else { return }
+            pendingCatchUp = nil
+            onCatchUp?()
+        }
     }
 
     public func send(_ message: ChatOutgoing) async throws -> String? {
