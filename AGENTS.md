@@ -290,6 +290,7 @@ Chat is one framework with an adapter per network; `docs/TECHNICAL_DESIGN.md` §
 - Update `docs/IMPLEMENTATION.md` when implementation choices are made or changed.
 - Keep API endpoint assumptions, response quirks, and side effects documented.
 - If behavior differs from the plan, record the reason and whether it is temporary or intentional.
+- Pull requests follow `.github/pull_request_template.md`: a short description of the change, and screenshots of every visible change (or "No visible change").
 
 ## Reading Simulator Credentials For API Testing
 
