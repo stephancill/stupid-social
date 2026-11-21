@@ -6,11 +6,13 @@ public enum LinkedPost: Hashable, Sendable, Codable {
     case instagram(InstagramPost)
     case bluesky(BlueskyPost)
 
-    public func chatEmbed(link: URL) -> ChatEmbed {
+    /// The post with its own link, not the one a chat used: a message that links one post several ways (Discord's
+    /// preview of an x.com link is a twitter.com link) then has equal embeds, which chats show once.
+    public var chatEmbed: ChatEmbed {
         switch self {
-        case let .x(post): post.chatEmbed(link: link)
-        case let .instagram(post): post.chatEmbed(link: link)
-        case let .bluesky(post): post.chatEmbed(link: link)
+        case let .x(post): post.chatEmbed(link: nil)
+        case let .instagram(post): post.chatEmbed(link: nil)
+        case let .bluesky(post): post.chatEmbed(link: nil)
         }
     }
 }
@@ -57,7 +59,7 @@ public final class LinkedPostResolver {
             if post == nil || cache.isStale(id) {
                 resolve(id, key: key, source: source)
             }
-            return post?.chatEmbed(link: url)
+            return post?.chatEmbed
         }
         return nil
     }

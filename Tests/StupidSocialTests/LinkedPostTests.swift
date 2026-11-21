@@ -44,6 +44,17 @@ final class LinkedPostTests: XCTestCase {
         XCTAssertEqual(count, 1, "once a session")
     }
 
+    func testOnePostLinkedSeveralWaysIsOneEmbed() async throws {
+        let cache = LinkedPostCache(url: url)
+        await cache.ready()
+        cache.insert(.x(post("1")), id: "x:1", at: Date())
+        let resolver = LinkedPostResolver(sources: [source(loads: LoadCounter())], cache: cache)
+        // Discord previews an x.com link with a twitter.com link.
+        let preview = try resolver.embed(for: XCTUnwrap(URL(string: "https://twitter.com/ada/status/1?s=20")))
+        XCTAssertNotNil(preview)
+        XCTAssertEqual(preview, resolver.embed(for: link("1")))
+    }
+
     func testLinksNoSourceKnowsAreLeftAlone() throws {
         let resolver = LinkedPostResolver(sources: [source(loads: LoadCounter())], cache: LinkedPostCache(url: url))
         XCTAssertNil(try resolver.embed(for: XCTUnwrap(URL(string: "https://example.com/status/1"))))
