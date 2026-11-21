@@ -1,0 +1,33 @@
+# Uploads a build to internal TestFlight from GitHub Actions. The signing broker
+# (vault.stupidtech.net) holds the App Store Connect key and the distribution key;
+# this run authenticates with its GitHub OIDC token, and the owner approves it in
+# the vault app. The broker's release policy names this repository, this file and
+# main, and the app's two bundle ids.
+name: TestFlight
+
+on: workflow_dispatch
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency: testflight
+
+jobs:
+  testflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      # Gitignored (public repo); without it the build ships without Telegram.
+      - name: Telegram API credentials
+        env:
+          TELEGRAM_API_JSON: ${{ secrets.TELEGRAM_API_JSON }}
+        run: |
+          if [ -z "${TELEGRAM_API_JSON}" ]; then
+            echo "::error::Set the TELEGRAM_API_JSON repository secret"; exit 1
+          fi
+          printf '%s' "${TELEGRAM_API_JSON}" > Sources/StupidSocialCore/Resources/TelegramAPI.json
+
+      - uses: stephancill/stupid-app-cli/.github/actions/testflight@ca670a1f5366362e73d9770632c4ae86942e36d5
