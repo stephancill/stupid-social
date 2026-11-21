@@ -1,12 +1,12 @@
 {
-  "originHash" : "3961dd2c172694e2c3e865d5ba0384c86ebbadf3e1938cecd3b40092ecdf7619",
+  "originHash" : "1c4e091973a06cca5feef3d6d67221e126e0a97ab50f3ab999b72283d9301f85",
   "pins" : [
     {
       "identity" : "stupid-chatkit",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/stephancill/stupid-chatkit",
       "state" : {
-        "revision" : "f8ef8c2bd473ca8180971a60f189ae332660453c"
+        "revision" : "4f6bbebc355cf68fb65191d75b4202db79e69ce4"
       }
     },
     {
