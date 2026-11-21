@@ -258,6 +258,7 @@ Chat is one framework with an adapter per network; `docs/TECHNICAL_DESIGN.md` §
 - Only target a physical device over USB when the user explicitly says "install to iphone" or similar.
 - After making source or resource changes, run `stupid-app build` for them to take effect.
 - After making changes, install to the simulator with `stupid-app run --simulator` unless the user explicitly asks not to install or asks for a different target.
+- In a cloud session or on any Linux machine without a Mac, set up the toolchain, SDKs and simulator first by following [stupid-app's "Claude Code cloud sessions and CI" instructions](https://github.com/stephancill/stupid-app-cli#claude-code-cloud-sessions-and-ci), then check changes on the simulator with `stupidsim` (`stupidsim ui-tree booted`, `tap --verify`, `screenshot`).
 - When asked to bump the build number, increment `CFBundleVersion` in `Info.plist` by 1.
 - Commit the build bump before archiving, so every uploaded build is a commit.
 - External TestFlight releases go to the beta group named `External` (id `ac67336d-4435-4ad7-9c6d-17ef19701dd1`, which has the testers and the public link): always pass `--group-name External` to `stupid-app release external-beta`. Its default, `External Testers`, is a different group with no testers; builds 167, 174 and 178 went there by mistake.
