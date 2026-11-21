@@ -9,13 +9,6 @@ Your notifications, friends' stories and every chat from X, Instagram, Telegram,
 <p align="center">
   <img src="docs/screenshots/01-feed.png" width="200" alt="Feed">
   <img src="docs/screenshots/02-chats.png" width="200" alt="Chats">
-  <img src="docs/screenshots/03-story.png" width="200" alt="Story">
-  <img src="docs/screenshots/04-chat-apron.png" width="200" alt="Chat reactions">
-</p>
-<p align="center">
-  <img src="docs/screenshots/05-chat-trip-top.png" width="200" alt="Chat photos">
-  <img src="docs/screenshots/06-detail.png" width="200" alt="Post detail">
-  <img src="docs/screenshots/07-chat-amy.png" width="200" alt="Chat">
 </p>
 
 ## Features
