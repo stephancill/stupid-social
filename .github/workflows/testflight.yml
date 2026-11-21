@@ -30,4 +30,4 @@ jobs:
           fi
           printf '%s' "${TELEGRAM_API_JSON}" > Sources/StupidSocialCore/Resources/TelegramAPI.json
 
-      - uses: stephancill/stupid-app-cli/.github/actions/testflight@ca670a1f5366362e73d9770632c4ae86942e36d5
+      - uses: stephancill/stupid-app-cli/.github/actions/testflight@17889d2053f0cf79f5e8ac3ca5be169da42fba6b
