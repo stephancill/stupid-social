@@ -73,10 +73,14 @@
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Debug builds can connect to a local notifications server for background refresh testing.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Take photos to send in chats.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Record voice messages to send in chats.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Save composed story images and chat images to your photo library.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Show your recent photos to send in chats.</string>
 	<key>NSUserActivityTypes</key>
 	<array>
 		<string>INSendMessageIntent</string>
