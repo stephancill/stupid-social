@@ -45,6 +45,9 @@ public final class InstagramClient {
     static let asbdID = "359341"
     var webState: InstagramWebState?
     var docIds: [String: String] = [:]
+    /// Relay providers and the ones each profile query passes, from Instagram's bundles (`InstagramProfile.swift`).
+    var relayProviders: [String: InstagramRelayProvider] = [:]
+    var queryProviders: [String: [String]] = [:]
     var storyPageScriptURLs: Set<URL> = []
     var requestCount = 0
     let webSessionID = InstagramClient.randomBase36(length: 6)
@@ -214,7 +217,9 @@ public final class InstagramClient {
         }
         let data = try await profileQuery(credentials: credentials, identifier: trimmed, posts: true, cursor: cursor, count: count)
         let decoded = try JSONDecoder().decode(InstagramProfilePostsResponse.self, from: data).data.connection
-        guard !decoded.pageInfo.hasNextPage || decoded.pageInfo.endCursor?.isEmpty == false else { throw SourceError.invalidResponse }
+        guard !decoded.pageInfo.hasNextPage || decoded.pageInfo.endCursor?.isEmpty == false else {
+            throw SourceError.serviceError("Instagram's posts page has more posts but no cursor to them.")
+        }
         return NetworkProfilePostsPage(
             posts: decoded.edges.compactMap(\.node.profilePost),
             nextCursor: decoded.pageInfo.endCursor,
@@ -222,6 +227,8 @@ public final class InstagramClient {
         )
     }
 
+    /// Accounts matching `query`, as the web client's search box finds them: `PolarisSearchBoxRefetchableQuery`, whose
+    /// doc id is in the homepage's bundles. `/web/search/topsearch/` answers `login_required` (observed 2026-11-21).
     public func searchUsers(query: String) async throws -> [InstagramUserInfoResponse.InfoUser] {
         guard let credentials = try credentialStore.loadInstagramCredentials() else {
             throw SourceError.notConfigured
@@ -230,13 +237,42 @@ public final class InstagramClient {
         let normalized = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty else { return [] }
 
-        let data = try await webJSONRequest(
+        let operation = "PolarisSearchBoxRefetchableQuery"
+        if docIds[operation] == nil {
+            let state = try await ensureBootstrappedState(credentials: credentials)
+            for url in scriptURLs(html: state.html) where docIds[operation] == nil {
+                let source = try await webTextRequest(credentials: credentials, method: "GET", url: url, headers: ["User-Agent": Self.webUserAgent])
+                docIds.merge(parseDocIds(source: source)) { _, new in new }
+            }
+        }
+        guard let docID = docIds[operation] else {
+            throw SourceError.serviceError("Instagram's current page did not include its search.")
+        }
+        let variables: [String: Any] = [
+            "data": [
+                "context": "blended",
+                "include_reel": "true",
+                "query": normalized,
+                "rank_token": "",
+                "search_session_id": UUID().uuidString.lowercased(),
+                "search_surface": "web_top_search",
+            ],
+            "hasQuery": true,
+        ]
+        let data = try await graphqlPost(
             credentials: credentials,
-            method: "GET",
-            path: "/web/search/topsearch/?context=blended&query=\(normalized.urlFormEncoded)&rank_token=0.0&include_reel=false",
+            docID: docID,
+            variables: variables,
+            friendlyName: operation,
+            rootFieldName: "xdt_api__v1__fbsearch__topsearch_connection",
+            endpoint: "/graphql/query",
         )
-        let decoded = try JSONDecoder().decode(InstagramTopSearchResponse.self, from: data)
-        return decoded.users.map(\.user)
+        let decoded = try JSONDecoder().decode(InstagramSearchResponse.self, from: data)
+        guard let connection = decoded.data?.connection else {
+            let messages = decoded.errors?.compactMap(\.message).joined(separator: "; ") ?? ""
+            throw SourceError.serviceError("Instagram's search failed: \(messages.isEmpty ? "no results came back" : messages)")
+        }
+        return connection.users.map(\.user)
     }
 
     func mediaInfo(mediaId: String) async throws -> InstagramMediaInfoResponse {

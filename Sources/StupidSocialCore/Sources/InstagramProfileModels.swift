@@ -169,6 +169,24 @@ struct InstagramTopSearchResponse: Decodable {
     let status: String?
 }
 
+/// `PolarisSearchBoxRefetchableQuery`'s answer: the accounts in the same shape `/web/search/topsearch/` had.
+struct InstagramSearchResponse: Decodable {
+    struct Payload: Decodable {
+        let connection: InstagramTopSearchResponse?
+
+        enum CodingKeys: String, CodingKey {
+            case connection = "xdt_api__v1__fbsearch__topsearch_connection"
+        }
+    }
+
+    struct Failure: Decodable {
+        let message: String?
+    }
+
+    let data: Payload?
+    let errors: [Failure]?
+}
+
 struct InstagramMediaInfoResponse: Decodable {
     let items: [InstagramMediaInfoItem]
     let status: String?

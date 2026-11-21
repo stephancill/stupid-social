@@ -318,7 +318,9 @@ struct ProfileDetailView: View {
                 Text("Posts")
             } footer: {
                 if instagramMostLiked {
-                    Text("The most liked of the \(profile.posts.count) latest posts. Scroll to load more.")
+                    Text(profile.hasMorePosts
+                        ? "The most liked of the \(profile.posts.count) latest posts. Scroll to load more."
+                        : "Every post, most liked first.")
                 }
             }
         } else if let postsErrorMessage {

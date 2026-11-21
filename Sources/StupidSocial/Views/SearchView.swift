@@ -93,6 +93,13 @@ struct SearchView: View {
         if viewModel.isSearching {
             ProgressView()
                 .frame(maxWidth: .infinity, minHeight: 320)
+        } else if !viewModel.results.isEmpty {
+            ContentUnavailableView(
+                "No Results",
+                systemImage: "person.crop.circle.badge.questionmark",
+                description: Text("No matching profiles on the networks you chose."),
+            )
+            .frame(minHeight: 320)
         } else if let errorMessage = viewModel.errorMessage {
             ContentUnavailableView(
                 "No Results",

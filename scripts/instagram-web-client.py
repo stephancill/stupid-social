@@ -16,6 +16,7 @@ import json
 import os
 import random
 import re
+from pathlib import Path
 import socket
 import ssl
 import string
@@ -1572,6 +1573,93 @@ class InstagramHTTPError(Exception):
         super().__init__(f"HTTP {status_code} {method} {url}\n{truncate(body, 1200)}")
 
 
+PROVIDER_RE = re.compile(r'__d\("(\w+)\.relayprovider",\["(gkx|qex|justknobx)"\].{0,200}?r\("\2"\)(?:\._)?\("(\d+)"\)(===!0)?', re.S)
+PROVIDER_TABLES = {"gkx": ("gkxData", "result"), "qex": ("qexData", "r"), "justknobx": ("justknobxData", "r")}
+
+
+def profile_route_id(html: str) -> str | None:
+    """The profile's id from the page's route props, as `instagramProfileRouteID` (InstagramProfile.swift) reads it."""
+    def find(value: Any) -> str | None:
+        if isinstance(value, dict):
+            props = (((value.get("initialRouteInfo") or {}).get("route") or {}).get("rootView") or {}).get("props") if isinstance(value.get("initialRouteInfo"), dict) else None
+            if isinstance(props, dict) and re.fullmatch(r"[0-9]+", str(props.get("id", ""))) and "profile_id" in ((props.get("page_logging") or {}).get("params") or {}):
+                return props["id"]
+            for child in value.values():
+                found = find(child)
+                if found:
+                    return found
+        elif isinstance(value, list):
+            for child in value:
+                found = find(child)
+                if found:
+                    return found
+        return None
+    return next((found for found in (find(obj) for obj in page_objects(html)) if found), None)
+
+
+def relay_providers(sources: list[str]) -> dict[str, tuple[str, str, bool]]:
+    """Each relay provider module: its config table (gkx, qex or justknobx), the id it reads, and whether it
+    compares to `true` (`===!0`) rather than passing the value on."""
+    return {name: (table, identifier, bool(strict)) for source in sources for name, table, identifier, strict in PROVIDER_RE.findall(source)}
+
+
+def query_providers(sources: list[str], operation: str) -> list[str]:
+    """The relay providers an operation's `.graphql` module passes as `__relay_internal__pv__…` variables."""
+    for source in sources:
+        start = source.find(f'__d("{operation}.graphql"')
+        if start < 0:
+            continue
+        end = source.find("__d(", start + 5)
+        module = source[start:end if end > 0 else None]
+        return sorted(set(re.findall(r"__relay_internal__pv__([A-Za-z0-9]+)relayprovider", module)))
+    return []
+
+
+def provider_value(objects: list[Any], table: str, identifier: str, strict: bool) -> bool:
+    """The value the web client's provider returns, from the page's `gkxData`, `qexData` or `justknobxData`."""
+    key, field = PROVIDER_TABLES[table]
+
+    def find(value: Any) -> Any:
+        if isinstance(value, dict):
+            data = value.get(key)
+            if isinstance(data, dict) and identifier in data:
+                return data[identifier]
+            for child in value.values():
+                found = find(child)
+                if found is not None:
+                    return found
+        elif isinstance(value, list):
+            for child in value:
+                found = find(child)
+                if found is not None:
+                    return found
+        return None
+
+    entry = next((found for found in (find(obj) for obj in objects) if found is not None), None)
+    if not isinstance(entry, dict) or field not in entry:
+        raise SystemExit(f"{table} {identifier} is missing from the page")
+    value = entry[field]
+    return value is True if strict else bool(value)
+
+
+def profile_config_report(html: str, sources: list[str]) -> dict[str, Any]:
+    """The provider variables the profile queries take, as InstagramProfile.swift computes them, and their doc ids."""
+    objects = page_objects(html)
+    providers = relay_providers(sources)
+    doc_ids = {name: doc_id for source in sources for name, doc_id in parse_doc_ids(source).items()}
+    report = {}
+    for operation in ("PolarisProfilePageContentQuery", "PolarisProfilePostsQuery"):
+        names = query_providers(sources, operation)
+        variables = {}
+        for name in names:
+            if name not in providers:
+                raise SystemExit(f"{operation}: no definition for provider {name}")
+            table, identifier, strict = providers[name]
+            variables[f"__relay_internal__pv__{name}relayprovider"] = provider_value(objects, table, identifier, strict)
+        report[operation] = {"doc_id": doc_ids.get(operation), "providers": {n: providers[n] for n in names}, "variables": variables}
+    return report
+
+
 SHORTCODE_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 
 
@@ -1848,6 +1936,22 @@ def build_parser() -> argparse.ArgumentParser:
     username_profile = subparsers.add_parser("profile-username", help="Call web-visible /api/v1/users/web_profile_info/.")
     username_profile.add_argument("username", help="Instagram username.")
 
+    profile_config = subparsers.add_parser("profile-config", help="Save the signed-in homepage and report the gates and configs the profile query reads (InstagramProfile.swift).")
+    profile_config.add_argument("--save-html", help="Also write the homepage HTML here (under logs/, never committed).")
+    profile_config.add_argument("--from-html", help="Read a homepage saved earlier with --save-html instead of loading it.")
+
+    search_people = subparsers.add_parser("search-people", help="Search accounts with PolarisSearchBoxRefetchableQuery, as the web client searches (POST /graphql/query); /web/search/topsearch/ answers login_required.")
+    search_people.add_argument("query", help="Search text.")
+    search_people.add_argument("--from-html", help="A homepage saved with profile-config --save-html, to find the doc id in its bundles.")
+
+    profile_page = subparsers.add_parser("profile-page", help="A profile with PolarisProfilePageContentQuery, as the web client sends it: the id from the profile page's route, providers from the bundles.")
+    profile_page.add_argument("username", help="Instagram username.")
+    profile_page.add_argument("--config", help="profile-config output (JSON) to take the doc id and providers from.")
+
+    profile_posts = subparsers.add_parser("profile-posts", help="A profile's first posts with PolarisProfilePostsQuery, as the web client sends it (POST /graphql/query, providers from the bundles).")
+    profile_posts.add_argument("username", help="Instagram username.")
+    profile_posts.add_argument("--config", help="profile-config output (JSON) to take the doc id and providers from, instead of loading them.")
+
     post_preview = subparsers.add_parser("post-preview", help="One post by its shortcode (/api/v1/media/<id>/info/), summarized as chats draw it.")
     post_preview.add_argument("shortcode", help="The code in instagram.com/p/<code>/ or /reel/<code>/.")
 
@@ -2016,6 +2120,64 @@ def main() -> None:
         result = client.direct_unsend(args.thread_fbid, args.message_id)
     elif args.command == "profile-username":
         result = client.rest_profile_by_username(args.username)
+    elif args.command == "profile-config":
+        if args.from_html:
+            html = Path(args.from_html).read_text()
+        else:
+            html = client.request_text("GET", BASE_URL + "/", headers=client._base_page_headers())
+        if args.save_html:
+            Path(args.save_html).write_text(html)
+        # The bundles are public, so they load without the session's cookies.
+        sources = [urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": client.user_agent}), timeout=30).read().decode("utf-8", "replace") for url in script_urls(html)]
+        result = profile_config_report(html, sources)
+    elif args.command == "search-people":
+        html = Path(args.from_html).read_text() if args.from_html else client.request_text("GET", BASE_URL + "/", headers=client._base_page_headers())
+        sources = [urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": client.user_agent}), timeout=30).read().decode("utf-8", "replace") for url in script_urls(html)]
+        doc_id = next((ids["PolarisSearchBoxRefetchableQuery"] for ids in map(parse_doc_ids, sources) if "PolarisSearchBoxRefetchableQuery" in ids), None)
+        if not doc_id:
+            raise SystemExit("No PolarisSearchBoxRefetchableQuery in the homepage's bundles.")
+        variables = {"data": {"context": "blended", "include_reel": "true", "query": args.query, "rank_token": "",
+                              "search_session_id": str(uuid.uuid4()), "search_surface": "web_top_search"}, "hasQuery": True}
+        page = client.graphql_post(doc_id, variables, friendly_name="PolarisSearchBoxRefetchableQuery",
+                                   root_field_name="xdt_api__v1__fbsearch__topsearch_connection", endpoint="/graphql/query")
+        connection = (page.get("data") or {}).get("xdt_api__v1__fbsearch__topsearch_connection") or {}
+        result = {"errors": page.get("errors"), "doc_id": doc_id, "keys": sorted(connection.keys()),
+                  "users": [{k: (u.get("user") or {}).get(k) for k in ("pk", "username", "full_name", "is_verified")} | {"pic": bool((u.get("user") or {}).get("profile_pic_url"))}
+                            for u in connection.get("users") or []][:5]}
+    elif args.command == "profile-page":
+        config = json.loads(Path(args.config).read_text())
+        page_html = client.request_text("GET", BASE_URL + f"/{urllib.parse.quote(args.username)}/", headers=client._base_page_headers())
+        profile_id = profile_route_id(page_html)
+        if not profile_id:
+            raise SystemExit("The profile page has no route id (initialRouteInfo.route.rootView.props.id).")
+        query = config["PolarisProfilePageContentQuery"]
+        variables = {"id": profile_id, "enable_integrity_filters": True, **query["variables"]}
+        page = client.graphql_post(query["doc_id"], variables, friendly_name="PolarisProfilePageContentQuery", endpoint="/graphql/query")
+        user = (page.get("data") or {}).get("user") or {}
+        result = {"errors": page.get("errors"), "profile_id": profile_id,
+                  "user": {k: user.get(k) for k in ("pk", "username", "full_name", "is_verified", "media_count", "follower_count")}}
+    elif args.command == "profile-posts":
+        if args.config:
+            config = json.loads(Path(args.config).read_text())
+        else:
+            html = client.request_text("GET", BASE_URL + "/", headers=client._base_page_headers())
+            sources = [urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": client.user_agent}), timeout=30).read().decode("utf-8", "replace") for url in script_urls(html)]
+            config = profile_config_report(html, sources)
+        query = config["PolarisProfilePostsQuery"]
+        variables = {
+            "username": args.username,
+            "data": {"count": 12, "include_reel_media_seen_timestamp": True, "include_relationship_info": True, "latest_besties_reel_media": True, "latest_reel_media": True},
+            **query["variables"],
+        }
+        page = client.graphql_post(query["doc_id"], variables, friendly_name="PolarisProfilePostsQuery",
+                                   root_field_name="xdt_api__v1__feed__user_timeline_graphql_connection", endpoint="/graphql/query")
+        connection = ((page.get("data") or {}).get("xdt_api__v1__feed__user_timeline_graphql_connection") or {})
+        result = {
+            "errors": page.get("errors"),
+            "posts": [{"code": e["node"].get("code"), "like_count": e["node"].get("like_count"),
+                       "likes_hidden": e["node"].get("like_and_view_counts_disabled")} for e in connection.get("edges", [])],
+            "has_next_page": (connection.get("page_info") or {}).get("has_next_page"),
+        }
     elif args.command == "post-preview":
         info = client.rest_media_info(args.shortcode)
         items = info.get("items") or []

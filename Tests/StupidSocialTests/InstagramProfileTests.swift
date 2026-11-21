@@ -8,14 +8,29 @@ final class InstagramProfileTests: XCTestCase {
         XCTAssertNil(instagramProfileRouteID(html: #"<script data-sjs>{"viewer":{"id":"42"}}</script>"#))
     }
 
-    func testProvidedVariablesRespectGateAndExperimentNamespaces() throws {
-        let variables = try instagramProfileVariables(html: runtimePage, posts: true)
+    func testQueriesTakeTheProvidersTheirBundlesNameFromEachProvidersTable() throws {
+        let providers = instagramRelayProviders(source: profileAsset)
+        XCTAssertEqual(providers["PolarisShortDramaEnabled"], InstagramRelayProvider(table: .justknobx, id: "14", isStrict: false))
+        XCTAssertEqual(providers["PolarisMultiCaptionCarouselEnabled"], InstagramRelayProvider(table: .qex, id: "2404", isStrict: true))
+        let names = try XCTUnwrap(instagramQueryProviders(source: profileAsset, operation: "PolarisProfilePostsQuery"))
+        XCTAssertEqual(names, ["PolarisMultiCaptionCarouselEnabled", "PolarisProductTagIndicatorEnabled", "PolarisReelsRecoDebugOverlayEnabled", "PolarisShortDramaEnabled"])
+        XCTAssertNil(instagramQueryProviders(source: profileAsset, operation: "PolarisSomethingElseQuery"))
+        let variables = try instagramProvidedVariables(html: runtimePage, names: names, providers: providers)
         XCTAssertEqual(variables["__relay_internal__pv__PolarisMultiCaptionCarouselEnabledrelayprovider"] as? Bool, true)
-        XCTAssertEqual(variables["__relay_internal__pv__PolarisReelsRecoDebugOverlayEnabledrelayprovider"] as? Bool, false)
-        XCTAssertEqual(variables["__relay_internal__pv__PolarisShortDramaEnabledrelayprovider"] as? Bool, false)
-        let experiment = runtimePage.replacingOccurrences(of: #""r":null"#, with: #""r":true"#)
-        XCTAssertEqual(try instagramProfileVariables(html: experiment, posts: false)["__relay_internal__pv__PolarisShortDramaEnabledrelayprovider"] as? Bool, true)
-        XCTAssertThrowsError(try instagramProfileVariables(html: "<html></html>", posts: false))
+        XCTAssertEqual(variables["__relay_internal__pv__PolarisProductTagIndicatorEnabledrelayprovider"] as? Bool, true)
+        XCTAssertEqual(variables["__relay_internal__pv__PolarisReelsRecoDebugOverlayEnabledrelayprovider"] as? Bool, false, "gate 684, not JustKnobs 684")
+        XCTAssertEqual(variables["__relay_internal__pv__PolarisShortDramaEnabledrelayprovider"] as? Bool, true)
+        XCTAssertThrowsError(try instagramProvidedVariables(html: "<html></html>", names: names, providers: providers))
+    }
+
+    func testSearchResultsDecodeFromTheSearchBoxQuery() throws {
+        let response = try JSONDecoder().decode(InstagramSearchResponse.self, from: Data(searchResponse.utf8))
+        let users = try XCTUnwrap(response.data?.connection?.users.map(\.user))
+        XCTAssertEqual(users.map(\.username), ["example"])
+        XCTAssertEqual(users.first?.fullName, "Example Person")
+        let failed = try JSONDecoder().decode(InstagramSearchResponse.self, from: Data(#"{"data":null,"errors":[{"message":"login_required"}]}"#.utf8))
+        XCTAssertNil(failed.data?.connection)
+        XCTAssertEqual(failed.errors?.first?.message, "login_required")
     }
 
     func testPrivateProfileAndEmptyPostsDecode() throws {
@@ -40,9 +55,12 @@ final class InstagramProfileTests: XCTestCase {
                 XCTAssertNil(request.value(forHTTPHeaderField: "Cookie"))
                 return (200, profileAsset)
             case "graphql/query":
-                let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!
-                let docID = query.first { $0.name == "doc_id" }!.value!
-                let variables = try JSONSerialization.jsonObject(with: Data(query.first { $0.name == "variables" }!.value!.utf8)) as! [String: Any]
+                XCTAssertEqual(request.httpMethod, "POST")
+                let form = formFields(request)
+                let docID = try XCTUnwrap(form["doc_id"])
+                XCTAssertEqual(request.value(forHTTPHeaderField: "X-FB-Friendly-Name"), form["fb_api_req_friendly_name"])
+                let variables = try JSONSerialization.jsonObject(with: Data(XCTUnwrap(form["variables"]).utf8)) as! [String: Any]
+                XCTAssertEqual(variables["__relay_internal__pv__PolarisShortDramaEnabledrelayprovider"] as? Bool, true)
                 if docID == "1001" {
                     XCTAssertEqual(variables["id"] as? String, "99")
                     XCTAssertEqual(variables["enable_integrity_filters"] as? Bool, true)
@@ -68,12 +86,30 @@ final class InstagramProfileTests: XCTestCase {
     }
 
     @MainActor
+    func testPostsFailOnlyWhenTheirDataIsMissing() async throws {
+        let (store, suite, session) = try setup()
+        defer { cleanup(store: store, suite: suite) }
+        let client = InstagramClient(credentialStore: store, session: session)
+        client.webState = InstagramWebState(html: runtimePage)
+        client.docIds["PolarisProfilePostsQuery"] = "1002"
+        client.queryProviders["PolarisProfilePostsQuery"] = []
+        ProfileURLProtocol.handler = { _ in (200, failedPostsResponse) }
+        do {
+            _ = try await client.userPostsPage(uid: "example", cursor: nil)
+            XCTFail("No posts came back")
+        } catch let SourceError.serviceError(message) {
+            XCTAssertTrue(message.contains("field_exception"), "says what Instagram said")
+        }
+    }
+
+    @MainActor
     func testRejectsMismatchedProfileAndDoesNotRetryRateLimit() async throws {
         let (store, suite, session) = try setup()
         defer { cleanup(store: store, suite: suite) }
         let client = InstagramClient(credentialStore: store, session: session)
         client.webState = InstagramWebState(html: runtimePage)
         client.docIds["PolarisProfilePageContentQuery"] = "1001"
+        client.queryProviders["PolarisProfilePageContentQuery"] = []
         ProfileURLProtocol.handler = { _ in (200, profileResponse) }
         do {
             _ = try await client.userInfo(uid: "100")
@@ -103,11 +139,33 @@ final class InstagramProfileTests: XCTestCase {
     }
 }
 
-private let runtimePage = #"<script data-sjs>{"gkx":{"17028":{"result":false},"6793":{"result":true},"17363":{"result":false},"9448":{"result":true},"12774":{"result":false},"684":{"result":false}},"qex":{"1697":{"r":null},"3668":{"r":null},"2404":{"r":true,"l":"quoted } value"},"684":{"r":true}}}</script>"#
+private let runtimePage = #"<script data-sjs>{"gkxData":{"684":{"result":false},"29816":{"result":true}},"qexData":{"2404":{"r":true,"l":"quoted } value"}},"justknobxData":{"14":{"r":true},"684":{"r":true}}}</script>"#
 private let profilePage = #"<script src="https://static.cdninstagram.com/profile.js"></script><script data-sjs>{"viewer":{"id":"42"},"initialRouteInfo":{"route":{"rootView":{"props":{"id":"99","page_logging":{"params":{"profile_id":"99"}}}}}}}</script>"#
-private let profileAsset = #"__d("PolarisProfilePageContentQuery_instagramRelayOperation",[],(function(a){a.exports="1001"}));__d("PolarisProfilePostsQuery_instagramRelayOperation",[],(function(a){a.exports="1002"}));"#
+/// Shaped like Instagram's bundles (2026-11-21): operation ids, each query's providers, and the providers' definitions.
+private let profileAsset = #"__d("PolarisProfilePageContentQuery_instagramRelayOperation",[],(function(a){a.exports="1001"}));__d("PolarisProfilePostsQuery_instagramRelayOperation",[],(function(a){a.exports="1002"}));__d("PolarisProfilePageContentQuery.graphql",["PolarisShortDramaEnabled.relayprovider"],(function(a,b){var e={params:{providedVariables:{"__relay_internal__pv__PolarisShortDramaEnabledrelayprovider":b("PolarisShortDramaEnabled.relayprovider")}}}}));__d("PolarisProfilePostsQuery.graphql",[],(function(a,b){var e={params:{providedVariables:{"__relay_internal__pv__PolarisMultiCaptionCarouselEnabledrelayprovider":1,"__relay_internal__pv__PolarisProductTagIndicatorEnabledrelayprovider":1,"__relay_internal__pv__PolarisReelsRecoDebugOverlayEnabledrelayprovider":1,"__relay_internal__pv__PolarisShortDramaEnabledrelayprovider":1}}}}));__d("PolarisShortDramaEnabled.relayprovider",["justknobx"],(function(t,n,r,o,a,i,l){"use strict";var e={get:function(){return r("justknobx")._("14")}}}));__d("PolarisMultiCaptionCarouselEnabled.relayprovider",["qex"],(function(t,n,r){var e={get:function(){return r("qex")._("2404")===!0}}}));__d("PolarisReelsRecoDebugOverlayEnabled.relayprovider",["gkx"],(function(t,n,r){var e={get:function(){return r("gkx")("684")===!0}}}));__d("PolarisProductTagIndicatorEnabled.relayprovider",["gkx"],(function(t,n,r){var e={get:function(){return r("gkx")("29816")===!0}}}));"#
 private let profileResponse = #"{"data":{"user":{"pk":"99","username":"example","follower_count":12,"following_count":5,"media_count":3,"is_private":true,"friendship_status":{"following":false,"followed_by":true}}}}"#
-private let postsResponse = #"{"data":{"xdt_api__v1__feed__user_timeline_graphql_connection":{"edges":[],"page_info":{"has_next_page":false,"end_cursor":null}}}}"#
+/// With an error on one field, as Instagram sends `field_exception` for a post's location picture: the data still counts.
+private let postsResponse = #"{"data":{"xdt_api__v1__feed__user_timeline_graphql_connection":{"edges":[],"page_info":{"has_next_page":false,"end_cursor":null}}},"errors":[{"message":"A server error field_exception occured.","severity":"ERROR","path":["xdt_api__v1__feed__user_timeline_graphql_connection","edges",0,"node","location","profile_pic_url"]}]}"#
+private let searchResponse = #"{"data":{"xdt_api__v1__fbsearch__topsearch_connection":{"users":[{"position":0,"user":{"pk":"99","username":"example","full_name":"Example Person","is_verified":false,"profile_pic_url":"https://scontent.example/p.jpg"}}],"places":[],"hashtags":[],"rank_token":"r"}}}"#
+private let failedPostsResponse = #"{"data":{"xdt_api__v1__feed__user_timeline_graphql_connection":null},"errors":[{"message":"A server error field_exception occured.","severity":"CRITICAL"}]}"#
+
+/// A form POST's fields; URLProtocol sees the body as a stream.
+private func formFields(_ request: URLRequest) -> [String: String] {
+    var data = request.httpBody ?? Data()
+    if data.isEmpty, let stream = request.httpBodyStream {
+        stream.open()
+        defer { stream.close() }
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while stream.hasBytesAvailable {
+            let read = stream.read(&buffer, maxLength: buffer.count)
+            guard read > 0 else { break }
+            data.append(buffer, count: read)
+        }
+    }
+    var components = URLComponents()
+    components.percentEncodedQuery = String(data: data, encoding: .utf8)?.replacingOccurrences(of: "+", with: "%20")
+    return Dictionary((components.queryItems ?? []).map { ($0.name, $0.value ?? "") }, uniquingKeysWith: { _, last in last })
+}
 
 private final class ProfileURLProtocol: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) static var handler: (@Sendable (URLRequest) throws -> (Int, String))?
