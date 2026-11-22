@@ -213,15 +213,21 @@ struct ChatsView: View {
 
     /// Chats whose name or latest message contains the query, archived ones included, from the picked accounts.
     private var filteredChats: [ChatSummary] {
-        let query = query.trimmingCharacters(in: .whitespaces)
         guard hasAppeared else { return [] }
         let filters = activeFilters
-        let chats = query.isEmpty ? viewModel.chats : (viewModel.chats + viewModel.archivedChats).filter { chat in
+        let chats = queryMatches
+        guard !filters.isEmpty else { return chats }
+        return chats.filter { filters.contains(.account($0.accountId)) }
+    }
+
+    /// Chats whose name or latest message contains the query, archived ones included; without a query, the list.
+    private var queryMatches: [ChatSummary] {
+        let query = query.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty else { return viewModel.chats }
+        return (viewModel.chats + viewModel.archivedChats).filter { chat in
             chat.title.localizedStandardContains(query) || (chat.titlePrefix ?? "").localizedStandardContains(query)
                 || (chat.preview ?? "").localizedStandardContains(query)
         }
-        guard !filters.isEmpty else { return chats }
-        return chats.filter { filters.contains(.account($0.accountId)) }
     }
 
     /// The picked accounts that are still signed in.
@@ -231,9 +237,11 @@ struct ChatsView: View {
         }
     }
 
-    /// Accounts with chats, most first.
+    /// Accounts with chats matching the query (any chats, archived too, without one), most first, and any selected
+    /// account so it can be turned off.
     private var filterAccounts: [Account] {
-        AccountFilterBar.accounts(settingsViewModel.accounts, itemAccountIds: (viewModel.chats + viewModel.archivedChats).map(\.accountId), selection: filterSelection)
+        let chats = query.trimmingCharacters(in: .whitespaces).isEmpty ? viewModel.chats + viewModel.archivedChats : queryMatches
+        return AccountFilterBar.accounts(settingsViewModel.accounts, itemAccountIds: chats.map(\.accountId), selection: filterSelection)
     }
 
     /// A long-pressed row's preview: the chat as it opens, read-only and without marking anything read.
