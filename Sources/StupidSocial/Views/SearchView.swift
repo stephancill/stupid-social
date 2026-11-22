@@ -9,9 +9,12 @@ struct SearchView: View {
     /// Follows `isSearchPresented` with an animation of its own: the field's focus changes without one, so the
     /// pills appeared at once and the navigation bar then slid the field up over them.
     @State private var showsFilter = false
+    /// The list's top safe area with the title and field showing: the empty state stays this far down throughout.
+    @State private var restingTop: CGFloat = 0
 
     var body: some View {
         let showsRecents = viewModel.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !viewModel.filteredRecentProfiles.isEmpty
+        let showsEmptyState = !showsRecents && viewModel.filteredResults.isEmpty
 
         List {
             // A row rather than a bar pinned under the field: any top `safeAreaBar`, even one with no height, made the
@@ -29,11 +32,7 @@ struct SearchView: View {
             }
             if showsRecents {
                 recentSection
-            } else if viewModel.filteredResults.isEmpty {
-                emptyState
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(Color.clear)
-            } else {
+            } else if !showsEmptyState {
                 Section("Profiles") {
                     ForEach(viewModel.filteredResults, id: \.self) { profile in
                         NavigationLink {
@@ -54,6 +53,24 @@ struct SearchView: View {
         .listStyle(.insetGrouped)
         #endif
         .contentMargins(.top, 0, for: .scrollContent)
+        // Over the list rather than a row in it, and kept where it rests: as a row it moved with the list as the field took
+        // and lost focus and the pills came and went, showing twice as the search started and dropping, then jumping
+        // back, as it ended; following the safe area, it jumped as the field moved. Focused, the pills take the space the
+        // title leaves, so it stays just below them.
+        .onGeometryChange(for: CGFloat.self, of: \.safeAreaInsets.top) { restingTop = max(restingTop, $0) }
+        .overlay(alignment: .top) {
+            if showsEmptyState {
+                // 15pt below the field, where the inset-grouped list put its first row.
+                emptyState
+                    .frame(height: 320)
+                    .padding(.top, restingTop + 15)
+                    .allowsHitTesting(false)
+                    .ignoresSafeArea(.container, edges: .top)
+            }
+        }
+        // An empty list draws no background of its own.
+        .scrollContentBackground(.hidden)
+        .background(Color(.systemGroupedBackground))
         .navigationTitle("Search")
         // Inline, as it opens: with no top content margin the large title never showed, and ending a search brought it
         // back, sliding in under the field and then jumping above it.
