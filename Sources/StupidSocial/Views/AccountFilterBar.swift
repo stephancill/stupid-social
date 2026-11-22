@@ -92,8 +92,9 @@ struct NetworkFilterBar: View {
     }
 }
 
-/// A horizontally scrolling row of `FilterPill`s under a circle that stays at the leading edge: a filter icon, or
-/// while any pill is selected, the clear button.
+/// A horizontally scrolling row of `FilterPill`s, led by a filter icon in a circle like the clear button's. While any
+/// is selected, the clear button floats at the trailing edge, and the row scrolls far enough that the last pill clears
+/// it.
 ///
 /// A tap selects one pill in place of the others. A long press adds a pill to the selection instead, and from then on
 /// taps add and remove pills, until the clear button (or turning the last one off) ends it. Meanwhile the clear
@@ -102,34 +103,31 @@ struct FilterPillBar<Filter: Hashable, Pills: View>: View {
     @Binding var selection: Set<Filter>
     @State private var isMultipleSelecting = false
     @ScaledMetric(relativeTo: .subheadline) private var clearButtonSize: CGFloat = 20
-    /// The leading circle's drawn width, including its style's padding, which the pills start after.
-    @State private var circleWidth: CGFloat = 0
+    /// The clear button's drawn width, including its style's padding, which the trailing margin makes room for.
+    @State private var clearButtonWidth: CGFloat = 0
 
     @ViewBuilder let pills: () -> Pills
     private let edgeMargin: CGFloat = 16
     private let spacing: CGFloat = 8
 
     var body: some View {
+        let isFiltering = !selection.isEmpty
+
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: spacing) {
+                filterIcon
                 pills()
             }
             .environment(\.isMultipleFilterSelecting, $isMultipleSelecting)
         }
-        .contentMargins(.leading, edgeMargin + circleWidth + spacing, for: .scrollContent)
-        .contentMargins(.trailing, edgeMargin, for: .scrollContent)
-        // Pills scrolled back slide under the circle and end there, rather than showing again beside it.
-        .mask { Rectangle().padding(.leading, edgeMargin + circleWidth / 2) }
-        .overlay(alignment: .leading) {
-            Group {
-                if selection.isEmpty {
-                    filterIcon
-                } else {
-                    clearButton
-                }
+        .contentMargins(.leading, edgeMargin, for: .scrollContent)
+        .contentMargins(.trailing, isFiltering ? edgeMargin + clearButtonWidth + spacing : edgeMargin, for: .scrollContent)
+        .overlay(alignment: .trailing) {
+            if isFiltering {
+                clearButton
+                    .onGeometryChange(for: CGFloat.self, of: \.size.width) { clearButtonWidth = $0 }
+                    .padding(.trailing, edgeMargin)
             }
-            .onGeometryChange(for: CGFloat.self, of: \.size.width) { circleWidth = $0 }
-            .padding(.leading, edgeMargin)
         }
         .padding(.vertical, 6)
         .onChange(of: selection.count, initial: true) { _, count in
