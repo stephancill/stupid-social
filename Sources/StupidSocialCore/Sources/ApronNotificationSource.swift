@@ -75,6 +75,20 @@ public final class ApronNotificationSource: ChatListProvider {
     /// One server's rooms, or only `roomIds` among them, such as the rooms a new message arrived in; the live
     /// connection calls this on its open session.
     public func chatSummaries(in session: ApronSession, roomIds: Set<String>? = nil) async throws -> [ChatSummary] {
+        guard roomIds == nil else { return try await buildSummaries(in: session, roomIds: roomIds) }
+        // Launch asks for every room more than once at a time (the Chats load, the live connection's first build);
+        // each would read a history page per room, and servers allow few a day.
+        let key = ObjectIdentifier(session.connection)
+        if let running = fullBuilds[key] { return try await running.value }
+        let build = Task { try await buildSummaries(in: session, roomIds: nil) }
+        fullBuilds[key] = build
+        defer { fullBuilds[key] = nil }
+        return try await build.value
+    }
+
+    private var fullBuilds: [ObjectIdentifier: Task<[ChatSummary], Error>] = [:]
+
+    private func buildSummaries(in session: ApronSession, roomIds: Set<String>?) async throws -> [ChatSummary] {
         // Without `history`, rooms are read from what the shared connection kept since sign-in.
         let hasHistory = session.server.has("history")
         guard hasHistory || session.server.has("rooms") else { return [] }

@@ -36,7 +36,9 @@ public enum ApronError: LocalizedError, Equatable {
         case let .rejected(status, _) where status == 503 || status == 429:
             "The Apron server is too busy to accept connections right now (HTTP \(status)). Try again later."
         case let .rejected(status, _): "The Apron server refused the connection (HTTP \(status))."
-        case let .limited(message, retryAfter, _): "\(message). Try again in \(retryAfter) seconds."
+        case let .limited(message, retryAfter, _) where retryAfter < 60: "\(message). Try again in \(retryAfter) seconds."
+        case let .limited(message, retryAfter, _):
+            "\(message). Try again at \(Date.now.addingTimeInterval(TimeInterval(retryAfter)).formatted(date: .omitted, time: .shortened))."
         case let .closedByServer(code, reason): reason.isEmpty ? "The Apron server closed the connection (\(code))." : reason
         case .noSignInPage: "This server's passkeys work only in its own apps and website. Sign in another way."
         case .invalidSignInPage: "The server's sign-in page has an address the app can't open."
@@ -133,7 +135,11 @@ public final class ApronConnection {
     /// Texts of `message` bodies over this many UTF-8 bytes are refused as `too_large` (SPEC §6).
     public static let maxTextBytes = 4096
 
+    /// The server address, which keys `ApronHistoryHold`.
+    let url: URL
+
     public init(url: URL, session: URLSession = .shared) {
+        self.url = url
         task = session.webSocketTask(with: url)
     }
 
@@ -414,4 +420,33 @@ private struct OutgoingFrame<Params: Encodable>: Encodable {
     let method: String
     let id: String?
     let params: Params
+}
+
+/// Servers whose history refusals outlast a retry (the demo's daily limit: until UTC midnight), so no device asks
+/// again before then: a refused page is charged like one served (apron-server-cloudflare docs/limits.md), and each
+/// launch, foreground and Chats reload would otherwise spend more. Kept in UserDefaults so relaunching doesn't ask.
+@MainActor
+enum ApronHistoryHold {
+    private static let key = "apron.historyHeldUntil"
+    private static let minimum = 60
+
+    /// The refusal to throw instead of sending, while one holds.
+    static func refusal(serverURL: URL) -> ApronError? {
+        guard let entry = entries[serverURL.absoluteString],
+              let until = entry["until"] as? Double,
+              case let remaining = Int((until - Date.now.timeIntervalSince1970).rounded(.up)), remaining > 0
+        else { return nil }
+        return .limited(message: entry["message"] as? String ?? "History limit reached", retryAfter: remaining, category: "read")
+    }
+
+    static func record(_ error: Error, serverURL: URL) {
+        guard case let ApronError.limited(message, retryAfter, category) = error, retryAfter >= minimum, category ?? "read" == "read" else { return }
+        var all = entries.filter { ($0.value["until"] as? Double ?? 0) > Date.now.timeIntervalSince1970 }
+        all[serverURL.absoluteString] = ["until": Date.now.timeIntervalSince1970 + Double(retryAfter), "message": message]
+        UserDefaults.standard.set(all, forKey: key)
+    }
+
+    private static var entries: [String: [String: Any]] {
+        UserDefaults.standard.dictionary(forKey: key) as? [String: [String: Any]] ?? [:]
+    }
 }

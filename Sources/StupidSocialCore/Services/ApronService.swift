@@ -434,7 +434,15 @@ public extension ApronConnection {
 
     /// A window of a room's log with inclusive bounds: the oldest matches with `after`, otherwise the newest (§4.3.2).
     func history(roomId: String?, after: String? = nil, before: String? = nil, limit: Int) async throws -> ApronHistoryResult {
-        try await request("history", params: ApronHistoryParams(roomId: roomId, after: after, before: before, limit: limit), as: ApronHistoryResult.self)
+        if let refusal = ApronHistoryHold.refusal(serverURL: url) {
+            throw refusal
+        }
+        do {
+            return try await request("history", params: ApronHistoryParams(roomId: roomId, after: after, before: before, limit: limit), as: ApronHistoryResult.self)
+        } catch {
+            ApronHistoryHold.record(error, serverURL: url)
+            throw error
+        }
     }
 
     func joinRoom(roomId: String) async throws {
