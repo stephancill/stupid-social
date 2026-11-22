@@ -40,9 +40,8 @@ struct ChatsView: View {
     @State private var settingsAccountId: String?
     @State private var query = ""
     @State private var isSearchPresented = false
-    /// Follows `isSearchPresented`: shown a run loop later, animated (shown in the same one as the field's focus, the
-    /// filter bar popped in and the list jumped); hidden at once with the field's own transition, since while it faded
-    /// out the rows' edge shadow grew over it, then snapped back as it went.
+    /// Follows `isSearchPresented` a run loop later, animated: changed in the same one as the field's focus, the filter
+    /// bar popped in and the list jumped.
     @State private var showsFilter = false
     /// The accounts picked in the filter shown while searching; cleared when the search ends.
     @State private var filterSelection: Set<AccountFilter> = []
@@ -132,13 +131,9 @@ struct ChatsView: View {
             .hidden()
         }
         .onChange(of: isSearchPresented) { _, presented in
-            if presented {
-                Task { @MainActor in
-                    withAnimation(.smooth(duration: 0.3)) { showsFilter = true }
-                }
-            } else {
-                filterSelection = []
-                showsFilter = false
+            if !presented { filterSelection = [] }
+            Task { @MainActor in
+                withAnimation(.smooth(duration: 0.3)) { showsFilter = presented }
             }
         }
         .onChange(of: selection == nil && !isShowingArchive && settingsAccountId == nil) { _, isOnList in
@@ -809,17 +804,35 @@ private struct ChatSummaryAvatar: View {
 }
 
 private extension View {
-    /// Content pinned to the bottom, above the search bar (and the keyboard while searching), that the list scrolls
-    /// beneath, while `isShown`.
-    @ViewBuilder
+    /// Content floating at the bottom, just above the search bar (and the keyboard while searching), over the rows,
+    /// while `isShown`; the list's content makes room for it, so the last row can scroll clear of it.
     func bottomBar(isShown: Bool, @ViewBuilder content: () -> some View) -> some View {
+        modifier(BottomBar(isShown: isShown, bar: content()))
+    }
+}
+
+/// An overlay rather than a `safeAreaBar`: in the safe area the rows' edge shadow covered the bar too, and changed in a
+/// single frame as the search ended.
+private struct BottomBar<Bar: View>: ViewModifier {
+    let isShown: Bool
+    let bar: Bar
+    @State private var barHeight: CGFloat = 0
+
+    func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {
-            // Rows fade under the bar and the search field, as under the navigation bar; a bar otherwise cuts them
-            // off with a hard edge.
-            scrollEdgeEffectStyle(.soft, for: .bottom)
-                .safeAreaBar(edge: .bottom) { if isShown { content().transition(.opacity) } }
+            // Rows fade under the search field, as under the navigation bar.
+            content
+                .scrollEdgeEffectStyle(.soft, for: .bottom)
+                .contentMargins(.bottom, isShown ? barHeight : 0, for: .scrollContent)
+                .overlay(alignment: .bottom) {
+                    if isShown {
+                        bar
+                            .onGeometryChange(for: CGFloat.self, of: \.size.height) { barHeight = $0 }
+                            .transition(.opacity)
+                    }
+                }
         } else {
-            safeAreaInset(edge: .bottom, spacing: 0) { if isShown { content().background(Color(.systemBackground)) } }
+            content.safeAreaInset(edge: .bottom, spacing: 0) { if isShown { bar.background(Color(.systemBackground)) } }
         }
     }
 }
