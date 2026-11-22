@@ -28,6 +28,9 @@ public struct TelegramPushNotification: Equatable, Sendable {
         }
     }
 
+    /// The category with the inline Reply action (`ApronPushNotification.replyActionIdentifier`, shared).
+    public static let categoryIdentifier = "telegram.message"
+
     /// The notification for a push's `userInfo`, or `nil` for one that isn't from a person. `localized` formats a
     /// `loc-key` with its arguments, from the app's strings.
     public static func make(userInfo: [AnyHashable: Any], localized: (String, [String]) -> String?) -> TelegramPushNotification? {
@@ -166,6 +169,11 @@ public enum TelegramPushChat: Hashable, Sendable {
         case let .chat(id): "chat:\(id)"
         case let .channel(id): "channel:\(id)"
         }
+    }
+
+    /// The pushed message's id (`custom.msg_id`), which a reply from the notification quotes in a group.
+    public static func messageId(_ userInfo: [AnyHashable: Any]) -> Int32? {
+        id(fields(userInfo)["msg_id"]).flatMap { Int32(exactly: $0) }
     }
 
     static func fields(_ userInfo: [AnyHashable: Any]) -> [String: Any] {

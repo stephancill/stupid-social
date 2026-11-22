@@ -299,6 +299,30 @@ enum TelegramMediaParser {
         return TelegramMediaURL.make(key: "avatar-\(key)-\(photoId)\(big ? "-big" : "")", dc: Int(dc), location: location)
     }
 
+    /// A small picture of a message's photo, video, GIF or large link preview for its Chats row, as Telegram's
+    /// own list shows; `nil` for other media.
+    static func previewThumbnailURL(of message: TLObject) -> URL? {
+        guard let media = message["media"]?.object else { return nil }
+        switch media.name {
+        case "messageMediaPhoto":
+            return media["photo"]?.object.flatMap { photoURL($0, maxSide: 320)?.url }
+        case "messageMediaDocument":
+            guard let document = media["document"]?.object else { return nil }
+            let attributes = document.objects("attributes")
+            let isVisual = attributes.contains { ["documentAttributeVideo", "documentAttributeAnimated"].contains($0.name) }
+                || (document["mime_type"]?.string ?? "").hasPrefix("image/")
+            guard isVisual, !attributes.contains(where: { $0.name == "documentAttributeSticker" }),
+                  let thumb = bestSize(document.objects("thumbs"), maxSide: 320)
+            else { return nil }
+            return documentURL(document, thumbSize: thumb.type)
+        case "messageMediaWebPage":
+            guard let page = media["webpage"]?.object, page.flag("has_large_media") else { return nil }
+            return page["photo"]?.object.flatMap { photoURL($0, maxSide: 320)?.url }
+        default:
+            return nil
+        }
+    }
+
     /// What a message's media shows: embeds, and a one-line label for previews and media without a picture.
     static func content(of media: TLObject) -> (label: String?, embeds: [TelegramEmbed]) {
         switch media.name {

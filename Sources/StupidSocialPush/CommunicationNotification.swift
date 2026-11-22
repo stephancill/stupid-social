@@ -108,5 +108,6 @@ public extension TelegramPushNotification {
         content.title = title
         content.body = body
         content.threadIdentifier = "telegram|\(conversationId)"
+        content.categoryIdentifier = Self.categoryIdentifier
     }
 }

@@ -622,6 +622,7 @@ private struct ChatRow: View {
     @AppStorage("redactionEnabled") private var redactionEnabled = false
     private static let avatarSize: CGFloat = 48
     private static let spacing: CGFloat = 10
+    private static let thumbnailSize: CGFloat = 18
 
     /// The time today, the short weekday within the past week, then numeric day and month this year, adding
     /// the year before that, each in the user's locale order.
@@ -684,10 +685,24 @@ private struct ChatRow: View {
                     }
                 }
                 HStack(alignment: .top) {
-                    Text(chat.preview.map { DebugRedaction.chatPreview($0, chat: chat, enabled: redactionEnabled) } ?? chat.subtitle ?? "No messages yet")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                    HStack(alignment: .firstTextBaseline, spacing: 5) {
+                        // The latest photo or video, small before its caption, as in Telegram. Redaction hides it,
+                        // as it does the text.
+                        if let thumbnail = chat.previewThumbnailURL, chat.preview != nil, !redactionEnabled {
+                            CachedAsyncImage(url: thumbnail, persist: true) { Color(.secondarySystemFill) } failure: { Color(.secondarySystemFill) }
+                                .frame(width: Self.thumbnailSize, height: Self.thumbnailSize)
+                                .clipShape(RoundedRectangle(cornerRadius: 3))
+                                // Centered on the first line's capitals, as Telegram does, rather than its line box.
+                                .alignmentGuide(.firstTextBaseline) { dimensions in
+                                    dimensions.height / 2 + UIFont.preferredFont(forTextStyle: .subheadline).capHeight / 2
+                                }
+                                .accessibilityHidden(true)
+                        }
+                        Text(chat.preview.map { DebugRedaction.chatPreview($0, chat: chat, enabled: redactionEnabled) } ?? chat.subtitle ?? "No messages yet")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
                     Spacer(minLength: 8)
                     HStack(spacing: 4) {
                         // A heart for unseen reactions to the user's messages, beside the unread count, as in

@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         )
         center.setNotificationCategories([
             UNNotificationCategory(identifier: ApronPushNotification.categoryIdentifier, actions: [reply], intentIdentifiers: []),
+            UNNotificationCategory(identifier: TelegramPushNotification.categoryIdentifier, actions: [reply], intentIdentifiers: []),
         ])
         ChatReminderStore.startSync()
         MainActor.assumeIsolated {
@@ -83,8 +84,16 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             return
         }
         if let peer = Self.telegramPeer(content.userInfo) {
-            let opens = response.actionIdentifier == UNNotificationDefaultActionIdentifier
+            let action = response.actionIdentifier
+            let opens = action == UNNotificationDefaultActionIdentifier
+            let text = (response as? UNTextInputNotificationResponse)?.userText.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            // As in Apron: a private chat gets a plain message; in a group the reply quotes the message.
+            let replyTo = peer.kind == .user ? nil : TelegramPushChat.messageId(content.userInfo)
+            let title = content.title
             Task { @MainActor in
+                if action == ApronPushNotification.replyActionIdentifier, !text.isEmpty {
+                    await NotificationRouter.shared.sendTelegramReply(text, to: peer, replyTo: replyTo, title: title)
+                }
                 if opens {
                     AppMetrics.notificationOpened(network: .telegram)
                     NotificationRouter.shared.pendingChat = .telegram(peer: peer)
@@ -164,6 +173,8 @@ final class NotificationRouter: ObservableObject {
     /// The app's Apron service once the UI has built it. A reply that launches the app in the background,
     /// without a scene, makes its own.
     weak var apronService: ApronService?
+    /// The signed-in Telegram accounts' clients once the UI has built them.
+    var telegramClients: (() -> [(accountId: String, client: TelegramClient)])?
     weak var chatList: ChatListViewModel? {
         didSet { routeWaitingLink() }
     }
@@ -239,13 +250,7 @@ final class NotificationRouter: ObservableObject {
     func telegramChatDidOpen(_ peer: TelegramPeer) {
         let thread = Self.telegramThread(peer)
         openThreads.insert(thread)
-        Task {
-            let center = UNUserNotificationCenter.current()
-            let ids = await center.deliveredNotifications()
-                .filter { AppDelegate.telegramPeer($0.request.content.userInfo).map(Self.telegramThread) == thread }
-                .map(\.request.identifier)
-            center.removeDeliveredNotifications(withIdentifiers: ids)
-        }
+        clearTelegramNotifications(thread)
     }
 
     func telegramChatDidClose(_ peer: TelegramPeer) {
@@ -278,6 +283,60 @@ final class NotificationRouter: ObservableObject {
         // In the background, go offline again so the server keeps pushing.
         if UIApplication.shared.applicationState != .active {
             service.closeSessions(for: serverURL)
+        }
+    }
+
+    /// Sends a reply typed into a Telegram notification. The push names the chat but neither its access hash nor
+    /// the account, so the Chats list row supplies both; without one (the app launched in the background for the
+    /// reply), each signed-in account looks for the chat among its dialogs.
+    func sendTelegramReply(_ text: String, to pushed: TelegramPeer, replyTo: Int32?, title: String) async {
+        do {
+            let (client, peer) = try await telegramChat(pushed)
+            _ = try await client.send(peer: peer, text: text, replyTo: replyTo)
+            AppMetrics.notificationReplied(network: .telegram, error: nil)
+            clearTelegramNotifications(Self.telegramThread(pushed))
+        } catch {
+            AppMetrics.notificationReplied(network: .telegram, error: error)
+            let content = UNMutableNotificationContent()
+            content.title = "Reply not sent"
+            content.body = "Your reply to \(title) wasn't sent: \(error.localizedDescription)"
+            content.threadIdentifier = "telegram|\(pushed.key)"
+            try? await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+        }
+    }
+
+    enum TelegramReplyError: LocalizedError {
+        case chatNotFound
+
+        var errorDescription: String? {
+            "The chat isn't in your Telegram chats."
+        }
+    }
+
+    private func telegramChat(_ pushed: TelegramPeer) async throws -> (TelegramClient, TelegramPeer) {
+        let clients = telegramClients?() ?? AccountStore().accounts(network: .telegram).map {
+            (accountId: $0.id, client: TelegramClient(keychain: KeychainCredentialStore().scoped(to: $0.id)))
+        }
+        if let row = chatList?.chat(for: .telegram(peer: pushed)), case let .telegram(peer) = row.destination,
+           let client = clients.first(where: { $0.accountId == row.accountId })?.client
+        {
+            return (client, peer)
+        }
+        for (_, client) in clients {
+            if let peer = try? await client.listedPeer(kind: pushed.kind, id: pushed.id) {
+                return (client, peer)
+            }
+        }
+        throw TelegramReplyError.chatNotFound
+    }
+
+    private func clearTelegramNotifications(_ thread: String) {
+        Task {
+            let center = UNUserNotificationCenter.current()
+            let ids = await center.deliveredNotifications()
+                .filter { AppDelegate.telegramPeer($0.request.content.userInfo).map(Self.telegramThread) == thread }
+                .map(\.request.identifier)
+            center.removeDeliveredNotifications(withIdentifiers: ids)
         }
     }
 

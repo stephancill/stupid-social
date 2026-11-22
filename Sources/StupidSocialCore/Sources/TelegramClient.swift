@@ -983,6 +983,30 @@ public actor TelegramClient: ChatListProvider {
         )
     }
 
+    /// The chat a push names, with the access hash the push leaves out, from the newest dialogs of both folders;
+    /// `nil` when this account doesn't list it. A basic group needs no access hash.
+    public func listedPeer(kind: TelegramPeer.Kind, id: Int64) async throws -> TelegramPeer? {
+        try requireAccount()
+        if kind == .chat {
+            return TelegramPeer(kind: .chat, id: id, accessHash: 0)
+        }
+        for folder: Int32 in [0, 1] {
+            guard let result = try await invoke(TLObject("messages.getDialogs", [
+                "folder_id": .int(folder),
+                "offset_date": .int(0), "offset_id": .int(0), "offset_peer": .object(TLObject("inputPeerEmpty")), "limit": .int(100), "hash": .long(0),
+            ])).object else { continue }
+            let users = Dictionary(result.objects("users").compactMap { user in user["id"]?.long.map { ($0, user) } }, uniquingKeysWith: { $1 })
+            let chats = Dictionary(result.objects("chats").compactMap { chat in chat["id"]?.long.map { ($0, chat) } }, uniquingKeysWith: { $1 })
+            for dialog in result.objects("dialogs") {
+                guard let object = dialog["peer"]?.object, let peer = Self.peer(object, users: users, chats: chats) else { continue }
+                if peer.kind == kind, peer.id == id {
+                    return peer
+                }
+            }
+        }
+        return nil
+    }
+
     /// The main chat list (folder 0), or the Archive (folder 1), including broadcast channels. Leaving out
     /// `folder_id` returns both folders mixed.
     func chatSummaries(archived: Bool = false, limit: Int = 50, muteDefaults: TelegramMuteDefaults) async throws -> [ChatSummary] {
@@ -1018,7 +1042,12 @@ public actor TelegramClient: ChatListProvider {
             }
             let top = messages["\(Self.peerKey(peerObject)):\(dialog["top_message"]?.int ?? 0)"]
             let latest = top.map { Self.message($0, selfId: stored.account?.userId) }
-            var preview = latest?.previewText.replacingOccurrences(of: "\n", with: " ")
+            let thumbnail = top.flatMap(TelegramMediaParser.previewThumbnailURL(of:))
+            // Beside its thumbnail, a captioned photo reads as its caption, without the "Photo · " before it.
+            let labelLength = latest.map { $0.text.count - $0.caption.count } ?? 0
+            var preview = latest.map { latest in
+                thumbnail != nil && !latest.caption.isEmpty && labelLength > 0 ? String(latest.previewText.dropFirst(labelLength)) : latest.previewText
+            }?.replacingOccurrences(of: "\n", with: " ")
             if let latest, let body = preview, !latest.isService {
                 if latest.isOutgoing {
                     preview = "You: \(body)"
@@ -1035,6 +1064,7 @@ public actor TelegramClient: ChatListProvider {
                 avatarURL: TelegramMediaParser.avatarURL(photo: photo, inputPeer: peer.inputPeer, key: peer.key),
                 avatarColorKey: String(peer.id),
                 preview: preview,
+                previewThumbnailURL: thumbnail,
                 timestamp: latest?.date,
                 unreadCount: Int(dialog["unread_count"]?.int ?? 0),
                 unseenReactionCount: Int(dialog["unread_reactions_count"]?.int ?? 0),

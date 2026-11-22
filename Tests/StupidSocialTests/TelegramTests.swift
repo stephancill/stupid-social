@@ -725,6 +725,13 @@ final class TelegramTests: XCTestCase {
         XCTAssertEqual(TelegramPushChat(userInfo: userInfo), .user(42))
     }
 
+    /// A reply from the notification quotes the pushed message in a group.
+    func testPushMessageIdIsReadFromCustomOrTopLevel() {
+        XCTAssertEqual(TelegramPushChat.messageId(["custom": ["chat_id": "9", "msg_id": "1759117"]]), 1_759_117)
+        XCTAssertEqual(TelegramPushChat.messageId(["from_id": 42, "msg_id": 7]), 7)
+        XCTAssertNil(TelegramPushChat.messageId(["from_id": 42]))
+    }
+
     func testApronPushIsNotTelegram() {
         XCTAssertNil(TelegramPushChat(userInfo: ["apron": ["server": "https://example.com"], "from_id": "1"]))
         XCTAssertNil(TelegramPushChat(userInfo: ["webpush": "abc"]))

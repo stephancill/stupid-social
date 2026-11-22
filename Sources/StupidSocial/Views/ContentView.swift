@@ -149,6 +149,9 @@ public struct ContentView: View {
         container = appContainer
         NotificationRouter.shared.apronService = appContainer.apronService
         NotificationRouter.shared.chatList = appContainer.chatListViewModel
+        NotificationRouter.shared.telegramClients = { [services = appContainer.services] in
+            services.components.compactMap { component in component.telegramClient.map { (accountId: component.accountId, client: $0) } }
+        }
         appContainer.startLiveFeeds()
         if ChatControlServer.isAvailable {
             _ = appContainer.chatControlServer
