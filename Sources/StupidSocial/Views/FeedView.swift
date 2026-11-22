@@ -1295,8 +1295,8 @@ private struct SettingsToolbarIcon: View {
     }
 }
 
-private extension View {
-    /// Content fades under the bar as on Chats; the feed's list otherwise gets a hard edge.
+extension View {
+    /// Content fades under the navigation bar (the feed, Chats); a plain list otherwise gets a hard edge.
     @ViewBuilder
     func softScrollEdge() -> some View {
         if #available(iOS 26.0, *) {

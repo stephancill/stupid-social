@@ -79,6 +79,7 @@ struct ChatsView: View {
             }
         }
         .listStyle(.plain)
+        .softScrollEdge()
         // At the bottom, as in Messages, with the account filter just above the field while searching rather than a row
         // in the list: inserting a row as the search field activated cancelled the search.
         .bottomSearchBar(text: $query, isPresented: $isSearchPresented, prompt: "Search Chats", showsAccessory: hasAppeared && showsFilter) {
