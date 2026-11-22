@@ -215,7 +215,7 @@ struct FeedView: View {
         }
         .fullScreenCover(isPresented: $showingStoryComposer) {
             StoryComposerView(onMentionSearch: { query in
-                await viewModel.service.searchProfiles(query: query).filter { $0.network == .instagram }
+                await viewModel.service.searchProfiles(query: query, networks: [.instagram])
             }) { imageData, width, height, mimeType, mentions, closeFriends in
                 try await storyViewModel.postInstagramStory(imageData: imageData, width: width, height: height, mimeType: mimeType, mentions: mentions, closeFriends: closeFriends)
             }

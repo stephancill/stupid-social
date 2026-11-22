@@ -8,8 +8,7 @@ enum AccountFilter: Hashable {
 }
 
 /// A Reminders pill, then one pill per account with items, most first. The list shows what any selected pill
-/// matches. While any is selected, a clear button floats at the trailing edge, and the row scrolls far enough
-/// that the last pill clears it.
+/// matches.
 struct AccountFilterBar: View {
     /// Accounts with items in the list, most first (ties keep the accounts' order), and any selected one so it
     /// can be turned off.
@@ -29,69 +28,186 @@ struct AccountFilterBar: View {
     let accounts: [Account]
     let showsReminders: Bool
     @Binding var selection: Set<AccountFilter>
-    /// Floating over a list that scrolls beneath it (Chats), where see-through bordered pills would be illegible:
-    /// the pills are glass on an opaque backing instead, and the filter icon, with nothing behind it, is left out.
-    var isFloating = false
     @AppStorage("redactionEnabled") private var redactionEnabled = false
-    @ScaledMetric(relativeTo: .subheadline) private var clearButtonSize: CGFloat = 20
-    /// The clear button's drawn width, including its style's padding, which the trailing margin makes room for.
-    @State private var clearButtonWidth: CGFloat = 0
 
+    var body: some View {
+        FilterPillBar(selection: $selection) {
+            if showsReminders {
+                FilterPill(filter: .reminders, selection: $selection) {
+                    Image(systemName: "bell")
+                        .frame(width: 16, height: 16)
+                    Text("Reminders")
+                }
+            }
+            ForEach(accounts) { account in
+                FilterPill(filter: .account(account.id), selection: $selection) {
+                    // Bluesky's blue butterfly would vanish on the selected pill's blue.
+                    let isSelected = selection.contains(.account(account.id))
+                    NetworkBadgeIcon(network: account.network, size: 16, tint: isSelected && account.network == .bluesky ? .white : nil)
+                    Text(name(for: account))
+                }
+            }
+        }
+    }
+
+    private func name(for account: Account) -> String {
+        let name = settingsViewModel.name(for: account)
+        return redactionEnabled && name.hasPrefix("@") ? "Redacted" : name
+    }
+}
+
+/// One pill per network (Search's networks to search).
+struct NetworkFilterBar: View {
+    let networks: [SocialNetwork]
+    @Binding var selection: Set<SocialNetwork>
+
+    var body: some View {
+        FilterPillBar(selection: $selection) {
+            ForEach(networks, id: \.self) { network in
+                FilterPill(filter: network, selection: $selection) {
+                    NetworkBadgeIcon(network: network, size: 16, tint: selection.contains(network) && network == .bluesky ? .white : nil)
+                        .accessibilityHidden(true)
+                    Text(network.displayName)
+                }
+            }
+        }
+    }
+}
+
+/// A horizontally scrolling row of `FilterPill`s under a circle that stays at the leading edge: a filter icon, or
+/// while any pill is selected, the clear button.
+///
+/// A tap selects one pill in place of the others. A long press adds a pill to the selection instead, and from then on
+/// taps add and remove pills, until the clear button (or turning the last one off) ends it. Meanwhile the clear
+/// button carries a badge with how many are selected.
+struct FilterPillBar<Filter: Hashable, Pills: View>: View {
+    @Binding var selection: Set<Filter>
+    @State private var isMultipleSelecting = false
+    @ScaledMetric(relativeTo: .subheadline) private var clearButtonSize: CGFloat = 20
+    /// The leading circle's drawn width, including its style's padding, which the pills start after.
+    @State private var circleWidth: CGFloat = 0
+
+    @ViewBuilder let pills: () -> Pills
     private let edgeMargin: CGFloat = 16
     private let spacing: CGFloat = 8
 
     var body: some View {
-        let isFiltering = !selection.isEmpty
-
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: spacing) {
-                if !isFloating {
-                    Image(systemName: "line.3.horizontal.decrease")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .accessibilityHidden(true)
-                }
-
-                if showsReminders {
-                    pill(for: .reminders) {
-                        Image(systemName: "bell")
-                            .frame(width: 16, height: 16)
-                        Text("Reminders")
-                    }
-                }
-                ForEach(accounts) { account in
-                    pill(for: .account(account.id)) {
-                        // Bluesky's blue butterfly would vanish on the selected pill's blue.
-                        let isSelected = selection.contains(.account(account.id))
-                        NetworkBadgeIcon(network: account.network, size: 16, tint: isSelected && account.network == .bluesky ? .white : nil)
-                        Text(name(for: account))
-                    }
-                }
+                pills()
             }
+            .environment(\.isMultipleFilterSelecting, $isMultipleSelecting)
         }
-        .contentMargins(.leading, edgeMargin, for: .scrollContent)
-        .contentMargins(.trailing, isFiltering ? edgeMargin + clearButtonWidth + spacing : edgeMargin, for: .scrollContent)
-        .overlay(alignment: .trailing) {
-            if isFiltering {
-                clearButton
-                    .onGeometryChange(for: CGFloat.self, of: \.size.width) { clearButtonWidth = $0 }
-                    .padding(.trailing, edgeMargin)
+        .contentMargins(.leading, edgeMargin + circleWidth + spacing, for: .scrollContent)
+        .contentMargins(.trailing, edgeMargin, for: .scrollContent)
+        // Pills scrolled back slide under the circle and end there, rather than showing again beside it.
+        .mask { Rectangle().padding(.leading, edgeMargin + circleWidth / 2) }
+        .overlay(alignment: .leading) {
+            Group {
+                if selection.isEmpty {
+                    filterIcon
+                } else {
+                    clearButton
+                }
             }
+            .onGeometryChange(for: CGFloat.self, of: \.size.width) { circleWidth = $0 }
+            .padding(.leading, edgeMargin)
         }
         .padding(.vertical, 6)
+        .onChange(of: selection.count, initial: true) { _, count in
+            // A selection of several kept from before is still one; an emptied one is single again.
+            if count > 1 {
+                isMultipleSelecting = true
+            } else if count == 0 {
+                isMultipleSelecting = false
+            }
+        }
         .listRowInsets(EdgeInsets())
         .listRowSeparator(.hidden)
         .listRowBackground(Color.clear)
     }
 
+    private var clearButton: some View {
+        styledClearButton
+            .overlay(alignment: .topTrailing) {
+                if isMultipleSelecting {
+                    Text(selection.count, format: .number)
+                        .font(.caption2.weight(.bold))
+                        .monospacedDigit()
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 5)
+                        .frame(minWidth: 18, minHeight: 18)
+                        .background(Color.accentColor, in: Capsule())
+                        .offset(x: 6, y: -6)
+                        .accessibilityHidden(true)
+                }
+            }
+            .accessibilityValue(isMultipleSelecting ? "\(selection.count) selected" : "")
+    }
+
+    private var styledClearButton: some View {
+        circleButton(systemImage: "xmark") {
+            selection = []
+            isMultipleSelecting = false
+        }
+        .accessibilityLabel("Clear Filter")
+    }
+
+    /// Drawn as a button so its circle is the clear button's, size and glass alike; it does nothing.
+    private var filterIcon: some View {
+        circleButton(systemImage: "line.3.horizontal.decrease") {}
+            .foregroundStyle(.secondary)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+
+    /// A glass circle on an opaque backing, so it reads over a list scrolling beneath the bar (Chats).
     @ViewBuilder
-    private func pill(for filter: AccountFilter, @ViewBuilder label: () -> some View) -> some View {
+    private func circleButton(systemImage: String, action: @escaping () -> Void) -> some View {
+        let button = Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.subheadline.weight(.semibold))
+                .frame(width: clearButtonSize, height: clearButtonSize)
+        }
+        .buttonBorderShape(.circle)
+        if #available(iOS 26.0, *) {
+            button.buttonStyle(.glass).background(Color(.systemBackground), in: Circle())
+        } else {
+            button.buttonStyle(.bordered).tint(.secondary).background(.background, in: Circle())
+        }
+    }
+}
+
+extension EnvironmentValues {
+    /// Whether a `FilterPillBar`'s pills add to the selection rather than replace it, set by a long press.
+    @Entry var isMultipleFilterSelecting: Binding<Bool> = .constant(false)
+}
+
+/// A pill that selects `filter` alone, or toggles it in the selection while its bar selects several, prominent while
+/// selected. A long press starts selecting several, with this pill added.
+struct FilterPill<Filter: Hashable, Label: View>: View {
+    let filter: Filter
+    @Binding var selection: Set<Filter>
+    @ViewBuilder let label: () -> Label
+    @Environment(\.isMultipleFilterSelecting) private var isMultipleSelecting
+    /// When a long press last selected this pill. The button's action can also run as the press lifts, which would
+    /// undo it, so a tap straight after is ignored; whether it runs varies, so a flag could swallow a later tap.
+    @State private var longPressedAt: Date?
+    @State private var longPressCount = 0
+
+    var body: some View {
         let isSelected = selection.contains(filter)
         let button = Button {
-            if isSelected {
-                selection.remove(filter)
+            if let longPressedAt, Date().timeIntervalSince(longPressedAt) < 1 {
+                return
+            } else if isMultipleSelecting.wrappedValue {
+                if isSelected {
+                    selection.remove(filter)
+                } else {
+                    selection.insert(filter)
+                }
             } else {
-                selection.insert(filter)
+                selection = isSelected && selection.count == 1 ? [] : [filter]
             }
         } label: {
             HStack(spacing: 6) {
@@ -101,10 +217,17 @@ struct AccountFilterBar: View {
             .font(.subheadline)
         }
         .buttonBorderShape(.capsule)
+        .simultaneousGesture(LongPressGesture().onEnded { _ in
+            longPressedAt = Date()
+            selectSeveral()
+        })
+        .sensoryFeedback(.selection, trigger: longPressCount)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .accessibilityAction(named: "Select Several") { selectSeveral() }
 
-        if #available(iOS 26.0, *), isFloating {
-            // Glass alone still shows the rows' text through it; an opaque backing keeps the label readable.
+        if #available(iOS 26.0, *) {
+            // Glass, like the search field and clear button; on an opaque backing, since where the bar floats over a
+            // list (Chats) glass alone showed the rows' text through the label.
             Group {
                 if isSelected {
                     button.buttonStyle(.glassProminent)
@@ -120,26 +243,9 @@ struct AccountFilterBar: View {
         }
     }
 
-    @ViewBuilder
-    private var clearButton: some View {
-        let button = Button {
-            selection = []
-        } label: {
-            Image(systemName: "xmark")
-                .font(.subheadline.weight(.semibold))
-                .frame(width: clearButtonSize, height: clearButtonSize)
-        }
-        .buttonBorderShape(.circle)
-        .accessibilityLabel("Clear Filter")
-        if #available(iOS 26.0, *) {
-            button.buttonStyle(.glass).background(Color(.systemBackground), in: Circle())
-        } else {
-            button.buttonStyle(.bordered).tint(.secondary).background(.background, in: Circle())
-        }
-    }
-
-    private func name(for account: Account) -> String {
-        let name = settingsViewModel.name(for: account)
-        return redactionEnabled && name.hasPrefix("@") ? "Redacted" : name
+    private func selectSeveral() {
+        isMultipleSelecting.wrappedValue = true
+        selection.insert(filter)
+        longPressCount += 1
     }
 }

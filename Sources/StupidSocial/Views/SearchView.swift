@@ -4,14 +4,30 @@ import SwiftUI
 struct SearchView: View {
     @ObservedObject var viewModel: ProfileSearchViewModel
     @AppStorage("redactionEnabled") private var redactionEnabled = false
-
-    private static let searchNetworks: [SocialNetwork] = [
-        .x, .instagram, .farcaster, .spotify, .bluesky,
-    ]
+    /// Whether the search field is focused; the network pills show (and apply) only then.
+    @State private var isSearchPresented = false
+    /// Follows `isSearchPresented` with an animation of its own: the field's focus changes without one, so the
+    /// pills appeared at once and the navigation bar then slid the field up over them.
+    @State private var showsFilter = false
 
     var body: some View {
+        let showsRecents = viewModel.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !viewModel.filteredRecentProfiles.isEmpty
+
         List {
-            if viewModel.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !viewModel.recentProfiles.isEmpty {
+            // A row rather than a bar pinned under the field: any top `safeAreaBar`, even one with no height, made the
+            // rows jump instead of sliding up with the field as the search took focus.
+            if showsFilter, viewModel.searchableNetworks.count > 1 {
+                // A header rather than a row, which the inset-grouped card clipped at its edge; out by the header's
+                // inset, so the pills scroll to the screen's edges and line up with the search field.
+                Section {} header: {
+                    NetworkFilterBar(networks: viewModel.searchableNetworks, selection: $viewModel.selectedNetworks)
+                        .textCase(nil)
+                        .padding(.horizontal, -16)
+                        .modifier(FadesInOnAppear())
+                }
+                .listSectionSpacing(.compact)
+            }
+            if showsRecents {
                 recentSection
             } else if viewModel.filteredResults.isEmpty {
                 emptyState
@@ -37,13 +53,19 @@ struct SearchView: View {
         #if os(iOS)
         .listStyle(.insetGrouped)
         #endif
+        .contentMargins(.top, 0, for: .scrollContent)
         .navigationTitle("Search")
         // Under the title, as in Chats: the field `.automatic` floats at the bottom stayed under the keyboard in the
         // home pager, whose pages don't follow the keyboard themselves (`HomePagerController`).
-        .searchBar(text: $viewModel.query, placement: .navigationBarDrawer(displayMode: .always))
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                filterMenu
+        .searchBar(text: $viewModel.query, isPresented: $isSearchPresented, placement: .navigationBarDrawer(displayMode: .always))
+        .onAppear { viewModel.refreshSearchableNetworks() }
+        // The pills are gone once the search ends, so a filter left on would hide recents with nothing to show why.
+        .onChange(of: isSearchPresented) { _, presented in
+            if !presented { viewModel.selectedNetworks = [] }
+            // On the next turn of the run loop: changed in the same one as the field's own transition, the row's
+            // removal wasn't animated, so the rows jumped up by its height.
+            Task { @MainActor in
+                withAnimation(.smooth(duration: 0.3)) { showsFilter = presented }
             }
         }
         .onChange(of: viewModel.query) { _, _ in
@@ -54,7 +76,7 @@ struct SearchView: View {
     /// Profiles opened from search, while the field is empty: swipe one away, or clear them all.
     private var recentSection: some View {
         Section {
-            ForEach(viewModel.recentProfiles) { recent in
+            ForEach(viewModel.filteredRecentProfiles) { recent in
                 NavigationLink {
                     ProfileDetailView(actor: recent.actor, feedService: viewModel.service, initialProfile: recent.profile)
                         .onAppear { viewModel.recordVisit(recent.profile) }
@@ -63,7 +85,7 @@ struct SearchView: View {
                 }
             }
             .onDelete { offsets in
-                for recent in offsets.map({ viewModel.recentProfiles[$0] }) {
+                for recent in offsets.map({ viewModel.filteredRecentProfiles[$0] }) {
                     viewModel.removeRecent(recent)
                 }
             }
@@ -78,16 +100,6 @@ struct SearchView: View {
         }
     }
 
-    private var filterMenu: some View {
-        Menu {
-            ForEach(Self.searchNetworks, id: \.self) { network in
-                Toggle(network.displayName, isOn: networkBinding(network))
-            }
-        } label: {
-            Image(systemName: "line.3.horizontal.decrease")
-        }
-    }
-
     @ViewBuilder
     private var emptyState: some View {
         if viewModel.isSearching {
@@ -97,7 +109,7 @@ struct SearchView: View {
             ContentUnavailableView(
                 "No Results",
                 systemImage: "person.crop.circle.badge.questionmark",
-                description: Text("No matching profiles on the networks you chose."),
+                description: Text("No matching profiles on the selected networks."),
             )
             .frame(minHeight: 320)
         } else if let errorMessage = viewModel.errorMessage {
@@ -124,19 +136,6 @@ struct SearchView: View {
             username: profile.username,
             displayName: profile.displayName,
             avatarURL: profile.avatarURL,
-        )
-    }
-
-    private func networkBinding(_ network: SocialNetwork) -> Binding<Bool> {
-        Binding(
-            get: { viewModel.enabledNetworks.contains(network) },
-            set: { enabled in
-                if enabled {
-                    viewModel.enabledNetworks.insert(network)
-                } else {
-                    viewModel.enabledNetworks.remove(network)
-                }
-            },
         )
     }
 }
@@ -206,5 +205,21 @@ private struct ProfileSearchRow: View {
     private var initial: String {
         let value = profile.username ?? profile.displayName ?? profile.id
         return value.first.map { String($0).uppercased() } ?? "?"
+    }
+}
+
+/// Fades its content in once it has appeared: a list's section header shows at once, without the insertion's
+/// transition, over the rows below as they move down to make room; an animation started in `onAppear` itself was
+/// dropped.
+private struct FadesInOnAppear: ViewModifier {
+    @State private var isShown = false
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(isShown ? 1 : 0)
+            .task {
+                try? await Task.sleep(for: .milliseconds(150))
+                withAnimation(.smooth(duration: 0.25)) { isShown = true }
+            }
     }
 }

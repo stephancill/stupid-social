@@ -230,8 +230,21 @@ public final class FeedService {
         return try await source.fetchProfilePosts(id: lookupId, cursor: cursor, count: count)
     }
 
+    /// The networks whose sources search profiles; the others' sources return none.
+    public static let profileSearchNetworks: [SocialNetwork] = [.x, .instagram, .farcaster, .spotify, .bluesky]
+
+    /// The searchable networks with a connected account, in the accounts' order.
+    public func searchableNetworks() -> [SocialNetwork] {
+        var networks: [SocialNetwork] = []
+        for sources in accountSources() where sources.profiles != nil && Self.profileSearchNetworks.contains(sources.network) && !networks.contains(sources.network) {
+            networks.append(sources.network)
+        }
+        return networks
+    }
+
     /// Searches with each network's first account, so a network with several accounts lists each person once.
-    public func searchProfiles(query: String) async -> [NetworkProfile] {
+    /// `networks` limits the search (and its requests) to those networks; nil searches every one.
+    public func searchProfiles(query: String, networks: Set<SocialNetwork>? = nil) async -> [NetworkProfile] {
         let normalized = String(query
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingPrefix("@"))
@@ -240,7 +253,8 @@ public final class FeedService {
         var searched = Set<SocialNetwork>()
         var profiles: [NetworkProfile] = []
         for sources in accountSources() {
-            guard let source = sources.profiles, searched.insert(sources.network).inserted else { continue }
+            guard let source = sources.profiles, networks?.contains(sources.network) ?? true,
+                  searched.insert(sources.network).inserted else { continue }
             do {
                 try await profiles.append(contentsOf: source.searchProfiles(query: normalized).map { profile in
                     var profile = profile

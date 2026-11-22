@@ -40,6 +40,10 @@ struct ChatsView: View {
     @State private var settingsAccountId: String?
     @State private var query = ""
     @State private var isSearchPresented = false
+    /// Follows `isSearchPresented`: shown a run loop later, animated (shown in the same one as the field's focus, the
+    /// filter bar popped in and the list jumped); hidden at once with the field's own transition, since while it faded
+    /// out the rows' edge shadow grew over it, then snapped back as it went.
+    @State private var showsFilter = false
     /// The accounts picked in the filter shown while searching; cleared when the search ends.
     @State private var filterSelection: Set<AccountFilter> = []
     /// With the search bar in the navigation bar's drawer, rows present while the bar first lays out start the
@@ -78,8 +82,8 @@ struct ChatsView: View {
         .listStyle(.plain)
         // Just above the search bar at the bottom, rather than a row in the list: inserting a row as the search field
         // activated cancelled the search.
-        .bottomBar(isShown: hasAppeared && isSearchPresented) {
-            AccountFilterBar(settingsViewModel: settingsViewModel, accounts: filterAccounts, showsReminders: false, selection: $filterSelection, isFloating: true)
+        .bottomBar(isShown: hasAppeared && showsFilter) {
+            AccountFilterBar(settingsViewModel: settingsViewModel, accounts: filterAccounts, showsReminders: false, selection: $filterSelection)
         }
         .overlay {
             if filteredChats.isEmpty, !query.isEmpty {
@@ -115,6 +119,9 @@ struct ChatsView: View {
         }
         // At the bottom, as in Messages.
         .searchBar(text: $query, isPresented: $isSearchPresented, prompt: "Search Chats")
+        // The field is at the bottom, so the title and toolbar can stay: hidden as the search took focus (and shown as
+        // it ended), they went at once and the list jumped by their height.
+        .searchPresentationToolbarBehavior(.avoidHidingContent)
         .background {
             // Command-K and Command-F search the list with a hardware keyboard (a Mac, an iPad).
             ForEach(["k", "f"] as [KeyEquivalent], id: \.character) { key in
@@ -125,7 +132,14 @@ struct ChatsView: View {
             .hidden()
         }
         .onChange(of: isSearchPresented) { _, presented in
-            if !presented { filterSelection = [] }
+            if presented {
+                Task { @MainActor in
+                    withAnimation(.smooth(duration: 0.3)) { showsFilter = true }
+                }
+            } else {
+                filterSelection = []
+                showsFilter = false
+            }
         }
         .onChange(of: selection == nil && !isShowingArchive && settingsAccountId == nil) { _, isOnList in
             isShowingChat = !isOnList
@@ -803,7 +817,7 @@ private extension View {
             // Rows fade under the bar and the search field, as under the navigation bar; a bar otherwise cuts them
             // off with a hard edge.
             scrollEdgeEffectStyle(.soft, for: .bottom)
-                .safeAreaBar(edge: .bottom) { if isShown { content() } }
+                .safeAreaBar(edge: .bottom) { if isShown { content().transition(.opacity) } }
         } else {
             safeAreaInset(edge: .bottom, spacing: 0) { if isShown { content().background(Color(.systemBackground)) } }
         }
