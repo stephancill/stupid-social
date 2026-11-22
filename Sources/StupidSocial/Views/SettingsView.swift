@@ -19,24 +19,26 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section {
-                ForEach(viewModel.accounts) { account in
+                // While any account needs reconnecting, only those show here; the rest are a push away.
+                let invalidAccounts = viewModel.accounts.filter { viewModel.status(for: $0.id) == .invalidCredentials }
+                ForEach(invalidAccounts.isEmpty ? viewModel.accounts : invalidAccounts) { account in
+                    SettingsAccountLink(viewModel: viewModel, apronServersViewModel: apronServersViewModel, account: account)
+                }
+
+                if !invalidAccounts.isEmpty {
                     NavigationLink {
-                        AccountDetailView(viewModel: viewModel, apronServersViewModel: apronServersViewModel, accountId: account.id)
+                        AllAccountsView(viewModel: viewModel, apronServersViewModel: apronServersViewModel)
                     } label: {
-                        let label = viewModel.connectionLabel(for: account)
-                        // Only beside a name, not a status such as "Invalid credentials"; an Apron server only with its own icon.
-                        let showsAvatar = account.network == .apron
-                            ? viewModel.status(for: account.id) != .invalidCredentials && viewModel.rowAvatarURL(for: account) != nil
-                            : label == account.label
-                        AccountRow(
-                            network: account.network,
-                            subtitle: redacted(label),
-                            isInvalid: viewModel.status(for: account.id) == .invalidCredentials,
-                            avatar: showsAvatar ? AccountAvatar(
-                                url: redactionEnabled ? nil : viewModel.rowAvatarURL(for: account),
-                                name: redacted(label),
-                            ) : nil,
-                        )
+                        HStack {
+                            Text("All Accounts")
+                            Spacer()
+                            // Each network with a connected account, once, in account order.
+                            let connected = viewModel.accounts
+                                .filter { viewModel.status(for: $0.id) != .invalidCredentials }
+                                .map(\.network)
+                                .reduce(into: [SocialNetwork]()) { if !$0.contains($1) { $0.append($1) } }
+                            NetworkBadgeStack(networks: connected)
+                        }
                     }
                 }
 
@@ -148,6 +150,117 @@ struct SettingsView: View {
             if !enabled {
                 onClearDemoData?()
             }
+        }
+    }
+}
+
+/// Up to five network badges overlapping, each ringed in the row's colour, then "+N" for the rest.
+private struct NetworkBadgeStack: View {
+    let networks: [SocialNetwork]
+    private let limit = 5
+    private let size: CGFloat = 20
+
+    var body: some View {
+        HStack(spacing: -size / 3) {
+            ForEach(networks.prefix(limit), id: \.self) { network in
+                ringed(NetworkBadgeIcon(network: network, size: size))
+            }
+            if networks.count > limit {
+                ringed(
+                    Text("+\(networks.count - limit)")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: size, height: size)
+                        .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: size / 4, style: .continuous)),
+                )
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(networks.map(\.displayName).formatted(.list(type: .and)))
+    }
+
+    private func ringed(_ badge: some View) -> some View {
+        badge
+            .padding(1.5)
+            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: size / 4 + 1.5, style: .continuous))
+    }
+}
+
+/// Every account, from Settings while some need reconnecting and the Accounts section shows only those.
+private struct AllAccountsView: View {
+    @ObservedObject var viewModel: SettingsViewModel
+    @ObservedObject var apronServersViewModel: ApronServersViewModel
+    @State private var query = ""
+    @State private var selectedNetworks: Set<SocialNetwork> = []
+
+    /// Each network with an account, once, in account order.
+    private var networks: [SocialNetwork] {
+        viewModel.accounts.map(\.network).reduce(into: []) { if !$0.contains($1) { $0.append($1) } }
+    }
+
+    /// Accounts on a selected network (any, with none selected) whose network, name or status contains the query.
+    private var accounts: [Account] {
+        let query = query.trimmingCharacters(in: .whitespaces)
+        return viewModel.accounts.filter { account in
+            (selectedNetworks.isEmpty || selectedNetworks.contains(account.network))
+                && (query.isEmpty || [account.network.displayName, viewModel.name(for: account), viewModel.connectionLabel(for: account)]
+                    .contains { $0.localizedStandardContains(query) })
+        }
+    }
+
+    var body: some View {
+        Form {
+            if networks.count > 1 {
+                // A header rather than a row, as in Search: out by the header's inset, so the pills scroll to the
+                // screen's edges and line up with the search field.
+                Section {} header: {
+                    NetworkFilterBar(networks: networks, selection: $selectedNetworks)
+                        .textCase(nil)
+                        .padding(.horizontal, -16)
+                }
+                .listSectionSpacing(.compact)
+            }
+            Section {
+                ForEach(accounts) { account in
+                    SettingsAccountLink(viewModel: viewModel, apronServersViewModel: apronServersViewModel, account: account)
+                }
+            }
+        }
+        .overlay {
+            if accounts.isEmpty {
+                ContentUnavailableView.search(text: query)
+            }
+        }
+        .searchBar(text: $query, placement: .navigationBarDrawer(displayMode: .always))
+        .navigationTitle("Accounts")
+    }
+}
+
+/// An account's row in Settings, pushing its detail.
+private struct SettingsAccountLink: View {
+    @ObservedObject var viewModel: SettingsViewModel
+    @ObservedObject var apronServersViewModel: ApronServersViewModel
+    let account: Account
+    @AppStorage("redactionEnabled") private var redactionEnabled = false
+
+    var body: some View {
+        NavigationLink {
+            AccountDetailView(viewModel: viewModel, apronServersViewModel: apronServersViewModel, accountId: account.id)
+        } label: {
+            let label = viewModel.connectionLabel(for: account)
+            // Only beside a name, not a status such as "Invalid credentials"; an Apron server only with its own icon.
+            let showsAvatar = account.network == .apron
+                ? viewModel.status(for: account.id) != .invalidCredentials && viewModel.rowAvatarURL(for: account) != nil
+                : label == account.label
+            AccountRow(
+                network: account.network,
+                subtitle: redacted(label),
+                isInvalid: viewModel.status(for: account.id) == .invalidCredentials,
+                avatar: showsAvatar ? AccountAvatar(
+                    url: redactionEnabled ? nil : viewModel.rowAvatarURL(for: account),
+                    name: redacted(label),
+                ) : nil,
+            )
         }
     }
 
