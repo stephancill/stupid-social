@@ -406,8 +406,11 @@ final class HomeTitleStripView: UIView {
     /// Whether taps on its titles switch pages: only while the row shows. A screen pushed over the page leaves the strip
     /// in the window under it, so tapping Search's field, where "Chats" sits on the Notifications page, switched to
     /// Chats with Search still open; and a collapsed title's strip is hidden in the bar.
+    /// The other page stays loaded beside the visible one, and its strip draws the row back across the screen, so its
+    /// titles sat under the visible page's controls too: only the page mostly on screen takes taps.
     var takesTaps: Bool {
-        guard window != nil, (largeTitleView?.alpha ?? 1) > 0 else { return false }
+        guard window != nil, (largeTitleView?.alpha ?? 1) > 0,
+              let pageIndex, model.visibility(ofPage: pageIndex) >= 0.5 else { return false }
         let navigation = sequence(first: next, next: { $0?.next }).lazy.compactMap { $0 as? UINavigationController }.first
         return (navigation?.viewControllers.count ?? 1) <= 1
     }

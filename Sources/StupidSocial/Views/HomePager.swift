@@ -240,9 +240,10 @@ final class HomePagerController: UIViewController {
 }
 
 extension HomePagerController: UIGestureRecognizerDelegate {
-    /// Only touches on a title, alongside whatever else is handling them.
+    /// Only touches on a title, alongside whatever else is handling them, and never while paging is off: a screen is
+    /// pushed over the visible page then, with its own controls where the titles were.
     func gestureRecognizer(_: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-        titles.titleIndex(at: touch.location(in: view), in: view) != nil
+        scrollView?.isScrollEnabled != false && titles.titleIndex(at: touch.location(in: view), in: view) != nil
     }
 
     func gestureRecognizer(_: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith _: UIGestureRecognizer) -> Bool {
