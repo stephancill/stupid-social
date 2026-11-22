@@ -75,8 +75,6 @@ struct SettingsView: View {
                 }
             }
 
-            ChatStorageSection()
-
             Section {
                 Button {
                     openURL(URL(string: "https://stupidtech.net")!)
@@ -108,20 +106,14 @@ struct SettingsView: View {
                     }
             }
 
-            // Styled like the page's other section titles, with a Mail-style disclosure chevron.
+            // Advanced is a group of sections: the first carries the header, styled like the page's other section
+            // titles with a Mail-style disclosure chevron, and the rest show only while it's expanded.
             Section {
                 if showsAdvanced {
                     Toggle("Share Usage Data", isOn: $sharesUsageData)
                         .onChange(of: sharesUsageData) { _, enabled in
                             AppMetrics.isEnabled = enabled
                         }
-                    Text("Sends anonymous usage counts, errors and crash reports to Stupid Tech to improve the app. Never includes your accounts, messages or notifications.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-
-                    if let chatControlServer {
-                        ChatControlRows(server: chatControlServer)
-                    }
                 }
             } header: {
                 Button {
@@ -137,6 +129,18 @@ struct SettingsView: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
+            } footer: {
+                if showsAdvanced {
+                    Text("Sends anonymous usage counts, errors and crash reports to Stupid Tech to improve the app. Never includes your accounts, messages or notifications.")
+                }
+            }
+
+            if showsAdvanced {
+                ChatStorageSection()
+
+                if let chatControlServer {
+                    ChatControlSection(server: chatControlServer)
+                }
             }
         }
         .navigationTitle("Settings")
@@ -271,41 +275,41 @@ private struct SettingsAccountLink: View {
 }
 
 /// Turns on the `stupid-social` command line and shows the token it pairs with.
-private struct ChatControlRows: View {
+private struct ChatControlSection: View {
     @ObservedObject var server: ChatControlServer
     @State private var isConfirmingReset = false
 
     var body: some View {
-        Toggle("Command-Line Access", isOn: $server.isEnabled)
-        if server.isEnabled {
-            LabeledContent("Token") {
-                Text(server.token)
-                    .textSelection(.enabled)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-            Button("Copy Pairing Command") {
-                UIPasteboard.general.string = "stupid-social pair \(server.token)"
-            }
-            Button("Reset Token", role: .destructive) {
-                isConfirmingReset = true
-            }
-            .confirmationDialog("Reset the token?", isPresented: $isConfirmingReset, titleVisibility: .visible) {
-                Button("Reset Token", role: .destructive) {
-                    server.resetToken()
+        Section {
+            Toggle("Command-Line Access", isOn: $server.isEnabled)
+            if server.isEnabled {
+                LabeledContent("Token") {
+                    Text(server.token)
+                        .textSelection(.enabled)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                 }
-            } message: {
-                Text("The command line stops working until you pair it again.")
+                Button("Copy Pairing Command") {
+                    UIPasteboard.general.string = "stupid-social pair \(server.token)"
+                }
+                Button("Reset Token", role: .destructive) {
+                    isConfirmingReset = true
+                }
+                .confirmationDialog("Reset the token?", isPresented: $isConfirmingReset, titleVisibility: .visible) {
+                    Button("Reset Token", role: .destructive) {
+                        server.resetToken()
+                    }
+                } message: {
+                    Text("The command line stops working until you pair it again.")
+                }
             }
-        }
-        if let error = server.error {
-            Text(error)
-                .font(.footnote)
-                .foregroundStyle(.red)
-        } else {
-            Text("Lets the stupid-social command read and send your chats while the app is open, on port \(String(ChatControlServer.port)) of this Mac. Anything with the token can act as you.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+        } footer: {
+            if let error = server.error {
+                Text(error)
+                    .foregroundStyle(.red)
+            } else {
+                Text("Lets the stupid-social command read and send your chats while the app is open, on port \(String(ChatControlServer.port)) of this Mac. Anything with the token can act as you.")
+            }
         }
     }
 }
@@ -520,8 +524,8 @@ struct AccountDetailView: View {
 }
 
 /// How much space chats' history takes on this device, and clearing it, after a confirmation. Chats load from the
-/// networks again when opened or loaded ahead.
-struct ChatStorageSection: View {
+/// networks again when opened or loaded ahead. One of Settings' Advanced sections.
+private struct ChatStorageSection: View {
     @State private var size = ChatKit.store.size
     @State private var isConfirming = false
     @State private var error: String?
@@ -532,13 +536,9 @@ struct ChatStorageSection: View {
             Button("Clear Chat History", role: .destructive) {
                 isConfirming = true
             }
-        } header: {
-            Text("Storage")
         } footer: {
             if let error {
                 Text(error)
-            } else {
-                Text("Messages are kept on this device so chats open without waiting. Messages waiting to send are kept.")
             }
         }
         .onAppear {
