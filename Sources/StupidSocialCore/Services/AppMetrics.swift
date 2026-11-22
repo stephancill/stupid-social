@@ -108,6 +108,24 @@ public enum AppMetrics {
             outcome("message_delete", network: network, error: error)
         case let .messageButtonPressed(network, error):
             outcome("message_button_press", network: network, error: error)
+        case let .voiceTranscribed(network, isLanguageChosen, error):
+            // `outcome` says why there's no transcript; only failures that shouldn't happen are errors.
+            let reason: String? = switch error as? ChatTranscriptionError {
+            case nil: error == nil ? nil : "error"
+            case .notUnderstood: "not_understood"
+            case .noSpeech: "no_speech"
+            case .unsupportedLanguage: "unsupported_language"
+            case .unavailable: "unavailable"
+            case .audioUnavailable: "audio_unavailable"
+            }
+            StupidMetrics.track("voice_transcribe", properties: [
+                "network": network.rawValue,
+                "chosen": isLanguageChosen ? "yes" : "no",
+                "outcome": reason ?? "ok",
+            ])
+            if let error, reason == "error" || reason == "audio_unavailable" {
+                StupidMetrics.error("voice_transcribe_failed", error: error, properties: ["network": network.rawValue])
+            }
         }
     }
 
