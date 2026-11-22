@@ -39,6 +39,10 @@ enum DemoChats {
     static let kade = person("kade", "Kade", men: 75)
     static let nova = person("nova", "Nova", women: 8)
     static let theo = person("theo", "Theo", men: 12)
+    static let sam = person("sam", "Sam Rivera", women: 68)
+
+    /// A spoken voice message bundled with the app, so transcribing it shows real words.
+    static let spokenVoiceNote = "bundle:DemoVoiceNote.m4a"
 
     static let customEmojis: [String: ChatCustomEmoji] = [
         ":apron:": ChatCustomEmoji(key: ":apron:", url: URL(string: "https://media.apron.chat/e/nrIp9696F6rvBbltXXvS6A")!, category: "Apron"),
@@ -59,6 +63,17 @@ enum DemoChats {
     }
 
     static let chats: [Chat] = [
+        Chat(
+            id: "whatsapp-sam", network: .whatsapp, title: "Sam Rivera", avatarURL: sam.avatarURL, unreadCount: 1, presence: .online,
+            messages: { now in
+                [
+                    message("w1", sam, now, minutes: 20, "found the place ☕️", embeds: [picture(1060, 1200, 900), picture(431, 900, 900)]),
+                    message("w2", you, now, minutes: 15, "omg yes. see you there!"),
+                    message("w3", sam, now, minutes: 2, "", embeds: [.voice(previewId: Self.spokenVoiceNote, duration: 5, waveform: waveform(seed: 2))]),
+                ]
+            },
+            reactions: ["w1": [ChatReaction(emoji: "😍", count: 1, includesYou: true)]],
+        ),
         Chat(
             id: "telegram-trip", network: .telegram, title: "Trip Photos 📸", isGroup: true,
             messages: { now in
@@ -309,7 +324,7 @@ public final class DemoChatAdapter: ChatReactionSending, ChatCustomEmojis, ChatA
 
     /// As the networks that report receipts show them: earlier messages seen, new ones sent.
     public func receipt(for message: ChatMessage) -> ChatReceipt? {
-        guard [.telegram, .instagram, .x].contains(network) else { return nil }
+        guard [.telegram, .instagram, .x, .whatsapp].contains(network) else { return nil }
         return sentIds.contains(message.id) ? .sent : .seen
     }
 
@@ -351,9 +366,13 @@ public final class DemoChatAdapter: ChatReactionSending, ChatCustomEmojis, ChatA
         nil
     }
 
-    /// The demo's voice messages and audio file play a sample from the web; Spotify's preview has none.
+    /// The demo's voice messages and audio file play a sample from the web, or a spoken note bundled with the app;
+    /// Spotify's preview has none.
     public func audioPreviewURL(for previewId: String) async -> URL? {
-        URL(string: previewId).flatMap { $0.scheme == "https" ? $0 : nil }
+        if previewId == DemoChats.spokenVoiceNote {
+            return Bundle.module.url(forResource: "DemoVoiceNote", withExtension: "m4a")
+        }
+        return URL(string: previewId).flatMap { $0.scheme == "https" ? $0 : nil }
     }
 
     public func restore(state _: Data) {}
