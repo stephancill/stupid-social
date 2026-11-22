@@ -50,7 +50,7 @@ final class HomeTitleStripModel {
 
     /// The index in the row of the title at a point in `view`, on whichever page's strip is on screen there.
     func titleIndex(at point: CGPoint, in view: UIView) -> Int? {
-        for strip in strips.allObjects where strip.window != nil {
+        for strip in strips.allObjects where strip.takesTaps {
             if let index = strip.titleIndex(at: view.convert(point, to: strip)) {
                 return index
             }
@@ -401,6 +401,15 @@ final class HomeTitleStripView: UIView {
             views.append(contentsOf: view.subviews)
         }
         return nil
+    }
+
+    /// Whether taps on its titles switch pages: only while the row shows. A screen pushed over the page leaves the strip
+    /// in the window under it, so tapping Search's field, where "Chats" sits on the Notifications page, switched to
+    /// Chats with Search still open; and a collapsed title's strip is hidden in the bar.
+    var takesTaps: Bool {
+        guard window != nil, (largeTitleView?.alpha ?? 1) > 0 else { return false }
+        let navigation = sequence(first: next, next: { $0?.next }).lazy.compactMap { $0 as? UINavigationController }.first
+        return (navigation?.viewControllers.count ?? 1) <= 1
     }
 
     /// The index in the row of the visible title at a point, with a little slack around each.
