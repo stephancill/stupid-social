@@ -100,7 +100,14 @@ final class HomeTitleStripView: UIView {
     /// One label per title that can be on screen: the row from one title before the leading one to two after.
     private let labels = (0 ..< 4).map { _ in UILabel() }
     private var labelIndices = [Int](repeating: 0, count: 4)
+    /// Holds the labels, and shrinks and moves into the bar's inline title as the page scrolls up.
+    private let row = UIView()
     private let pageMask = CALayer()
+    /// The scroll view the navigation bar collapses with, and its offset observed to follow it.
+    private weak var scrollView: UIScrollView?
+    private var offsetObservation: NSKeyValueObservation?
+    /// The list's top content inset with the large title showing in full.
+    private var restingInset: CGFloat?
 
     var font: UIFont {
         let base = UIFont.preferredFont(forTextStyle: .largeTitle)
@@ -113,7 +120,8 @@ final class HomeTitleStripView: UIView {
         pageMask.backgroundColor = UIColor.black.cgColor
         layer.mask = pageMask
         isUserInteractionEnabled = false
-        labels.forEach(addSubview)
+        addSubview(row)
+        labels.forEach(row.addSubview)
         registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (view: Self, _) in
             view.invalidateIntrinsicContentSize()
             view.setNeedsLayout()
@@ -125,8 +133,32 @@ final class HomeTitleStripView: UIView {
         fatalError("init(coder:) has not been implemented")
     }
 
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        observeScrollView()
+        setNeedsLayout()
+    }
+
+    /// The navigation bar whose inline title the strip collapses into.
+    private var navigationBar: UINavigationBar? {
+        sequence(first: next, next: { $0?.next }).lazy.compactMap { $0 as? UINavigationController }.first?.navigationBar
+    }
+
+    /// The large title sits in the list's scroll view and scrolls with it (observed 2026-11-22 on iOS 27), so the
+    /// nearest scroll view above the strip is the one it collapses with.
+    private func observeScrollView() {
+        let found = sequence(first: superview, next: { $0?.superview }).lazy.compactMap { $0 as? UIScrollView }.first
+        guard found !== scrollView else { return }
+        scrollView = found
+        restingInset = nil
+        offsetObservation = found?.observe(\.contentOffset, options: [.new]) { [weak self] _, _ in
+            MainActor.assumeIsolated { self?.setNeedsLayout() }
+        }
+    }
+
     override func layoutSubviews() {
         super.layoutSubviews()
+        if scrollView?.window == nil { observeScrollView() }
         let page = model.pageViews.first { isDescendant(of: $0) }
         // How far this strip's page has moved off the screen's leading edge: the row is drawn that far back,
         // so it stays where it is while the page slides.
@@ -146,6 +178,11 @@ final class HomeTitleStripView: UIView {
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
+        row.transform = .identity
+        row.frame = bounds
+        let collapse = layoutCollapse(leadingCenterX: origins[1] - scroll - pageShift + widths[1] / 2, font: font)
+        // The other titles are gone by halfway, so only the leading one reaches the bar.
+        let othersAlpha = max(0, 1 - 2 * collapse)
         for (slot, label) in labels.enumerated() {
             let index = leading - 1 + slot
             labelIndices[slot] = index
@@ -156,17 +193,52 @@ final class HomeTitleStripView: UIView {
             // Only the leading title and the next show at rest: the one before fades in as a swipe back brings it
             // in, and the one after next as a swipe forward makes it the next.
             let distance = CGFloat(index) - model.position
-            label.alpha = distance < 0 ? max(0, 1 + distance) : max(0, min(1, 2 - distance))
+            let swipeAlpha = distance < 0 ? max(0, 1 + distance) : max(0, min(1, 2 - distance))
+            label.alpha = swipeAlpha * (index == Int(model.position.rounded()) ? 1 : othersAlpha)
             label.frame = CGRect(x: origins[slot] - scroll - pageShift, y: 0, width: widths[slot], height: bounds.height)
         }
         // Cut to the page, so the other page's strip draws the rest of the row.
-        pageMask.frame = page.map { $0.convert($0.bounds, to: self).insetBy(dx: 0, dy: -100) } ?? bounds.insetBy(dx: -1000, dy: -100)
+        pageMask.frame = page.map { $0.convert($0.bounds, to: self).insetBy(dx: 0, dy: -1000) } ?? bounds.insetBy(dx: -1000, dy: -1000)
         CATransaction.commit()
+    }
+
+    /// Shrinks and moves the row so the leading title turns into the bar's inline title as the page scrolls up: it
+    /// scales from the large title's size to the inline title's and slides to the bar's centre, arriving as the
+    /// bar hides the large title and shows its own inline title in that same place. Returns the progress, 0 at
+    /// rest to 1 collapsed.
+    ///
+    /// The large title sits in the list's scroll view, above its content. Scrolling up first shrinks the top
+    /// content inset by the large title's height, with the offset following so the content stays put relative to
+    /// it; once the inset bottoms out the bar hides the large title and shows its inline one (observed 2026-11-22
+    /// on iOS 27). So the progress is how much of that inset is gone.
+    private func layoutCollapse(leadingCenterX: CGFloat, font: UIFont) -> CGFloat {
+        guard let scrollView, let bar = navigationBar, window != nil else { return 0 }
+        let inset = scrollView.adjustedContentInset.top
+        restingInset = max(restingInset ?? inset, inset)
+        // The large title's own view, the scroll view's subview holding the strip.
+        let span = sequence(first: self as UIView, next: \.superview).first { $0.superview === scrollView }?.bounds.height ?? bounds.height
+        let progress = min(1, max(0, ((restingInset ?? inset) - inset) / span))
+        guard progress > 0 else { return 0 }
+
+        // The middle of the bar's top row (44pt, under the status bar), where its inline title sits.
+        let barFrame = bar.convert(bar.bounds, to: nil)
+        let target = convert(CGPoint(x: barFrame.midX, y: barFrame.minY + 22), from: nil)
+        let inlineFont = UIFont.preferredFont(forTextStyle: .headline)
+        let scale = 1 + (inlineFont.pointSize / font.pointSize - 1) * progress
+        let x = (target.x - leadingCenterX) * progress
+        let y = (target.y - bounds.midY) * progress
+        // Scaled about the leading title's centre.
+        row.transform = CGAffineTransform(translationX: leadingCenterX - bounds.midX + x, y: y)
+            .scaledBy(x: scale, y: scale)
+            .translatedBy(x: bounds.midX - leadingCenterX, y: 0)
+        return progress
     }
 
     /// The index in the row of the visible title at a point, with a little slack around each.
     func titleIndex(at point: CGPoint) -> Int? {
-        labels.indices.first { labels[$0].alpha > 0.5 && labels[$0].frame.insetBy(dx: -Self.spacing / 2, dy: -8).contains(point) }
-            .map { labelIndices[$0] }
+        labels.indices.first {
+            labels[$0].alpha > 0.5 && labels[$0].convert(labels[$0].bounds, to: self).insetBy(dx: -Self.spacing / 2, dy: -8).contains(point)
+        }
+        .map { labelIndices[$0] }
     }
 }
