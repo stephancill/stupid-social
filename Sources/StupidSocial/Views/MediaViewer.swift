@@ -20,6 +20,14 @@ struct MediaViewerPage: Hashable {
     var link: URL?
     /// Replies, reposts and likes shown read-only for a post the app can't act on (no `post` and `engaging`).
     var counts: Counts?
+    /// A chat's video plays from a downloaded copy, as the chat's own player does: its URL may be one only
+    /// `URLSession` can load (`tgfile:`, `xchatmedia:`), and some networks' servers don't stream.
+    var downloadsVideo = false
+
+    /// The photo, or a video's poster. A video without one has its own URL as `media.imageURL`.
+    var imageURL: URL? {
+        media.imageURL == media.videoURL ? nil : media.imageURL
+    }
 
     struct Counts: Hashable {
         var replies: Int?
@@ -67,8 +75,9 @@ enum MediaViewer {
         )
     }
 
-    /// Opens `pages` at the one with `startKey` (else the first). `updates` brings later pages, such as a grid's
-    /// next page, which `loadMore` asks for as the viewer nears the end.
+    /// Opens `pages` at the one with `startKey` (else the first). `updates` brings more pages, such as a grid's
+    /// next page, which `loadMore` asks for as the viewer nears the end, or a chat's earlier media, which
+    /// `loadEarlier` asks for as it nears the start.
     static func present(
         pages: [MediaViewerPage],
         startKey: String? = nil,
@@ -76,6 +85,7 @@ enum MediaViewer {
         engaging: (any PostEngaging)?,
         updates: AnyPublisher<[MediaViewerPage], Never>? = nil,
         loadMore: (() -> Void)? = nil,
+        loadEarlier: (() -> Void)? = nil,
     ) {
         guard !pages.isEmpty else { return }
         let window = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first
@@ -84,8 +94,37 @@ enum MediaViewer {
             presenter = presented
         }
         let caption = MediaViewerCaptionModel(network: network, engaging: engaging)
-        let viewer = MediaViewerController(pages: pages, startKey: startKey, updates: updates, loadMore: loadMore, caption: caption)
+        let viewer = MediaViewerController(pages: pages, startKey: startKey, updates: updates, loadMore: loadMore, loadEarlier: loadEarlier, caption: caption)
         presenter.present(viewer, animated: true)
+    }
+
+    /// A chat's photos and videos (`ChatKit.openChatMedia`), at the one tapped. Paging back near the first loads
+    /// the chat's earlier messages.
+    static func present(chatMedia gallery: ChatMediaGallery) {
+        let pages = Self.pages(gallery.items)
+        present(
+            pages: pages,
+            startKey: gallery.startKey,
+            network: gallery.network.socialNetwork,
+            engaging: nil,
+            updates: gallery.updates.map(Self.pages).eraseToAnyPublisher(),
+            loadEarlier: gallery.loadEarlier,
+        )
+    }
+
+    static func pages(_ items: [ChatMediaItem]) -> [MediaViewerPage] {
+        items.map { item in
+            let media = ProfileTimelineItem.Media(
+                imageURL: item.isVideo ? item.posterURL ?? item.url : item.url,
+                videoURL: item.isVideo ? item.url : nil,
+                isGIF: item.isGIF,
+                aspectRatio: item.aspectRatio,
+                altText: item.alt,
+            )
+            var page = MediaViewerPage(post: nil, itemId: item.messageId, index: item.index, count: item.count, media: media, caption: item.caption)
+            page.downloadsVideo = true
+            return page
+        }
     }
 
     static func pages(_ items: [ProfileTimelineItem]) -> [MediaViewerPage] {
@@ -134,6 +173,7 @@ final class MediaViewerController: UIViewController, UIPageViewControllerDataSou
     private var pages: [MediaViewerPage]
     private let updates: AnyPublisher<[MediaViewerPage], Never>?
     private let loadMore: (() -> Void)?
+    private let loadEarlier: (() -> Void)?
     private var currentKey: String
 
     private let backdrop = UIView()
@@ -176,10 +216,11 @@ final class MediaViewerController: UIViewController, UIPageViewControllerDataSou
     /// Pages past the readied ones whose photos (or video posters) are downloaded ahead.
     private static let warmedAhead = 4
 
-    init(pages: [MediaViewerPage], startKey: String?, updates: AnyPublisher<[MediaViewerPage], Never>?, loadMore: (() -> Void)?, caption: MediaViewerCaptionModel) {
+    init(pages: [MediaViewerPage], startKey: String?, updates: AnyPublisher<[MediaViewerPage], Never>?, loadMore: (() -> Void)?, loadEarlier: (() -> Void)?, caption: MediaViewerCaptionModel) {
         self.pages = pages
         self.updates = updates
         self.loadMore = loadMore
+        self.loadEarlier = loadEarlier
         self.caption = caption
         captionController = UIHostingController(rootView: MediaViewerCaptionView(model: caption))
         currentKey = startKey.flatMap { key in pages.contains { $0.key == key } ? key : nil } ?? pages.first?.key ?? ""
@@ -271,6 +312,11 @@ final class MediaViewerController: UIViewController, UIPageViewControllerDataSou
         let controller = MediaViewerPageController(page: page)
         controller.onTap = { [weak self] in self?.setChromeHidden(!(self?.chromeHidden ?? false)) }
         controller.onPlaybackChange = { [weak self] in self?.updatePlayButton() }
+        // A chat's video gets its player once its file has downloaded.
+        controller.onPlayerReady = { [weak self, weak controller] in
+            guard let self, controller != nil, controller === currentPageController else { return }
+            attachCurrentPlayer()
+        }
         prepared[page.key] = controller
         return controller
     }
@@ -288,7 +334,9 @@ final class MediaViewerController: UIViewController, UIPageViewControllerDataSou
         }
         let warmed = pages.dropFirst(index + Self.preparedAhead + 1).prefix(Self.warmedAhead)
         for page in warmed {
-            ImageCache.shared.preload(url: page.media.imageURL)
+            if let url = page.imageURL {
+                ImageCache.shared.preload(url: url)
+            }
         }
     }
 
@@ -314,28 +362,40 @@ final class MediaViewerController: UIViewController, UIPageViewControllerDataSou
 
     private func showCurrentPage() {
         caption.page = currentPageController?.page
-        observeTime(of: currentPageController?.player)
-        if currentPageController?.page.media.isGIF == false {
-            currentPageController?.player?.isMuted = isMuted
-        }
+        attachCurrentPlayer()
         updateMoreMenu()
-        updatePlayButton()
         if let index = currentIndex, index + Self.loadMoreDistance >= pages.count {
             loadMore?()
+        }
+        if let index = currentIndex, index < Self.loadMoreDistance {
+            loadEarlier?()
         }
         prepareNeighbors()
     }
 
-    /// A later page of the grid adds pages; the pager asks again for the page after the current one, which it
-    /// last heard was the end.
+    /// The scrubber follows the current page's player, at the sound the viewer keeps.
+    private func attachCurrentPlayer() {
+        observeTime(of: currentPageController?.player)
+        if currentPageController?.page.media.isGIF == false {
+            currentPageController?.player?.isMuted = isMuted
+        }
+        updatePlayButton()
+    }
+
+    /// A later page of the grid, or a chat's earlier messages, add pages; the pager asks again for the pages beside
+    /// the current one when it last heard it was the end or the start.
     private func update(_ pages: [MediaViewerPage]) {
+        let wasFirst = currentIndex == 0
         let wasLast = currentIndex == self.pages.count - 1
         self.pages = pages
         guard let current = currentPageController, pages.contains(where: { $0.key == currentKey }) else { return }
-        if wasLast, currentIndex != pages.count - 1 {
+        if (wasFirst && currentIndex != 0) || (wasLast && currentIndex != pages.count - 1) {
             pager.setViewControllers([current], direction: .forward, animated: false)
         }
         prepareNeighbors()
+        if let index = currentIndex, index < Self.loadMoreDistance {
+            loadEarlier?()
+        }
     }
 
     // MARK: Chrome
@@ -712,6 +772,7 @@ final class MediaViewerPageController: UIViewController, UIScrollViewDelegate {
     let page: MediaViewerPage
     var onTap: (() -> Void)?
     var onPlaybackChange: (() -> Void)?
+    var onPlayerReady: (() -> Void)?
 
     private let scrollView = UIScrollView()
     private let contentView = UIView()
@@ -721,6 +782,7 @@ final class MediaViewerPageController: UIViewController, UIScrollViewDelegate {
     private var looper: AVPlayerLooper?
     private var playerLayer: AVPlayerLayer?
     private var loadTask: Task<Void, Never>?
+    private var videoTask: Task<Void, Never>?
     private var statusObservation: NSKeyValueObservation?
     private var readyObservation: NSKeyValueObservation?
     private var hasPrerolled = false
@@ -738,6 +800,7 @@ final class MediaViewerPageController: UIViewController, UIScrollViewDelegate {
 
     deinit {
         loadTask?.cancel()
+        videoTask?.cancel()
     }
 
     var isVideo: Bool {
@@ -789,7 +852,11 @@ final class MediaViewerPageController: UIViewController, UIScrollViewDelegate {
 
         loadImage()
         if let videoURL = page.media.videoURL {
-            setUpPlayer(videoURL)
+            if page.downloadsVideo {
+                downloadVideo(videoURL)
+            } else {
+                setUpPlayer(videoURL)
+            }
         }
     }
 
@@ -828,7 +895,7 @@ final class MediaViewerPageController: UIViewController, UIScrollViewDelegate {
     /// The photo, or a video's poster until its first frame. The grid's smaller thumbnail shows while a
     /// larger photo loads.
     private func loadImage() {
-        let url = page.media.imageURL
+        guard let url = page.imageURL else { return }
         if let cached = ImageCache.shared.image(for: url) {
             imageView.image = cached
             return
@@ -850,6 +917,39 @@ final class MediaViewerPageController: UIViewController, UIScrollViewDelegate {
         }
     }
 
+    /// A chat's video plays once its file has downloaded, with a spinner until then; an HLS playlist streams, as a
+    /// downloaded copy can't reach the segments it lists.
+    private func downloadVideo(_ url: URL) {
+        guard url.pathExtension.lowercased() != "m3u8" else {
+            setUpPlayer(url)
+            return
+        }
+        spinner.startAnimating()
+        videoTask = Task { [weak self] in
+            let file = try? await ChatMediaFiles.shared.file(for: url, filename: url.pathExtension.isEmpty ? "video.mp4" : nil)
+            guard let self, !Task.isCancelled else { return }
+            spinner.stopAnimating()
+            guard let file else {
+                showFailure("Couldn't load the video.")
+                return
+            }
+            setUpPlayer(file)
+        }
+    }
+
+    private func showFailure(_ message: String) {
+        let label = UILabel()
+        label.text = message
+        label.textColor = .secondaryLabel
+        label.font = .preferredFont(forTextStyle: .subheadline)
+        label.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            label.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+        ])
+    }
+
     private func setUpPlayer(_ url: URL) {
         let item = AVPlayerItem(url: url)
         let player = AVQueuePlayer()
@@ -857,9 +957,11 @@ final class MediaViewerPageController: UIViewController, UIScrollViewDelegate {
         looper = AVPlayerLooper(player: player, templateItem: item)
         let layer = AVPlayerLayer(player: player)
         layer.videoGravity = .resizeAspect
+        layer.frame = contentView.bounds
         contentView.layer.addSublayer(layer)
         playerLayer = layer
         self.player = player
+        onPlayerReady?()
         statusObservation = player.observe(\.timeControlStatus) { [weak self] _, _ in
             Task { @MainActor in self?.onPlaybackChange?() }
         }

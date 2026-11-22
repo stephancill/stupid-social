@@ -95,6 +95,8 @@ final class AppContainer {
         ChatKit.openPostMedia = { [services] post, index in
             MediaViewer.present(chatPost: post, at: index, xEngaging: services.components.first { $0.network == .x }?.postEngager)
         }
+        // A chat's photos and videos open in the media viewer too, paging through the chat's others.
+        ChatKit.openChatMedia = { gallery in MediaViewer.present(chatMedia: gallery) }
 
         settingsViewModel = SettingsViewModel(
             services: services,
