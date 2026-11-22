@@ -119,10 +119,6 @@ final class HomePagerController: UIViewController {
     var pages: [UIViewController] = []
     private let titles: HomeTitleStripModel
     private var offsetObservation: NSKeyValueObservation?
-    /// The progress of the page shown when the scroll view was last at rest.
-    private var restingProgress: CGFloat = 1
-    /// While a tapped title scrolls to its page: the offset passes the middle before the scroll finishes.
-    private var isScrollingToPage = false
 
     init(titles: HomeTitleStripModel) {
         self.titles = titles
@@ -192,18 +188,14 @@ final class HomePagerController: UIViewController {
     func show(_ page: UIViewController) {
         let isLeft = page === leftPage
         pageController.setViewControllers([page], direction: isLeft ? .reverse : .forward, animated: false)
-        restingProgress = isLeft ? 0 : 1
-        titles.position = restingProgress
+        titles.position = isLeft ? 0 : 1
     }
 
     /// Scrolls to a page as a swipe would, for a tapped title.
     func scroll(to page: UIViewController, forward: Bool, completion: @escaping () -> Void) {
-        isScrollingToPage = true
         pageController.setViewControllers([page], direction: forward ? .forward : .reverse, animated: true) { [weak self] _ in
             guard let self else { return }
-            isScrollingToPage = false
-            restingProgress = page === leftPage ? 0 : 1
-            titles.position = restingProgress
+            titles.position = page === leftPage ? 0 : 1
             // An animated set leaves the page controller's cached neighbours stale, so it's set again without.
             DispatchQueue.main.async {
                 self.pageController.setViewControllers([page], direction: .forward, animated: false)
@@ -216,21 +208,32 @@ final class HomePagerController: UIViewController {
         scrollView?.isScrollEnabled = enabled
     }
 
-    /// The scroll view rests one page in, with the current page in the middle, and moves a page either way
-    /// during a swipe. It stays the page controller's own delegate, so the offset is observed instead.
+    /// The scroll view stays the page controller's own delegate, so its offset is observed instead. The titles
+    /// follow on the next layout pass: when the page controller moves the scroll view back to the middle, it
+    /// sets the offset before moving the pages, so they're only where they belong once it's done.
     private func observeScrolling() {
-        offsetObservation = scrollView?.observe(\.contentOffset, options: [.new]) { [weak self] scrollView, _ in
-            MainActor.assumeIsolated {
-                guard let self, scrollView.bounds.width > 0 else { return }
-                let shift = (scrollView.contentOffset.x - scrollView.bounds.width) / scrollView.bounds.width
-                // The page controller switches its current page while a swipe is still settling, before the
-                // offset returns to the middle, so the swipe is measured from the page it started on.
-                if shift == 0, !self.isScrollingToPage {
-                    self.restingProgress = self.pageController.viewControllers?.first === self.leftPage ? 0 : 1
-                }
-                // Past either end the swipe wraps to the other page, which the title row repeats for.
-                self.titles.position = self.restingProgress + shift
-            }
+        offsetObservation = scrollView?.observe(\.contentOffset, options: [.new]) { [weak self] _, _ in
+            MainActor.assumeIsolated { self?.view.setNeedsLayout() }
+        }
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        updateTitlesPosition()
+    }
+
+    /// The titles' position from where the pages are on screen. Measured from the scroll offset and the page
+    /// the swipe started on, a swipe started while the last one was still settling counted from the wrong page,
+    /// and the titles showed the other page's until the scroll view came back to the middle (observed 2026-11-23).
+    private func updateTitlesPosition() {
+        guard let scrollView, scrollView.bounds.width > 0 else { return }
+        let width = scrollView.bounds.width
+        for page in pages where page.view.isDescendant(of: scrollView) {
+            let x = page.view.convert(CGPoint.zero, to: view).x
+            guard abs(x) < width else { continue }
+            // Past either end the swipe wraps to the other page, which the title row repeats for.
+            titles.position = (page === leftPage ? 0 : 1) - x / width
+            return
         }
     }
 
