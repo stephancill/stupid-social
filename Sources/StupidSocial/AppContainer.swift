@@ -142,8 +142,9 @@ final class AppContainer {
     }
 
     /// Live connections (Apron servers, and each account's that has one) stream updates only while the app is in
-    /// the foreground.
+    /// the foreground, and not while demo data is shown: their rows would join the preview chats.
     func startLiveFeeds() {
+        guard !DemoData.isDemoMode else { return }
         apronLiveFeed.start()
         for component in services.components {
             component.liveConnection?.start()
@@ -277,6 +278,7 @@ final class AppContainer {
 
     func loadDemoData() {
         DemoData.enableDemoMode()
+        stopLiveFeeds()
         feedViewModel.loadCachedFeed()
         storyBarViewModel.loadDemoStoryBarItems()
         Task { await chatListViewModel.load() }
@@ -286,6 +288,7 @@ final class AppContainer {
     /// live content so the app returns to its real state.
     func clearDemoData() {
         DemoData.disableDemoMode()
+        startLiveFeeds()
         feedViewModel.loadCachedFeed()
         storyBarViewModel.clearDemoStoryItems()
         Task {

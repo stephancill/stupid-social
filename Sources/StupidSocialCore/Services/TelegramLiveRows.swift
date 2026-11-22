@@ -33,7 +33,8 @@ final class TelegramLiveRows {
     }
 
     private func scheduleReload() {
-        guard reload == nil else { return }
+        // The session stays open in demo mode (sign-in, push registration), but its rows would join the preview chats.
+        guard reload == nil, !DemoData.isDemoMode else { return }
         let wait = max(0.5, interval - Date().timeIntervalSince(lastReload))
         reload = Task { [weak self] in
             try? await Task.sleep(for: .seconds(wait))
@@ -42,6 +43,7 @@ final class TelegramLiveRows {
             reload = nil
             do {
                 let page = try await client.chatList()
+                guard !DemoData.isDemoMode else { return }
                 chatList?.updateChats(page.chats, accountId: accountId)
             } catch {
                 logger.error("reload failed: \(String(describing: type(of: error)), privacy: .public)")
