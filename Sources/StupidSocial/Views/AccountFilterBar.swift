@@ -233,8 +233,6 @@ struct FilterPill<Filter: Hashable, Label: View>: View {
             }
             .lineLimit(1)
             .font(.subheadline)
-            // Muted until selected, so a row of names doesn't compete with the list under it.
-            .foregroundStyle(isSelected ? .primary : .secondary)
         }
         .buttonBorderShape(.capsule)
         .simultaneousGesture(LongPressGesture().onEnded { _ in
