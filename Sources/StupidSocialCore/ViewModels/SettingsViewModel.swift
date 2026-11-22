@@ -225,7 +225,9 @@ public final class SettingsViewModel: ObservableObject {
             return try? await DiscordClient(credentialStore: credentials).currentUser().avatarURL
         case .linkedin:
             return try? await LinkedInClient(credentialStore: credentials).me().avatarURL
-        case .whatsapp, .debug:
+        case .whatsapp:
+            return await services.component(id: account.id)?.whatsAppClient?.ownProfile().avatarURL
+        case .debug:
             return nil
         }
     }
@@ -564,6 +566,15 @@ public final class SettingsViewModel: ObservableObject {
                     store.setStatus(.invalidCredentials, id: account.id)
                 } catch {
                     continue
+                }
+            case .whatsapp:
+                // The number names the account until WhatsApp's own name for the user is known; the picture's
+                // signed URL expires, so it's refreshed each time Settings loads.
+                guard let client = services.component(id: account.id)?.whatsAppClient, client.isLinked else { continue }
+                let profile = await client.ownProfile()
+                store.update(id: account.id) {
+                    if let name = profile.name { $0.displayName = name }
+                    if let url = profile.avatarURL { $0.avatarURL = url }
                 }
             case .spotify where account.handle?.isEmpty != false:
                 guard let username = try? await SpotifyClient(credentialStore: credentials).validateAccount() else { continue }

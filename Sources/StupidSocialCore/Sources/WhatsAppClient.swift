@@ -1858,6 +1858,18 @@ public actor WhatsAppClient {
         return (store.directory.groupDescriptions?[chat], summaries)
     }
 
+    /// The user's own WhatsApp name and profile picture, for the account's row in Settings. The picture's URL is
+    /// signed and expires, so it's looked up again once the stored one is due.
+    public func ownProfile() async -> (name: String?, avatarURL: URL?) {
+        guard let jid = device?.jid?.nonAD else { return (nil, nil) }
+        let key = jid.description
+        let name = device?.pushName.flatMap { $0.isEmpty ? nil : $0 } ?? store.name(forUserJID: key)
+        if store.needsAvatar(key), let fetched = try? await fetchAvatar(jid) {
+            store.update { $0.avatars[key] = WhatsAppStore.Avatar(url: fetched, checkedAt: Date(), expires: Self.expiry(of: fetched) ?? Date().addingTimeInterval(7 * 24 * 3600)) }
+        }
+        return (name, store.avatarURL(for: key))
+    }
+
     /// The user's own JID, which keys their reactions.
     public var ownUser: String? {
         device?.jid?.nonAD.description
