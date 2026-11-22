@@ -35,11 +35,11 @@ final class HomeTitleStripModel {
 extension View {
     /// The page's large title as the home title strip, on iOS 26 and later; the plain title before.
     @ViewBuilder
-    func homeTitleStrip(_ model: HomeTitleStripModel) -> some View {
+    func homeTitleStrip(model: HomeTitleStripModel, page: HomePage) -> some View {
         if #available(iOS 26.0, *) {
             toolbar {
                 ToolbarItem(placement: .largeTitle) {
-                    HomeTitleStrip(model: model)
+                    HomeTitleStrip(model: model, page: page)
                 }
             }
         } else {
@@ -48,12 +48,45 @@ extension View {
     }
 }
 
-private struct HomeTitleStrip: UIViewRepresentable {
+/// Taps and accessibility are SwiftUI's: a tap recognizer on the UIKit view never fired inside the large title,
+/// and its labels didn't reach the accessibility tree.
+private struct HomeTitleStrip: View {
     let model: HomeTitleStripModel
+    let page: HomePage
+    @State private var strip = StripReference()
+
+    var body: some View {
+        let index = page == .chats ? 0 : 1
+        HomeTitleStripRepresentable(model: model, reference: strip)
+            .contentShape(Rectangle())
+            .onTapGesture(coordinateSpace: .local) { location in
+                if let tapped = strip.view?.titleIndex(at: location) {
+                    model.select?(tapped)
+                }
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityChildren {
+                Text(HomeTitleStripModel.title(at: index))
+                    .accessibilityAddTraits(.isHeader)
+                Button(HomeTitleStripModel.title(at: index + 1)) {
+                    model.select?(index + 1)
+                }
+            }
+    }
+}
+
+private final class StripReference {
+    weak var view: HomeTitleStripView?
+}
+
+private struct HomeTitleStripRepresentable: UIViewRepresentable {
+    let model: HomeTitleStripModel
+    let reference: StripReference
 
     func makeUIView(context _: Context) -> HomeTitleStripView {
         let view = HomeTitleStripView(model: model)
         model.strips.add(view)
+        reference.view = view
         return view
     }
 
@@ -82,11 +115,8 @@ final class HomeTitleStripView: UIView {
         super.init(frame: .zero)
         pageMask.backgroundColor = UIColor.black.cgColor
         layer.mask = pageMask
-        for label in labels {
-            label.isAccessibilityElement = true
-            addSubview(label)
-        }
-        addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(tapped)))
+        isUserInteractionEnabled = false
+        labels.forEach(addSubview)
         registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (view: Self, _) in
             view.invalidateIntrinsicContentSize()
             view.setNeedsLayout()
@@ -119,7 +149,6 @@ final class HomeTitleStripView: UIView {
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        let current = Int(model.position.rounded())
         for (slot, label) in labels.enumerated() {
             let index = leading - 1 + slot
             labelIndices[slot] = index
@@ -132,17 +161,15 @@ final class HomeTitleStripView: UIView {
             let distance = CGFloat(index) - model.position
             label.alpha = distance < 0 ? max(0, 1 + distance) : max(0, min(1, 2 - distance))
             label.frame = CGRect(x: origins[slot] - scroll - pageShift, y: 0, width: widths[slot], height: bounds.height)
-            label.accessibilityTraits = index == current ? [.header, .selected] : .button
-            label.isAccessibilityElement = index == current || index == current + 1
         }
         // Cut to the page, so the other page's strip draws the rest of the row.
         pageMask.frame = page.map { $0.convert($0.bounds, to: self).insetBy(dx: 0, dy: -100) } ?? bounds.insetBy(dx: -1000, dy: -100)
         CATransaction.commit()
     }
 
-    @objc private func tapped(_ recognizer: UITapGestureRecognizer) {
-        let point = recognizer.location(in: self)
-        guard let slot = labels.firstIndex(where: { $0.frame.insetBy(dx: -Self.spacing / 2, dy: -8).contains(point) }) else { return }
-        model.select?(labelIndices[slot])
+    /// The index in the row of the visible title at a point, with a little slack around each.
+    func titleIndex(at point: CGPoint) -> Int? {
+        labels.indices.first { labels[$0].alpha > 0.5 && labels[$0].frame.insetBy(dx: -Self.spacing / 2, dy: -8).contains(point) }
+            .map { labelIndices[$0] }
     }
 }

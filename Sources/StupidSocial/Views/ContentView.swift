@@ -77,7 +77,7 @@ public struct ContentView: View {
                     isShowingChat: $isShowingChat,
                     openRequest: $notificationRouter.pendingChat,
                 )
-                .homeTitleStrip(homeTitles)
+                .homeTitleStrip(model: homeTitles, page: .chats)
             }
             // On the stack, so the chats it pushes have it too.
             .environment(\.feedService, container.feedViewModel.service),
@@ -131,7 +131,7 @@ public struct ContentView: View {
                     onRefresh: { await refreshFeedAndStories(container: container) },
                     isShowingDetail: $isShowingFeedDetail,
                 )
-                .homeTitleStrip(homeTitles)
+                .homeTitleStrip(model: homeTitles, page: .social)
             }
             .navigationDestination(for: HomeDestination.self) { destination in
                 switch destination {
