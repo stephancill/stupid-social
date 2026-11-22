@@ -31,6 +31,18 @@ public final class WhatsAppLiveFeed: LiveConnecting {
         connection.stop()
     }
 
+    public enum State: Sendable {
+        case connected
+        /// Opening, or waiting to retry after the connection closed.
+        case connecting
+        /// Not connecting: stopped, in the background, or ended by WhatsApp (logged out, banned, replaced).
+        case offline
+    }
+
+    public var state: State {
+        connection.isOpen ? .connected : connection.isRunning ? .connecting : .offline
+    }
+
     /// A logged-out device won't come back by retrying, and whatsmeow doesn't reconnect after a temporary ban or
     /// while another connection holds the device either: wait for the next launch or foreground.
     private static func outcome(for error: Error) -> LiveOutcome {

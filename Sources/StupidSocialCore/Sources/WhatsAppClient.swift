@@ -227,6 +227,11 @@ public actor WhatsAppClient {
         keychain.loadWhatsAppDevice() != nil
     }
 
+    /// How far WhatsApp's sync got, for Settings.
+    public var syncStatus: WhatsAppSyncStatus {
+        WhatsAppSyncStatus(state: store.directory.sync, chatCount: store.chats.count)
+    }
+
     public var account: WhatsAppAccount? {
         guard let jid = device?.jid else { return nil }
         return WhatsAppAccount(jid: jid, lid: device?.lid, pushName: device?.pushName)
@@ -1080,6 +1085,9 @@ public actor WhatsAppClient {
                     directory.pushNames[jid.user] = pushName.pushname
                 }
             }
+            var sync = directory.sync ?? WhatsAppSyncState()
+            sync.received(history.syncType, progress: history.progress)
+            directory.sync = sync
         }
         let own = device?.jid?.nonAD.description ?? ""
         // An on-demand sync answers a request for one chat's older messages: it carries only them, so it leaves
@@ -1374,11 +1382,20 @@ public actor WhatsAppClient {
         guard !syncingAppState else { return }
         syncingAppState = true
         defer { syncingAppState = false }
+        var failed = false
         for name in Self.collections {
             do {
                 try await syncCollection(name)
             } catch {
+                failed = true
                 logger.info("WhatsApp app state \(name, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+            }
+        }
+        if !failed {
+            store.update { directory in
+                var sync = directory.sync ?? WhatsAppSyncState()
+                sync.appStateSyncedAt = Date()
+                directory.sync = sync
             }
         }
         saveKeys()

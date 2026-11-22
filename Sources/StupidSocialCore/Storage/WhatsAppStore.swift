@@ -166,6 +166,71 @@ public struct WhatsAppChat: Codable, Hashable, Sendable {
     }
 }
 
+/// How far the phone got sending history after linking, and when app state last synced. WhatsApp Web's rule
+/// (as Baileys ports it): history is complete when a RECENT chunk reports progress 100, and paused when no RECENT
+/// chunk has come for two minutes before that.
+public struct WhatsAppSyncState: Codable, Equatable, Sendable {
+    public enum History: Equatable, Sendable {
+        /// No history has arrived yet.
+        case waiting
+        /// The phone is sending history; the percentage once a RECENT chunk reports one.
+        case syncing(progress: Int?)
+        /// The phone stopped sending before it finished.
+        case paused(progress: Int?)
+        case complete
+    }
+
+    static let pausedAfter: TimeInterval = 120
+
+    /// The latest RECENT chunk's progress, 0–100.
+    public var historyProgress: Int?
+    public var historyComplete: Bool?
+    /// When the latest initial or RECENT chunk arrived.
+    public var historyChunkAt: Date?
+    /// When every app state collection (contact names, mute, archive, pin, read) last synced.
+    public var appStateSyncedAt: Date?
+
+    public init(historyProgress: Int? = nil, historyComplete: Bool? = nil, historyChunkAt: Date? = nil, appStateSyncedAt: Date? = nil) {
+        self.historyProgress = historyProgress
+        self.historyComplete = historyComplete
+        self.historyChunkAt = historyChunkAt
+        self.appStateSyncedAt = appStateSyncedAt
+    }
+
+    public func history(at date: Date = Date()) -> History {
+        if historyComplete == true { return .complete }
+        guard let historyChunkAt else { return .waiting }
+        return date.timeIntervalSince(historyChunkAt) < Self.pausedAfter ? .syncing(progress: historyProgress) : .paused(progress: historyProgress)
+    }
+
+    /// Records a history chunk other than an on-demand one.
+    mutating func received(_ syncType: WhatsAppProto.HistorySync.SyncType?, progress: UInt32, at date: Date = Date()) {
+        switch syncType {
+        case .initialBootstrap:
+            historyChunkAt = date
+        case .recent:
+            historyChunkAt = date
+            historyProgress = Int(min(progress, 100))
+            if progress >= 100 { historyComplete = true }
+        default:
+            break
+        }
+    }
+}
+
+/// What Settings shows about an account's sync.
+public struct WhatsAppSyncStatus: Equatable, Sendable {
+    /// Nil until anything synced, and for accounts linked before the app tracked it.
+    public let state: WhatsAppSyncState?
+    public let chatCount: Int
+
+    /// Nil when it can't be known: an account linked before the app tracked it, which already has chats.
+    public func history(at date: Date = Date()) -> WhatsAppSyncState.History? {
+        if let state { return state.history(at: date) }
+        return chatCount == 0 ? .waiting : nil
+    }
+}
+
 /// The account's chats, messages and the names that title them, in files under Application Support
 /// (`WhatsApp/<account id>/`), excluded from backup and readable only after first unlock. Not thread-safe:
 /// `WhatsAppClient` owns it.
@@ -201,6 +266,8 @@ final class WhatsAppStore {
         var groupAddressing: [String: String]?
         /// Groups where only admins can send.
         var announcementGroups: Set<String>?
+        /// How far WhatsApp's sync after linking got. Optional so directories from before it still decode.
+        var sync: WhatsAppSyncState?
     }
 
     struct GroupMember: Codable, Hashable {

@@ -26,6 +26,9 @@ struct WhatsAppConnectionView: View {
                 } footer: {
                     Text("WhatsApp lists this device as “stupid social” under Linked Devices. Removing the account logs it out.")
                 }
+                if let account, let component = settings?.services.component(id: account.id), let client = component.whatsAppClient {
+                    WhatsAppSyncSection(client: client, liveFeed: component.whatsAppLiveFeed)
+                }
             } else {
                 steps
             }
@@ -121,6 +124,68 @@ struct WhatsAppConnectionView: View {
             } footer: {
                 Text("Your chats appear on the Chats screen as WhatsApp syncs them.")
             }
+        }
+    }
+}
+
+/// The linked account's connection and how far WhatsApp's sync after linking got, read again every second while
+/// shown: the client is an actor and the connection isn't observable.
+private struct WhatsAppSyncSection: View {
+    let client: WhatsAppClient
+    let liveFeed: WhatsAppLiveFeed?
+    @State private var status: WhatsAppSyncStatus?
+    @State private var connection: WhatsAppLiveFeed.State?
+    @State private var now = Date()
+
+    var body: some View {
+        Section {
+            LabeledContent("Connection", value: connectionText)
+            if let status {
+                if let history = status.history(at: now) {
+                    LabeledContent("History", value: historyText(history))
+                }
+                LabeledContent("Chats", value: status.chatCount.formatted())
+                LabeledContent("Contacts", value: status.state?.appStateSyncedAt.map { "Synced \($0.formatted(.relative(presentation: .named)))" } ?? "Not synced yet")
+            }
+        } header: {
+            Text("Sync")
+        } footer: {
+            if let footer {
+                Text(footer)
+            }
+        }
+        .task {
+            while !Task.isCancelled {
+                status = await client.syncStatus
+                connection = liveFeed?.state
+                now = Date()
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
+    }
+
+    private var connectionText: String {
+        switch connection {
+        case .connected: "Connected"
+        case .connecting: "Connecting…"
+        case .offline, nil: "Offline"
+        }
+    }
+
+    private func historyText(_ history: WhatsAppSyncState.History) -> String {
+        switch history {
+        case .waiting: "Waiting for phone"
+        case let .syncing(progress): progress.map { "Syncing \($0)%" } ?? "Syncing…"
+        case let .paused(progress): progress.map { "Paused at \($0)%" } ?? "Paused"
+        case .complete: "Complete"
+        }
+    }
+
+    private var footer: String? {
+        switch status?.history(at: now) {
+        case .waiting, .syncing: "Keep WhatsApp open on your phone until history finishes syncing."
+        case .paused: "Your phone stopped sending history. Open WhatsApp on your phone to continue."
+        case .complete, nil: nil
         }
     }
 }
