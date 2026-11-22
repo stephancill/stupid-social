@@ -128,6 +128,7 @@ waAdv = importlib.import_module("waAdv.WAAdv_pb2")
 waCompanionReg = importlib.import_module("waCompanionReg.WACompanionReg_pb2")
 waE2E = importlib.import_module("waE2E.WAWebProtobufsE2E_pb2")
 waHistorySync = importlib.import_module("waHistorySync.WAWebProtobufsHistorySync_pb2")
+waMmsRetry = importlib.import_module("waMmsRetry.WAMmsRetry_pb2")
 whisper = importlib.import_module("WhisperTextProtocol_pb2")
 
 
@@ -1934,6 +1935,78 @@ async def send_dm(account: Account, to: JID, message: Any) -> str:
     return identifier
 
 
+async def send_peer(account: Account, message: Any) -> str:
+    """A protocol message to the user's own phone (whatsmeow SendPeerMessage, preparePeerMessageNode): encrypted
+    for the phone's device only, `category="peer"`; an on-demand history request goes with `push_priority`
+    high_force and `privacy_sensitive`."""
+    session = account.session
+    phone = JID(session.lid.user, LID_SERVER)
+    if not account.store.has_session(phone.signal_address()):
+        for device, bundle in (await fetch_bundles(account, [phone])).items():
+            account.store.build_session(device.signal_address(), bundle)
+    kind, ciphertext = account.store.encrypt(phone.signal_address(), pad_message(message.SerializeToString()))
+    identifier = message_id(session.jid)
+    attrs = {"id": identifier, "type": "text", "category": "peer", "to": session.jid.non_ad()}
+    operation = message.protocolMessage.peerDataOperationRequestMessage
+    if operation.peerDataOperationRequestType == waE2E.PeerDataOperationRequestType.HISTORY_SYNC_ON_DEMAND:
+        attrs["push_priority"] = "high_force"
+        attrs["privacy_sensitive"] = "1"
+    content = [Node("meta", {"appdata": "default"}), Node("enc", {"v": "2", "type": kind}, ciphertext)]
+    if kind == "pkmsg":
+        content.append(Node("device-identity", {}, unb64(session.data["account"])))
+    ack = await account.client.send_and_wait(Node("message", attrs, content), identifier)
+    if ack.attrs.get("error"):
+        raise SystemExit(f"peer send failed: {ack.describe()}")
+    return identifier
+
+
+def oldest_known(chat: str) -> Any | None:
+    """The oldest message saved for the chat in history syncs, as the anchor for an on-demand request."""
+    oldest = None
+    for name in os.listdir(HISTORY_DIR) if os.path.isdir(HISTORY_DIR) else []:
+        with open(os.path.join(HISTORY_DIR, name), "rb") as file:
+            history = waHistorySync.HistorySync.FromString(file.read())
+        for conversation in history.conversations:
+            if conversation.ID != chat:
+                continue
+            for item in conversation.messages:
+                if oldest is None or item.message.messageTimestamp < oldest.messageTimestamp:
+                    oldest = item.message
+    return oldest
+
+
+async def command_history(args: argparse.Namespace) -> None:
+    """Asks the phone for older messages in one chat (whatsmeow BuildHistorySyncRequest): up to --count before the
+    oldest saved one. The answer arrives as an ON_DEMAND history sync, saved like the others."""
+    session = Session.load()
+    if not session or not session.jid:
+        raise SystemExit("not linked; run `link` first")
+    anchor = oldest_known(args.chat)
+    if anchor is None:
+        raise SystemExit(f"no saved messages for {args.chat}")
+    account = Account(session, verbose=args.verbose)
+    await account.start()
+    try:
+        message = waE2E.Message()
+        protocol = message.protocolMessage
+        protocol.type = waE2E.ProtocolMessage.PEER_DATA_OPERATION_REQUEST_MESSAGE
+        operation = protocol.peerDataOperationRequestMessage
+        operation.peerDataOperationRequestType = waE2E.PeerDataOperationRequestType.HISTORY_SYNC_ON_DEMAND
+        request = operation.historySyncOnDemandRequest
+        request.chatJID = args.chat
+        request.oldestMsgID = anchor.key.ID
+        request.oldestMsgFromMe = anchor.key.fromMe
+        request.onDemandMsgCount = args.count
+        # Seconds, despite the name (whatsmeow).
+        request.oldestMsgTimestampMS = anchor.messageTimestamp
+        age = (time.time() - anchor.messageTimestamp) / 86400
+        identifier = await send_peer(account, message)
+        print(f"requested {args.count} messages before {anchor.key.ID} ({age:.0f}d old) as {identifier}; waiting {args.listen:.0f}s", flush=True)
+        await asyncio.sleep(args.listen)
+    finally:
+        await account.close()
+
+
 async def command_avatar(args: argparse.Namespace) -> None:
     """Profile picture URLs (whatsmeow GetProfilePictureInfo); prints status, id, expiry and size, not the image."""
     session = Session.load()
@@ -2149,6 +2222,136 @@ async def command_send(args: argparse.Namespace) -> None:
         await account.close()
 
 
+MEDIA_FIELDS = {
+    "imageMessage": (b"WhatsApp Image Keys", "image", "jpg"),
+    "videoMessage": (b"WhatsApp Video Keys", "video", "mp4"),
+    "audioMessage": (b"WhatsApp Audio Keys", "audio", "ogg"),
+    "documentMessage": (b"WhatsApp Document Keys", "document", "bin"),
+    "stickerMessage": (b"WhatsApp Image Keys", "image", "webp"),
+}
+MEDIA_DIR = os.path.join(ROOT, "logs", "whatsapp-media")
+
+
+def media_of(message: Any) -> tuple[str, Any] | None:
+    """The message's downloadable part (whatsmeow classToMediaType), looking inside view-once and ephemeral wrappers."""
+    for wrapper in ("ephemeralMessage", "viewOnceMessage", "viewOnceMessageV2", "documentWithCaptionMessage"):
+        if message.HasField(wrapper):
+            return media_of(getattr(message, wrapper).message)
+    for field in MEDIA_FIELDS:
+        if message.HasField(field):
+            return field, getattr(message, field)
+    return None
+
+
+def history_media(limit_per_kind: int, kinds: set[str], message_id: str | None = None) -> list[tuple]:
+    """(chat, message id, field, media) from saved history syncs, newest files first, up to `limit_per_kind` per kind."""
+    found: list[tuple] = []
+    counts: dict[str, int] = {}
+    seen: set[str] = set()
+    for name in sorted(os.listdir(HISTORY_DIR), reverse=True) if os.path.isdir(HISTORY_DIR) else []:
+        with open(os.path.join(HISTORY_DIR, name), "rb") as file:
+            history = waHistorySync.HistorySync.FromString(file.read())
+        for conversation in history.conversations:
+            for item in conversation.messages:
+                info = item.message
+                part = media_of(info.message)
+                if not part or info.key.ID in seen or (message_id and info.key.ID != message_id):
+                    continue
+                field, media = part
+                if field not in kinds or counts.get(field, 0) >= limit_per_kind:
+                    continue
+                seen.add(info.key.ID)
+                counts[field] = counts.get(field, 0) + 1
+                found.append((conversation.ID, info.key.ID, field, media, info.messageTimestamp, info.key.fromMe, info.key.participant or info.participant))
+    return found
+
+
+async def media_retry(account: "Account", chat: str, message_id: str, from_me: bool, participant: str, media_key: bytes, timeout: float = 30) -> str:
+    """Asks the phone to upload expired media again (whatsmeow SendMediaRetryReceipt) and returns the new direct
+    path from its `mediaretry` notification (DecryptMediaRetryNotification)."""
+    key = hkdf(media_key, 32, info=b"WhatsApp Media Retry Notification")
+    iv = secrets.token_bytes(12)
+    request = waMmsRetry.ServerErrorReceipt(stanzaID=message_id).SerializeToString()
+    ciphertext = AESGCM(key).encrypt(iv, request, message_id.encode())
+    rmr = {"jid": JID.parse(chat), "from_me": "true" if from_me else "false"}
+    if chat.endswith("@g.us") and participant:
+        rmr["participant"] = JID.parse(participant)
+    waiter = asyncio.get_running_loop().create_future()
+    account.media_retries[message_id] = waiter
+    await account.client.send(
+        Node(
+            "receipt",
+            {"id": message_id, "to": account.session.jid.non_ad(), "type": "server-error"},
+            [Node("encrypt", {}, [Node("enc_p", {}, ciphertext), Node("enc_iv", {}, iv)]), Node("rmr", rmr)],
+        )
+    )
+    node = await asyncio.wait_for(waiter, timeout)
+    if node.child("error"):
+        code = node.child("error").attr("code")
+        raise SignalError("not available on the phone" if code == "2" else f"media retry error {code}")
+    encrypt = node.child("encrypt")
+    plaintext = AESGCM(key).decrypt(encrypt.child("enc_iv").bytes(), encrypt.child("enc_p").bytes(), message_id.encode())
+    notification = waMmsRetry.MediaRetryNotification.FromString(plaintext)
+    if notification.result != waMmsRetry.MediaRetryNotification.SUCCESS:
+        raise SignalError(f"media retry result {waMmsRetry.MediaRetryNotification.ResultType.Name(notification.result)}")
+    return notification.directPath
+
+
+async def command_media(args: argparse.Namespace) -> None:
+    """Downloads and decrypts media from saved history (whatsmeow Download): prints each file's kind, MIME type,
+    sizes and the inline thumbnail's size, and saves it under logs/whatsapp-media (0600) for checking its format.
+    Never prints captions or other content."""
+    session = Session.load()
+    if not session or not session.jid:
+        raise SystemExit("not linked; run `link` first")
+    kinds = set(args.kind) if args.kind else set(MEDIA_FIELDS)
+    items = history_media(args.limit, kinds, args.id)
+    if not items:
+        raise SystemExit("no media in saved history")
+    account = Account(session, verbose=args.verbose)
+    await account.start()
+    os.makedirs(MEDIA_DIR, mode=0o700, exist_ok=True)
+    try:
+        for chat, identifier, field, media, timestamp, from_me, participant in items:
+            info, mms_type, extension = MEDIA_FIELDS[field]
+            extras = []
+            if field == "audioMessage":
+                extras.append(f"ptt={media.PTT} seconds={media.seconds} waveform={len(media.waveform)}")
+            if field == "videoMessage":
+                extras.append(f"gif={media.gifPlayback} seconds={media.seconds}")
+            if field == "stickerMessage":
+                extras.append(f"animated={media.isAnimated}")
+            if field in ("imageMessage", "videoMessage", "stickerMessage"):
+                extras.append(f"{media.width}x{media.height}")
+            thumbnail = len(media.JPEGThumbnail) if hasattr(media, "JPEGThumbnail") else len(getattr(media, "pngThumbnail", b""))
+            extras.append(f"age={(time.time() - timestamp) / 86400:.0f}d")
+            started = time.monotonic()
+            try:
+                data = await account.download_media(media.directPath, media.fileEncSHA256, media.fileSHA256, media.mediaKey, info, mms_type)
+            except Exception as error:  # noqa: BLE001
+                expired = any(code in str(error) for code in ("403", "404", "410"))
+                print(f"{field} {chat} {identifier} {media.mimetype} {' '.join(extras)} FAILED: {error}", flush=True)
+                if not (args.retry and expired):
+                    continue
+                try:
+                    direct_path = await media_retry(account, chat, identifier, from_me, participant, media.mediaKey)
+                    print(f"  media retry gave a new path; downloading", flush=True)
+                    data = await account.download_media(direct_path, media.fileEncSHA256, media.fileSHA256, media.mediaKey, info, mms_type)
+                except Exception as retry_error:  # noqa: BLE001
+                    print(f"  media retry FAILED: {retry_error}", flush=True)
+                    continue
+            path = os.path.join(MEDIA_DIR, f"{identifier}.{extension}")
+            with open(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "wb") as file:
+                file.write(data)
+            print(
+                f"{field} {chat} {identifier} {media.mimetype} {len(data)} bytes (declared {media.fileLength}) "
+                f"thumb={thumbnail} {' '.join(extras)} ok in {time.monotonic() - started:.1f}s",
+                flush=True,
+            )
+    finally:
+        await account.close()
+
+
 async def command_read(args: argparse.Namespace) -> None:
     """Read receipt for message ids in a chat (whatsmeow MarkRead); --sender is required in groups."""
     session = Session.load()
@@ -2232,6 +2435,7 @@ class Account:
         self.messages: asyncio.Queue[Node] = asyncio.Queue()
         self.offline_done = asyncio.Event()
         self.on_message: Any = None
+        self.media_retries: dict[str, asyncio.Future] = {}
         session.data.setdefault("lidMap", {})
         session.data.setdefault("appStateKeys", {})
         session.data.setdefault("pushNames", {})
@@ -2303,6 +2507,10 @@ class Account:
         if kind == "encrypt" and node.attrs.get("from") == SERVER_JID and node.child("count"):
             if int(node.child("count").attr("value", "0")) < MIN_PREKEY_COUNT:
                 await ensure_prekeys(self.client)
+        if kind == "mediaretry":
+            waiter = self.media_retries.pop(node.attr("id"), None)
+            if waiter and not waiter.done():
+                waiter.set_result(node)
         log(f"notification {kind} from {node.attr('from')}")
 
     async def enqueue_message(self, node: Node) -> None:
@@ -2717,6 +2925,17 @@ def main() -> None:
     capture.add_argument("--unavailable", action="store_true", help="send presence unavailable before going offline")
     capture.set_defaults(handler=command_push_capture)
 
+    media = commands.add_parser("media", help="download and decrypt media from saved history (prints kind, type, sizes; never content)")
+    media.add_argument("--kind", action="append", choices=sorted(MEDIA_FIELDS), help="limit to these message kinds (repeatable)")
+    media.add_argument("--limit", type=int, default=2, help="files per kind")
+    media.add_argument("--id", help="only this message id")
+    media.add_argument("--retry", action="store_true", help="on 403/404/410, ask the phone to upload the file again (one request per file)")
+    media.set_defaults(handler=command_media)
+    history = commands.add_parser("history", help="ask the phone for older messages in one chat (on-demand history sync)")
+    history.add_argument("--chat", required=True, help="the chat JID")
+    history.add_argument("--count", type=int, default=50)
+    history.add_argument("--listen", type=float, default=30)
+    history.set_defaults(handler=command_history)
     read = commands.add_parser("read", help="send a read receipt")
     read.add_argument("--chat", required=True)
     read.add_argument("--sender", help="the sender's JID, in groups")

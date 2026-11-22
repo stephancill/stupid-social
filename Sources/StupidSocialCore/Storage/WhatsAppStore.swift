@@ -15,10 +15,14 @@ public struct WhatsAppMessage: Codable, Hashable, Sendable {
     public var isDeleted: Bool
     /// The latest edit's time, when the message was edited.
     public var editedAt: Date?
-    /// Others' reactions by emoji, keyed by the reactor's JID.
+    /// Reactions by the reactor's JID (the user's own under their own JID), each the emoji.
     public var reactions: [String: String]
+    /// The photo, video, voice message, sticker or file, with what downloading it takes.
+    public var media: WhatsAppMedia?
+    /// The quoted message's sender, for drawing and sending replies.
+    public var quotedSender: String?
 
-    public init(id: String, sender: String, isFromMe: Bool, timestamp: Date, text: String?, label: String?, quotedId: String? = nil, isDeleted: Bool = false, editedAt: Date? = nil, reactions: [String: String] = [:]) {
+    public init(id: String, sender: String, isFromMe: Bool, timestamp: Date, text: String?, label: String?, quotedId: String? = nil, isDeleted: Bool = false, editedAt: Date? = nil, reactions: [String: String] = [:], media: WhatsAppMedia? = nil, quotedSender: String? = nil) {
         self.id = id
         self.sender = sender
         self.isFromMe = isFromMe
@@ -29,6 +33,91 @@ public struct WhatsAppMessage: Codable, Hashable, Sendable {
         self.isDeleted = isDeleted
         self.editedAt = editedAt
         self.reactions = reactions
+        self.media = media
+        self.quotedSender = quotedSender
+    }
+}
+
+/// A message's file on WhatsApp's media servers: where it is, the key that decrypts it and the hashes that check
+/// it, and what showing it needs (size, length, waveform, thumbnail). Stored with the message, like WhatsApp
+/// Web keeps it, so the file downloads only when shown.
+public struct WhatsAppMedia: Codable, Hashable, Sendable {
+    public enum Kind: String, Codable, Sendable {
+        case image, video, audio, document, sticker
+
+        /// The HKDF info for the file's keys (whatsmeow `MediaType`); stickers use the image keys.
+        var keyInfo: String {
+            switch self {
+            case .image, .sticker: "WhatsApp Image Keys"
+            case .video: "WhatsApp Video Keys"
+            case .audio: "WhatsApp Audio Keys"
+            case .document: "WhatsApp Document Keys"
+            }
+        }
+
+        /// The download URL's `mms-type`.
+        var mmsType: String {
+            switch self {
+            case .image, .sticker: "image"
+            case .video: "video"
+            case .audio: "audio"
+            case .document: "document"
+            }
+        }
+    }
+
+    public var kind: Kind
+    public var mimetype: String?
+    /// The path on WhatsApp's media hosts; replaced when the phone uploads an expired file again.
+    public var directPath: String?
+    public var mediaKey: Data?
+    public var fileEncSHA256: Data?
+    public var fileSHA256: Data?
+    public var fileLength: UInt64?
+    public var width: UInt32?
+    public var height: UInt32?
+    public var seconds: UInt32?
+    /// A voice message rather than an audio file.
+    public var isVoice: Bool
+    /// A GIF (a video played muted and looped) or an animated sticker.
+    public var isAnimated: Bool
+    public var fileName: String?
+    /// The voice message's levels, one byte each (0–100), as WhatsApp sends 64 of them.
+    public var waveform: Data?
+    /// The inline JPEG preview, when the message carries one.
+    public var thumbnail: Data?
+
+    /// Whether there is anything to download: messages still uploading, or whose upload failed, have no path.
+    public var isDownloadable: Bool {
+        directPath?.isEmpty == false && mediaKey != nil && fileEncSHA256 != nil && fileSHA256 != nil
+    }
+
+    /// The file's extension, for the cache file and players that need the type.
+    public var fileExtension: String {
+        if let fileName, !(fileName as NSString).pathExtension.isEmpty {
+            return (fileName as NSString).pathExtension.lowercased()
+        }
+        let type = (mimetype ?? "").split(separator: ";").first.map { $0.trimmingCharacters(in: .whitespaces) } ?? ""
+        switch type {
+        case "image/jpeg": return "jpg"
+        case "image/png": return "png"
+        case "image/webp": return "webp"
+        case "image/gif": return "gif"
+        case "video/mp4": return "mp4"
+        case "video/quicktime": return "mov"
+        case "audio/ogg": return "ogg"
+        case "audio/mp4", "audio/aac": return "m4a"
+        case "audio/mpeg": return "mp3"
+        case "application/pdf": return "pdf"
+        default:
+            switch kind {
+            case .image: return "jpg"
+            case .video: return "mp4"
+            case .audio: return "ogg"
+            case .sticker: return "webp"
+            case .document: return "bin"
+            }
+        }
     }
 }
 
@@ -81,7 +170,8 @@ public struct WhatsAppChat: Codable, Hashable, Sendable {
 /// (`WhatsApp/<account id>/`), excluded from backup and readable only after first unlock. Not thread-safe:
 /// `WhatsAppClient` owns it.
 final class WhatsAppStore {
-    static let messageLimit = 1000
+    /// Enough for older pages fetched on demand to stay, not only what arrived after linking.
+    static let messageLimit = 5000
 
     /// A profile picture lookup: a signed `pps.whatsapp.net` URL that expires (its `oe` parameter), or none when
     /// the person or group has no picture or doesn't show it.
@@ -224,8 +314,15 @@ final class WhatsAppStore {
         var list = messages(in: chat)
         var index = Dictionary(uniqueKeysWithValues: list.enumerated().map { ($1.id, $0) })
         var changed = false
-        for message in incoming {
+        for var message in incoming {
             if let existing = index[message.id] {
+                // A message delivered again (history on demand) keeps the reactions and media path this device has.
+                if message.reactions.isEmpty {
+                    message.reactions = list[existing].reactions
+                }
+                if let stored = list[existing].media, message.media?.mediaKey == stored.mediaKey {
+                    message.media = stored
+                }
                 if list[existing] != message {
                     list[existing] = message
                     changed = true

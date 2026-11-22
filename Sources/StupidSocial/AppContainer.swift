@@ -219,7 +219,7 @@ final class AppContainer {
         guard let component = services.component(id: accountId), let client = component.whatsAppClient, client.isLinked,
               let liveFeed = component.whatsAppLiveFeed
         else { return nil }
-        return { AdapterChatViewModel(adapter: WhatsAppChatAdapter(client: client, liveFeed: liveFeed, chatJID: jid, title: title), accountId: accountId) }
+        return { AdapterChatViewModel(adapter: WhatsAppChatAdapter(client: client, liveFeed: liveFeed, accountId: accountId, chatJID: jid, title: title), accountId: accountId) }
     }
 
     /// The chat and its group's member list.

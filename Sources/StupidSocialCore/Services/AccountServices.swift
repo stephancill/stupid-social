@@ -295,6 +295,7 @@ public final class AccountServices: ObservableObject {
         }
         TelegramFileURLProtocol.register(clients: rebuilt.compactMap(\.telegramClient))
         XChatMediaURLProtocol.register(clients: rebuilt.compactMap(\.xChatClient))
+        WhatsAppMediaURLProtocol.register(clients: Dictionary(rebuilt.compactMap { component in component.whatsAppClient.map { (component.accountId, $0) } }, uniquingKeysWith: { first, _ in first }))
         if changed {
             onAccountsChange?()
         }

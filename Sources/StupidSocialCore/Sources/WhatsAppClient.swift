@@ -38,6 +38,10 @@ public enum WhatsAppError: Error, Equatable {
     case sendFailed(String)
     case unsupported
     case download
+    /// The media host no longer has the file (403, 404 or 410): the phone has to upload it again.
+    case mediaExpired
+    /// The phone no longer has the file either.
+    case mediaUnavailable
 }
 
 /// What changed in the store, for the Chats list and open chats.
@@ -144,6 +148,14 @@ public actor WhatsAppClient {
     private var onLoggedIn: (@Sendable () -> Void)?
     private var pending = WhatsAppChanges()
     private var mediaHosts: (hosts: [String], expires: Date)?
+    /// Media retry requests waiting for the phone's `mediaretry` notification, by message id.
+    private var mediaRetryWaiters: [String: CheckedContinuation<WhatsAppNode, Error>] = [:]
+    /// On-demand history requests waiting for their sync, by chat; each gets how many messages came.
+    private var historyWaiters: [String: [CheckedContinuation<Int, Never>]] = [:]
+    private var lastHistoryRequest: Date?
+    static let historyRequestSpacing: TimeInterval = 5
+    /// Downloads in flight, so a file shown in several places downloads once.
+    private var mediaDownloads: [String: Task<Data, Error>] = [:]
     private var syncingAppState = false
     private var avatarQueue: [String] = []
     /// The open chat that asked for a sender's picture, refreshed when it arrives.
@@ -866,8 +878,16 @@ public actor WhatsAppClient {
     }
 
     /// Stores a message's effect: a new or edited message, a deletion, or nothing for protocol-only content.
-    private func apply(_ message: WhatsAppProto.Message, id: String, chat: String, sender: String, isFromMe: Bool, timestamp: Date, live: Bool) {
+    private func apply(_ message: WhatsAppProto.Message, id: String, chat: String, sender: String, isFromMe: Bool, timestamp: Date, live: Bool, reactions: [String: String] = [:]) {
         let content = message.unwrapped
+        if let reaction = content.reaction, let target = reaction.key?.id {
+            // A reaction belongs to the message it reacts to; an empty one takes the reactor's back.
+            let emoji = reaction.text ?? ""
+            if store.modifyMessage(target, in: chat, { $0.reactions[sender] = emoji.isEmpty ? nil : emoji }) {
+                pending.chats.insert(chat)
+            }
+            return
+        }
         if let protocolMessage = content.protocolMessage {
             switch protocolMessage.kind {
             case .revoke:
@@ -890,8 +910,10 @@ public actor WhatsAppClient {
         }
         let text = Self.text(of: content)
         let label = text == nil ? Self.label(of: content) ?? "Unsupported message" : nil
-        let quoted = content.extendedText?.contextInfo?.stanzaID ?? content.media?.contextInfo?.stanzaID
-        let stored = WhatsAppMessage(id: id, sender: sender, isFromMe: isFromMe, timestamp: timestamp, text: text, label: label, quotedId: quoted)
+        let context = content.extendedText?.contextInfo ?? content.media?.contextInfo
+        let quotedSender = context?.participant.flatMap { WhatsAppJID(string: $0)?.nonAD.description }
+        let stored = WhatsAppMessage(id: id, sender: sender, isFromMe: isFromMe, timestamp: timestamp, text: text, label: label, quotedId: context?.stanzaID,
+                                     reactions: reactions, media: content.media.map(Self.media), quotedSender: quotedSender)
         if store.upsert([stored], in: chat), live {
             store.updateChat(chat) { chat in
                 if isFromMe {
@@ -904,6 +926,22 @@ public actor WhatsAppClient {
             }
         }
         pending.chats.insert(chat)
+    }
+
+    static func media(_ media: WhatsAppProto.MediaMessage) -> WhatsAppMedia {
+        let kind: WhatsAppMedia.Kind = switch media.kind {
+        case .image: .image
+        case .video: .video
+        case .audio: .audio
+        case .document: .document
+        case .sticker: .sticker
+        }
+        return WhatsAppMedia(
+            kind: kind, mimetype: media.mimetype, directPath: media.directPath, mediaKey: media.mediaKey,
+            fileEncSHA256: media.fileEncSHA256, fileSHA256: media.fileSHA256, fileLength: media.fileLength,
+            width: media.width, height: media.height, seconds: media.seconds, isVoice: media.ptt == true,
+            isAnimated: media.isAnimated == true, fileName: media.fileName, waveform: media.waveform, thumbnail: media.jpegThumbnail,
+        )
     }
 
     static func text(of message: WhatsAppProto.Message) -> String? {
@@ -949,6 +987,10 @@ public actor WhatsAppClient {
             await syncAppState()
         case "w:gp2":
             try? await fetchGroups()
+        case "mediaretry":
+            if let id = node.attr("id"), let waiter = mediaRetryWaiters.removeValue(forKey: id) {
+                waiter.resume(returning: node)
+            }
         case "picture":
             // Someone changed their picture: look it up again when it's next shown.
             for child in node.children {
@@ -983,10 +1025,15 @@ public actor WhatsAppClient {
             }
         }
         let own = device?.jid?.nonAD.description ?? ""
+        // An on-demand sync answers a request for one chat's older messages: it carries only them, so it leaves
+        // the chat's unread count, archive, mute and the rest as they are.
+        let isOnDemand = history.syncType == .onDemand
+        var delivered: [String: Int] = [:]
         for conversation in history.conversations {
             guard let jid = WhatsAppJID(string: conversation.id), jid.server != WhatsAppJID.Server.broadcast, jid.server != WhatsAppJID.Server.newsletter else { continue }
             let chat = jid.description
-            store.updateChat(chat) { stored in
+            delivered[chat, default: 0] += conversation.messages.count
+            if !isOnDemand { store.updateChat(chat) { stored in
                 if let name = conversation.name, !name.isEmpty { stored.name = name }
                 if let phone = conversation.pnJID { stored.phoneNumberJID = phone }
                 stored.unreadCount = Int(conversation.unreadCount)
@@ -997,16 +1044,31 @@ public actor WhatsAppClient {
                 stored.readUpTo = nil
                 let time = Date(timeIntervalSince1970: TimeInterval(max(conversation.conversationTimestamp, conversation.lastMsgTimestamp)))
                 if time > (stored.lastTimestamp ?? .distantPast) { stored.lastTimestamp = time }
-            }
+            } }
             for info in conversation.messages {
                 guard let message = info.message, let key = info.key, let id = key.id else { continue }
                 let isFromMe = key.fromMe == true
                 let sender = isFromMe ? own : (key.participant ?? info.participant ?? key.remoteJID ?? chat)
+                var reactions: [String: String] = [:]
+                for reaction in info.reactions {
+                    guard let emoji = reaction.text, !emoji.isEmpty, let reactionKey = reaction.key else { continue }
+                    let reactor = reactionKey.fromMe == true ? own : (reactionKey.participant ?? reactionKey.remoteJID ?? chat)
+                    reactions[WhatsAppJID(string: reactor)?.nonAD.description ?? reactor] = emoji
+                }
                 apply(message, id: id, chat: chat, sender: WhatsAppJID(string: sender)?.nonAD.description ?? sender, isFromMe: isFromMe,
-                      timestamp: Date(timeIntervalSince1970: TimeInterval(info.messageTimestamp)), live: false)
+                      timestamp: Date(timeIntervalSince1970: TimeInterval(info.messageTimestamp)), live: false, reactions: reactions)
             }
         }
-        pending.reloadList = true
+        if isOnDemand {
+            for (chat, count) in delivered {
+                pending.chats.insert(canonicalChat(WhatsAppJID(string: chat) ?? .server))
+                for waiter in historyWaiters.removeValue(forKey: chat) ?? [] {
+                    waiter.resume(returning: count)
+                }
+            }
+        } else {
+            pending.reloadList = true
+        }
         logger.info("WhatsApp history sync: \(history.conversations.count) chats")
     }
 
@@ -1024,12 +1086,19 @@ public actor WhatsAppClient {
         let cipherKey = expanded[expanded.startIndex + 16 ..< expanded.startIndex + 48]
         let macKey = expanded[expanded.startIndex + 48 ..< expanded.startIndex + 80]
         let hash = encSHA256.base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
+        var expired = false
         for host in mediaHosts?.hosts ?? [] {
             guard let url = URL(string: "https://\(host)\(directPath)&hash=\(hash)&mms-type=\(mmsType)&__wa-mms=") else { continue }
             var request = URLRequest(url: url)
             request.setValue(WhatsAppSocket.origin, forHTTPHeaderField: "Origin")
             request.setValue(WhatsAppSocket.origin + "/", forHTTPHeaderField: "Referer")
-            guard let (data, response) = try? await URLSession.shared.data(for: request), (response as? HTTPURLResponse)?.statusCode == 200, data.count > 10 else { continue }
+            guard let (data, response) = try? await URLSession.shared.data(for: request) else { continue }
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            if [403, 404, 410].contains(status) {
+                expired = true
+                continue
+            }
+            guard status == 200, data.count > 10 else { continue }
             guard WhatsAppCipher.sha256(data) == encSHA256 else { throw WhatsAppError.download }
             let file = data.prefix(data.count - 10)
             guard WhatsAppCipher.hmacSHA256(key: Data(macKey), Data(iv) + file).prefix(10) == data.suffix(10) else { throw WhatsAppError.download }
@@ -1037,7 +1106,158 @@ public actor WhatsAppClient {
             guard WhatsAppCipher.sha256(plaintext) == sha256 else { throw WhatsAppError.download }
             return plaintext
         }
-        throw WhatsAppError.download
+        throw expired ? WhatsAppError.mediaExpired : WhatsAppError.download
+    }
+
+    // MARK: History on demand (whatsmeow BuildHistorySyncRequest, SendPeerMessage)
+
+    /// Asks the phone for up to `count` messages before `before` in a chat and waits for them (up to 30 s);
+    /// returns how many came. The phone answers with an on-demand history sync, which stores them like any other
+    /// (validated with the probe's `history`, 2026-11-22).
+    public func requestHistory(chat: String, before message: WhatsAppMessage, count: Int = 50) async throws -> Int {
+        // At most one request every few seconds, however fast a chat pages back, so the phone isn't flooded.
+        if let last = lastHistoryRequest, Date().timeIntervalSince(last) < Self.historyRequestSpacing {
+            try await Task.sleep(for: .seconds(Self.historyRequestSpacing - Date().timeIntervalSince(last)))
+        }
+        lastHistoryRequest = Date()
+        // The phone keys chats as history sync names them: a phone-number chat for people it knows by number.
+        let requestChat = chat
+        var request = ProtoMessage()
+        request.set(1, requestChat)
+        request.set(2, message.id)
+        request.set(3, message.isFromMe)
+        request.set(4, Int32(count))
+        // Seconds, despite the name (whatsmeow).
+        request.set(5, Int64(message.timestamp.timeIntervalSince1970))
+        var operation = ProtoMessage()
+        operation.set(1, UInt64(3)) // HISTORY_SYNC_ON_DEMAND
+        operation.set(4, request)
+        var protocolMessage = ProtoMessage()
+        protocolMessage.set(2, UInt64(16)) // PEER_DATA_OPERATION_REQUEST_MESSAGE
+        protocolMessage.set(16, operation)
+        var wrapper = ProtoMessage()
+        wrapper.set(WhatsAppProto.Message.Field.protocolMessage, protocolMessage)
+        return await withCheckedContinuation { continuation in
+            historyWaiters[requestChat, default: []].append(continuation)
+            Task {
+                do {
+                    try await sendPeer(wrapper, historyRequest: true)
+                } catch {
+                    logger.info("WhatsApp history request failed: \(String(describing: error), privacy: .public)")
+                }
+                try? await Task.sleep(for: .seconds(30))
+                for waiter in historyWaiters.removeValue(forKey: requestChat) ?? [] {
+                    waiter.resume(returning: 0)
+                }
+            }
+        }
+    }
+
+    /// A protocol message to the user's own phone only (`category="peer"`); history requests go with
+    /// `push_priority="high_force"` and `privacy_sensitive`, as whatsmeow's `preparePeerMessageNode` sends them.
+    private func sendPeer(_ message: ProtoMessage, historyRequest: Bool) async throws {
+        guard let own = device?.jid?.nonAD, let ownLID = device?.lid, let account = device?.account else { throw WhatsAppError.notLinked }
+        let phone = WhatsAppJID(user: ownLID.user, server: WhatsAppJID.Server.lid)
+        var store = signal
+        if !store.hasSession(address: phone.signalAddress) {
+            for (address, bundle) in try await bundles(for: [phone]) {
+                try? store.buildSession(address: address, bundle: bundle)
+            }
+        }
+        let encrypted = try store.encrypt(address: phone.signalAddress, WhatsAppMessagePadding.pad(message.serialized()))
+        signal = store
+        saveKeys()
+        let id = messageId()
+        var children = [WhatsAppNode("meta", ["appdata": "default"]), WhatsAppNode("enc", ["v": "2", "type": .string(encrypted.type.rawValue)], bytes: encrypted.data)]
+        if encrypted.type == .pkmsg {
+            children.append(WhatsAppNode("device-identity", bytes: account))
+        }
+        var node = WhatsAppNode("message", ["id": .string(id), "type": "text", "category": "peer"], children: children)
+        if historyRequest {
+            node["push_priority"] = "high_force"
+            node["privacy_sensitive"] = "1"
+        }
+        node["to"] = .jid(own)
+        let ack = try await request(node, id: id)
+        if let error = ack.attr("error") {
+            throw WhatsAppError.sendFailed(error)
+        }
+    }
+
+    // MARK: Media (whatsmeow download.go, mediaretry.go)
+
+    /// A message's file, decrypted. An expired file is asked of the phone once (a media retry, as WhatsApp Web
+    /// does when an old photo is opened), and the new path is kept with the message.
+    public func downloadMedia(chat: String, messageId: String) async throws -> Data {
+        let key = "\(chat)/\(messageId)"
+        if let running = mediaDownloads[key] {
+            return try await running.value
+        }
+        let task = Task { try await self.loadMedia(chat: chat, messageId: messageId) }
+        mediaDownloads[key] = task
+        defer { mediaDownloads[key] = nil }
+        return try await task.value
+    }
+
+    /// The message's inline JPEG preview.
+    public func mediaThumbnail(chat: String, messageId: String) throws -> Data {
+        guard let thumbnail = store.messages(in: chat).first(where: { $0.id == messageId })?.media?.thumbnail, !thumbnail.isEmpty else { throw WhatsAppError.mediaUnavailable }
+        return thumbnail
+    }
+
+    private func loadMedia(chat: String, messageId: String) async throws -> Data {
+        guard let message = store.messages(in: chat).first(where: { $0.id == messageId }), let media = message.media else { throw WhatsAppError.unsupported }
+        guard media.isDownloadable else { throw WhatsAppError.mediaUnavailable }
+        do {
+            return try await download(directPath: media.directPath, encSHA256: media.fileEncSHA256, sha256: media.fileSHA256, mediaKey: media.mediaKey, info: media.kind.keyInfo, mmsType: media.kind.mmsType)
+        } catch WhatsAppError.mediaExpired {
+            let directPath = try await requestMediaRetry(chat: chat, message: message, mediaKey: media.mediaKey ?? Data())
+            _ = store.modifyMessage(messageId, in: chat) { $0.media?.directPath = directPath }
+            store.save()
+            return try await download(directPath: directPath, encSHA256: media.fileEncSHA256, sha256: media.fileSHA256, mediaKey: media.mediaKey, info: media.kind.keyInfo, mmsType: media.kind.mmsType)
+        }
+    }
+
+    /// Asks the phone to upload the message's file again (whatsmeow `SendMediaRetryReceipt`) and returns the new
+    /// path from its encrypted `mediaretry` notification (validated with the probe's `media --retry`, 2026-11-22).
+    private func requestMediaRetry(chat: String, message: WhatsAppMessage, mediaKey: Data) async throws -> String {
+        guard let own = device?.jid?.nonAD, let chatJID = WhatsAppJID(string: chat) else { throw WhatsAppError.notLinked }
+        let key = WhatsAppCipher.hkdf(mediaKey, length: 32, info: Data("WhatsApp Media Retry Notification".utf8))
+        var receipt = ProtoMessage()
+        receipt.set(1, message.id)
+        let iv = WhatsAppCipher.randomBytes(12)
+        let ciphertext = try WhatsAppCipher.aesGCMSeal(key: key, nonce: iv, receipt.serialized(), authenticating: Data(message.id.utf8))
+        var rmr = WhatsAppNode("rmr", ["from_me": .string(message.isFromMe ? "true" : "false")])
+        rmr["jid"] = .jid(chatJID)
+        if chatJID.server == WhatsAppJID.Server.group, let sender = WhatsAppJID(string: message.sender) {
+            rmr["participant"] = .jid(sender)
+        }
+        var node = WhatsAppNode("receipt", ["id": .string(message.id), "type": "server-error"], children: [
+            WhatsAppNode("encrypt", children: [WhatsAppNode("enc_p", bytes: ciphertext), WhatsAppNode("enc_iv", bytes: iv)]),
+            rmr,
+        ])
+        node["to"] = .jid(own)
+        let reply: WhatsAppNode = try await withCheckedThrowingContinuation { continuation in
+            mediaRetryWaiters[message.id] = continuation
+            Task {
+                do {
+                    try await send(node)
+                } catch {
+                    mediaRetryWaiters.removeValue(forKey: message.id)?.resume(throwing: error)
+                    return
+                }
+                try? await Task.sleep(for: .seconds(30))
+                mediaRetryWaiters.removeValue(forKey: message.id)?.resume(throwing: WhatsAppError.timeout)
+            }
+        }
+        if let error = reply.child("error") {
+            throw error.attr("code") == "2" ? WhatsAppError.mediaUnavailable : WhatsAppError.download
+        }
+        guard let encrypt = reply.child("encrypt"), let sealed = encrypt.child("enc_p")?.bytes, let nonce = encrypt.child("enc_iv")?.bytes else { throw WhatsAppError.download }
+        let notification = try ProtoMessage(WhatsAppCipher.aesGCMOpen(key: key, nonce: nonce, sealed, authenticating: Data(message.id.utf8)))
+        // `MediaRetryNotification`: stanzaID 1, directPath 2, result 3 (1 is SUCCESS).
+        guard notification.uint64(3) == 1, let directPath = notification.string(2), !directPath.isEmpty else { throw WhatsAppError.mediaUnavailable }
+        return directPath
     }
 
     // MARK: App state (whatsmeow appstate/)
@@ -1458,6 +1678,11 @@ public actor WhatsAppClient {
     }
 
     // MARK: Reading the store
+
+    /// A stored message, such as the anchor for an on-demand history request.
+    public func message(_ id: String, in chat: String) -> WhatsAppMessage? {
+        store.messages(in: chat).first { $0.id == id }
+    }
 
     public func chatPage(_ chat: String) -> WhatsAppChatPage {
         let messages = store.messages(in: chat)

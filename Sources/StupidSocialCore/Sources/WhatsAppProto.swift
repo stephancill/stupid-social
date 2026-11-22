@@ -723,6 +723,8 @@ public extension WhatsAppProto {
         public var title: String?
         /// Video `gifPlayback` or sticker `isAnimated`.
         public var isAnimated: Bool?
+        /// Audio `waveform`: 64 levels, one byte each.
+        public var waveform: Data?
         public var contextInfo: ContextInfo?
 
         init(kind: Kind, proto: ProtoMessage) {
@@ -748,6 +750,7 @@ public extension WhatsAppProto {
             case .sticker: proto.bool(13)
             default: nil
             }
+            waveform = kind == .audio ? proto.data(19) : nil
             contextInfo = proto.message(17).map(ContextInfo.init)
         }
     }
