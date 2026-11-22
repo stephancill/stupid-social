@@ -26,6 +26,9 @@ final class HomeTitleStripModel {
     /// A tapped title's index in the row, the same numbering as `position`.
     var select: ((Int) -> Void)?
     fileprivate let strips = NSHashTable<HomeTitleStripView>.weakObjects()
+    /// Each page list's top content inset with the large title showing in full, kept here rather than in the strip:
+    /// SwiftUI makes a new strip when a page comes back on screen, possibly with its title collapsed.
+    fileprivate let restingInsets = NSMapTable<UIScrollView, NSNumber>.weakToStrongObjects()
 
     /// The index in the row of the title at a point in `view`, on whichever page's strip is on screen there.
     func titleIndex(at point: CGPoint, in view: UIView) -> Int? {
@@ -50,6 +53,11 @@ extension View {
             toolbar {
                 ToolbarItem(placement: .largeTitle) {
                     HomeTitleStrip(model: model, page: page)
+                }
+                // In place of the bar's own inline title, which came in blurred, sliding up from below, as the
+                // strip's leading title arrived in its place, and in a lighter weight.
+                ToolbarItem(placement: .principal) {
+                    HomeInlineTitle(title: HomeTitleStripModel.title(at: page == .chats ? 0 : 1))
                 }
             }
         } else {
@@ -94,6 +102,44 @@ private struct HomeTitleStripRepresentable: UIViewRepresentable {
     }
 }
 
+/// The page's title in the collapsed bar, the strip's leading title at its final size. Hidden until the strip's
+/// title has shrunk into its place, then shown at once (`HomeTitleStripView` sets its alpha), so the swap can't be seen.
+private struct HomeInlineTitle: UIViewRepresentable {
+    let title: String
+
+    func makeUIView(context _: Context) -> HomeInlineTitleView {
+        let view = HomeInlineTitleView()
+        view.alpha = 0
+        return view
+    }
+
+    func updateUIView(_ view: HomeInlineTitleView, context _: Context) {
+        view.text = title
+    }
+}
+
+final class HomeInlineTitleView: UILabel {
+    /// Read out only while shown: the strip is the page's heading until it collapses.
+    override var alpha: CGFloat {
+        didSet { accessibilityElementsHidden = alpha == 0 }
+    }
+
+    init() {
+        super.init(frame: .zero)
+        font = HomeTitleStripView.inlineFont
+        textColor = .label
+        accessibilityTraits.insert(.header)
+        registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (view: Self, _) in
+            view.font = HomeTitleStripView.inlineFont
+        }
+    }
+
+    @available(*, unavailable)
+    required init?(coder _: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+}
+
 final class HomeTitleStripView: UIView {
     private static let spacing: CGFloat = 12
     private let model: HomeTitleStripModel
@@ -106,13 +152,24 @@ final class HomeTitleStripView: UIView {
     /// The scroll view the navigation bar collapses with, and its offset observed to follow it.
     private weak var scrollView: UIScrollView?
     private var offsetObservation: NSKeyValueObservation?
-    /// The list's top content inset with the large title showing in full.
-    private var restingInset: CGFloat?
 
     var font: UIFont {
         let base = UIFont.preferredFont(forTextStyle: .largeTitle)
         return UIFont(descriptor: base.fontDescriptor.withSymbolicTraits(.traitBold) ?? base.fontDescriptor, size: 0)
     }
+
+    /// The collapsed title: the large title's face at the inline title's size, so the shrunk strip matches it.
+    static var inlineFont: UIFont {
+        let base = UIFont.preferredFont(forTextStyle: .largeTitle)
+        let size = UIFont.preferredFont(forTextStyle: .headline).pointSize
+        return UIFont(descriptor: base.fontDescriptor.withSymbolicTraits(.traitBold) ?? base.fontDescriptor, size: size)
+    }
+
+    /// The bar's `HomeInlineTitle`, shown once the strip has collapsed into it.
+    private weak var inlineTitle: HomeInlineTitleView?
+    /// While the bar fades the large title back in: see `showInlineTitle(collapse:)`.
+    private var fadeLink: CADisplayLink?
+    private var lastCollapse: CGFloat = 0
 
     init(model: HomeTitleStripModel) {
         self.model = model
@@ -135,6 +192,7 @@ final class HomeTitleStripView: UIView {
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
+        if window == nil { stopFollowingFade() }
         observeScrollView()
         setNeedsLayout()
     }
@@ -150,7 +208,6 @@ final class HomeTitleStripView: UIView {
         let found = sequence(first: superview, next: { $0?.superview }).lazy.compactMap { $0 as? UIScrollView }.first
         guard found !== scrollView else { return }
         scrollView = found
-        restingInset = nil
         offsetObservation = found?.observe(\.contentOffset, options: [.new]) { [weak self] _, _ in
             MainActor.assumeIsolated { self?.setNeedsLayout() }
         }
@@ -200,6 +257,7 @@ final class HomeTitleStripView: UIView {
         // Cut to the page, so the other page's strip draws the rest of the row.
         pageMask.frame = page.map { $0.convert($0.bounds, to: self).insetBy(dx: 0, dy: -1000) } ?? bounds.insetBy(dx: -1000, dy: -1000)
         CATransaction.commit()
+        if window != nil { showInlineTitle(collapse: collapse) }
     }
 
     /// Shrinks and moves the row so the leading title turns into the bar's inline title as the page scrolls up: it
@@ -212,19 +270,20 @@ final class HomeTitleStripView: UIView {
     /// it; once the inset bottoms out the bar hides the large title and shows its inline one (observed 2026-11-22
     /// on iOS 27). So the progress is how much of that inset is gone.
     private func layoutCollapse(leadingCenterX: CGFloat, font: UIFont) -> CGFloat {
+        // Off screen (scrolled far away, or another screen pushed) the inline title keeps what it last showed.
         guard let scrollView, let bar = navigationBar, window != nil else { return 0 }
         let inset = scrollView.adjustedContentInset.top
-        restingInset = max(restingInset ?? inset, inset)
-        // The large title's own view, the scroll view's subview holding the strip.
-        let span = sequence(first: self as UIView, next: \.superview).first { $0.superview === scrollView }?.bounds.height ?? bounds.height
-        let progress = min(1, max(0, ((restingInset ?? inset) - inset) / span))
+        let restingInset = max(model.restingInsets.object(forKey: scrollView).map { CGFloat($0.doubleValue) } ?? inset, inset)
+        model.restingInsets.setObject(NSNumber(value: Double(restingInset)), forKey: scrollView)
+        let span = largeTitleView?.bounds.height ?? bounds.height
+        let progress = min(1, max(0, (restingInset - inset) / span))
+        if inlineTitle?.window == nil { inlineTitle = Self.inlineTitle(in: bar) }
         guard progress > 0 else { return 0 }
 
         // The middle of the bar's top row (44pt, under the status bar), where its inline title sits.
         let barFrame = bar.convert(bar.bounds, to: nil)
         let target = convert(CGPoint(x: barFrame.midX, y: barFrame.minY + 22), from: nil)
-        let inlineFont = UIFont.preferredFont(forTextStyle: .headline)
-        let scale = 1 + (inlineFont.pointSize / font.pointSize - 1) * progress
+        let scale = 1 + (Self.inlineFont.pointSize / font.pointSize - 1) * progress
         let x = (target.x - leadingCenterX) * progress
         let y = (target.y - bounds.midY) * progress
         // Scaled about the leading title's centre.
@@ -232,6 +291,60 @@ final class HomeTitleStripView: UIView {
             .scaledBy(x: scale, y: scale)
             .translatedBy(x: bounds.midX - leadingCenterX, y: 0)
         return progress
+    }
+
+    /// The large title's own view: the scroll view's subview holding the strip.
+    private var largeTitleView: UIView? {
+        sequence(first: self as UIView, next: \.superview).first { $0.superview != nil && $0.superview === scrollView }
+    }
+
+    /// Shows the bar's inline title once the strip has collapsed into it, at once, so the swap can't be seen. On the
+    /// way back it shows as much as the bar is still hiding the large title, which it fades back in a frame or more
+    /// after the title starts to grow: hidden at once, the title blinked out; faded by progress, it showed twice.
+    private func showInlineTitle(collapse: CGFloat) {
+        lastCollapse = collapse
+        guard let inlineTitle else { return stopFollowingFade() }
+        if collapse >= 1 {
+            inlineTitle.alpha = 1
+            return stopFollowingFade()
+        }
+        guard inlineTitle.alpha > 0, let largeTitle = largeTitleView, window != nil else {
+            inlineTitle.alpha = 0
+            return stopFollowingFade()
+        }
+        let shown = largeTitle.alpha == 0 ? 0 : CGFloat(largeTitle.layer.presentation()?.opacity ?? Float(largeTitle.alpha))
+        inlineTitle.alpha = shown >= 0.99 ? 0 : 1 - shown
+        if inlineTitle.alpha > 0 {
+            followFade()
+        } else {
+            stopFollowingFade()
+        }
+    }
+
+    /// Follows the large title's fade frame by frame, which moves no layout.
+    private func followFade() {
+        guard fadeLink == nil else { return }
+        let link = CADisplayLink(target: self, selector: #selector(fadeStep))
+        link.add(to: .main, forMode: .common)
+        fadeLink = link
+    }
+
+    @objc private func fadeStep() {
+        showInlineTitle(collapse: lastCollapse)
+    }
+
+    private func stopFollowingFade() {
+        fadeLink?.invalidate()
+        fadeLink = nil
+    }
+
+    private static func inlineTitle(in bar: UINavigationBar) -> HomeInlineTitleView? {
+        var views: [UIView] = [bar]
+        while let view = views.popLast() {
+            if let title = view as? HomeInlineTitleView { return title }
+            views.append(contentsOf: view.subviews)
+        }
+        return nil
     }
 
     /// The index in the row of the visible title at a point, with a little slack around each.
