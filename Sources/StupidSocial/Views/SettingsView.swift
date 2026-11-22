@@ -253,10 +253,17 @@ struct AddAccountView: View {
     @ObservedObject var viewModel: SettingsViewModel
     @ObservedObject var apronServersViewModel: ApronServersViewModel
     @Environment(\.dismiss) private var dismiss
+    @State private var query = ""
+
+    private var networks: [SocialNetwork] {
+        let query = query.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty else { return SocialNetwork.addable }
+        return SocialNetwork.addable.filter { $0.displayName.localizedStandardContains(query) }
+    }
 
     var body: some View {
         NavigationStack {
-            List(SocialNetwork.addable) { network in
+            List(networks) { network in
                 NavigationLink {
                     addView(for: network)
                 } label: {
@@ -267,6 +274,12 @@ struct AddAccountView: View {
                     }
                 }
             }
+            .overlay {
+                if networks.isEmpty {
+                    ContentUnavailableView.search(text: query)
+                }
+            }
+            .searchBar(text: $query, placement: .navigationBarDrawer(displayMode: .always))
             .navigationTitle("Add Account")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
