@@ -130,6 +130,17 @@ public final class StoryBarViewModel: ObservableObject {
         storyBarLoading = false
     }
 
+    /// Whether an account with stories (Instagram, Spotify, GitHub) is connected, so the bar's space is reserved
+    /// with the skeleton from the first frame rather than inserted once the fetch starts.
+    public var expectsStoryBar: Bool {
+        !instagramSources().isEmpty || !spotifyActivitySources().isEmpty || !githubActivitySources().isEmpty
+    }
+
+    /// Whether the bar has anything to show: the user's own bubble or anyone's stories.
+    public var hasStoryBarContent: Bool {
+        ownInstagramStoryActor != nil || !storyBarItems.isEmpty
+    }
+
     /// A reel with its slides, oldest first as the viewer shows them, loading them the first time. The bar keeps
     /// them, so seeing and liking work on them. `nil` when they couldn't load.
     public func loadInstagramReel(id: String) async -> InstagramStoryReel? {

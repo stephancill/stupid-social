@@ -74,7 +74,7 @@ struct FeedView: View {
                 )
                 .listRowSeparator(.hidden)
                 .listRowBackground(Color.clear)
-            } else if notificationItems.isEmpty, !hasVisibleStoriesBar, !storyViewModel.storyBarLoading {
+            } else if notificationItems.isEmpty, !hasVisibleStoriesBar, !storyViewModel.storyBarLoading, !showsStoryBarSkeleton {
                 VStack {
                     Spacer(minLength: 0)
                     VStack(spacing: 8) {
@@ -270,11 +270,11 @@ struct FeedView: View {
     }
 
     private var hasVisibleStoriesBar: Bool {
-        storyViewModel.storyBarContentLoaded && (storyViewModel.ownInstagramStoryActor != nil || !storyViewModel.storyBarItems.isEmpty)
+        storyViewModel.storyBarContentLoaded && storyViewModel.hasStoryBarContent
     }
 
     private var showsStoryBarSkeleton: Bool {
-        storyViewModel.storyBarLoading && !storyViewModel.storyBarContentLoaded
+        !storyViewModel.storyBarContentLoaded && (storyViewModel.storyBarLoading || storyViewModel.expectsStoryBar)
     }
 
     private var errorBinding: Binding<Bool> {
