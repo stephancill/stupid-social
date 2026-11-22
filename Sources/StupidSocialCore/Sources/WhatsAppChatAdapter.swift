@@ -7,7 +7,7 @@ import Foundation
 /// one-to-one chats (group sending isn't validated yet, so groups are read-only) and sends read receipts as
 /// messages are read.
 @MainActor
-public final class WhatsAppChatAdapter: ChatAdapter, ChatLiveUpdating, ChatReadOnlyAccess, ChatAudioPreviewing, ChatReactionSending, ChatTyping {
+public final class WhatsAppChatAdapter: ChatAdapter, ChatLiveUpdating, ChatReadOnlyAccess, ChatAudioPreviewing, ChatReactionSending, ChatTyping, ChatMembersListing {
     public let network = ChatNetwork.whatsapp
     public var canReply: Bool {
         !isReadOnly
@@ -256,6 +256,13 @@ public final class WhatsAppChatAdapter: ChatAdapter, ChatLiveUpdating, ChatReadO
             lastTypingSent = nil
             await client.sendTyping(false, in: chatJID)
         }
+    }
+
+    // MARK: Members
+
+    public func groupDetails() async -> (description: String?, members: [ChatMemberSummary])? {
+        guard isReadOnly || chatJID.hasSuffix("@\(WhatsAppJID.Server.group)") else { return nil }
+        return await client.groupInfo(chatJID)
     }
 
     // MARK: Reactions

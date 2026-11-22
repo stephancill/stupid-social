@@ -1542,11 +1542,20 @@ public actor WhatsAppClient {
             WhatsAppNode("participating", children: [WhatsAppNode("participants"), WhatsAppNode("description")]),
         ])
         var subjects: [String: String] = [:]
+        var members: [String: [WhatsAppStore.GroupMember]] = [:]
+        var descriptions: [String: String] = [:]
         for group in response.child("groups")?.children ?? [] where group.tag == "group" {
             guard let id = group.attr("id") else { continue }
-            subjects["\(id)@\(WhatsAppJID.Server.group)"] = group.attr("subject") ?? ""
+            let groupJID = "\(id)@\(WhatsAppJID.Server.group)"
+            subjects[groupJID] = group.attr("subject") ?? ""
+            if let body = group.child("description", "body"), case let .string(text) = body.content {
+                descriptions[groupJID] = text
+            } else if let body = group.child("description", "body"), !body.bytes.isEmpty {
+                descriptions[groupJID] = String(decoding: body.bytes, as: UTF8.self)
+            }
             for participant in group.children where participant.tag == "participant" {
                 guard let jid = participant.jid("jid") else { continue }
+                members[groupJID, default: []].append(.init(jid: jid.nonAD.description, role: participant.attr("type")))
                 if jid.server == WhatsAppJID.Server.lid {
                     storeLID(phoneNumber: participant.jid("phone_number"), lid: jid)
                 } else {
@@ -1554,7 +1563,11 @@ public actor WhatsAppClient {
                 }
             }
         }
-        store.update { $0.groupSubjects = subjects }
+        store.update {
+            $0.groupSubjects = subjects
+            $0.groupMembers = members
+            $0.groupDescriptions = descriptions
+        }
         pending.reloadList = true
         flush()
     }
@@ -1827,6 +1840,23 @@ public actor WhatsAppClient {
     }
 
     // MARK: Reading the store
+
+    /// A group's description and members (names, pictures as far as they're looked up, roles), admins first.
+    /// Pictures of the first members shown are looked up as for any chat, one a second.
+    public func groupInfo(_ chat: String) -> (description: String?, members: [ChatMemberSummary]) {
+        let members = store.directory.groupMembers?[chat] ?? []
+        let ownUsers: Set = [device?.jid?.user, device?.lid?.user].compactMap(\.self).reduce(into: Set<String>()) { $0.insert($1) }
+        let order: (String?) -> Int = { $0 == "superadmin" ? 0 : $0 == "admin" ? 1 : 2 }
+        let sorted = members.sorted { order($0.role) != order($1.role) ? order($0.role) < order($1.role) : (store.name(forUserJID: $0.jid) ?? "~") < (store.name(forUserJID: $1.jid) ?? "~") }
+        requestAvatars(for: Array(sorted.prefix(30).map(\.jid)), in: chat)
+        let summaries = sorted.map { member in
+            let user = String(member.jid.prefix { $0 != "@" })
+            let tags = member.role == "superadmin" ? ["owner"] : member.role == "admin" ? ["admin"] : []
+            return ChatMemberSummary(id: member.jid, name: store.name(forUserJID: member.jid) ?? (member.jid.hasSuffix("@\(WhatsAppJID.Server.user)") ? "+\(user)" : "Unknown"),
+                                     avatarURL: store.avatarURL(for: member.jid), tags: tags, isYou: ownUsers.contains(user))
+        }
+        return (store.directory.groupDescriptions?[chat], summaries)
+    }
 
     /// The user's own JID, which keys their reactions.
     public var ownUser: String? {

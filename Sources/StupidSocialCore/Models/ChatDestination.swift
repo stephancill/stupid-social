@@ -79,6 +79,31 @@ public struct ChatServerFilter {
     }
 }
 
+/// One member of a group, as a chat's details list them.
+public struct ChatMemberSummary: Identifiable, Hashable, Sendable {
+    public let id: String
+    public let name: String
+    public let avatarURL: URL?
+    /// Such as "owner" or "admin".
+    public let tags: [String]
+    public let isYou: Bool
+
+    public init(id: String, name: String, avatarURL: URL?, tags: [String], isYou: Bool) {
+        self.id = id
+        self.name = name
+        self.avatarURL = avatarURL
+        self.tags = tags
+        self.isYou = isYou
+    }
+}
+
+/// A group chat whose details list its description and members, on a network without a details screen of its
+/// own. `nil` for chats that aren't groups.
+@MainActor
+public protocol ChatMembersListing: ChatAdapter {
+    func groupDetails() async -> (description: String?, members: [ChatMemberSummary])?
+}
+
 /// A one-to-one chat with someone who has a profile on the network, which the chat's title opens. Nil until the
 /// chat knows them, and for groups.
 @MainActor

@@ -207,7 +207,8 @@ Observed X behavior:
 - Chats and senders show their WhatsApp profile pictures where people share them.
 - Photos, videos, GIFs, voice messages, stickers and files show in chats and download only when shown; old files WhatsApp's servers no longer keep are asked of the phone again when opened. Scrolling back past what the device has asks the phone for older messages.
 - In one-to-one chats the user can reply to and react to messages, and others see them typing; replies, reactions and the other person's typing show in every chat. While a WhatsApp chat is open the user shows as online, as on WhatsApp Web.
-- Not supported yet: sending to groups, member lists, starting chats, calls, status updates, channels and communities' announcement settings.
+- Tapping a group's title shows its description and members.
+- Not supported yet: sending to groups, starting chats, calls, status updates, channels and communities' announcement settings.
 
 ### Chat Title
 

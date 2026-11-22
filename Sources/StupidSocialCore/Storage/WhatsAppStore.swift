@@ -193,6 +193,17 @@ final class WhatsAppStore {
         var groupSubjects: [String: String] = [:]
         /// By chat or user JID.
         var avatars: [String: Avatar] = [:]
+        /// Group JID → members, from `<participating>`. Optional so directories from before them still decode.
+        var groupMembers: [String: [GroupMember]]?
+        /// Group JID → description.
+        var groupDescriptions: [String: String]?
+    }
+
+    struct GroupMember: Codable, Hashable {
+        /// The member's JID as the group lists it (LID or phone number).
+        var jid: String
+        /// `admin` or `superadmin` (the creator), else nil.
+        var role: String?
     }
 
     let directoryURL: URL

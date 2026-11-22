@@ -52,17 +52,20 @@ extension EnvironmentValues {
     @Entry var feedService: FeedService?
 }
 
-/// A chat's details: its picture, title and subtitle, with Mute and Archive buttons where its network has them.
+/// A chat's details: its picture, title and subtitle, with Mute and Archive buttons where its network has them,
+/// then a group's description and members where its adapter lists them (`ChatMembersListing`).
 struct ChatInfoView: View {
     @ObservedObject var viewModel: ChatViewModel
     @AppStorage("redactionEnabled") private var redactionEnabled = false
+    @State private var details: (description: String?, members: [ChatMemberSummary])?
+    @State private var query = ""
 
     var body: some View {
         List {
             ChatDetailsHeader(
                 title: viewModel.titleNamesPeople ? DebugRedaction.name(viewModel.title, enabled: redactionEnabled) : viewModel.title,
-                subtitle: viewModel.subtitle.isEmpty ? nil : viewModel.subtitle,
-                description: nil,
+                subtitle: details.map { "\($0.members.count) members" } ?? (viewModel.subtitle.isEmpty ? nil : viewModel.subtitle),
+                description: details?.description,
                 avatarURL: viewModel.titleAvatar?.url,
                 colorKey: viewModel.titleAvatar?.colorKey ?? viewModel.title,
             ) {
@@ -70,8 +73,69 @@ struct ChatInfoView: View {
                     DetailActionRow { ChatSettingsButtons(viewModel: viewModel) }
                 }
             }
+            if let members = details?.members, !members.isEmpty {
+                let filtered = query.isEmpty ? members : members.filter { $0.name.localizedStandardContains(query) }
+                MembersSection(query: $query, hasResults: !filtered.isEmpty) {
+                    ForEach(filtered) { member in
+                        ChatMemberRow(member: member)
+                    }
+                }
+            }
         }
         .navigationBarTitleDisplayMode(.inline)
+        .task {
+            details = await (viewModel as? any ChatMembersListingProviding)?.groupDetails()
+        }
+    }
+}
+
+/// A chat view model whose adapter lists a group's members.
+@MainActor
+protocol ChatMembersListingProviding {
+    func groupDetails() async -> (description: String?, members: [ChatMemberSummary])?
+}
+
+extension AdapterChatViewModel: ChatMembersListingProviding {
+    func groupDetails() async -> (description: String?, members: [ChatMemberSummary])? {
+        await (adapter as? any ChatMembersListing)?.groupDetails()
+    }
+}
+
+private struct ChatMemberRow: View {
+    @AppStorage("redactionEnabled") private var redactionEnabled = false
+    let member: ChatMemberSummary
+
+    var body: some View {
+        HStack(spacing: 12) {
+            avatar
+            HStack(spacing: 6) {
+                Text(DebugRedaction.name(member.name, enabled: redactionEnabled))
+                    .lineLimit(1)
+                ApronUserTags(roles: member.tags, isYou: member.isYou)
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private var avatar: some View {
+        Group {
+            if let url = member.avatarURL {
+                CachedAsyncImage(url: url) { initials } failure: { initials }
+            } else {
+                initials
+            }
+        }
+        .frame(width: 36, height: 36)
+        .clipShape(Circle())
+    }
+
+    private var initials: some View {
+        ZStack {
+            Color(uiColor: ChatUserColor.color(for: member.id))
+            Text(DebugRedaction.name(member.name, enabled: redactionEnabled).split(separator: " ").prefix(2).compactMap(\.first).map(String.init).joined().uppercased())
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.white)
+        }
     }
 }
 
