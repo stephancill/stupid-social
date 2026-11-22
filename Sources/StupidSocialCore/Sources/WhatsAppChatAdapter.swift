@@ -36,7 +36,7 @@ public final class WhatsAppChatAdapter: ChatAdapter, ChatLiveUpdating, ChatReadO
         self.chatJID = chatJID
         let isGroup = chatJID.hasSuffix("@\(WhatsAppJID.Server.group)")
         isReadOnly = isGroup
-        info = ChatInfo(title: title, subtitle: "WhatsApp", showsSenderNames: isGroup)
+        info = ChatInfo(title: title, subtitle: "", showsSenderNames: isGroup)
         if !isGroup {
             info.avatarUserId = chatJID
         }
