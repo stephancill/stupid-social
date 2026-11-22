@@ -55,6 +55,9 @@ struct SearchView: View {
         #endif
         .contentMargins(.top, 0, for: .scrollContent)
         .navigationTitle("Search")
+        // Inline, as it opens: with no top content margin the large title never showed, and ending a search brought it
+        // back, sliding in under the field and then jumping above it.
+        .navigationBarTitleDisplayMode(.inline)
         // Under the title, as in Chats: the field `.automatic` floats at the bottom stayed under the keyboard in the
         // home pager, whose pages don't follow the keyboard themselves (`HomePagerController`).
         .searchBar(text: $viewModel.query, isPresented: $isSearchPresented, placement: .navigationBarDrawer(displayMode: .always))
