@@ -457,7 +457,8 @@ public actor WhatsAppClient {
             WhatsAppNode("link_code_pairing_wrapped_companion_ephemeral_pub", bytes: wrapped),
             WhatsAppNode("companion_server_auth_key_pub", bytes: device!.noiseKey.publicKey),
             WhatsAppNode("companion_platform_id", content: .string("6")),
-            WhatsAppNode("companion_platform_display", content: .string("Safari (stupid social)")),
+            // WhatsApp accepts only `Browser (OS)` with a common browser and OS; anything else is 400 bad-request.
+            WhatsAppNode("companion_platform_display", content: .string("Safari (Mac OS)")),
             WhatsAppNode("link_code_pairing_nonce", bytes: Data([0])),
         ])
         registration["jid"] = .jid(jid)

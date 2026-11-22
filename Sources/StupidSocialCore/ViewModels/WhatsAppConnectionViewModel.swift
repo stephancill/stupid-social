@@ -101,6 +101,7 @@ public final class WhatsAppConnectionViewModel: ObservableObject {
         case WhatsAppError.linkExpired: "The code expired. Try again."
         case WhatsAppError.clientOutdated: "WhatsApp asked for a newer version of the app."
         case WhatsAppError.banned: "WhatsApp has restricted this account from linking devices."
+        case WhatsAppError.iq(code: "429", text: _): "WhatsApp is limiting link requests for this number. Wait a while and try again."
         default: "Couldn't link WhatsApp. Check your connection and try again."
         }
     }

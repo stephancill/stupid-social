@@ -62,6 +62,8 @@ WA_CERT_PUBLIC_KEY = bytes.fromhex("142375574d0a587166aae71ebe516437c4a28b73e369
 # The web client version whatsmeow ships; `version` fetches the current one from web.whatsapp.com/sw.js.
 DEFAULT_WA_VERSION = (2, 3000, 1050728964)
 DEVICE_NAME = "stupid social"
+# WhatsApp accepts only `Browser (OS)` with a common browser and OS here; anything else is 400 bad-request (observed 2026-11-22).
+PAIR_CLIENT_DISPLAY = "Safari (Mac OS)"
 # DeviceProps.PlatformType.SAFARI, and the matching pairing client type ("6", whatsmeow pair-code.go).
 PLATFORM_TYPE_SAFARI = 5
 PAIR_CLIENT_SAFARI = "6"
@@ -1394,7 +1396,8 @@ class IQError(Exception):
         error = node.child("error")
         self.code = error.attr("code") if error else ""
         self.text = error.attr("text") if error else ""
-        super().__init__(f"iq error {self.code} {self.text}")
+        # The whole error node, so hints beyond code/text (such as a retry time on 429) aren't lost.
+        super().__init__(f"iq error {self.code} {self.text}: {error if error else node}")
 
 
 # ---------------------------------------------------------------------------------------------------------
@@ -1456,7 +1459,7 @@ class Linker:
                         Node("link_code_pairing_wrapped_companion_ephemeral_pub", {}, wrapped),
                         Node("companion_server_auth_key_pub", {}, session.noise_key.public),
                         Node("companion_platform_id", {}, PAIR_CLIENT_SAFARI),
-                        Node("companion_platform_display", {}, f"Safari ({DEVICE_NAME})"),
+                        Node("companion_platform_display", {}, PAIR_CLIENT_DISPLAY),
                         Node("link_code_pairing_nonce", {}, bytes([0])),
                     ],
                 )
