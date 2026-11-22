@@ -1565,10 +1565,23 @@ public actor WhatsAppClient {
         var subjects: [String: String] = [:]
         var members: [String: [WhatsAppStore.GroupMember]] = [:]
         var descriptions: [String: String] = [:]
+        var addressing: [String: String] = [:]
+        var announcement: Set<String> = []
         for group in response.child("groups")?.children ?? [] where group.tag == "group" {
             guard let id = group.attr("id") else { continue }
             let groupJID = "\(id)@\(WhatsAppJID.Server.group)"
             subjects[groupJID] = group.attr("subject") ?? ""
+            addressing[groupJID] = group.attr("addressing_mode")
+            // A group created or joined recently that history didn't include (it has no messages yet) is listed from
+            // its creation time, as WhatsApp lists a new group; older empty groups aren't.
+            if let created = group.attr("creation").flatMap(TimeInterval.init).map(Date.init(timeIntervalSince1970:)),
+               created > Date().addingTimeInterval(-14 * 24 * 3600), store.chat(groupJID)?.lastTimestamp == nil
+            {
+                store.updateChat(groupJID) { $0.lastTimestamp = created }
+            }
+            if group.child("announcement") != nil {
+                announcement.insert(groupJID)
+            }
             if let body = group.child("description", "body"), case let .string(text) = body.content {
                 descriptions[groupJID] = text
             } else if let body = group.child("description", "body"), !body.bytes.isEmpty {
@@ -1588,6 +1601,8 @@ public actor WhatsAppClient {
             $0.groupSubjects = subjects
             $0.groupMembers = members
             $0.groupDescriptions = descriptions
+            $0.groupAddressing = addressing
+            $0.announcementGroups = announcement
         }
         pending.reloadList = true
         flush()
@@ -1797,7 +1812,18 @@ public actor WhatsAppClient {
         incomingRetryCounts[counterKey, default: 0] += 1
         guard incomingRetryCounts[counterKey]! < 10 else { return }
         let isOwnDevice = requester.user == own.user || requester.user == ownLID.user
-        let message = isOwnDevice ? WhatsAppProto.Message.deviceSent(recent.message, destinationJID: recent.recipient) : recent.message
+        var message = isOwnDevice ? WhatsAppProto.Message.deviceSent(recent.message, destinationJID: recent.recipient) : recent.message
+        if recent.recipient.hasSuffix("@\(WhatsAppJID.Server.group)") {
+            // A group message goes again as a 1:1 message, with the sender key alongside (whatsmeow handleRetryReceipt).
+            var store = signal
+            var distribution = ProtoMessage()
+            distribution.set(1, recent.recipient)
+            distribution.set(2, store.senderKeyDistribution(group: recent.recipient, ownAddress: WhatsAppJID(user: ownLID.user, server: WhatsAppJID.Server.lid, device: ownLID.device).signalAddress))
+            signal = store
+            var proto = recent.message.proto
+            proto.set(WhatsAppProto.Message.Field.senderKeyDistribution, distribution)
+            message = WhatsAppProto.Message(proto: proto)
+        }
         let address = requester.server == WhatsAppJID.Server.user ? (lid(for: requester) ?? requester) : requester
         var store = signal
         do {
@@ -1966,7 +1992,7 @@ public actor WhatsAppClient {
     private func send(_ message: WhatsAppProto.Message, to chat: String) async throws -> (String, Date) {
         guard let device, device.jid != nil, let ownLID = device.lid, let account = device.account else { throw WhatsAppError.notLinked }
         guard var recipient = WhatsAppJID(string: chat) else { throw WhatsAppError.unsupported }
-        guard recipient.server != WhatsAppJID.Server.group else { throw WhatsAppError.unsupported }
+        let isGroup = recipient.server == WhatsAppJID.Server.group
         var phoneNumber: WhatsAppJID?
         if recipient.server == WhatsAppJID.Server.user {
             guard let lid = lid(for: recipient) else { throw WhatsAppError.noLID }
@@ -1974,24 +2000,48 @@ public actor WhatsAppClient {
             recipient = lid.nonAD
         }
         let plaintext = message.proto.serialized()
-        let deviceSent = WhatsAppProto.Message.deviceSent(message, destinationJID: recipient.description).proto.serialized()
         let ownUser = WhatsAppJID(user: ownLID.user, server: WhatsAppJID.Server.lid)
-        let users = recipient.user == ownLID.user ? [recipient] : [recipient, ownUser]
-        let targets = try await devices(of: users).filter { !($0.user == ownLID.user && $0.device == ownLID.device) }
+        let ownAddress = WhatsAppJID(user: ownLID.user, server: WhatsAppJID.Server.lid, device: ownLID.device).signalAddress
+        // A group gets the message once, under the user's sender key (`skmsg`); every participant device gets the
+        // sender key itself in a 1:1 message (whatsmeow sendGroup). A 1:1 chat's recipient devices get the
+        // message, the user's other devices a `DeviceSentMessage`.
+        let users: [WhatsAppJID]
+        let payloadFor: (WhatsAppJID) -> Data
+        var groupCiphertext: Data?
         var store = signal
+        if isGroup {
+            users = try groupParticipants(chat).filter { $0.user != ownLID.user && $0.user != device.jid?.user } + [ownUser]
+            var distribution = ProtoMessage()
+            distribution.set(1, chat)
+            distribution.set(2, store.senderKeyDistribution(group: chat, ownAddress: ownAddress))
+            var wrapper = ProtoMessage()
+            wrapper.set(WhatsAppProto.Message.Field.senderKeyDistribution, distribution)
+            let distributionPlaintext = wrapper.serialized()
+            payloadFor = { _ in distributionPlaintext }
+            groupCiphertext = try store.encryptGroupMessage(group: chat, ownAddress: ownAddress, WhatsAppMessagePadding.pad(plaintext))
+        } else {
+            let deviceSent = WhatsAppProto.Message.deviceSent(message, destinationJID: recipient.description).proto.serialized()
+            users = recipient.user == ownLID.user ? [recipient] : [recipient, ownUser]
+            payloadFor = { $0.user == ownLID.user ? deviceSent : plaintext }
+        }
+        let targets = try await devices(of: users).filter { !($0.user == ownLID.user && $0.device == ownLID.device) }
         let missing = targets.filter { !store.hasSession(address: $0.signalAddress) }
         if !missing.isEmpty {
             for (address, bundle) in try await bundles(for: missing) {
                 try? store.buildSession(address: address, bundle: bundle)
             }
         }
+        let (type, mediaType) = Self.messageType(message)
         var participants: [WhatsAppNode] = []
         var includesIdentity = false
         for target in targets where store.hasSession(address: target.signalAddress) {
-            let payload = target.user == ownLID.user ? deviceSent : plaintext
-            let encrypted = try store.encrypt(address: target.signalAddress, WhatsAppMessagePadding.pad(payload))
+            let encrypted = try store.encrypt(address: target.signalAddress, WhatsAppMessagePadding.pad(payloadFor(target)))
             includesIdentity = includesIdentity || encrypted.type == .pkmsg
-            var to = WhatsAppNode("to", children: [WhatsAppNode("enc", ["v": "2", "type": .string(encrypted.type.rawValue)], bytes: encrypted.data)])
+            var enc = WhatsAppNode("enc", ["v": "2", "type": .string(encrypted.type.rawValue)], bytes: encrypted.data)
+            if !isGroup, let mediaType {
+                enc["mediatype"] = .string(mediaType)
+            }
+            var to = WhatsAppNode("to", children: [enc])
             to["jid"] = .jid(target)
             participants.append(to)
         }
@@ -1999,22 +2049,40 @@ public actor WhatsAppClient {
         saveKeys()
         let id = messageId()
         var children = [WhatsAppNode("participants", children: participants)]
+        if let groupCiphertext {
+            var enc = WhatsAppNode("enc", ["v": "2", "type": "skmsg"], bytes: groupCiphertext)
+            if let mediaType {
+                enc["mediatype"] = .string(mediaType)
+            }
+            children.append(enc)
+        }
         if includesIdentity {
             children.append(WhatsAppNode("device-identity", bytes: account))
         }
-        if let token = privacyTokenNode(for: recipient) {
+        if !isGroup, let token = privacyTokenNode(for: recipient) {
             children.append(token)
         }
-        var node = WhatsAppNode("message", ["id": .string(id), "type": "text"], children: children)
+        var node = WhatsAppNode("message", ["id": .string(id), "type": .string(type)], children: children)
         node["to"] = .jid(recipient)
         if let phoneNumber {
             node["peer_recipient_pn"] = .jid(phoneNumber)
+        }
+        if isGroup {
+            // whatsmeow participantListHashV2: "2:" and the base64 of the first 6 bytes of SHA-256 over the sorted
+            // device JIDs.
+            let joined = (targets + [WhatsAppJID(user: ownLID.user, server: WhatsAppJID.Server.lid, device: ownLID.device)]).map(\.description).sorted().joined()
+            node["phash"] = .string("2:" + WhatsAppCipher.sha256(Data(joined.utf8)).prefix(6).base64EncodedString().replacingOccurrences(of: "=", with: ""))
+            if store_isLIDGroup(chat) {
+                node["addressing_mode"] = "lid"
+            }
         }
         let ack = try await request(node, id: id)
         if let error = ack.attr("error") {
             throw WhatsAppError.sendFailed(error)
         }
-        Task { await issuePrivacyTokenIfNeeded(to: recipient) }
+        if !isGroup {
+            Task { await issuePrivacyTokenIfNeeded(to: recipient) }
+        }
         let timestamp = ack.attr("t").flatMap(Double.init).map { Date(timeIntervalSince1970: $0) } ?? Date()
         recentSent[id] = (recipient.description, message)
         recentSentOrder.append(id)
@@ -2022,6 +2090,43 @@ public actor WhatsAppClient {
             recentSent[recentSentOrder.removeFirst()] = nil
         }
         return (id, timestamp)
+    }
+
+    /// The node's `type` and the `enc`'s `mediatype` (whatsmeow getTypeFromMessage, getMediaTypeFromMessage).
+    static func messageType(_ message: WhatsAppProto.Message) -> (type: String, mediaType: String?) {
+        let content = message.unwrapped
+        if content.reaction != nil { return ("reaction", nil) }
+        if let media = content.media {
+            let mediaType = switch media.kind {
+            case .image: "image"
+            case .sticker: "sticker"
+            case .document: "document"
+            case .audio: media.ptt == true ? "ptt" : "audio"
+            case .video: media.isAnimated == true ? "gif" : "video"
+            }
+            return ("media", mediaType)
+        }
+        return ("text", nil)
+    }
+
+    /// A group's participants as the group addresses them (LIDs in LID-addressed groups), from `<participating>`.
+    private func groupParticipants(_ chat: String) throws -> [WhatsAppJID] {
+        let members = store.directory.groupMembers?[chat] ?? []
+        guard !members.isEmpty else { throw WhatsAppError.unsupported }
+        return members.compactMap { WhatsAppJID(string: $0.jid) }
+    }
+
+    private func store_isLIDGroup(_ chat: String) -> Bool {
+        store.directory.groupAddressing?[chat] == "lid"
+    }
+
+    /// Whether the user can send to the group: not when only admins can and they aren't one.
+    public func canSend(to chat: String) -> Bool {
+        guard chat.hasSuffix("@\(WhatsAppJID.Server.group)") else { return true }
+        guard let members = store.directory.groupMembers?[chat], !members.isEmpty else { return false }
+        guard store.directory.announcementGroups?.contains(chat) == true else { return true }
+        let own: Set = [device?.jid?.user, device?.lid?.user].compactMap(\.self).reduce(into: Set<String>()) { $0.insert($1) }
+        return members.contains { own.contains(String($0.jid.prefix { $0 != "@" })) && $0.role != nil }
     }
 
     // MARK: Presence and typing (whatsmeow presence.go; validated with the probe's `typing`, 2026-11-22)

@@ -197,6 +197,10 @@ final class WhatsAppStore {
         var groupMembers: [String: [GroupMember]]?
         /// Group JID → description.
         var groupDescriptions: [String: String]?
+        /// Group JID → `addressing_mode` ("lid" or "pn").
+        var groupAddressing: [String: String]?
+        /// Groups where only admins can send.
+        var announcementGroups: Set<String>?
     }
 
     struct GroupMember: Codable, Hashable {

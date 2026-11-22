@@ -4,7 +4,7 @@ import Foundation
 /// fill, so the newest page is everything the device has; paging back past it asks the phone for older messages
 /// (on-demand history), one request at a time. Photos, videos, voice messages, stickers and files load lazily
 /// through `wamedia:` URLs. The chat refreshes when the connection stores something for it. Sends text in
-/// one-to-one chats (group sending isn't validated yet, so groups are read-only) and sends read receipts as
+/// one-to-one chats  and sends read receipts as
 /// messages are read.
 @MainActor
 public final class WhatsAppChatAdapter: ChatAdapter, ChatLiveUpdating, ChatReadOnlyAccess, ChatAudioPreviewing, ChatReactionSending, ChatTyping, ChatMembersListing, ChatVoiceSending {
@@ -29,7 +29,9 @@ public final class WhatsAppChatAdapter: ChatAdapter, ChatLiveUpdating, ChatReadO
     public var onCatchUp: (() -> Void)?
     public private(set) var info: ChatInfo
     public var history: ChatHistory?
-    public let isReadOnly: Bool
+    /// Groups where only admins can send, for a user who isn't one; known once the chat loads.
+    public private(set) var isReadOnly = false
+    private let isGroup: Bool
 
     private let client: WhatsAppClient
     private let liveFeed: WhatsAppLiveFeed?
@@ -62,7 +64,7 @@ public final class WhatsAppChatAdapter: ChatAdapter, ChatLiveUpdating, ChatReadO
         self.accountId = accountId
         self.chatJID = chatJID
         let isGroup = chatJID.hasSuffix("@\(WhatsAppJID.Server.group)")
-        isReadOnly = isGroup
+        self.isGroup = isGroup
         info = ChatInfo(title: title, subtitle: "", showsSenderNames: isGroup)
         if !isGroup {
             info.avatarUserId = chatJID
@@ -138,6 +140,7 @@ public final class WhatsAppChatAdapter: ChatAdapter, ChatLiveUpdating, ChatReadO
         if let title = page.title {
             info.title = title
         }
+        isReadOnly = await !client.canSend(to: chatJID)
         return try ChatPage(records: page.messages.map(Self.record), earlier: earlierCursor(oldest: page.messages.first))
     }
 
@@ -227,7 +230,7 @@ public final class WhatsAppChatAdapter: ChatAdapter, ChatLiveUpdating, ChatReadO
     private func publishTyping() {
         let now = Date()
         typing = typing.filter { $0.value > now }
-        typingNames = typing.keys.sorted().map { names[$0] ?? (isReadOnly ? "Someone" : info.title) }
+        typingNames = typing.keys.sorted().map { names[$0] ?? (isGroup ? "Someone" : info.title) }
         onChange?()
         typingExpiry?.cancel()
         if let next = typing.values.min() {
@@ -265,7 +268,7 @@ public final class WhatsAppChatAdapter: ChatAdapter, ChatLiveUpdating, ChatReadO
     // MARK: Members
 
     public func groupDetails() async -> (description: String?, members: [ChatMemberSummary])? {
-        guard isReadOnly || chatJID.hasSuffix("@\(WhatsAppJID.Server.group)") else { return nil }
+        guard isGroup else { return nil }
         return await client.groupInfo(chatJID)
     }
 
