@@ -27,6 +27,16 @@ final class HomeTitleStripModel {
     var select: ((Int) -> Void)?
     fileprivate let strips = NSHashTable<HomeTitleStripView>.weakObjects()
 
+    /// The index in the row of the title at a point in `view`, on whichever page's strip is on screen there.
+    func titleIndex(at point: CGPoint, in view: UIView) -> Int? {
+        for strip in strips.allObjects where strip.window != nil {
+            if let index = strip.titleIndex(at: view.convert(point, to: strip)) {
+                return index
+            }
+        }
+        return nil
+    }
+
     static func title(at index: Int) -> String {
         titles[((index % titles.count) + titles.count) % titles.count]
     }
@@ -48,22 +58,15 @@ extension View {
     }
 }
 
-/// Taps and accessibility are SwiftUI's: a tap recognizer on the UIKit view never fired inside the large title,
-/// and its labels didn't reach the accessibility tree.
+/// Accessibility is SwiftUI's: the UIKit labels didn't reach the accessibility tree. Taps are the pager's
+/// (`HomeTitleStripModel.titleIndex(at:)`): nothing in the large title receives touches, UIKit or SwiftUI.
 private struct HomeTitleStrip: View {
     let model: HomeTitleStripModel
     let page: HomePage
-    @State private var strip = StripReference()
 
     var body: some View {
         let index = page == .chats ? 0 : 1
-        HomeTitleStripRepresentable(model: model, reference: strip)
-            .contentShape(Rectangle())
-            .onTapGesture(coordinateSpace: .local) { location in
-                if let tapped = strip.view?.titleIndex(at: location) {
-                    model.select?(tapped)
-                }
-            }
+        HomeTitleStripRepresentable(model: model)
             .accessibilityElement(children: .contain)
             .accessibilityChildren {
                 Text(HomeTitleStripModel.title(at: index))
@@ -75,18 +78,12 @@ private struct HomeTitleStrip: View {
     }
 }
 
-private final class StripReference {
-    weak var view: HomeTitleStripView?
-}
-
 private struct HomeTitleStripRepresentable: UIViewRepresentable {
     let model: HomeTitleStripModel
-    let reference: StripReference
 
     func makeUIView(context _: Context) -> HomeTitleStripView {
         let view = HomeTitleStripView(model: model)
         model.strips.add(view)
-        reference.view = view
         return view
     }
 

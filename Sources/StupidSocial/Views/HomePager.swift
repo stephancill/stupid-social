@@ -144,6 +144,12 @@ final class HomePagerController: UIViewController {
 
         observeScrolling()
 
+        // Nothing inside a navigation bar's large title receives touches, so the pager takes taps on the titles.
+        let titleTap = UITapGestureRecognizer(target: self, action: #selector(titleTapped))
+        titleTap.cancelsTouchesInView = false
+        titleTap.delegate = self
+        view.addGestureRecognizer(titleTap)
+
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillChangeFrame), name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillChangeFrame), name: UIResponder.keyboardWillHideNotification, object: nil)
     }
@@ -173,6 +179,12 @@ final class HomePagerController: UIViewController {
                 page.additionalSafeAreaInsets.bottom = overlap
                 page.view.layoutIfNeeded()
             }
+        }
+    }
+
+    @objc private func titleTapped(_ recognizer: UITapGestureRecognizer) {
+        if let index = titles.titleIndex(at: recognizer.location(in: view), in: view) {
+            titles.select?(index)
         }
     }
 
@@ -224,5 +236,16 @@ final class HomePagerController: UIViewController {
 
     private var scrollView: UIScrollView? {
         pageController.view.subviews.lazy.compactMap { $0 as? UIScrollView }.first
+    }
+}
+
+extension HomePagerController: UIGestureRecognizerDelegate {
+    /// Only touches on a title, alongside whatever else is handling them.
+    func gestureRecognizer(_: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        titles.titleIndex(at: touch.location(in: view), in: view) != nil
+    }
+
+    func gestureRecognizer(_: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith _: UIGestureRecognizer) -> Bool {
+        true
     }
 }
