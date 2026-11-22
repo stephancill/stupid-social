@@ -69,16 +69,18 @@ private struct SearchFieldFillKeeper: UIViewControllerRepresentable {
     }
 }
 
-/// Pins the Mac's search field under the navigation bar. A bar rather than an inset keeps the large title, which
-/// an opaque `safeAreaInset` hid.
+/// Pins the Mac's search field under the navigation bar, with the title inline: a large title stretches down with
+/// the list when a trackpad overscrolls it, and slid under the pinned field.
 private struct PlainSearchBar: ViewModifier {
     let field: PlainSearchField
 
     func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {
             content.safeAreaBar(edge: .top) { field }
+                .navigationBarTitleDisplayMode(.inline)
         } else {
             content.safeAreaInset(edge: .top, spacing: 0) { field.background(Color(.systemBackground)) }
+                .navigationBarTitleDisplayMode(.inline)
         }
     }
 }

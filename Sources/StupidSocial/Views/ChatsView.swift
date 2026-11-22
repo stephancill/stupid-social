@@ -82,9 +82,6 @@ struct ChatsView: View {
                 }
             }
         }
-        .refreshable {
-            await viewModel.load()
-        }
         .task {
             try? await Task.sleep(for: .milliseconds(50))
             hasAppeared = true
@@ -421,9 +418,6 @@ private struct ChatFolderView<Empty: View>: View {
                     ContentUnavailableView.search(text: query)
                 }
             }
-        }
-        .refreshable {
-            await viewModel.load()
         }
         .navigationTitle(navigationTitle)
         .modifier(FolderSearch(isSearchable: isSearchable, query: $query))
