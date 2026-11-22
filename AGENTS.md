@@ -18,7 +18,7 @@ Sources/
       HomeTitleStrip.swift          # The pages' large title as one "Chats  Notifications" row that scrolls with a swipe
       ChatsView.swift               # Chats list across Apron rooms, Spotify chats and Instagram threads
       SearchView.swift              # Cross-network profile search and recently opened profiles
-      SearchBar.swift               # Shared search field modifier (Search, Chats) and the drawer field's fill fix
+      SearchBar.swift               # Shared search field modifier (Search, Chats), Chats' keyboard-docked bottom field, the drawer field's fill fix
       AccountFilterBar.swift        # Filter pills: accounts (feed, Chats search) and networks (Search)
       CompactListRow.swift          # Shared row insets for the feed and Chats lists
       ChatInfoView.swift            # Chat details for networks without their own screen (or the person's profile); header action buttons (Message, Mute, Archive)

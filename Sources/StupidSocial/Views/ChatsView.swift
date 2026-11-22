@@ -79,9 +79,9 @@ struct ChatsView: View {
             }
         }
         .listStyle(.plain)
-        // Just above the search bar at the bottom, rather than a row in the list: inserting a row as the search field
-        // activated cancelled the search.
-        .bottomBar(isShown: hasAppeared && showsFilter) {
+        // At the bottom, as in Messages, with the account filter just above the field while searching rather than a row
+        // in the list: inserting a row as the search field activated cancelled the search.
+        .bottomSearchBar(text: $query, isPresented: $isSearchPresented, prompt: "Search Chats", showsAccessory: hasAppeared && showsFilter) {
             AccountFilterBar(settingsViewModel: settingsViewModel, accounts: filterAccounts, showsReminders: false, selection: $filterSelection)
         }
         .overlay {
@@ -116,11 +116,6 @@ struct ChatsView: View {
                 }
             }
         }
-        // At the bottom, as in Messages.
-        .searchBar(text: $query, isPresented: $isSearchPresented, prompt: "Search Chats")
-        // The field is at the bottom, so the title and toolbar can stay: hidden as the search took focus (and shown as
-        // it ended), they went at once and the list jumped by their height.
-        .searchPresentationToolbarBehavior(.avoidHidingContent)
         .background {
             // Command-K and Command-F search the list with a hardware keyboard (a Mac, an iPad).
             ForEach(["k", "f"] as [KeyEquivalent], id: \.character) { key in
@@ -800,39 +795,5 @@ private struct ChatSummaryAvatar: View {
                     .background(Color(uiColor: .systemBackground), in: Circle())
                     .offset(x: 2, y: 2)
             }
-    }
-}
-
-private extension View {
-    /// Content floating at the bottom, just above the search bar (and the keyboard while searching), over the rows,
-    /// while `isShown`; the list's content makes room for it, so the last row can scroll clear of it.
-    func bottomBar(isShown: Bool, @ViewBuilder content: () -> some View) -> some View {
-        modifier(BottomBar(isShown: isShown, bar: content()))
-    }
-}
-
-/// An overlay rather than a `safeAreaBar`: in the safe area the rows' edge shadow covered the bar too, and changed in a
-/// single frame as the search ended.
-private struct BottomBar<Bar: View>: ViewModifier {
-    let isShown: Bool
-    let bar: Bar
-    @State private var barHeight: CGFloat = 0
-
-    func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
-            // Rows fade under the search field, as under the navigation bar.
-            content
-                .scrollEdgeEffectStyle(.soft, for: .bottom)
-                .contentMargins(.bottom, isShown ? barHeight : 0, for: .scrollContent)
-                .overlay(alignment: .bottom) {
-                    if isShown {
-                        bar
-                            .onGeometryChange(for: CGFloat.self, of: \.size.height) { barHeight = $0 }
-                            .transition(.opacity)
-                    }
-                }
-        } else {
-            content.safeAreaInset(edge: .bottom, spacing: 0) { if isShown { bar.background(Color(.systemBackground)) } }
-        }
     }
 }

@@ -171,7 +171,7 @@ struct FilterPillBar<Filter: Hashable, Pills: View>: View {
         }
         .buttonBorderShape(.circle)
         if #available(iOS 26.0, *) {
-            button.buttonStyle(.glass).background(Color(.systemBackground), in: Circle())
+            button.buttonStyle(StillGlassButtonStyle(shape: Circle())).background(Color(.systemBackground), in: Circle())
         } else {
             button.buttonStyle(.bordered).tint(.secondary).background(.background, in: Circle())
         }
@@ -226,16 +226,11 @@ struct FilterPill<Filter: Hashable, Label: View>: View {
         .accessibilityAction(named: "Select Several") { selectSeveral() }
 
         if #available(iOS 26.0, *) {
-            // Glass, like the search field and clear button; on an opaque backing, since where the bar floats over a
-            // list (Chats) glass alone showed the rows' text through the label.
-            Group {
-                if isSelected {
-                    button.buttonStyle(.glassProminent)
-                } else {
-                    button.buttonStyle(.glass)
-                }
-            }
-            .background(Color(.systemBackground), in: Capsule())
+            // Glass, like the search field; on an opaque backing, since where the bar floats over a list (Chats) glass
+            // alone showed the rows' text through the label.
+            button
+                .buttonStyle(StillGlassButtonStyle(shape: Capsule(), isProminent: isSelected))
+                .background(Color(.systemBackground), in: Capsule())
         } else if isSelected {
             button.buttonStyle(.borderedProminent)
         } else {
@@ -247,5 +242,22 @@ struct FilterPill<Filter: Hashable, Label: View>: View {
         isMultipleSelecting.wrappedValue = true
         selection.insert(filter)
         longPressCount += 1
+    }
+}
+
+/// Glass that stays still under a finger: `.glass` and `.glassProminent` are interactive glass, which stretches and
+/// follows a drag across the pills. Pressed, the label dims instead.
+@available(iOS 26.0, *)
+struct StillGlassButtonStyle<S: Shape>: ButtonStyle {
+    let shape: S
+    var isProminent = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .padding(.horizontal, shape is Circle ? 6 : 12)
+            .padding(.vertical, 6)
+            .foregroundStyle(isProminent ? AnyShapeStyle(.white) : AnyShapeStyle(.foreground))
+            .opacity(configuration.isPressed ? 0.6 : 1)
+            .glassEffect(isProminent ? .regular.tint(.accentColor) : .regular, in: shape)
     }
 }
