@@ -67,6 +67,7 @@ public struct ContentView: View {
                     blueskyChat: { container.blueskyChatFactory(accountId: $0, convoId: $1, title: $2) },
                     discordChat: { container.discordChatFactory(accountId: $0, channelId: $1, title: $2) },
                     linkedinChat: { container.linkedinChatFactory(accountId: $0, conversationUrn: $1, title: $2) },
+                    whatsAppChat: { container.whatsAppChatFactory(accountId: $0, jid: $1, title: $2) },
                     accountSettings: { accountId in
                         guard container.settingsViewModel.account(id: accountId) != nil else { return nil }
                         return AnyView(AccountDetailView(viewModel: container.settingsViewModel, apronServersViewModel: container.apronServersViewModel, accountId: accountId))

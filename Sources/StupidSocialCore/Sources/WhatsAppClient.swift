@@ -1,0 +1,1547 @@
+import Foundation
+import OSLog
+
+public struct WhatsAppAccount: Sendable, Equatable {
+    public let jid: WhatsAppJID
+    public let lid: WhatsAppJID?
+    public let pushName: String?
+
+    /// The international number without `+`.
+    public var phoneNumber: String {
+        jid.user
+    }
+}
+
+public enum WhatsAppLinkUpdate: Sendable {
+    case qr(String)
+    case pairingCode(String)
+    case paired
+}
+
+public enum WhatsAppError: Error, Equatable {
+    case handshakeFailed
+    case badCertificate
+    case notConnected
+    case notLinked
+    case linkExpired
+    case pairingFailed
+    case clientOutdated
+    case banned
+    case loggedOut
+    /// Another connection of this device took over.
+    case replaced
+    case connectFailure(Int)
+    case streamError(String)
+    case iq(code: String, text: String)
+    case timeout
+    case noLID
+    case sendFailed(String)
+    case unsupported
+    case download
+}
+
+/// What changed in the store, for the Chats list and open chats.
+public struct WhatsAppChanges: Sendable {
+    public var chats: Set<String> = []
+    public var reloadList = false
+
+    var isEmpty: Bool {
+        chats.isEmpty && !reloadList
+    }
+}
+
+/// What a chat shows when it opens or refreshes.
+public struct WhatsAppChatPage: Sendable {
+    public let title: String?
+    public let messages: [WhatsAppMessage]
+    /// Senders' display names by JID.
+    public let names: [String: String]
+    public let readUpTo: Date?
+    public let isGroup: Bool
+    /// The chat's picture, and senders' pictures by JID, as far as they are looked up.
+    public let avatarURL: URL?
+    public let avatars: [String: URL]
+}
+
+/// The linked device's own keys, in the Keychain: never synchronizable, since each device is its own WhatsApp
+/// device.
+struct WhatsAppDevice: Codable {
+    var noiseKey: WhatsAppKeyPair
+    var identityKey: WhatsAppKeyPair
+    var signedPreKey: WhatsAppSignedPreKey
+    var registrationId: UInt32
+    var advSecret: Data
+    var version: [UInt32]
+    var jid: WhatsAppJID?
+    var lid: WhatsAppJID?
+    /// The signed device identity from pairing, sent with prekey messages.
+    var account: Data?
+    var pushName: String?
+
+    static func generate(version: [UInt32]) -> WhatsAppDevice {
+        let identity = WhatsAppKeyPair.generate()
+        let signed = WhatsAppKeyPair.generate()
+        return WhatsAppDevice(
+            noiseKey: .generate(), identityKey: identity,
+            signedPreKey: WhatsAppSignedPreKey(id: 1, keyPair: signed, signature: identity.sign(Data([5]) + signed.publicKey)),
+            registrationId: UInt32.random(in: 1 ... UInt32.max), advSecret: WhatsAppCipher.randomBytes(32), version: version,
+        )
+    }
+
+    var appVersion: WhatsAppProto.AppVersion {
+        WhatsAppProto.AppVersion(version[0], version[1], version[2])
+    }
+}
+
+/// The Signal state, one-time prekeys and app state keys and hashes, in a file next to the chats.
+struct WhatsAppKeyState: Codable {
+    struct AppStateKey: Codable {
+        var data: Data
+        var timestamp: Int64
+    }
+
+    struct Collection: Codable {
+        var version: UInt64
+        var hash: Data
+        /// Base64 index MAC → value MAC.
+        var macs: [String: Data]
+    }
+
+    var signal = WhatsAppSignalState()
+    var preKeys: [String: WhatsAppKeyPair] = [:]
+    var nextPreKeyId: UInt32 = 1
+    var uploadedPreKeyId: UInt32 = 0
+    var appStateKeys: [String: AppStateKey] = [:]
+    var collections: [String: Collection] = [:]
+    var readReceipts = true
+}
+
+/// A WhatsApp account as a linked device (WhatsApp's multi-device protocol, validated with
+/// `scripts/whatsapp-client.py`, which ports whatsmeow). Links, logs in, decrypts what arrives in order and
+/// keeps chats and messages in its `WhatsAppStore`, sends text and receipts.
+public actor WhatsAppClient {
+    static let collections = ["critical_block", "critical_unblock_low", "regular_high", "regular", "regular_low"]
+    private static let initialPreKeyCount = 812
+    private static let wantedPreKeyCount = 50
+    private static let minimumPreKeyCount = 5
+    /// Pictures looked up at login, for the newest chats; others when their chat opens. Bulk picture lookups are
+    /// suspected in restrictions of unofficial clients (whatsmeow and Baileys issues), so this stays small.
+    private static let avatarPrefetchCount = 20
+    /// Lookups are spaced out, as a person scrolling WhatsApp Web would make them.
+    private static let avatarSpacing: Duration = .seconds(1)
+    private static let linkingAlphabet = Array("123456789ABCDEFGHJKLMNPQRSTVWXYZ")
+
+    private let keychain: KeychainCredentialStore
+    private let logger = Logger(subsystem: "tech.stupid.StupidSocial", category: "WhatsAppClient")
+    private var device: WhatsAppDevice?
+    private var keys: WhatsAppKeyState
+    private let store: WhatsAppStore
+    private var socket: WhatsAppSocket?
+    private var waiters: [String: CheckedContinuation<WhatsAppNode, Error>] = [:]
+    private let idPrefix = "\(UInt16.random(in: 0 ... .max)).\(UInt16.random(in: 0 ... .max))-"
+    private var idCounter = 0
+    private var onChanges: (@Sendable (WhatsAppChanges) -> Void)?
+    private var onLoggedIn: (@Sendable () -> Void)?
+    private var pending = WhatsAppChanges()
+    private var mediaHosts: (hosts: [String], expires: Date)?
+    private var syncingAppState = false
+    private var avatarQueue: [String] = []
+    /// The open chat that asked for a sender's picture, refreshed when it arrives.
+    private var avatarRequesters: [String: String] = [:]
+    private var avatarTask: Task<Void, Never>?
+
+    @MainActor private static var clients: [String: WhatsAppClient] = [:]
+
+    /// The account's one client. Its files have a single writer, so Settings (linking) and the live connection
+    /// share it; two clients would each save their own copy of the chats over the other's.
+    @MainActor public static func client(accountId: String, keychain: KeychainCredentialStore) -> WhatsAppClient {
+        if let client = clients[accountId] { return client }
+        let client = WhatsAppClient(keychain: keychain, accountId: accountId)
+        clients[accountId] = client
+        return client
+    }
+
+    @MainActor static func forget(accountId: String) {
+        clients[accountId] = nil
+    }
+
+    private init(keychain: KeychainCredentialStore, accountId: String) {
+        self.keychain = keychain
+        store = WhatsAppStore(accountId: accountId)
+        device = keychain.loadWhatsAppDevice().flatMap { try? JSONDecoder().decode(WhatsAppDevice.self, from: $0) }
+        keys = Self.loadKeys(directory: store.directoryURL)
+    }
+
+    private static func loadKeys(directory: URL) -> WhatsAppKeyState {
+        (try? Data(contentsOf: directory.appending(path: "keys.json"))).flatMap { try? JSONDecoder().decode(WhatsAppKeyState.self, from: $0) } ?? WhatsAppKeyState()
+    }
+
+    /// Picks up a link another client made for this account, such as the one Settings links with.
+    private func reloadIfLinkedElsewhere() {
+        guard device == nil, let data = keychain.loadWhatsAppDevice(), let linked = try? JSONDecoder().decode(WhatsAppDevice.self, from: data) else { return }
+        device = linked
+        keys = Self.loadKeys(directory: store.directoryURL)
+        store.reload()
+    }
+
+    public nonisolated var isLinked: Bool {
+        keychain.loadWhatsAppDevice() != nil
+    }
+
+    public var account: WhatsAppAccount? {
+        guard let jid = device?.jid else { return nil }
+        return WhatsAppAccount(jid: jid, lid: device?.lid, pushName: device?.pushName)
+    }
+
+    private var signal: WhatsAppSignalStore {
+        get {
+            WhatsAppSignalStore(state: keys.signal, identity: device!.identityKey, registrationId: device!.registrationId, signedPreKey: device!.signedPreKey)
+        }
+        set {
+            keys.signal = newValue.state
+        }
+    }
+
+    private func saveDevice() {
+        guard let device, let data = try? JSONEncoder().encode(device) else { return }
+        try? keychain.saveWhatsAppDevice(data)
+    }
+
+    private func saveKeys() {
+        try? FileManager.default.createDirectory(at: store.directoryURL, withIntermediateDirectories: true)
+        guard let data = try? JSONEncoder().encode(keys) else { return }
+        try? data.write(to: store.directoryURL.appending(path: "keys.json"), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+    }
+
+    // MARK: Requests
+
+    private func requestId() -> String {
+        idCounter += 1
+        return "\(idPrefix)\(idCounter)"
+    }
+
+    private func send(_ node: WhatsAppNode) async throws {
+        guard let socket else { throw WhatsAppError.notConnected }
+        try await socket.send(node)
+    }
+
+    /// Sends a stanza and waits for the reply with its id: an `<iq>` result, or the `<ack>` for a message.
+    private func request(_ node: WhatsAppNode, id: String, timeout: Duration = .seconds(60)) async throws -> WhatsAppNode {
+        guard socket != nil else { throw WhatsAppError.notConnected }
+        let timeoutTask = Task { [weak self] in
+            try await Task.sleep(for: timeout)
+            await self?.fail(id: id, with: WhatsAppError.timeout)
+        }
+        defer { timeoutTask.cancel() }
+        return try await withCheckedThrowingContinuation { continuation in
+            waiters[id] = continuation
+            Task {
+                do {
+                    try await send(node)
+                } catch {
+                    fail(id: id, with: error)
+                }
+            }
+        }
+    }
+
+    private func fail(id: String, with error: Error) {
+        waiters.removeValue(forKey: id)?.resume(throwing: error)
+    }
+
+    @discardableResult
+    private func iq(_ xmlns: String, _ type: String, to: WhatsAppJID = .server, target: WhatsAppJID? = nil, _ children: [WhatsAppNode] = [], timeout: Duration = .seconds(60)) async throws -> WhatsAppNode {
+        let id = requestId()
+        var node = WhatsAppNode("iq", ["id": .string(id), "xmlns": .string(xmlns), "type": .string(type), "to": .jid(to)], children: children)
+        if let target {
+            node["target"] = .jid(target)
+        }
+        if children.isEmpty {
+            node.content = .none
+        }
+        let response = try await request(node, id: id, timeout: timeout)
+        if response.attr("type") == "error" {
+            let error = response.child("error")
+            throw WhatsAppError.iq(code: error?.attr("code") ?? "", text: error?.attr("text") ?? "")
+        }
+        return response
+    }
+
+    private func ack(_ node: WhatsAppNode) async {
+        var reply = WhatsAppNode("ack", ["class": .string(node.tag)])
+        reply["id"] = node["id"]
+        reply["to"] = node["from"]
+        reply["participant"] = node["participant"]
+        reply["recipient"] = node["recipient"]
+        if node.tag != "message" {
+            reply["type"] = node["type"]
+        }
+        try? await send(reply)
+    }
+
+    // MARK: Connection
+
+    /// Opens a socket, runs the handshake and starts reading: replies resolve their requests, everything else
+    /// arrives in order on the returned stream.
+    private func open(payload: Data) async throws -> AsyncThrowingStream<WhatsAppNode, Error> {
+        guard let device else { throw WhatsAppError.notLinked }
+        let socket = WhatsAppSocket()
+        try await socket.handshake(noiseKey: device.noiseKey, payload: payload)
+        self.socket = socket
+        let (stream, continuation) = AsyncThrowingStream<WhatsAppNode, Error>.makeStream()
+        let reader = Task { [weak self] in
+            do {
+                while !Task.isCancelled {
+                    let node = try await socket.receive()
+                    guard let self else { return }
+                    if await !resolve(node) {
+                        continuation.yield(node)
+                    }
+                }
+            } catch {
+                continuation.finish(throwing: error)
+                await self?.closed(socket, error: error)
+            }
+        }
+        // whatsmeow sends keepalives from the moment it connects; WhatsApp drops a silent socket.
+        let keepalive = Task { [weak self] in
+            while !Task.isCancelled {
+                try await Task.sleep(for: .seconds(Double.random(in: 20 ... 30)))
+                _ = try? await self?.iq("w:p", "get", timeout: .seconds(10))
+            }
+        }
+        continuation.onTermination = { _ in
+            reader.cancel()
+            keepalive.cancel()
+            socket.close()
+        }
+        return stream
+    }
+
+    private func resolve(_ node: WhatsAppNode) -> Bool {
+        let isReply = (node.tag == "iq" && ["result", "error"].contains(node.attr("type") ?? "")) || node.tag == "ack"
+        guard isReply, let id = node.attr("id"), let waiter = waiters.removeValue(forKey: id) else { return false }
+        waiter.resume(returning: node)
+        return true
+    }
+
+    private func closed(_ closedSocket: WhatsAppSocket, error _: Error) {
+        guard socket === closedSocket else { return }
+        socket = nil
+        for waiter in waiters.values {
+            waiter.resume(throwing: WhatsAppError.notConnected)
+        }
+        waiters.removeAll()
+    }
+
+    // MARK: Linking (whatsmeow pair.go, pair-code.go)
+
+    /// Links a new device: shows QR codes, or with a number requests a pairing code, and returns once WhatsApp
+    /// confirms the pairing. The first login happens on the next `run`.
+    public func link(phoneNumber: String?, onUpdate: @escaping @Sendable (WhatsAppLinkUpdate) -> Void) async throws -> WhatsAppAccount {
+        let version = try await Self.currentVersion()
+        device = WhatsAppDevice.generate(version: version)
+        keys = WhatsAppKeyState()
+        let registration = WhatsAppProto.DevicePairingRegistrationData(
+            registrationID: device!.registrationId, identityKey: device!.identityKey.publicKey, signedPreKeyID: device!.signedPreKey.id,
+            signedPreKey: device!.signedPreKey.keyPair.publicKey, signedPreKeySignature: device!.signedPreKey.signature, deviceProps: WhatsAppProto.DeviceProps(),
+        )
+        let payload = WhatsAppProto.ClientPayload(version: device!.appVersion, mode: .registration(registration)).serialized()
+        let stream = try await open(payload: payload)
+        var pairing: (jid: WhatsAppJID, key: WhatsAppKeyPair, code: String, ref: Data)?
+        var linked: WhatsAppAccount?
+        var qrTask: Task<Void, Never>?
+        defer {
+            qrTask?.cancel()
+            socket?.close()
+            socket = nil
+        }
+        for try await node in stream {
+            switch node.tag {
+            case "iq" where node.jid("from") == .server:
+                guard let child = node.children.first else { continue }
+                if child.tag == "pair-device" {
+                    var reply = WhatsAppNode("iq", ["type": "result"])
+                    reply["to"] = node["from"]
+                    reply["id"] = node["id"]
+                    try await send(reply)
+                    if let phoneNumber {
+                        guard pairing == nil else { continue }
+                        pairing = try await requestPairingCode(phoneNumber: phoneNumber)
+                        onUpdate(.pairingCode(String(pairing!.code.prefix(4)) + "-" + String(pairing!.code.suffix(4))))
+                    } else {
+                        let refs = child.children.filter { $0.tag == "ref" }.compactMap { String(data: $0.bytes, encoding: .utf8) }
+                        qrTask?.cancel()
+                        qrTask = Task { [device] in
+                            guard let device else { return }
+                            for (index, ref) in refs.enumerated() {
+                                let parts = [ref, device.noiseKey.publicKey.base64EncodedString(), device.identityKey.publicKey.base64EncodedString(), device.advSecret.base64EncodedString(), "6"]
+                                onUpdate(.qr("https://wa.me/settings/linked_devices#" + parts.joined(separator: ",")))
+                                try? await Task.sleep(for: .seconds(index == 0 ? 60 : 20))
+                                if Task.isCancelled { return }
+                            }
+                        }
+                    }
+                } else if child.tag == "pair-success" {
+                    qrTask?.cancel()
+                    linked = try await pairSuccess(node, child)
+                    onUpdate(.paired)
+                }
+            case "notification":
+                await ack(node)
+                if node.attr("type") == "link_code_companion_reg", let pairing {
+                    try await finishPairingCode(node, pairing: pairing)
+                }
+            case "stream:error" where linked != nil:
+                // WhatsApp closes the stream (515) once it has the signed identity; the link is complete.
+                return linked!
+            case "stream:error", "failure":
+                throw WhatsAppError.pairingFailed
+            default:
+                break
+            }
+        }
+        if let linked { return linked }
+        throw WhatsAppError.linkExpired
+    }
+
+    private func requestPairingCode(phoneNumber: String) async throws -> (jid: WhatsAppJID, key: WhatsAppKeyPair, code: String, ref: Data) {
+        let ephemeral = WhatsAppKeyPair.generate()
+        let salt = WhatsAppCipher.randomBytes(32)
+        let iv = WhatsAppCipher.randomBytes(16)
+        let raw = WhatsAppCipher.randomBytes(5).reduce(UInt64(0)) { $0 << 8 | UInt64($1) }
+        let code = String((0 ..< 8).map { Self.linkingAlphabet[Int(raw >> (35 - 5 * UInt64($0)) & 31)] })
+        let key = WhatsAppCipher.pbkdf2SHA256(password: Data(code.utf8), salt: salt, iterations: 2 << 16, length: 32)
+        let wrapped = try salt + iv + WhatsAppCipher.aesCTR(key: key, iv: iv, ephemeral.publicKey)
+        let jid = WhatsAppJID(user: phoneNumber, server: WhatsAppJID.Server.user)
+        var registration = WhatsAppNode("link_code_companion_reg", ["stage": "companion_hello", "should_show_push_notification": "true"], children: [
+            WhatsAppNode("link_code_pairing_wrapped_companion_ephemeral_pub", bytes: wrapped),
+            WhatsAppNode("companion_server_auth_key_pub", bytes: device!.noiseKey.publicKey),
+            WhatsAppNode("companion_platform_id", content: .string("6")),
+            WhatsAppNode("companion_platform_display", content: .string("Safari (stupid social)")),
+            WhatsAppNode("link_code_pairing_nonce", bytes: Data([0])),
+        ])
+        registration["jid"] = .jid(jid)
+        let response = try await iq("md", "set", [registration])
+        guard let ref = response.child("link_code_companion_reg", "link_code_pairing_ref")?.bytes, !ref.isEmpty else { throw WhatsAppError.pairingFailed }
+        return (jid, ephemeral, code, ref)
+    }
+
+    private func finishPairingCode(_ node: WhatsAppNode, pairing: (jid: WhatsAppJID, key: WhatsAppKeyPair, code: String, ref: Data)) async throws {
+        guard let registration = node.child("link_code_companion_reg"), registration.child("link_code_pairing_ref")?.bytes == pairing.ref,
+              let wrapped = registration.child("link_code_pairing_wrapped_primary_ephemeral_pub")?.bytes, wrapped.count >= 80,
+              let primaryIdentity = registration.child("primary_identity_pub")?.bytes, var device
+        else { throw WhatsAppError.pairingFailed }
+        let start = wrapped.startIndex
+        let key = WhatsAppCipher.pbkdf2SHA256(password: Data(pairing.code.utf8), salt: wrapped[start ..< start + 32], iterations: 2 << 16, length: 32)
+        let primaryEphemeral = try WhatsAppCipher.aesCTR(key: key, iv: wrapped[start + 32 ..< start + 48], wrapped[start + 48 ..< start + 80])
+        let ephemeralSecret = try pairing.key.agree(with: primaryEphemeral)
+        let advRandom = WhatsAppCipher.randomBytes(32)
+        let bundleSalt = WhatsAppCipher.randomBytes(32)
+        let bundleNonce = WhatsAppCipher.randomBytes(12)
+        let bundleKey = WhatsAppCipher.hkdf(ephemeralSecret, length: 32, salt: bundleSalt, info: Data("link_code_pairing_key_bundle_encryption_key".utf8))
+        let bundle = try WhatsAppCipher.aesGCMSeal(key: bundleKey, nonce: bundleNonce, device.identityKey.publicKey + primaryIdentity + advRandom)
+        let identitySecret = try device.identityKey.agree(with: primaryIdentity)
+        device.advSecret = WhatsAppCipher.hkdf(ephemeralSecret + identitySecret + advRandom, length: 32, info: Data("adv_secret".utf8))
+        self.device = device
+        var finish = WhatsAppNode("link_code_companion_reg", ["stage": "companion_finish"], children: [
+            WhatsAppNode("link_code_pairing_wrapped_key_bundle", bytes: bundleSalt + bundleNonce + bundle),
+            WhatsAppNode("companion_identity_public", bytes: device.identityKey.publicKey),
+            WhatsAppNode("link_code_pairing_ref", bytes: pairing.ref),
+        ])
+        finish["jid"] = .jid(pairing.jid)
+        try await iq("md", "set", [finish])
+    }
+
+    private func pairSuccess(_ node: WhatsAppNode, _ success: WhatsAppNode) async throws -> WhatsAppAccount {
+        guard var device, let requestId = node.attr("id") else { throw WhatsAppError.pairingFailed }
+        let container = try WhatsAppProto.ADVSignedDeviceIdentityHMAC(data: success.child("device-identity")?.bytes ?? Data())
+        let prefix = container.accountType == .hosted ? Data([6, 5]) : Data()
+        guard WhatsAppCipher.hmacSHA256(key: device.advSecret, prefix + container.details) == container.hmac else {
+            try? await pairError(requestId, code: 401, text: "hmac-mismatch")
+            throw WhatsAppError.pairingFailed
+        }
+        var identity = try WhatsAppProto.ADVSignedDeviceIdentity(data: container.details)
+        let details = try WhatsAppProto.ADVDeviceIdentity(data: identity.details ?? Data())
+        let publicKey = device.identityKey.publicKey
+        guard let accountKey = identity.accountSignatureKey, let accountSignature = identity.accountSignature,
+              WhatsAppXEdDSA.verify(publicKey: accountKey, message: Data([6, 0]) + (identity.details ?? Data()) + publicKey, signature: accountSignature)
+        else {
+            try? await pairError(requestId, code: 401, text: "signature-mismatch")
+            throw WhatsAppError.pairingFailed
+        }
+        identity.deviceSignature = device.identityKey.sign(Data([6, 1]) + (identity.details ?? Data()) + publicKey + accountKey)
+        guard let jid = success.child("device")?.jid("jid") else { throw WhatsAppError.pairingFailed }
+        let lid = success.child("device")?.jid("lid")
+        device.jid = jid
+        device.lid = lid
+        device.account = identity.serialized()
+        self.device = device
+        if let lid {
+            keys.signal.identities[WhatsAppJID(user: lid.user, server: WhatsAppJID.Server.lid).signalAddress] = accountKey
+            store.update { $0.lidByPhoneNumber[jid.user] = lid.user }
+        }
+        saveDevice()
+        saveKeys()
+        store.save()
+        identity.accountSignatureKey = nil
+        var reply = WhatsAppNode("iq", ["type": "result", "id": .string(requestId)], children: [
+            WhatsAppNode("pair-device-sign", children: [WhatsAppNode("device-identity", ["key-index": .string(String(details.keyIndex))], bytes: identity.serialized())]),
+        ])
+        reply["to"] = .jid(.server)
+        try await send(reply)
+        return WhatsAppAccount(jid: jid, lid: lid, pushName: nil)
+    }
+
+    private func pairError(_ id: String, code: Int, text: String) async throws {
+        var reply = WhatsAppNode("iq", ["type": "error", "id": .string(id)], children: [WhatsAppNode("error", ["code": .string(String(code)), "text": .string(text)])])
+        reply["to"] = .jid(.server)
+        try await send(reply)
+    }
+
+    /// The current web client revision from `sw.js`, as Baileys reads it (needs `Sec-Fetch-Site`).
+    static func currentVersion() async throws -> [UInt32] {
+        var request = URLRequest(url: URL(string: "https://web.whatsapp.com/sw.js")!)
+        request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
+        request.setValue("none", forHTTPHeaderField: "Sec-Fetch-Site")
+        let (data, _) = try await URLSession.shared.data(for: request)
+        let body = String(decoding: data, as: UTF8.self)
+        guard let match = body.firstMatch(of: /client_revision\\?":\s*(\d+)/), let revision = UInt32(match.1) else {
+            throw WhatsAppError.clientOutdated
+        }
+        return [2, 3000, revision]
+    }
+
+    // MARK: Session
+
+    /// Logs in and handles everything WhatsApp sends until the connection closes. `onLoggedIn` hears when the
+    /// login succeeded, and `onChanges` what the store gained.
+    public func run(onLoggedIn: @escaping @Sendable () -> Void, onChanges: @escaping @Sendable (WhatsAppChanges) -> Void) async throws {
+        reloadIfLinkedElsewhere()
+        guard let device, let jid = device.jid else { throw WhatsAppError.notLinked }
+        self.onLoggedIn = onLoggedIn
+        self.onChanges = onChanges
+        let payload = WhatsAppProto.ClientPayload(version: device.appVersion, mode: .login(username: UInt64(jid.user) ?? 0, device: UInt32(jid.device))).serialized()
+        let stream = try await open(payload: payload)
+        logger.info("WhatsApp connected")
+        defer {
+            socket?.close()
+            socket = nil
+            store.save()
+            saveKeys()
+        }
+        for try await node in stream {
+            try await handle(node)
+            flush()
+        }
+        throw WhatsAppError.notConnected
+    }
+
+    private func flush() {
+        guard !pending.isEmpty else { return }
+        let changes = pending
+        pending = WhatsAppChanges()
+        store.save()
+        onChanges?(changes)
+    }
+
+    private func handle(_ node: WhatsAppNode) async throws {
+        switch node.tag {
+        case "success":
+            logger.info("WhatsApp logged in")
+            onLoggedIn?()
+            if let lid = node.jid("lid"), device?.lid == nil {
+                device?.lid = lid
+                saveDevice()
+            }
+            Task { await afterLogin() }
+        case "failure":
+            let reason = Int(node.attr("reason") ?? "") ?? 0
+            switch reason {
+            case 401, 403, 406:
+                await forgetDevice()
+                throw WhatsAppError.loggedOut
+            case 402: throw WhatsAppError.banned
+            case 405:
+                if let version = try? await Self.currentVersion() {
+                    device?.version = version
+                    saveDevice()
+                }
+                throw WhatsAppError.clientOutdated
+            default: throw WhatsAppError.connectFailure(reason)
+            }
+        case "stream:error":
+            let code = node.attr("code") ?? ""
+            let conflict = node.child("conflict")?.attr("type")
+            if conflict == "device_removed" || code == "401" {
+                await forgetDevice()
+                throw WhatsAppError.loggedOut
+            } else if conflict == "replaced" {
+                throw WhatsAppError.replaced
+            }
+            throw WhatsAppError.streamError(code)
+        case "message":
+            await handleMessage(node)
+        case "receipt":
+            await ack(node)
+            handleReceipt(node)
+        case "notification":
+            await ack(node)
+            await handleNotification(node)
+        case "call":
+            await ack(node)
+        default:
+            break
+        }
+    }
+
+    private func afterLogin() async {
+        do {
+            try await ensurePreKeys()
+            try await iq("passive", "set", [WhatsAppNode("active")])
+            if let privacy = try? await iq("privacy", "get", [WhatsAppNode("privacy")]) {
+                let category = privacy.child("privacy")?.children.first { $0.attr("name") == "readreceipts" }
+                keys.readReceipts = category?.attr("value") != "none"
+            }
+            if !keys.appStateKeys.isEmpty {
+                await syncAppState()
+            }
+            try await fetchGroups()
+            requestAvatars(for: store.chats.sorted { ($0.lastTimestamp ?? .distantPast) > ($1.lastTimestamp ?? .distantPast) }.prefix(Self.avatarPrefetchCount).map(\.jid))
+        } catch {
+            logger.info("WhatsApp post-login setup failed: \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    private func forgetDevice() async {
+        device = nil
+        try? keychain.deleteWhatsAppDevice()
+    }
+
+    /// Logs this device out of WhatsApp (connecting for it when the app isn't) and removes its keys and chats.
+    public func logout() async {
+        if let jid = device?.jid {
+            // Kept until the request is answered: ending the stream closes its socket.
+            var iterator: AsyncThrowingStream<WhatsAppNode, Error>.AsyncIterator?
+            if socket == nil, let device {
+                let payload = WhatsAppProto.ClientPayload(version: device.appVersion, mode: .login(username: UInt64(jid.user) ?? 0, device: UInt32(jid.device))).serialized()
+                iterator = try? await open(payload: payload).makeAsyncIterator()
+                while let node = try? await iterator?.next(), node.tag != "success", node.tag != "failure" {}
+            }
+            _ = try? await iq("md", "set", [WhatsAppNode("remove-companion-device", ["jid": .jid(jid), "reason": "user_initiated"])])
+            iterator = nil
+        }
+        socket?.close()
+        socket = nil
+        await forgetDevice()
+        keys = WhatsAppKeyState()
+        store.removeAll()
+    }
+
+    // MARK: Prekeys (whatsmeow prekeys.go)
+
+    private func ensurePreKeys() async throws {
+        guard let device else { return }
+        let response = try await iq("encrypt", "get", [WhatsAppNode("count")])
+        let count = Int(response.child("count")?.attr("value") ?? "") ?? 0
+        guard count < Self.minimumPreKeyCount || keys.uploadedPreKeyId == 0 else { return }
+        let wanted = count == 0 && keys.uploadedPreKeyId == 0 ? Self.initialPreKeyCount : Self.wantedPreKeyCount
+        var nodes: [WhatsAppNode] = []
+        for _ in 0 ..< wanted {
+            let id = keys.nextPreKeyId
+            keys.nextPreKeyId += 1
+            let pair = WhatsAppKeyPair.generate()
+            keys.preKeys[String(id)] = pair
+            nodes.append(WhatsAppNode("key", children: [WhatsAppNode("id", bytes: Self.uint24(id)), WhatsAppNode("value", bytes: pair.publicKey)]))
+        }
+        saveKeys()
+        try await iq("encrypt", "set", [
+            WhatsAppNode("registration", bytes: withUnsafeBytes(of: device.registrationId.bigEndian) { Data($0) }),
+            WhatsAppNode("type", bytes: Data([5])),
+            WhatsAppNode("identity", bytes: device.identityKey.publicKey),
+            WhatsAppNode("list", children: nodes),
+            WhatsAppNode("skey", children: [
+                WhatsAppNode("id", bytes: Self.uint24(device.signedPreKey.id)),
+                WhatsAppNode("value", bytes: device.signedPreKey.keyPair.publicKey),
+                WhatsAppNode("signature", bytes: device.signedPreKey.signature),
+            ]),
+        ])
+        keys.uploadedPreKeyId = keys.nextPreKeyId - 1
+        saveKeys()
+    }
+
+    private static func uint24(_ value: UInt32) -> Data {
+        Data([UInt8(value >> 16 & 0xFF), UInt8(value >> 8 & 0xFF), UInt8(value & 0xFF)])
+    }
+
+    // MARK: Addressing
+
+    private var ownUsers: Set<String> {
+        Set([device?.jid?.user, device?.lid?.user].compactMap(\.self))
+    }
+
+    private func lid(for jid: WhatsAppJID) -> WhatsAppJID? {
+        if jid.server == WhatsAppJID.Server.lid { return jid }
+        return store.lid(forPhoneNumberUser: jid.user).map { WhatsAppJID(user: $0, server: WhatsAppJID.Server.lid, device: jid.device) }
+    }
+
+    private func storeLID(phoneNumber: WhatsAppJID?, lid: WhatsAppJID?) {
+        guard let phoneNumber, let lid, phoneNumber.server == WhatsAppJID.Server.user, lid.server == WhatsAppJID.Server.lid,
+              store.lid(forPhoneNumberUser: phoneNumber.user) != lid.user
+        else { return }
+        store.update { $0.lidByPhoneNumber[phoneNumber.user] = lid.user }
+    }
+
+    /// One chat per person: a LID chat and a phone-number chat for the same person are the one history named.
+    private func canonicalChat(_ jid: WhatsAppJID) -> String {
+        let plain = jid.nonAD
+        if plain.server == WhatsAppJID.Server.lid, let phone = store.phoneNumberUser(forLIDUser: plain.user) {
+            let phoneChat = "\(phone)@\(WhatsAppJID.Server.user)"
+            if store.chat(phoneChat) != nil { return phoneChat }
+        } else if plain.server == WhatsAppJID.Server.user, let lid = store.lid(forPhoneNumberUser: plain.user) {
+            let lidChat = "\(lid)@\(WhatsAppJID.Server.lid)"
+            if store.chat(lidChat) != nil { return lidChat }
+        }
+        return plain.description
+    }
+
+    // MARK: Receiving (whatsmeow message.go)
+
+    private struct Source {
+        var chat: WhatsAppJID
+        var sender: WhatsAppJID
+        var senderAlt: WhatsAppJID?
+        var isGroup: Bool
+        var isFromMe: Bool
+    }
+
+    private func source(of node: WhatsAppNode) -> Source? {
+        guard let from = node.jid("from") else { return nil }
+        let own = ownUsers
+        if from.server == WhatsAppJID.Server.group || from.server == WhatsAppJID.Server.broadcast {
+            guard let participant = node.jid("participant") else { return nil }
+            let alt = node.jid("participant_pn") ?? (node.attr("addressing_mode") != "lid" ? node.jid("participant_lid") : nil)
+            return Source(chat: from, sender: participant, senderAlt: alt, isGroup: true, isFromMe: own.contains(participant.user))
+        } else if own.contains(from.user) {
+            return Source(chat: node.jid("recipient") ?? from.nonAD, sender: from, senderAlt: nil, isGroup: false, isFromMe: true)
+        }
+        let alt = from.server == WhatsAppJID.Server.lid ? node.jid("sender_pn") : node.jid("sender_lid")
+        return Source(chat: from.nonAD, sender: from, senderAlt: alt, isGroup: false, isFromMe: false)
+    }
+
+    private func encryptionJID(_ source: Source) -> WhatsAppJID {
+        var alt = source.senderAlt
+        if let value = alt, value.device == 0 {
+            alt = WhatsAppJID(user: value.user, server: value.server, device: source.sender.device)
+        }
+        if source.sender.server == WhatsAppJID.Server.user {
+            if let alt, alt.server == WhatsAppJID.Server.lid {
+                storeLID(phoneNumber: source.sender, lid: alt)
+                return alt
+            }
+            return lid(for: source.sender) ?? source.sender
+        }
+        if source.sender.server == WhatsAppJID.Server.lid, let alt, alt.server == WhatsAppJID.Server.user {
+            storeLID(phoneNumber: alt, lid: source.sender)
+        }
+        return source.sender
+    }
+
+    private func handleMessage(_ node: WhatsAppNode) async {
+        guard let source = source(of: node), let id = node.attr("id") else {
+            await ack(node)
+            return
+        }
+        if let notify = node.attr("notify"), !notify.isEmpty, notify != "-" {
+            store.update { $0.pushNames[source.sender.user] = notify }
+        }
+        let address = encryptionJID(source)
+        let timestamp = Date(timeIntervalSince1970: TimeInterval(node.attr("t").flatMap(Double.init) ?? Date().timeIntervalSince1970))
+        var decryptedAny = false
+        for child in node.children where child.tag == "enc" {
+            let content = child.bytes
+            do {
+                var store = signal
+                let plaintext: Data
+                switch child.attr("type") {
+                case "pkmsg":
+                    let result = try store.decryptPreKeyMessage(address: address.signalAddress, content, keepState: child.attr("state") != "false") { id in
+                        self.keys.preKeys[String(id)]
+                    }
+                    if child.attr("state") != "false", let used = result.usedPreKeyId {
+                        keys.preKeys[String(used)] = nil
+                    }
+                    plaintext = result.plaintext
+                case "msg":
+                    plaintext = try store.decryptMessage(address: address.signalAddress, content)
+                case "skmsg" where source.isGroup:
+                    plaintext = try store.decryptGroupMessage(group: source.chat.description, address: address.signalAddress, content)
+                default:
+                    continue
+                }
+                signal = store
+                saveKeys()
+                let version = Int(child.attr("v") ?? "2") ?? 2
+                guard version == 2 else { continue }
+                let message = try WhatsAppProto.Message(data: WhatsAppMessagePadding.unpad(plaintext, version: version))
+                decryptedAny = true
+                await handleDecrypted(message, id: id, source: source, address: address, timestamp: timestamp, node: node)
+            } catch WhatsAppSignalError.oldCounter {
+                continue
+            } catch {
+                logger.info("WhatsApp couldn't decrypt \(child.attr("type") ?? "", privacy: .public): \(String(describing: error), privacy: .public)")
+                AppMetrics.whatsAppFailed("decrypt", error: error)
+                await ack(node)
+                return
+            }
+        }
+        if decryptedAny {
+            var receipt = WhatsAppNode("receipt", ["id": .string(id)])
+            receipt["to"] = node["from"]
+            receipt["recipient"] = node["recipient"]
+            receipt["participant"] = node["participant"]
+            // Like whatsmeow without active receipts: delivered to an inactive device, never "read".
+            receipt["type"] = source.isFromMe ? (node.attr("type") == "peer_msg" ? "peer_msg" : "sender") : "inactive"
+            try? await send(receipt)
+        } else {
+            await ack(node)
+        }
+    }
+
+    private func handleDecrypted(_ message: WhatsAppProto.Message, id: String, source: Source, address: WhatsAppJID, timestamp: Date, node: WhatsAppNode) async {
+        var content = message
+        var chat = source.chat
+        if let deviceSent = message.deviceSent, let inner = deviceSent.message {
+            content = inner
+            if let destination = deviceSent.destinationJID.flatMap(WhatsAppJID.init(string:)) {
+                chat = destination
+            }
+        }
+        if let distribution = content.senderKeyDistribution?.axolotlSenderKeyDistributionMessage, source.isGroup {
+            var store = signal
+            if (try? store.processSenderKeyDistribution(group: source.chat.description, address: address.signalAddress, distribution)) != nil {
+                signal = store
+                saveKeys()
+            }
+        }
+        if let protocolMessage = content.protocolMessage {
+            await handleProtocolMessage(protocolMessage, id: id, source: source, chat: chat, timestamp: timestamp, node: node)
+        }
+        // Status updates (`status@broadcast`) and broadcast lists aren't chats.
+        guard chat.server != WhatsAppJID.Server.broadcast else { return }
+        apply(content, id: id, chat: canonicalChat(chat), sender: source.isFromMe ? (device?.jid?.nonAD.description ?? "") : source.sender.nonAD.description, isFromMe: source.isFromMe, timestamp: timestamp, live: true)
+    }
+
+    private func handleProtocolMessage(_ message: WhatsAppProto.ProtocolMessage, id: String, source: Source, chat _: WhatsAppJID, timestamp _: Date, node: WhatsAppNode) async {
+        guard source.isFromMe else { return }
+        if let notification = message.historySyncNotification {
+            do {
+                try await processHistorySync(notification)
+            } catch {
+                logger.info("WhatsApp history sync failed: \(String(describing: error), privacy: .public)")
+                AppMetrics.whatsAppFailed("history_sync", error: error)
+            }
+            if let own = device?.jid?.nonAD {
+                try? await send(WhatsAppNode("receipt", ["id": .string(id), "type": "hist_sync", "to": .jid(own)]))
+            }
+        }
+        if let share = message.appStateSyncKeyShare {
+            for key in share.keys {
+                guard let keyId = key.keyID, let data = key.keyData else { continue }
+                keys.appStateKeys[keyId.hexString] = .init(data: data, timestamp: key.timestamp ?? 0)
+            }
+            saveKeys()
+            Task { await syncAppState() }
+        }
+        if let payload = message.lidMigrationMappingPayload, let mappings = try? WhatsAppProto.LIDMigrationMappingSyncPayload(data: payload) {
+            store.update { directory in
+                for mapping in mappings.mappings {
+                    directory.lidByPhoneNumber[String(mapping.pn)] = String(mapping.assignedLID)
+                }
+            }
+        }
+        if node.attr("category") == "peer", let own = device?.jid?.nonAD {
+            try? await send(WhatsAppNode("receipt", ["id": .string(id), "type": "peer_msg", "to": .jid(own)]))
+        }
+    }
+
+    /// Stores a message's effect: a new or edited message, a deletion, or nothing for protocol-only content.
+    private func apply(_ message: WhatsAppProto.Message, id: String, chat: String, sender: String, isFromMe: Bool, timestamp: Date, live: Bool) {
+        let content = message.unwrapped
+        if let protocolMessage = content.protocolMessage {
+            switch protocolMessage.kind {
+            case .revoke:
+                if let target = protocolMessage.key?.id, store.modifyMessage(target, in: chat, { $0.isDeleted = true; $0.text = nil; $0.label = nil }) {
+                    pending.chats.insert(chat)
+                }
+            case .messageEdit:
+                if let target = protocolMessage.key?.id, let edited = protocolMessage.editedMessage,
+                   store.modifyMessage(target, in: chat, { $0.text = Self.text(of: edited.unwrapped) ?? $0.text; $0.editedAt = timestamp })
+                {
+                    pending.chats.insert(chat)
+                }
+            default:
+                break
+            }
+            return
+        }
+        if content.reaction != nil || content.senderKeyDistribution != nil, Self.text(of: content) == nil, Self.label(of: content) == nil {
+            return
+        }
+        let text = Self.text(of: content)
+        let label = text == nil ? Self.label(of: content) ?? "Unsupported message" : nil
+        let quoted = content.extendedText?.contextInfo?.stanzaID ?? content.media?.contextInfo?.stanzaID
+        let stored = WhatsAppMessage(id: id, sender: sender, isFromMe: isFromMe, timestamp: timestamp, text: text, label: label, quotedId: quoted)
+        if store.upsert([stored], in: chat), live {
+            store.updateChat(chat) { chat in
+                if isFromMe {
+                    // Writing from another device reads the chat there.
+                    chat.unreadCount = 0
+                    chat.readUpTo = timestamp
+                } else if chat.readUpTo == nil {
+                    chat.unreadCount += 1
+                }
+            }
+        }
+        pending.chats.insert(chat)
+    }
+
+    static func text(of message: WhatsAppProto.Message) -> String? {
+        let text = message.conversation ?? message.extendedText?.text ?? message.media?.caption
+        return text?.isEmpty == false ? text : nil
+    }
+
+    static func label(of message: WhatsAppProto.Message) -> String? {
+        if let media = message.media {
+            switch media.kind {
+            case .image: return "Photo"
+            case .video: return "Video"
+            case .audio: return media.ptt == true ? "Voice message" : "Audio"
+            case .document: return media.fileName.map { "Document: \($0)" } ?? "Document"
+            case .sticker: return "Sticker"
+            }
+        }
+        if message.contact != nil || message.contactsArray != nil { return "Contact" }
+        if let location = message.location { return location.isLive ? "Live location" : "Location" }
+        if let poll = message.poll { return poll.name.map { "Poll: \($0)" } ?? "Poll" }
+        return nil
+    }
+
+    private func handleReceipt(_ node: WhatsAppNode) {
+        // The user read messages on another of their devices.
+        guard node.attr("type") == "read-self", let from = node.jid("from") else { return }
+        let chat = canonicalChat(node.jid("recipient") ?? from)
+        let time = node.attr("t").flatMap(Double.init).map { Date(timeIntervalSince1970: $0) } ?? Date()
+        store.updateChat(chat) {
+            $0.readUpTo = max($0.readUpTo ?? .distantPast, time)
+            $0.unreadCount = 0
+        }
+        pending.chats.insert(chat)
+    }
+
+    private func handleNotification(_ node: WhatsAppNode) async {
+        switch node.attr("type") {
+        case "encrypt" where node.jid("from") == .server:
+            if let count = node.child("count")?.attr("value").flatMap(Int.init), count < Self.minimumPreKeyCount {
+                try? await ensurePreKeys()
+            }
+        case "server_sync":
+            await syncAppState()
+        case "w:gp2":
+            try? await fetchGroups()
+        case "picture":
+            // Someone changed their picture: look it up again when it's next shown.
+            for child in node.children {
+                if let jid = child.jid("jid") ?? node.jid("from") {
+                    store.update { $0.avatars[jid.nonAD.description] = nil }
+                }
+            }
+        default:
+            break
+        }
+    }
+
+    // MARK: History sync
+
+    private func processHistorySync(_ notification: WhatsAppProto.HistorySyncNotification) async throws {
+        let compressed: Data = if let inline = notification.initialHistBootstrapInlinePayload, !inline.isEmpty {
+            inline
+        } else {
+            try await download(directPath: notification.directPath, encSHA256: notification.fileEncSHA256, sha256: notification.fileSHA256, mediaKey: notification.mediaKey, info: "WhatsApp History Keys", mmsType: "md-msg-hist")
+        }
+        let history = try WhatsAppProto.HistorySync(data: WhatsAppZlib.decompress(compressed))
+        store.update { directory in
+            for mapping in history.phoneNumberToLIDMappings {
+                if let phone = WhatsAppJID(string: mapping.pnJID), let lid = WhatsAppJID(string: mapping.lidJID) {
+                    directory.lidByPhoneNumber[phone.user] = lid.user
+                }
+            }
+            for pushName in history.pushnames {
+                if let jid = WhatsAppJID(string: pushName.id) {
+                    directory.pushNames[jid.user] = pushName.pushname
+                }
+            }
+        }
+        let own = device?.jid?.nonAD.description ?? ""
+        for conversation in history.conversations {
+            guard let jid = WhatsAppJID(string: conversation.id), jid.server != WhatsAppJID.Server.broadcast, jid.server != WhatsAppJID.Server.newsletter else { continue }
+            let chat = jid.description
+            store.updateChat(chat) { stored in
+                if let name = conversation.name, !name.isEmpty { stored.name = name }
+                if let phone = conversation.pnJID { stored.phoneNumberJID = phone }
+                stored.unreadCount = Int(conversation.unreadCount)
+                stored.markedUnread = conversation.markedAsUnread
+                stored.isArchived = conversation.archived
+                stored.isPinned = conversation.pinned > 0
+                stored.muteEnd = conversation.muteEndTime > 0 ? Int64(bitPattern: conversation.muteEndTime) : nil
+                stored.readUpTo = nil
+                let time = Date(timeIntervalSince1970: TimeInterval(max(conversation.conversationTimestamp, conversation.lastMsgTimestamp)))
+                if time > (stored.lastTimestamp ?? .distantPast) { stored.lastTimestamp = time }
+            }
+            for info in conversation.messages {
+                guard let message = info.message, let key = info.key, let id = key.id else { continue }
+                let isFromMe = key.fromMe == true
+                let sender = isFromMe ? own : (key.participant ?? info.participant ?? key.remoteJID ?? chat)
+                apply(message, id: id, chat: chat, sender: WhatsAppJID(string: sender)?.nonAD.description ?? sender, isFromMe: isFromMe,
+                      timestamp: Date(timeIntervalSince1970: TimeInterval(info.messageTimestamp)), live: false)
+            }
+        }
+        pending.reloadList = true
+        logger.info("WhatsApp history sync: \(history.conversations.count) chats")
+    }
+
+    private func download(directPath: String?, encSHA256: Data?, sha256: Data?, mediaKey: Data?, info: String, mmsType: String) async throws -> Data {
+        guard let directPath, let encSHA256, let sha256, let mediaKey else { throw WhatsAppError.download }
+        if mediaHosts == nil || mediaHosts!.expires < Date() {
+            let response = try await iq("w:m", "set", [WhatsAppNode("media_conn")])
+            let connection = response.child("media_conn")
+            let hosts = connection?.children.filter { $0.tag == "host" }.compactMap { $0.attr("hostname") } ?? []
+            let ttl = connection?.attr("ttl").flatMap(Double.init) ?? 300
+            mediaHosts = (hosts, Date().addingTimeInterval(ttl))
+        }
+        let expanded = WhatsAppCipher.hkdf(mediaKey, length: 112, info: Data(info.utf8))
+        let iv = expanded.prefix(16)
+        let cipherKey = expanded[expanded.startIndex + 16 ..< expanded.startIndex + 48]
+        let macKey = expanded[expanded.startIndex + 48 ..< expanded.startIndex + 80]
+        let hash = encSHA256.base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
+        for host in mediaHosts?.hosts ?? [] {
+            guard let url = URL(string: "https://\(host)\(directPath)&hash=\(hash)&mms-type=\(mmsType)&__wa-mms=") else { continue }
+            var request = URLRequest(url: url)
+            request.setValue(WhatsAppSocket.origin, forHTTPHeaderField: "Origin")
+            request.setValue(WhatsAppSocket.origin + "/", forHTTPHeaderField: "Referer")
+            guard let (data, response) = try? await URLSession.shared.data(for: request), (response as? HTTPURLResponse)?.statusCode == 200, data.count > 10 else { continue }
+            guard WhatsAppCipher.sha256(data) == encSHA256 else { throw WhatsAppError.download }
+            let file = data.prefix(data.count - 10)
+            guard WhatsAppCipher.hmacSHA256(key: Data(macKey), Data(iv) + file).prefix(10) == data.suffix(10) else { throw WhatsAppError.download }
+            let plaintext = try WhatsAppCipher.aesCBCDecrypt(key: Data(cipherKey), iv: Data(iv), Data(file))
+            guard WhatsAppCipher.sha256(plaintext) == sha256 else { throw WhatsAppError.download }
+            return plaintext
+        }
+        throw WhatsAppError.download
+    }
+
+    // MARK: App state (whatsmeow appstate/)
+
+    private func syncAppState() async {
+        guard !syncingAppState else { return }
+        syncingAppState = true
+        defer { syncingAppState = false }
+        for name in Self.collections {
+            do {
+                try await syncCollection(name)
+            } catch {
+                logger.info("WhatsApp app state \(name, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+            }
+        }
+        saveKeys()
+        pending.reloadList = true
+        flush()
+    }
+
+    private func syncCollection(_ name: String) async throws {
+        var state = keys.collections[name] ?? .init(version: 0, hash: Data(count: 128), macs: [:])
+        var wantSnapshot = state.version == 0
+        while true {
+            var collection = WhatsAppNode("collection", ["name": .string(name), "return_snapshot": .string(wantSnapshot ? "true" : "false")])
+            if !wantSnapshot {
+                collection["version"] = .string(String(state.version))
+            }
+            let response = try await iq("w:sync:app:state", "set", [WhatsAppNode("sync", children: [collection])])
+            guard let result = response.child("sync", "collection") else { throw WhatsAppError.unsupported }
+            if let snapshotData = result.child("snapshot")?.bytes, !snapshotData.isEmpty {
+                let reference = try WhatsAppProto.ExternalBlobReference(data: snapshotData)
+                let snapshot = try await WhatsAppProto.SyncdSnapshot(data: download(reference))
+                try applySnapshot(snapshot, name: name, state: &state)
+            }
+            for patchNode in result.child("patches")?.children ?? [] {
+                var patch = try WhatsAppProto.SyncdPatch(data: patchNode.bytes)
+                if let external = patch.externalMutations {
+                    patch.mutations = try await WhatsAppProto.SyncdMutations(data: download(external)).mutations
+                }
+                try applyPatch(patch, name: name, state: &state)
+            }
+            wantSnapshot = false
+            if result.attr("has_more_patches") != "true" { break }
+        }
+        keys.collections[name] = state
+    }
+
+    private func download(_ reference: WhatsAppProto.ExternalBlobReference) async throws -> Data {
+        try await download(directPath: reference.directPath, encSHA256: reference.fileEncSHA256, sha256: reference.fileSHA256, mediaKey: reference.mediaKey, info: "WhatsApp App State Keys", mmsType: "md-app-state")
+    }
+
+    private struct MutationKeys {
+        let index, value, valueMAC, snapshotMAC, patchMAC: Data
+    }
+
+    private func mutationKeys(_ keyId: Data) throws -> MutationKeys {
+        guard let key = keys.appStateKeys[keyId.hexString] else { throw WhatsAppError.unsupported }
+        let expanded = WhatsAppCipher.hkdf(key.data, length: 160, info: Data("WhatsApp Mutation Keys".utf8))
+        func part(_ index: Int) -> Data {
+            Data(expanded[expanded.startIndex + index * 32 ..< expanded.startIndex + (index + 1) * 32])
+        }
+        return MutationKeys(index: part(0), value: part(1), valueMAC: part(2), snapshotMAC: part(3), patchMAC: part(4))
+    }
+
+    private static func ltHash(_ hash: inout Data, _ macs: [Data], subtract: Bool) {
+        var bytes = [UInt8](hash)
+        for mac in macs {
+            let expanded = [UInt8](WhatsAppCipher.hkdf(mac, length: 128, info: Data("WhatsApp Patch Integrity".utf8)))
+            for index in stride(from: 0, to: 128, by: 2) {
+                let x = UInt16(bytes[index]) | UInt16(bytes[index + 1]) << 8
+                let y = UInt16(expanded[index]) | UInt16(expanded[index + 1]) << 8
+                let result = subtract ? x &- y : x &+ y
+                bytes[index] = UInt8(result & 0xFF)
+                bytes[index + 1] = UInt8(result >> 8)
+            }
+        }
+        hash = Data(bytes)
+    }
+
+    private static func snapshotMAC(_ hash: Data, version: UInt64, name: String, key: Data) -> Data {
+        WhatsAppCipher.hmacSHA256(key: key, hash + withUnsafeBytes(of: version.bigEndian) { Data($0) } + Data(name.utf8))
+    }
+
+    private func decodeMutation(operation: WhatsAppProto.SyncdMutation.Operation, record: WhatsAppProto.SyncdRecord) throws -> (index: [String], value: WhatsAppProto.SyncActionValue?, indexMAC: Data, valueMAC: Data) {
+        let keys = try mutationKeys(record.keyID)
+        let blob = record.value
+        guard blob.count > 48 else { throw WhatsAppError.unsupported }
+        let content = blob.prefix(blob.count - 32)
+        let valueMAC = Data(blob.suffix(32))
+        let operationByte = Data([UInt8(operation.rawValue) + 1])
+        let length = withUnsafeBytes(of: UInt64(record.keyID.count + 1).bigEndian) { Data($0) }
+        guard WhatsAppCipher.hmacSHA512(key: keys.valueMAC, operationByte + record.keyID + content + length).prefix(32) == valueMAC else {
+            throw WhatsAppError.unsupported
+        }
+        let plaintext = try WhatsAppCipher.aesCBCDecrypt(key: keys.value, iv: Data(content.prefix(16)), Data(content.dropFirst(16)))
+        let action = try WhatsAppProto.SyncActionData(data: plaintext)
+        guard WhatsAppCipher.hmacSHA256(key: keys.index, action.index) == record.index else { throw WhatsAppError.unsupported }
+        let index = (try? JSONSerialization.jsonObject(with: action.index) as? [String]) ?? []
+        return (index, action.value, record.index, valueMAC)
+    }
+
+    private func applySnapshot(_ snapshot: WhatsAppProto.SyncdSnapshot, name: String, state: inout WhatsAppKeyState.Collection) throws {
+        state = .init(version: snapshot.version, hash: Data(count: 128), macs: [:])
+        Self.ltHash(&state.hash, snapshot.records.map { Data($0.value.suffix(32)) }, subtract: false)
+        let keys = try mutationKeys(snapshot.keyID)
+        guard Self.snapshotMAC(state.hash, version: state.version, name: name, key: keys.snapshotMAC) == snapshot.mac else { throw WhatsAppError.unsupported }
+        for record in snapshot.records {
+            let mutation = try decodeMutation(operation: .set, record: record)
+            state.macs[mutation.indexMAC.base64EncodedString()] = mutation.valueMAC
+            applyAction(index: mutation.index, value: mutation.value, removed: false)
+        }
+    }
+
+    private func applyPatch(_ patch: WhatsAppProto.SyncdPatch, name: String, state: inout WhatsAppKeyState.Collection) throws {
+        var added: [Data] = []
+        var removed: [Data] = []
+        for (position, mutation) in patch.mutations.enumerated() {
+            if mutation.operation == .set {
+                added.append(Data(mutation.record.value.suffix(32)))
+            }
+            let indexMAC = mutation.record.index
+            if let earlier = patch.mutations[..<position].last(where: { $0.record.index == indexMAC }) {
+                if earlier.operation == .set { removed.append(Data(earlier.record.value.suffix(32))) }
+            } else if let previous = state.macs[indexMAC.base64EncodedString()] {
+                removed.append(previous)
+            }
+        }
+        var hash = state.hash
+        Self.ltHash(&hash, removed, subtract: true)
+        Self.ltHash(&hash, added, subtract: false)
+        let keys = try mutationKeys(patch.keyID)
+        guard Self.snapshotMAC(hash, version: patch.version, name: name, key: keys.snapshotMAC) == patch.snapshotMAC else { throw WhatsAppError.unsupported }
+        var patchData = patch.snapshotMAC
+        for mutation in patch.mutations {
+            patchData += mutation.record.value.suffix(32)
+        }
+        patchData += withUnsafeBytes(of: patch.version.bigEndian) { Data($0) } + Data(name.utf8)
+        guard WhatsAppCipher.hmacSHA256(key: keys.patchMAC, patchData) == patch.patchMAC else { throw WhatsAppError.unsupported }
+        state.hash = hash
+        state.version = patch.version
+        for mutation in patch.mutations {
+            let decoded = try decodeMutation(operation: mutation.operation, record: mutation.record)
+            if mutation.operation == .set {
+                state.macs[decoded.indexMAC.base64EncodedString()] = decoded.valueMAC
+            } else {
+                state.macs[decoded.indexMAC.base64EncodedString()] = nil
+            }
+            applyAction(index: decoded.index, value: decoded.value, removed: mutation.operation == .remove)
+        }
+    }
+
+    /// Folds an app state mutation into the store: contact names, mute, archive, pin, read.
+    private func applyAction(index: [String], value: WhatsAppProto.SyncActionValue?, removed: Bool) {
+        guard index.count > 1, let value else { return }
+        let target = index[1]
+        switch index[0] {
+        case "contact":
+            let name = removed ? nil : (value.contactAction?.fullName ?? value.contactAction?.firstName)
+            store.update { directory in
+                directory.contactNames[target] = name
+                // Contacts carry both addresses, so a chat that arrives by LID still finds the contact's name.
+                if let lid = value.contactAction?.lidJID.flatMap(WhatsAppJID.init(string:)) {
+                    directory.contactNames[lid.nonAD.description] = name
+                    if let phone = WhatsAppJID(string: target), phone.server == WhatsAppJID.Server.user {
+                        directory.lidByPhoneNumber[phone.user] = lid.user
+                    }
+                }
+            }
+        case "mute":
+            let end = value.muteAction.flatMap { $0.muted ? ($0.muteEndTimestamp ?? -1) : nil }
+            store.updateChat(target) { $0.muteEnd = removed ? nil : end }
+        case "archive":
+            store.updateChat(target) { $0.isArchived = !removed && value.archived == true }
+        case "pin_v1":
+            store.updateChat(target) { $0.isPinned = !removed && value.pinned == true }
+        case "markChatAsRead":
+            if value.read == true {
+                store.updateChat(target) {
+                    $0.unreadCount = 0
+                    $0.markedUnread = false
+                    $0.readUpTo = max($0.readUpTo ?? .distantPast, value.timestamp.map { Date(timeIntervalSince1970: TimeInterval($0) / 1000) } ?? Date())
+                }
+            } else if value.read == false {
+                store.updateChat(target) { $0.markedUnread = true }
+            }
+        default:
+            break
+        }
+    }
+
+    // MARK: Groups
+
+    private func fetchGroups() async throws {
+        let response = try await iq("w:g2", "get", to: WhatsAppJID(user: "", server: WhatsAppJID.Server.group), [
+            WhatsAppNode("participating", children: [WhatsAppNode("participants"), WhatsAppNode("description")]),
+        ])
+        var subjects: [String: String] = [:]
+        for group in response.child("groups")?.children ?? [] where group.tag == "group" {
+            guard let id = group.attr("id") else { continue }
+            subjects["\(id)@\(WhatsAppJID.Server.group)"] = group.attr("subject") ?? ""
+            for participant in group.children where participant.tag == "participant" {
+                guard let jid = participant.jid("jid") else { continue }
+                if jid.server == WhatsAppJID.Server.lid {
+                    storeLID(phoneNumber: participant.jid("phone_number"), lid: jid)
+                } else {
+                    storeLID(phoneNumber: jid, lid: participant.jid("lid"))
+                }
+            }
+        }
+        store.update { $0.groupSubjects = subjects }
+        pending.reloadList = true
+        flush()
+    }
+
+    // MARK: Profile pictures (whatsmeow GetProfilePictureInfo)
+
+    /// Queues lookups for pictures that aren't known or are about to expire; they run one at a time, spaced out,
+    /// while connected.
+    func requestAvatars(for jids: [String], in chat: String? = nil) {
+        let wanted = jids.filter { store.needsAvatar($0) && !avatarQueue.contains($0) }
+        if let chat {
+            for jid in wanted {
+                avatarRequesters[jid] = chat
+            }
+        }
+        guard !wanted.isEmpty else { return }
+        avatarQueue.append(contentsOf: wanted)
+        guard avatarTask == nil else { return }
+        avatarTask = Task { await drainAvatars() }
+    }
+
+    private func drainAvatars() async {
+        let count = avatarQueue.count
+        logger.info("WhatsApp looking up \(count) pictures")
+        defer { avatarTask = nil }
+        while socket != nil, !avatarQueue.isEmpty {
+            let jid = avatarQueue.removeFirst()
+            guard store.needsAvatar(jid), let target = WhatsAppJID(string: jid) else { continue }
+            do {
+                let url = try await fetchAvatar(target)
+                store.update { $0.avatars[jid] = WhatsAppStore.Avatar(url: url, checkedAt: Date(), expires: url.flatMap(Self.expiry) ?? Date().addingTimeInterval(7 * 24 * 3600)) }
+                pending.chats.insert(avatarRequesters.removeValue(forKey: jid) ?? jid)
+                flush()
+            } catch WhatsAppError.notConnected {
+                avatarQueue.insert(jid, at: 0)
+                return
+            } catch {
+                logger.info("WhatsApp picture lookup failed: \(String(describing: error), privacy: .public)")
+            }
+            try? await Task.sleep(for: Self.avatarSpacing)
+        }
+    }
+
+    /// The preview picture's URL; `nil` when there is none to show (404) or it's hidden from the user (401).
+    private func fetchAvatar(_ jid: WhatsAppJID) async throws -> URL? {
+        do {
+            let response = try await iq("w:profile:picture", "get", target: jid.nonAD, [WhatsAppNode("picture", ["query": "url", "type": "preview"])])
+            guard let picture = response.child("picture"), picture.attr("status") == nil else { return nil }
+            return picture.attr("url").flatMap(URL.init(string:))
+        } catch let WhatsAppError.iq(code, _) where code == "404" || code == "401" {
+            return nil
+        }
+    }
+
+    /// The `oe` parameter: the signed URL's expiry as hex Unix seconds.
+    private static func expiry(of url: URL) -> Date? {
+        URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "oe" }?.value
+            .flatMap { UInt64($0, radix: 16) }
+            .map { Date(timeIntervalSince1970: TimeInterval($0)) }
+    }
+
+    // MARK: Sending (whatsmeow send.go)
+
+    private func messageId() -> String {
+        let own = device?.jid?.user ?? ""
+        let data = withUnsafeBytes(of: UInt64(Date().timeIntervalSince1970).bigEndian) { Data($0) } + Data("\(own)@c.us".utf8) + WhatsAppCipher.randomBytes(16)
+        return "3EB0" + WhatsAppCipher.sha256(data).prefix(9).hexString.uppercased()
+    }
+
+    private func devices(of users: [WhatsAppJID]) async throws -> [WhatsAppJID] {
+        let list = users.map { user -> WhatsAppNode in
+            var node = WhatsAppNode("user")
+            node["jid"] = .jid(user.nonAD)
+            return node
+        }
+        let usync = WhatsAppNode("usync", ["sid": .string(requestId()), "mode": "query", "last": "true", "index": "0", "context": "message"], children: [
+            WhatsAppNode("query", children: [WhatsAppNode("devices", ["version": "2"])]),
+            WhatsAppNode("list", children: list),
+        ])
+        let response = try await iq("usync", "get", [usync])
+        var devices: [WhatsAppJID] = []
+        for user in response.child("usync", "list")?.children ?? [] {
+            guard let jid = user.jid("jid") else { continue }
+            for device in user.child("devices", "device-list")?.children ?? [] where device.tag == "device" && device.attr("is_hosted") != "true" {
+                if let id = device.attr("id").flatMap(Int.init) {
+                    devices.append(WhatsAppJID(user: jid.user, server: jid.server, device: id))
+                }
+            }
+        }
+        return devices
+    }
+
+    private func bundles(for devices: [WhatsAppJID]) async throws -> [String: WhatsAppPreKeyBundle] {
+        let users = devices.map { device -> WhatsAppNode in
+            var node = WhatsAppNode("user", ["reason": "identity"])
+            node["jid"] = .jid(device)
+            return node
+        }
+        let response = try await iq("encrypt", "get", [WhatsAppNode("key", children: users)])
+        var bundles: [String: WhatsAppPreKeyBundle] = [:]
+        for user in response.child("list")?.children ?? [] where user.tag == "user" && user.child("error") == nil {
+            guard let jid = user.jid("jid") else { continue }
+            let keys = user.child("keys") ?? user
+            func id(_ node: WhatsAppNode?) -> UInt32 {
+                (node?.child("id")?.bytes ?? Data()).reduce(UInt32(0)) { $0 << 8 | UInt32($1) }
+            }
+            guard let signed = keys.child("skey"), let identity = keys.child("identity")?.bytes,
+                  let registration = user.child("registration")?.bytes
+            else { continue }
+            let preKey = keys.child("key")
+            bundles[jid.signalAddress] = WhatsAppPreKeyBundle(
+                registrationId: registration.reduce(UInt32(0)) { $0 << 8 | UInt32($1) }, identity: identity, signedPreKeyId: id(signed),
+                signedPreKey: signed.child("value")?.bytes ?? Data(), signature: signed.child("signature")?.bytes ?? Data(),
+                preKeyId: preKey.map { id($0) }, preKey: preKey?.child("value")?.bytes,
+            )
+        }
+        return bundles
+    }
+
+    /// Sends text to a one-to-one chat, addressed by LID: the recipient's devices get the message, the user's other
+    /// devices a `DeviceSentMessage`. Group sending isn't validated in the probe yet.
+    public func sendText(_ text: String, to chat: String) async throws -> WhatsAppMessage {
+        guard let device, let ownJID = device.jid, let ownLID = device.lid, let account = device.account else { throw WhatsAppError.notLinked }
+        guard var recipient = WhatsAppJID(string: chat) else { throw WhatsAppError.unsupported }
+        guard recipient.server != WhatsAppJID.Server.group else { throw WhatsAppError.unsupported }
+        var phoneNumber: WhatsAppJID?
+        if recipient.server == WhatsAppJID.Server.user {
+            guard let lid = lid(for: recipient) else { throw WhatsAppError.noLID }
+            phoneNumber = recipient
+            recipient = lid.nonAD
+        }
+        let message = WhatsAppProto.Message.text(text)
+        let plaintext = message.proto.serialized()
+        let deviceSent = WhatsAppProto.Message.deviceSent(message, destinationJID: recipient.description).proto.serialized()
+        let ownUser = WhatsAppJID(user: ownLID.user, server: WhatsAppJID.Server.lid)
+        let users = recipient.user == ownLID.user ? [recipient] : [recipient, ownUser]
+        let targets = try await devices(of: users).filter { !($0.user == ownLID.user && $0.device == ownLID.device) }
+        var store = signal
+        let missing = targets.filter { !store.hasSession(address: $0.signalAddress) }
+        if !missing.isEmpty {
+            for (address, bundle) in try await bundles(for: missing) {
+                try? store.buildSession(address: address, bundle: bundle)
+            }
+        }
+        var participants: [WhatsAppNode] = []
+        var includesIdentity = false
+        for target in targets where store.hasSession(address: target.signalAddress) {
+            let payload = target.user == ownLID.user ? deviceSent : plaintext
+            let encrypted = try store.encrypt(address: target.signalAddress, WhatsAppMessagePadding.pad(payload))
+            includesIdentity = includesIdentity || encrypted.type == .pkmsg
+            var to = WhatsAppNode("to", children: [WhatsAppNode("enc", ["v": "2", "type": .string(encrypted.type.rawValue)], bytes: encrypted.data)])
+            to["jid"] = .jid(target)
+            participants.append(to)
+        }
+        signal = store
+        saveKeys()
+        let id = messageId()
+        var children = [WhatsAppNode("participants", children: participants)]
+        if includesIdentity {
+            children.append(WhatsAppNode("device-identity", bytes: account))
+        }
+        var node = WhatsAppNode("message", ["id": .string(id), "type": "text"], children: children)
+        node["to"] = .jid(recipient)
+        if let phoneNumber {
+            node["peer_recipient_pn"] = .jid(phoneNumber)
+        }
+        let ack = try await request(node, id: id)
+        if let error = ack.attr("error") {
+            throw WhatsAppError.sendFailed(error)
+        }
+        let timestamp = ack.attr("t").flatMap(Double.init).map { Date(timeIntervalSince1970: $0) } ?? Date()
+        let sent = WhatsAppMessage(id: id, sender: ownJID.nonAD.description, isFromMe: true, timestamp: timestamp, text: text, label: nil)
+        self.store.upsert([sent], in: chat)
+        self.store.updateChat(chat) {
+            $0.unreadCount = 0
+            $0.readUpTo = timestamp
+        }
+        pending.chats.insert(chat)
+        flush()
+        return sent
+    }
+
+    /// Read receipts for others' messages up to `time`, one per sender (whatsmeow `MarkRead`); `read-self` when
+    /// the user turned read receipts off in WhatsApp.
+    public func markRead(_ messages: [WhatsAppMessage], in chat: String, upTo time: Date) async throws {
+        store.updateChat(chat) {
+            $0.readUpTo = max($0.readUpTo ?? .distantPast, time)
+            $0.unreadCount = 0
+            $0.markedUnread = false
+        }
+        pending.chats.insert(chat)
+        flush()
+        guard let chatJID = WhatsAppJID(string: chat) else { return }
+        let isGroup = chatJID.server == WhatsAppJID.Server.group
+        for (sender, group) in Dictionary(grouping: messages, by: \.sender) {
+            guard let first = group.first else { continue }
+            var receipt = WhatsAppNode("receipt", ["id": .string(first.id), "type": .string(keys.readReceipts ? "read" : "read-self"), "t": .string(String(Int(Date().timeIntervalSince1970)))])
+            receipt["to"] = .jid(chatJID)
+            if isGroup, let participant = WhatsAppJID(string: sender) {
+                receipt["participant"] = .jid(participant.nonAD)
+            }
+            if group.count > 1 {
+                receipt.content = .nodes([WhatsAppNode("list", children: group.dropFirst().map { WhatsAppNode("item", ["id": .string($0.id)]) })])
+            }
+            try await send(receipt)
+        }
+    }
+
+    // MARK: Reading the store
+
+    public func chatPage(_ chat: String) -> WhatsAppChatPage {
+        let messages = store.messages(in: chat)
+        var names: [String: String] = [:]
+        for sender in Set(messages.filter { !$0.isFromMe }.map(\.sender)) {
+            names[sender] = store.name(forUserJID: sender)
+        }
+        let stored = store.chat(chat)
+        var readUpTo = stored?.readUpTo
+        if readUpTo == nil, let stored {
+            // From history's unread count: the newest that many messages from others are unread.
+            let incoming = messages.filter { !$0.isFromMe }
+            let unread = min(stored.unreadCount, incoming.count)
+            readUpTo = unread == 0 ? (messages.last?.timestamp ?? .distantPast) : incoming.count > unread ? incoming[incoming.count - unread - 1].timestamp : .distantPast
+        }
+        let senders = Set(messages.filter { !$0.isFromMe }.map(\.sender))
+        requestAvatars(for: [chat] + senders.sorted(), in: chat)
+        let avatars = senders.reduce(into: [String: URL]()) { result, sender in
+            result[sender] = store.avatarURL(for: sender)
+        }
+        return WhatsAppChatPage(
+            title: stored.map(store.title(for:)), messages: messages, names: names, readUpTo: readUpTo, isGroup: stored?.isGroup ?? chat.hasSuffix("@g.us"),
+            avatarURL: store.avatarURL(for: chat), avatars: avatars,
+        )
+    }
+
+    func summary(for chat: WhatsAppChat) -> ChatSummary {
+        let messages = store.messages(in: chat.jid)
+        let last = messages.last
+        var preview: String?
+        if let last {
+            let body = last.isDeleted ? "This message was deleted." : (last.text ?? last.label ?? "")
+            if last.isFromMe {
+                preview = "You: \(body)"
+            } else if chat.isGroup {
+                preview = "\(store.name(forUserJID: last.sender) ?? "Someone"): \(body)"
+            } else {
+                preview = body
+            }
+        }
+        let unread: Int = if let readUpTo = chat.readUpTo {
+            messages.count { !$0.isFromMe && $0.timestamp > readUpTo }
+        } else {
+            chat.unreadCount
+        }
+        return ChatSummary(
+            id: "whatsapp:\(chat.jid)", network: .whatsapp, title: store.title(for: chat), avatarURL: store.avatarURL(for: chat.jid), avatarColorKey: chat.jid,
+            preview: preview, timestamp: last?.timestamp ?? chat.lastTimestamp, unreadCount: max(unread, chat.markedUnread ? 1 : 0),
+            destination: .whatsapp(jid: chat.jid), namesSenderInPreview: chat.isGroup, titleNamesPeople: !chat.isGroup,
+            isMuted: chat.isMuted(),
+        )
+    }
+
+    public func chatSummaries(for chats: Set<String>) -> [ChatSummary] {
+        chats.compactMap { store.chat($0) }.map(summary(for:))
+    }
+
+    private func listPage() throws -> ChatListPage {
+        reloadIfLinkedElsewhere()
+        guard device?.jid != nil else { throw SourceError.notConfigured }
+        // Chats without messages or a time are empty shells from app state, such as old mutes.
+        store.mergeDuplicateChats()
+        let chats = store.chats.filter { chat in
+            !chat.jid.hasSuffix("@\(WhatsAppJID.Server.broadcast)") && !chat.jid.hasSuffix("@\(WhatsAppJID.Server.newsletter)")
+                && (chat.lastTimestamp != nil || !store.messages(in: chat.jid).isEmpty)
+        }
+        let summaries = chats.map(summary(for:))
+        let archived = Set(chats.filter(\.isArchived).map { "whatsapp:\($0.jid)" })
+        return ChatListPage(chats: summaries.filter { !archived.contains($0.id) }, archived: summaries.filter { archived.contains($0.id) })
+    }
+}
+
+extension WhatsAppClient: ChatListProvider {
+    public nonisolated var chatNetwork: ChatNetwork {
+        .whatsapp
+    }
+
+    public func chatList() async throws -> ChatListPage {
+        try listPage()
+    }
+}
+
+extension Data {
+    var hexString: String {
+        map { String(format: "%02x", $0) }.joined()
+    }
+}

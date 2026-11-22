@@ -93,8 +93,9 @@ public struct AccountPreferences: Codable, Hashable, Sendable {
 }
 
 public extension SocialNetwork {
-    /// Networks the user can add accounts for, in the order Add Account lists them.
-    static let addable: [SocialNetwork] = [.x, .farcaster, .instagram, .bluesky, .spotify, .github, .telegram, .discord, .linkedin, .apron]
+    /// Networks the user can add accounts for, alphabetically by name as Add Account lists them.
+    static let addable: [SocialNetwork] = [.x, .farcaster, .instagram, .bluesky, .spotify, .github, .telegram, .discord, .linkedin, .whatsapp, .apron]
+        .sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
 }
 
 public extension NotificationItem {

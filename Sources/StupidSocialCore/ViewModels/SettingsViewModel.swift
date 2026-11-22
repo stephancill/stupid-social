@@ -225,7 +225,7 @@ public final class SettingsViewModel: ObservableObject {
             return try? await DiscordClient(credentialStore: credentials).currentUser().avatarURL
         case .linkedin:
             return try? await LinkedInClient(credentialStore: credentials).me().avatarURL
-        case .debug:
+        case .whatsapp, .debug:
             return nil
         }
     }
@@ -468,6 +468,37 @@ public final class SettingsViewModel: ObservableObject {
         return await addGitHub(credentials, reconnecting: accountId)
     }
 
+    /// Linking WhatsApp as a device, for a new account or, with `accountId`, one listed from another device.
+    /// The link stays on this device, under the account's id.
+    public func makeWhatsAppLink(accountId: String? = nil) -> WhatsAppConnectionViewModel {
+        let id = accountId ?? Account.newId(network: .whatsapp)
+        let client = WhatsAppClient.client(accountId: id, keychain: services.keychain.scoped(to: id))
+        let viewModel = WhatsAppConnectionViewModel(client: client)
+        viewModel.onLinked = { [weak self] linked in
+            self?.finishWhatsAppLink(linked, accountId: id)
+        }
+        return viewModel
+    }
+
+    public func isWhatsAppLinked(accountId: String) -> Bool {
+        services.keychain.scoped(to: accountId).loadWhatsAppDevice() != nil
+    }
+
+    /// Lists a WhatsApp account once it linked on this device and opens its connection, which logs in and
+    /// receives WhatsApp's history sync.
+    public func finishWhatsAppLink(_ linked: WhatsAppAccount, accountId: String) {
+        var account = store.account(id: accountId) ?? Account(id: accountId, network: .whatsapp)
+        account.remoteId = linked.phoneNumber
+        // WhatsApp has no handle; the number names the account.
+        account.handle = nil
+        account.displayName = "+\(linked.phoneNumber)"
+        store.setStatus(.valid, id: account.id)
+        store.save(account)
+        let component = services.components(for: account)
+        component.whatsAppLiveFeed?.start()
+        loadStatuses()
+    }
+
     /// A Telegram sign-in for a new account. Telegram sign-ins stay on this device, under the account's id.
     public func makeTelegramSignIn() -> TelegramConnectionViewModel {
         let id = Account.newId(network: .telegram)
@@ -612,6 +643,10 @@ public final class SettingsViewModel: ObservableObject {
             }
         case .telegram:
             await services.component(id: accountId)?.telegramClient?.signOut()
+        case .whatsapp:
+            services.component(id: accountId)?.whatsAppLiveFeed?.stop()
+            await services.component(id: accountId)?.whatsAppClient?.logout()
+            WhatsAppClient.forget(accountId: accountId)
         default:
             break
         }

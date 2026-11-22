@@ -214,6 +214,14 @@ final class AppContainer {
         return { AdapterChatViewModel(adapter: XChatAdapter(client: client, liveFeed: liveFeed, conversationId: conversationId, title: title), accountId: accountId) }
     }
 
+    /// `nil` until WhatsApp is linked on this device.
+    func whatsAppChatFactory(accountId: String, jid: String, title: String) -> (() -> ChatViewModel)? {
+        guard let component = services.component(id: accountId), let client = component.whatsAppClient, client.isLinked,
+              let liveFeed = component.whatsAppLiveFeed
+        else { return nil }
+        return { AdapterChatViewModel(adapter: WhatsAppChatAdapter(client: client, liveFeed: liveFeed, chatJID: jid, title: title), accountId: accountId) }
+    }
+
     /// The chat and its group's member list.
     func telegramChatFactory(accountId: String, peer: TelegramPeer, title: String, userStatus: ChatPresence?, avatarURL: URL?) -> (chat: () -> ChatViewModel, members: () -> TelegramMembersViewModel)? {
         guard let client = services.component(id: accountId)?.telegramClient else { return nil }
@@ -260,6 +268,8 @@ final class AppContainer {
             discordChatFactory(accountId: chat.accountId, channelId: channelId, title: chat.title)?.chat()
         case let .linkedin(conversationUrn):
             linkedinChatFactory(accountId: chat.accountId, conversationUrn: conversationUrn, title: chat.title)?()
+        case let .whatsapp(jid):
+            whatsAppChatFactory(accountId: chat.accountId, jid: jid, title: chat.title)?()
         case let .demo(chatId):
             AdapterChatViewModel(adapter: DemoChatAdapter(chatId: chatId), accountId: chat.accountId)
         }

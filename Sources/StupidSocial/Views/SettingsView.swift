@@ -253,10 +253,17 @@ struct AddAccountView: View {
     @ObservedObject var viewModel: SettingsViewModel
     @ObservedObject var apronServersViewModel: ApronServersViewModel
     @Environment(\.dismiss) private var dismiss
+    @State private var query = ""
+
+    private var networks: [SocialNetwork] {
+        let query = query.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty else { return SocialNetwork.addable }
+        return SocialNetwork.addable.filter { $0.displayName.localizedStandardContains(query) }
+    }
 
     var body: some View {
         NavigationStack {
-            List(SocialNetwork.addable) { network in
+            List(networks) { network in
                 NavigationLink {
                     addView(for: network)
                 } label: {
@@ -267,6 +274,12 @@ struct AddAccountView: View {
                     }
                 }
             }
+            .overlay {
+                if networks.isEmpty {
+                    ContentUnavailableView.search(text: query)
+                }
+            }
+            .searchBar(text: $query, placement: .navigationBarDrawer(displayMode: .always))
             .navigationTitle("Add Account")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -291,6 +304,7 @@ struct AddAccountView: View {
         case .discord: DiscordConnectionView(viewModel: viewModel, accountId: nil, onDone: done)
         case .linkedin: LinkedInConnectionView(viewModel: viewModel, accountId: nil, onDone: done)
         case .telegram: TelegramAddAccountView(settings: viewModel, onDone: done)
+        case .whatsapp: WhatsAppAddAccountView(settings: viewModel, onDone: done)
         case .apron: ApronAddServerView(viewModel: apronServersViewModel, onDone: done)
         case .debug: EmptyView()
         }
@@ -310,6 +324,41 @@ private struct TelegramAddAccountView: View {
 
     var body: some View {
         TelegramConnectionView(viewModel: connection, onDone: onDone)
+    }
+}
+
+/// Adding a WhatsApp account. The link is a state object so the QR code or pairing code and the connection
+/// waiting on it survive the view updating, such as while the user switches to WhatsApp to enter the code.
+private struct WhatsAppAddAccountView: View {
+    @StateObject private var connection: WhatsAppConnectionViewModel
+    let onDone: () -> Void
+
+    init(settings: SettingsViewModel, onDone: @escaping () -> Void) {
+        _connection = StateObject(wrappedValue: settings.makeWhatsAppLink())
+        self.onDone = onDone
+    }
+
+    var body: some View {
+        WhatsAppConnectionView(viewModel: connection, onDone: onDone)
+    }
+}
+
+/// Linking an existing WhatsApp account on this device again.
+private struct WhatsAppRelinkView: View {
+    @StateObject private var connection: WhatsAppConnectionViewModel
+    @ObservedObject var settings: SettingsViewModel
+    let account: Account
+    let onDone: () -> Void
+
+    init(settings: SettingsViewModel, account: Account, onDone: @escaping () -> Void) {
+        _connection = StateObject(wrappedValue: settings.makeWhatsAppLink(accountId: account.id))
+        self.settings = settings
+        self.account = account
+        self.onDone = onDone
+    }
+
+    var body: some View {
+        WhatsAppConnectionView(viewModel: connection, account: account, settings: settings, isLinked: settings.isWhatsAppLinked(accountId: account.id), onDone: onDone)
     }
 }
 
@@ -345,6 +394,8 @@ struct AccountDetailView: View {
             if let connection = viewModel.services.component(id: account.id)?.telegramConnection {
                 TelegramConnectionView(viewModel: connection, account: account, settings: viewModel, onDone: done)
             }
+        case .whatsapp:
+            WhatsAppRelinkView(settings: viewModel, account: account, onDone: done)
         case .apron:
             if let serverURL = account.serverURL, let server = apronServersViewModel.server(for: serverURL) {
                 ApronServerDetailView(viewModel: apronServersViewModel, server: server)

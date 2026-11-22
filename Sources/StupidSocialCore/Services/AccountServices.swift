@@ -35,6 +35,8 @@ public final class AccountComponents {
     public private(set) var linkedinClient: LinkedInClient?
     public private(set) var linkedinLiveFeed: LinkedInLiveFeed?
     private var telegramLiveRows: TelegramLiveRows?
+    public private(set) var whatsAppClient: WhatsAppClient?
+    public private(set) var whatsAppLiveFeed: WhatsAppLiveFeed?
 
     init(account: Account, store: AccountStore, keychain: KeychainCredentialStore, farcasterClient: FarcasterClient, chatList: ChatListViewModel?, onTelegramChange: (() -> Void)?, onXChatChange: (() -> Void)?) {
         accountId = account.id
@@ -135,6 +137,12 @@ public final class AccountComponents {
             linkedinClient = client
             notificationSource = LinkedInNotificationSource(client: client, metadataStore: metadata)
             linkedinLiveFeed = LinkedInLiveFeed(client: client, accountId: account.id, chatList: chatList)
+        case .whatsapp:
+            let client = WhatsAppClient.client(accountId: account.id, keychain: credentials)
+            whatsAppClient = client
+            if let chatList {
+                whatsAppLiveFeed = WhatsAppLiveFeed(client: client, accountId: account.id, chatList: chatList)
+            }
         case .apron, .debug:
             break
         }
@@ -156,12 +164,12 @@ public final class AccountComponents {
 
     /// The account's chats, when its network has any. Apron servers list through one shared source instead.
     public var chatListProvider: (any ChatListProvider<ChatDestination>)? {
-        spotifyMessagesSource ?? instagramClient ?? telegramClient ?? xChatClient ?? blueskyClient ?? discordChatList ?? linkedinClient
+        spotifyMessagesSource ?? instagramClient ?? telegramClient ?? xChatClient ?? blueskyClient ?? discordChatList ?? linkedinClient ?? whatsAppClient
     }
 
     /// The connection the account keeps open while the app is in the foreground, when its network pushes updates.
     public var liveConnection: (any LiveConnecting)? {
-        xChatLiveFeed ?? discordGateway ?? linkedinLiveFeed ?? instagramLiveFeed
+        xChatLiveFeed ?? discordGateway ?? linkedinLiveFeed ?? instagramLiveFeed ?? whatsAppLiveFeed
     }
 
     /// Stops what runs in the background, when the account goes away.
@@ -186,7 +194,7 @@ public final class AccountServices: ObservableObject {
     public let store: AccountStore
     public let keychain: KeychainCredentialStore
     private let farcasterClient: FarcasterClient
-    /// Set once the Chats list exists, so X accounts get a live feed into it.
+    /// Set once the Chats list exists, so X and WhatsApp accounts get a live feed into it.
     public weak var chatList: ChatListViewModel? {
         didSet { rebuild(force: true) }
     }
@@ -253,12 +261,21 @@ public final class AccountServices: ObservableObject {
         return built
     }
 
+    /// Built before the Chats list existed, so without the live connection that keeps its chats current.
+    private static func lacksLiveFeed(_ component: AccountComponents) -> Bool {
+        switch component.network {
+        case .x: component.xChatLiveFeed == nil
+        case .whatsapp: component.whatsAppLiveFeed == nil
+        default: false
+        }
+    }
+
     private func rebuild(force: Bool) {
         let accounts = store.accounts
         let existing = Dictionary(components.map { ($0.accountId, $0) }, uniquingKeysWith: { first, _ in first })
         var rebuilt: [AccountComponents] = []
         for account in accounts {
-            if let kept = existing[account.id], !(force && ((kept.network == .x && kept.xChatLiveFeed == nil) || kept.network == .discord)) {
+            if let kept = existing[account.id], !(force && (Self.lacksLiveFeed(kept) || kept.network == .discord)) {
                 rebuilt.append(kept)
             } else {
                 existing[account.id]?.shutDown()
