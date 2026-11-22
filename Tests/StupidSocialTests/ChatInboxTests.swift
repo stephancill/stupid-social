@@ -30,7 +30,7 @@ final class ChatInboxTests: XCTestCase {
     }
 
     func testImportsMessagesAndEmptiesTheInbox() throws {
-        // In the order they arrived: the store leaves a message older than its newest to the next page.
+        try store.write([record(0)], chatKey: "a|apron:room")
         try SharedChatStore.leave(record(1), chatKey: "a|apron:room", inbox: inbox)
         try SharedChatStore.leave(record(2), chatKey: "a|apron:room", inbox: inbox)
         XCTAssertEqual(inboxFiles.count, 2)
@@ -40,6 +40,18 @@ final class ChatInboxTests: XCTestCase {
         XCTAssertNotNil(try store.record(id: "1", chatKey: "a|apron:room"))
         XCTAssertNotNil(try store.record(id: "2", chatKey: "a|apron:room"))
         XCTAssertEqual(inboxFiles, [])
+    }
+
+    /// A pushed message doesn't make its chat current, so loading ahead fetches it on opening the app and it opens on
+    /// its stored history, not on the pushed messages alone with the rest filling in above.
+    func testPushedMessagesShowAfterTheStoredOnesWithoutMakingTheChatCurrent() throws {
+        try store.write([record(1)], chatKey: "a|apron:room")
+        try SharedChatStore.leave(record(5), chatKey: "a|apron:room", inbox: inbox)
+
+        try SharedChatStore.importInbox(into: store, inbox: inbox)
+
+        XCTAssertEqual(try store.window(chatKey: "a|apron:room", at: .newest(count: 10)).records.map(\.id), ["1", "5"])
+        XCTAssertFalse(try store.isCurrent(chatKey: "a|apron:room", latestMessageId: "5"))
     }
 
     func testProvisionalMessagesGoToEveryStoredChatWithThePeer() throws {
@@ -56,6 +68,7 @@ final class ChatInboxTests: XCTestCase {
     func testABadEntryIsRemovedWithoutBlockingTheRest() throws {
         try FileManager.default.createDirectory(at: inbox, withIntermediateDirectories: true)
         try Data("not json".utf8).write(to: inbox.appending(path: "000000000000000000-bad.json"))
+        try store.write([record(0)], chatKey: "a|apron:room")
         try SharedChatStore.leave(record(3), chatKey: "a|apron:room", inbox: inbox)
 
         XCTAssertThrowsError(try SharedChatStore.importInbox(into: store, inbox: inbox))

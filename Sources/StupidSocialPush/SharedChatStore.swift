@@ -56,11 +56,13 @@ public enum SharedChatStore {
 
     /// One pushed message waiting for the app.
     struct InboxEntry: Codable, Equatable {
+        /// Either way the message is written provisional: a push says nothing about what came before it, and stored as
+        /// history it started a chunk of its own, so the chat counted as current, loading ahead skipped it, and it
+        /// opened on the pushed messages alone with earlier ones filling in above.
         enum Target: Codable, Equatable {
-            /// `ChatStore.write` to this chat.
+            /// To this chat.
             case chat(String)
-            /// `ChatStore.writeProvisional` to every stored chat whose key ends with this, since the push doesn't say
-            /// which account it is for.
+            /// To every stored chat whose key ends with this, since the push doesn't say which account it is for.
             case provisional(chatKeySuffix: String)
         }
 
@@ -120,7 +122,7 @@ public enum SharedChatStore {
                 let entry = try JSONDecoder().decode(InboxEntry.self, from: Data(contentsOf: url))
                 switch entry.target {
                 case let .chat(chatKey):
-                    try store.write([entry.record], chatKey: chatKey)
+                    try store.writeProvisional([entry.record], chatKey: chatKey)
                 case let .provisional(suffix):
                     for chatKey in try store.chatKeys(endingWith: suffix) {
                         try store.writeProvisional([entry.record], chatKey: chatKey)
