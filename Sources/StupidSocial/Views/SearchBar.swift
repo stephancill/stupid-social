@@ -160,8 +160,9 @@ struct PlainSearchField: View {
 /// the keyboard's own animation. Laid out by SwiftUI from the home pager's keyboard inset, they moved at once, ahead of
 /// the keyboard rising and after it fell, even inside a UIKit animation; a SwiftUI spring standing in for the
 /// keyboard's curve lagged behind it. Floating over the list rather than in its safe area: as a `safeAreaBar`, the
-/// rows' edge shadow also covered the accessory and changed in a single frame as the search ended. The list's content
-/// makes room for them, so the last row can scroll clear.
+/// rows' edge shadow also covered the accessory and changed in a single frame as the search ended. Like iOS's own
+/// field there's no shadow behind them; the glass blurs what's under it. The list's content makes room for them, so
+/// the last row can scroll clear.
 @available(iOS 26.0, *)
 private struct BottomSearchBar<Accessory: View>: ViewModifier {
     @Binding var text: String
@@ -184,7 +185,6 @@ private struct BottomSearchBar<Accessory: View>: ViewModifier {
                     }
                     BottomSearchField(text: $text, isPresented: $isPresented, prompt: prompt)
                         .onGeometryChange(for: CGFloat.self, of: \.size.height) { fieldHeight = $0 }
-                        .background(alignment: .top) { BottomEdgeFade() }
                 }
                 // The dock's hosting controller doesn't share this view's transactions.
                 .animation(.smooth(duration: 0.3), value: showsAccessory))
@@ -193,29 +193,9 @@ private struct BottomSearchBar<Accessory: View>: ViewModifier {
     }
 }
 
-/// Rows fading out under the field, as under the navigation bar: from a little above it down past the screen's
-/// bottom edge (behind the keyboard while it's up). The system's edge shadow is drawn only under a bar in the safe
-/// area, not under this floating field.
-private struct BottomEdgeFade: View {
-    var body: some View {
-        Rectangle()
-            .fill(.bar)
-            .mask {
-                LinearGradient(
-                    stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.35)],
-                    startPoint: .top,
-                    endPoint: .bottom,
-                )
-            }
-            .frame(height: 200)
-            .offset(y: -32)
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
-    }
-}
-
-/// Keeps `content` on top of the keyboard, or of the bottom safe area while there's none, moving with the keyboard's
-/// own animation through `keyboardLayoutGuide`, as the chat composer does. Touches anywhere else pass through.
+/// Keeps `content` just above the keyboard, or where iOS's own bottom search field rests while there's none (in the
+/// home indicator's area), moving with the keyboard's own animation through `keyboardLayoutGuide`, as the chat
+/// composer does. Touches anywhere else pass through.
 private struct KeyboardDock<Content: View>: UIViewControllerRepresentable {
     let content: Content
 
@@ -252,10 +232,17 @@ private struct KeyboardDock<Content: View>: UIViewControllerRepresentable {
             hosting.view.translatesAutoresizingMaskIntoConstraints = false
             addChild(hosting)
             view.addSubview(hosting.view)
+            // As far down as both allow: 8 pt above the keyboard, and 28 pt above the screen's bottom edge, which is
+            // where iOS 26's bottom search field rests (measured on iOS 27.0).
+            view.keyboardLayoutGuide.usesBottomSafeArea = false
+            let resting = hosting.view.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -28)
+            resting.priority = .defaultHigh
             NSLayoutConstraint.activate([
                 hosting.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
                 hosting.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-                hosting.view.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor),
+                hosting.view.bottomAnchor.constraint(lessThanOrEqualTo: view.keyboardLayoutGuide.topAnchor, constant: -8),
+                hosting.view.bottomAnchor.constraint(lessThanOrEqualTo: view.bottomAnchor, constant: -28),
+                resting,
             ])
             hosting.didMove(toParent: self)
         }
@@ -284,7 +271,6 @@ private struct BottomSearchField: View {
         HStack(spacing: 12) {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
                     .accessibilityHidden(true)
                 TextField(prompt, text: $text)
                     .autocorrectionDisabled()
@@ -323,8 +309,8 @@ private struct BottomSearchField: View {
                 .transition(.scale.combined(with: .opacity))
             }
         }
-        .padding(.horizontal, 20)
-        .padding(.bottom, 8)
+        // iOS 26's bottom search field's margins (measured on iOS 27.0).
+        .padding(.horizontal, 28)
         .animation(.smooth(duration: 0.3), value: isPresented)
         .onChange(of: isFocused) { _, focused in
             if focused { isPresented = true }
