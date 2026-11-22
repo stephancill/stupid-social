@@ -58,6 +58,7 @@ public struct ContentView: View {
             chats: NavigationStack {
                 ChatsView(
                     viewModel: container.chatListViewModel,
+                    settingsViewModel: container.settingsViewModel,
                     apronService: container.apronService,
                     spotifyChat: { container.spotifyChatFactory(accountId: $0, chatId: $1, title: $2) },
                     instagramChat: { container.instagramChatFactory(accountId: $0, threadFbid: $1, title: $2) },

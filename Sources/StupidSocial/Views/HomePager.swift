@@ -118,9 +118,14 @@ final class HomePagerController: UIViewController {
 
         dots.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(dots)
+        // Below the safe area, between Chats' bottom search field and the home indicator; on screens with no bottom
+        // inset, just above the edge.
+        let belowSafeArea = dots.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: 2)
+        belowSafeArea.priority = .defaultHigh
         NSLayoutConstraint.activate([
             dots.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            dots.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -4),
+            belowSafeArea,
+            dots.bottomAnchor.constraint(lessThanOrEqualTo: view.bottomAnchor, constant: -2),
         ])
 
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillChangeFrame), name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
@@ -208,7 +213,7 @@ final class HomePageDotsView: UIView {
         didSet {
             guard progress != oldValue else { return }
             setNeedsLayout()
-            accessibilityLabel = progress < 0.5 ? "Chats, page 1 of 2" : "Social, page 2 of 2"
+            accessibilityLabel = progress < 0.5 ? "Chats, page 1 of 2" : "Notifications, page 2 of 2"
         }
     }
 
@@ -219,7 +224,7 @@ final class HomePageDotsView: UIView {
         addSubview(pill)
         dotViews.forEach(addSubview)
         isAccessibilityElement = true
-        accessibilityLabel = "Social, page 2 of 2"
+        accessibilityLabel = "Notifications, page 2 of 2"
     }
 
     @available(*, unavailable)

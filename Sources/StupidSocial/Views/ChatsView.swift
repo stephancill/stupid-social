@@ -5,6 +5,8 @@ import SwiftUI
 /// Every chat across networks, newest first; the page to the left of the feed.
 struct ChatsView: View {
     @ObservedObject var viewModel: ChatListViewModel
+    /// The accounts the search's filter pills name.
+    @ObservedObject var settingsViewModel: SettingsViewModel
     let apronService: ApronService
     /// The chat for a Spotify account's chat id and title; `nil` when the account is gone.
     let spotifyChat: (_ accountId: String, _ chatId: String, _ title: String) -> (() -> ChatViewModel)?
@@ -37,6 +39,8 @@ struct ChatsView: View {
     @State private var settingsAccountId: String?
     @State private var query = ""
     @State private var isSearchPresented = false
+    /// The accounts picked in the filter shown while searching; cleared when the search ends.
+    @State private var filterSelection: Set<AccountFilter> = []
     /// With the search bar in the navigation bar's drawer, rows present while the bar first lays out start the
     /// list collapsed to the inline title, so saved chats are inserted just after the screen appears.
     @State private var hasAppeared = false
@@ -47,7 +51,7 @@ struct ChatsView: View {
     var body: some View {
         List {
             // Like Telegram, archived chats sit behind one row at the top, which search looks through.
-            if hasAppeared, query.isEmpty, !viewModel.archivedChats.isEmpty {
+            if showsArchiveRow {
                 Button {
                     isShowingArchive = true
                 } label: {
@@ -71,9 +75,16 @@ struct ChatsView: View {
             }
         }
         .listStyle(.plain)
+        // Just above the search bar at the bottom, rather than a row in the list: inserting a row as the search field
+        // activated cancelled the search.
+        .bottomBar(isShown: hasAppeared && isSearchPresented) {
+            AccountFilterBar(settingsViewModel: settingsViewModel, accounts: filterAccounts, showsReminders: false, selection: $filterSelection)
+        }
         .overlay {
             if filteredChats.isEmpty, !query.isEmpty {
                 ContentUnavailableView.search(text: query)
+            } else if filteredChats.isEmpty, !activeFilters.isEmpty {
+                ContentUnavailableView("No Chats", systemImage: "line.3.horizontal.decrease", description: Text("No chats match the selected filters."))
             } else if viewModel.chats.isEmpty {
                 if viewModel.hasLoaded {
                     ContentUnavailableView("No Chats", systemImage: "bubble.left.and.bubble.right", description: Text("Chats from Apron servers, Spotify, Instagram, Telegram, X, Bluesky, Discord and LinkedIn appear here."))
@@ -88,14 +99,21 @@ struct ChatsView: View {
         }
         .navigationTitle("Chats")
         .toolbar {
-            if viewModel.connections.contains(where: { $0.error != nil }) {
+            // While the list reloads, a spinner holds the place the connection errors show in once it's done.
+            if viewModel.isLoading {
+                ToolbarItem(placement: .primaryAction) {
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityLabel("Refreshing")
+                }
+            } else if viewModel.connections.contains(where: { $0.error != nil }) {
                 ToolbarItem(placement: .primaryAction) {
                     ConnectionErrorsButton(viewModel: viewModel, accountSettings: accountSettings) { settingsAccountId = $0 }
                 }
             }
         }
-        .searchBar(text: $query, isPresented: $isSearchPresented, placement: .navigationBarDrawer(displayMode: .always))
-        .searchBarKeepsFill()
+        // At the bottom, as in Messages.
+        .searchBar(text: $query, isPresented: $isSearchPresented, prompt: "Search Chats")
         .background {
             // Command-K and Command-F search the list with a hardware keyboard (a Mac, an iPad).
             ForEach(["k", "f"] as [KeyEquivalent], id: \.character) { key in
@@ -104,6 +122,9 @@ struct ChatsView: View {
                     .accessibilityHidden(true)
             }
             .hidden()
+        }
+        .onChange(of: isSearchPresented) { _, presented in
+            if !presented { filterSelection = [] }
         }
         .onChange(of: selection == nil && !isShowingArchive && settingsAccountId == nil) { _, isOnList in
             isShowingChat = !isOnList
@@ -187,18 +208,32 @@ struct ChatsView: View {
     }
 
     private var showsArchiveRow: Bool {
-        hasAppeared && query.isEmpty && !viewModel.archivedChats.isEmpty
+        hasAppeared && query.isEmpty && activeFilters.isEmpty && !viewModel.archivedChats.isEmpty
     }
 
-    /// Chats whose name or latest message contains the query, archived ones included.
+    /// Chats whose name or latest message contains the query, archived ones included, from the picked accounts.
     private var filteredChats: [ChatSummary] {
         let query = query.trimmingCharacters(in: .whitespaces)
         guard hasAppeared else { return [] }
-        guard !query.isEmpty else { return viewModel.chats }
-        return (viewModel.chats + viewModel.archivedChats).filter { chat in
+        let filters = activeFilters
+        let chats = query.isEmpty ? viewModel.chats : (viewModel.chats + viewModel.archivedChats).filter { chat in
             chat.title.localizedStandardContains(query) || (chat.titlePrefix ?? "").localizedStandardContains(query)
                 || (chat.preview ?? "").localizedStandardContains(query)
         }
+        guard !filters.isEmpty else { return chats }
+        return chats.filter { filters.contains(.account($0.accountId)) }
+    }
+
+    /// The picked accounts that are still signed in.
+    private var activeFilters: Set<AccountFilter> {
+        filterSelection.filter { filter in
+            if case let .account(id) = filter { settingsViewModel.account(id: id) != nil } else { false }
+        }
+    }
+
+    /// Accounts with chats, most first.
+    private var filterAccounts: [Account] {
+        AccountFilterBar.accounts(settingsViewModel.accounts, itemAccountIds: (viewModel.chats + viewModel.archivedChats).map(\.accountId), selection: filterSelection)
     }
 
     /// A long-pressed row's preview: the chat as it opens, read-only and without marking anything read.
@@ -741,5 +776,18 @@ private struct ChatSummaryAvatar: View {
                     .background(Color(uiColor: .systemBackground), in: Circle())
                     .offset(x: 2, y: 2)
             }
+    }
+}
+
+private extension View {
+    /// Content pinned to the bottom, above the search bar (and the keyboard while searching), that the list scrolls
+    /// beneath, while `isShown`.
+    @ViewBuilder
+    func bottomBar(isShown: Bool, @ViewBuilder content: () -> some View) -> some View {
+        if #available(iOS 26.0, *) {
+            safeAreaBar(edge: .bottom) { if isShown { content() } }
+        } else {
+            safeAreaInset(edge: .bottom, spacing: 0) { if isShown { content().background(Color(.systemBackground)) } }
+        }
     }
 }
