@@ -276,8 +276,12 @@ final class HomeTitleStripView: UIView {
             label.alpha = swipeAlpha * (index == Int(model.position.rounded()) ? 1 : othersAlpha)
             label.frame = CGRect(x: origins[slot] - scroll - pageShift, y: 0, width: widths[slot], height: bounds.height)
         }
-        // Cut to the page, so the other page's strip draws the rest of the row.
-        pageMask.frame = page.map { $0.convert($0.bounds, to: self).insetBy(dx: 0, dy: -1000) } ?? bounds.insetBy(dx: -1000, dy: -1000)
+        // Cut to the page mid-swipe, so the other page's strip draws the rest of the row. Not at rest: measured while a
+        // pushed screen was popping, with the page still sliding in, the cut stayed where it was and clipped the
+        // leading title until the list next scrolled.
+        let isSwiping = model.position.rounded() != model.position
+        pageMask.frame = isSwiping ? page.map { $0.convert($0.bounds, to: self).insetBy(dx: 0, dy: -1000) } ?? bounds.insetBy(dx: -1000, dy: -1000)
+            : bounds.insetBy(dx: -10000, dy: -1000)
         CATransaction.commit()
         if window != nil { showInlineTitle(collapse: collapse) }
     }
@@ -330,7 +334,8 @@ final class HomeTitleStripView: UIView {
 
         let scale = 1 + (Self.inlineFont.pointSize / font.pointSize - 1) * drawnProgress
         // Towards the bar's centre by the distance at rest, which a swipe doesn't change.
-        let x = (convert(CGPoint(x: barFrame.midX, y: 0), from: nil).x - restingLeadingCenterX) * drawnProgress
+        // The list's middle, the bar's too: unlike the screen's, it moves with a push or pop along with the strip.
+        let x = (convert(CGPoint(x: scrollView.bounds.midX, y: 0), from: scrollView).x - restingLeadingCenterX) * drawnProgress
         let y = drawnCenter - center
         // Scaled about the leading title's centre.
         row.transform = CGAffineTransform(translationX: leadingCenterX - bounds.midX + x, y: y)
