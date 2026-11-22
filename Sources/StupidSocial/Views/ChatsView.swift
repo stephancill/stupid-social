@@ -785,7 +785,10 @@ private extension View {
     @ViewBuilder
     func bottomBar(isShown: Bool, @ViewBuilder content: () -> some View) -> some View {
         if #available(iOS 26.0, *) {
-            safeAreaBar(edge: .bottom) { if isShown { content() } }
+            // Rows fade under the bar and the search field, as under the navigation bar; a bar otherwise cuts them
+            // off with a hard edge.
+            scrollEdgeEffectStyle(.soft, for: .bottom)
+                .safeAreaBar(edge: .bottom) { if isShown { content() } }
         } else {
             safeAreaInset(edge: .bottom, spacing: 0) { if isShown { content().background(Color(.systemBackground)) } }
         }
