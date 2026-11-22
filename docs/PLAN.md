@@ -206,7 +206,8 @@ Observed X behavior:
 - No WhatsApp notifications, in the feed or on the Lock Screen: WhatsApp doesn't push to third-party linked devices, so they could only come from catching up in the background (the queued messages a login receives, as WhatsApp Web shows when its tab opens), and that is out of scope for now.
 - Chats and senders show their WhatsApp profile pictures where people share them.
 - Photos, videos, GIFs, voice messages, stickers and files show in chats and download only when shown; old files WhatsApp's servers no longer keep are asked of the phone again when opened. Scrolling back past what the device has asks the phone for older messages.
-- Not supported yet: sending to groups, reactions, replies, typing, member lists, starting chats, calls, status updates, channels and communities' announcement settings.
+- In one-to-one chats the user can reply to and react to messages, and others see them typing; replies, reactions and the other person's typing show in every chat. While a WhatsApp chat is open the user shows as online, as on WhatsApp Web.
+- Not supported yet: sending to groups, member lists, starting chats, calls, status updates, channels and communities' announcement settings.
 
 ### Chat Title
 

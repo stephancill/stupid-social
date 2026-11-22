@@ -1055,9 +1055,16 @@ public extension WhatsAppProto {
         public var pnJID: String?
         public var lidJID: String?
         public var username: String?
+        /// The contact's privacy token for us, its time and when we last issued ours to them.
+        public var tcToken: Data?
+        public var tcTokenTimestamp: UInt64
+        public var tcTokenSenderTimestamp: UInt64
 
         public init(proto: ProtoMessage) {
             id = proto.string(1) ?? ""
+            tcToken = proto.data(21)
+            tcTokenTimestamp = proto.uint64(22) ?? 0
+            tcTokenSenderTimestamp = proto.uint64(28) ?? 0
             messages = proto.messages(2).compactMap { $0.message(1).map(WebMessageInfo.init) }
             lastMsgTimestamp = proto.uint64(5) ?? 0
             unreadCount = proto.uint32(6) ?? 0

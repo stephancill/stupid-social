@@ -1889,6 +1889,60 @@ async def fetch_bundles(account: Account, devices: list[JID]) -> dict[JID, dict]
     return bundles
 
 
+TC_TOKEN_BUCKET = 604800
+TC_TOKEN_BUCKETS = 4
+
+
+def tc_token_cutoff() -> int:
+    """Tokens from before this bucket boundary have expired (whatsmeow currentTCTokenCutoffTimestamp)."""
+    return (int(time.time()) // TC_TOKEN_BUCKET - (TC_TOKEN_BUCKETS - 1)) * TC_TOKEN_BUCKET
+
+
+def privacy_tokens(session: Session) -> dict:
+    """Privacy tokens by LID user: from history sync conversations (whatsmeow message.go) and privacy_token
+    notifications, which `Account` stores in the session."""
+    tokens = session.data.setdefault("privacyTokens", {})
+    for name in sorted(os.listdir(HISTORY_DIR)) if os.path.isdir(HISTORY_DIR) else []:
+        with open(os.path.join(HISTORY_DIR, name), "rb") as file:
+            history = waHistorySync.HistorySync.FromString(file.read())
+        if history.nctSalt:
+            session.data["nctSalt"] = b64(history.nctSalt)
+        for conversation in history.conversations:
+            if not conversation.tcToken:
+                continue
+            jid = JID.parse(conversation.ID)
+            user = session.data["lidMap"].get(jid.user, jid.user) if jid.server == USER_SERVER else jid.user
+            previous = tokens.get(user)
+            if previous and previous["t"] >= conversation.tcTokenTimestamp:
+                continue
+            tokens[user] = {"token": b64(conversation.tcToken), "t": conversation.tcTokenTimestamp, "senderT": conversation.tcTokenSenderTimestamp or (previous or {}).get("senderT", 0)}
+    return tokens
+
+
+def token_node(session: Session, lid: JID) -> Node | None:
+    """`<tctoken>` with the recipient's unexpired privacy token, else `<cstoken>` (HMAC-SHA256 of their LID under the
+    account's NCT salt), else nothing (whatsmeow sendDM, cstoken.go)."""
+    token = privacy_tokens(session).get(lid.user)
+    if token and token["t"] >= tc_token_cutoff():
+        return Node("tctoken", {}, unb64(token["token"]))
+    if session.data.get("nctSalt"):
+        return Node("cstoken", {}, hmac.new(unb64(session.data["nctSalt"]), f"{lid.user}@{LID_SERVER}".encode(), hashlib.sha256).digest())
+    return None
+
+
+async def issue_privacy_token(account: Account, lid: JID) -> None:
+    """After a send, our own token goes to the recipient once per week bucket (whatsmeow issuePrivacyTokenAndSave)."""
+    tokens = privacy_tokens(account.session)
+    sender_t = tokens.get(lid.user, {}).get("senderT", 0)
+    now = int(time.time())
+    if sender_t and now // TC_TOKEN_BUCKET <= sender_t // TC_TOKEN_BUCKET:
+        return
+    await account.client.iq("privacy", "set", [Node("tokens", {}, [Node("token", {"jid": JID(lid.user, LID_SERVER), "t": str(now), "type": "trusted_contact"})])])
+    tokens.setdefault(lid.user, {"token": "", "t": 0})["senderT"] = now
+    account.session.save()
+    print(f"issued our privacy token to {lid.user}@lid", flush=True)
+
+
 async def send_dm(account: Account, to: JID, message: Any) -> str:
     """One-to-one send in LID addressing: the recipient's devices get the message, our other devices a DeviceSentMessage."""
     session = account.session
@@ -1925,13 +1979,17 @@ async def send_dm(account: Account, to: JID, message: Any) -> str:
     content = [Node("participants", {}, participants)]
     if include_identity:
         content.append(Node("device-identity", {}, unb64(session.data["account"])))
+    token = token_node(session, to)
+    if token:
+        content.append(token)
     attrs = {"id": identifier, "type": "text", "to": to}
     if peer_pn:
         attrs["peer_recipient_pn"] = peer_pn
     ack = await account.client.send_and_wait(Node("message", attrs, content), identifier)
     if ack.attrs.get("error"):
         raise SystemExit(f"send failed: {ack.describe()}")
-    print(f"sent {identifier} to {to} ({len(participants)} devices), server t={ack.attr('t')}", flush=True)
+    print(f"sent {identifier} to {to} ({len(participants)} devices, {token.tag if token else 'no token'}), server t={ack.attr('t')}", flush=True)
+    await issue_privacy_token(account, to)
     return identifier
 
 
@@ -2215,9 +2273,64 @@ async def command_send(args: argparse.Namespace) -> None:
     account = Account(session, verbose=args.verbose)
     await account.start()
     try:
-        message = waE2E.Message(conversation=args.text)
+        if args.reply_to:
+            # A reply quotes the original (whatsmeow examples): its id, sender and content in contextInfo.
+            message = waE2E.Message()
+            message.extendedTextMessage.text = args.text
+            context = message.extendedTextMessage.contextInfo
+            context.stanzaID = args.reply_to
+            context.participant = str(JID(session.jid.user, USER_SERVER)) if args.quoted_from_me else str(to)
+            context.quotedMessage.conversation = args.quoted_text or ""
+        else:
+            message = waE2E.Message(conversation=args.text)
         await send_dm(account, to, message)
         await asyncio.sleep(args.listen)
+    finally:
+        await account.close()
+
+
+async def command_react(args: argparse.Namespace) -> None:
+    """A reaction (whatsmeow BuildReaction) to a message in the self chat; an empty --emoji removes it."""
+    session = Session.load()
+    to = JID(session.lid.user, LID_SERVER)
+    account = Account(session, verbose=args.verbose)
+    await account.start()
+    try:
+        message = waE2E.Message()
+        reaction = message.reactionMessage
+        reaction.key.remoteJID = str(to)
+        reaction.key.fromMe = args.from_me
+        reaction.key.ID = args.id
+        reaction.text = args.emoji
+        reaction.senderTimestampMS = int(time.time() * 1000)
+        await send_dm(account, to, message)
+        await asyncio.sleep(3)
+    finally:
+        await account.close()
+
+
+async def command_typing(args: argparse.Namespace) -> None:
+    """Presence available, composing then paused in the self chat, then unavailable (whatsmeow SendPresence,
+    SendChatPresence); prints chatstate and presence nodes that arrive meanwhile."""
+    session = Session.load()
+    to = JID(session.lid.user, LID_SERVER)
+    account = Account(session, verbose=args.verbose)
+
+    async def show(node: Node) -> None:
+        print(f"{node.tag} from {node.attr('from')} {[child.tag for child in node.children()]} {node.attrs.get('type', '')}", flush=True)
+
+    account.client.handlers.update({"chatstate": show, "presence": show})
+    await account.start()
+    try:
+        name = session.data.get("pushName") or "probe"
+        await account.client.send(Node("presence", {"type": "available", "name": name}))
+        await account.client.send(Node("chatstate", {"to": to}, [Node("composing", {})]))
+        await asyncio.sleep(3)
+        await account.client.send(Node("chatstate", {"to": to}, [Node("paused", {})]))
+        await asyncio.sleep(2)
+        await account.client.send(Node("presence", {"type": "unavailable", "name": name}))
+        await asyncio.sleep(2)
+        print("sent available, composing, paused, unavailable", flush=True)
     finally:
         await account.close()
 
@@ -2507,6 +2620,14 @@ class Account:
         if kind == "encrypt" and node.attrs.get("from") == SERVER_JID and node.child("count"):
             if int(node.child("count").attr("value", "0")) < MIN_PREKEY_COUNT:
                 await ensure_prekeys(self.client)
+        if kind == "privacy_token" and node.child("tokens"):
+            sender = JID.parse(node.attr("sender_lid") or node.attr("from"))
+            user = self.session.data["lidMap"].get(sender.user, sender.user) if sender.server == USER_SERVER else sender.user
+            for token in node.child("tokens").children():
+                if token.tag == "token" and token.attr("type") == "trusted_contact":
+                    entry = self.session.data.setdefault("privacyTokens", {}).setdefault(user, {"senderT": 0})
+                    entry.update({"token": b64(token.bytes()), "t": int(token.attr("t", "0"))})
+            self.session.save()
         if kind == "mediaretry":
             waiter = self.media_retries.pop(node.attr("id"), None)
             if waiter and not waiter.done():
@@ -2900,6 +3021,15 @@ def main() -> None:
     send.add_argument("--to", default="self", help="`self`, or a user JID")
     send.add_argument("--text", required=True)
     send.add_argument("--allow-others", action="store_true")
+    send.add_argument("--reply-to", help="message id to quote")
+    send.add_argument("--quoted-text", help="the quoted message's text, as replies carry it")
+    send.add_argument("--quoted-from-me", action="store_true", help="the quoted message is the account's own")
+    react = commands.add_parser("react", help="react to a message in the self chat (empty --emoji removes it)")
+    react.add_argument("--id", required=True)
+    react.add_argument("--emoji", default="👍")
+    react.add_argument("--from-me", action="store_true", help="the reacted message is the account's own")
+    react.set_defaults(handler=command_react)
+    commands.add_parser("typing", help="send presence and typing in the self chat").set_defaults(handler=command_typing)
     send.add_argument("--listen", type=float, default=10)
     send.set_defaults(handler=command_send)
 

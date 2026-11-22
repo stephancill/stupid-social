@@ -157,7 +157,7 @@ Sources/
       WhatsAppSignal.swift          # Signal protocol: X3DH sessions, double ratchet, prekey messages, sender keys, padding
       WhatsAppSocket.swift          # WebSocket with the Noise XX handshake, certificate check and encrypted frames
       WhatsAppClient.swift          # WhatsApp linked device: linking, login, decrypting, receipts, history sync, app state, groups, sending
-      WhatsAppChatAdapter.swift     # WhatsApp chat adapter: messages from the local store, media, history on demand, live refresh, text sending, read receipts
+      WhatsAppChatAdapter.swift     # WhatsApp chat adapter: messages from the local store, media, history on demand, live refresh, text, replies, reactions, typing, read receipts
       WhatsAppMediaFiles.swift      # wamedia: URLs, the URLProtocol that downloads, decrypts and caches WhatsApp media
     Resources/
       TelegramSchema.tl             # Telegram TL schema (scripts/telegram-schema.py); TelegramAPI.json is gitignored

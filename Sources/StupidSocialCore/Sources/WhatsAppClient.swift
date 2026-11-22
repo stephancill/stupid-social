@@ -48,10 +48,18 @@ public enum WhatsAppError: Error, Equatable {
 public struct WhatsAppChanges: Sendable {
     public var chats: Set<String> = []
     public var reloadList = false
+    /// Typing changes: the chat, who, and whether they're typing now.
+    public var typing: [WhatsAppTyping] = []
 
     var isEmpty: Bool {
-        chats.isEmpty && !reloadList
+        chats.isEmpty && !reloadList && typing.isEmpty
     }
+}
+
+public struct WhatsAppTyping: Sendable {
+    public let chat: String
+    public let sender: String
+    public let isTyping: Bool
 }
 
 /// What a chat shows when it opens or refreshes.
@@ -118,6 +126,16 @@ struct WhatsAppKeyState: Codable {
     var appStateKeys: [String: AppStateKey] = [:]
     var collections: [String: Collection] = [:]
     var readReceipts = true
+    /// Privacy tokens by LID user (whatsmeow tctoken.go). Optional so key files from before them still decode.
+    var privacyTokens: [String: PrivacyToken]?
+
+    struct PrivacyToken: Codable {
+        /// Their token for us, sent with messages, presence subscriptions and picture requests.
+        var token: Data?
+        var timestamp: Int64
+        /// When we last issued our token to them.
+        var senderTimestamp: Int64
+    }
 }
 
 /// A WhatsApp account as a linked device (WhatsApp's multi-device protocol, validated with
@@ -153,6 +171,7 @@ public actor WhatsAppClient {
     /// On-demand history requests waiting for their sync, by chat; each gets how many messages came.
     private var historyWaiters: [String: [CheckedContinuation<Int, Never>]] = [:]
     private var lastHistoryRequest: Date?
+    private var openChats = 0
     static let historyRequestSpacing: TimeInterval = 5
     /// Downloads in flight, so a file shown in several places downloads once.
     private var mediaDownloads: [String: Task<Data, Error>] = [:]
@@ -602,6 +621,15 @@ public actor WhatsAppClient {
             await handleNotification(node)
         case "call":
             await ack(node)
+        case "chatstate":
+            // `<chatstate from=chat [participant=sender]><composing/>` or `<paused/>` (whatsmeow handleChatState).
+            // The user's own typing comes back in their self chat, under their LID: it's never shown.
+            if let from = node.jid("from"), let state = node.children.first?.tag,
+               ![device?.jid?.user, device?.lid?.user].contains((node.jid("participant") ?? from).user)
+            {
+                let sender = (node.jid("participant") ?? from).nonAD.description
+                pending.typing.append(WhatsAppTyping(chat: canonicalChat(from.nonAD), sender: sender, isTyping: state == "composing"))
+            }
         default:
             break
         }
@@ -987,6 +1015,13 @@ public actor WhatsAppClient {
             await syncAppState()
         case "w:gp2":
             try? await fetchGroups()
+        case "privacy_token":
+            if let sender = node.jid("sender_lid") ?? node.jid("from") {
+                for token in node.child("tokens")?.children ?? [] where token.tag == "token" && token.attr("type") == "trusted_contact" {
+                    storePrivacyToken(for: sender, token: token.bytes, timestamp: token.attr("t").flatMap(Int64.init) ?? 0, senderTimestamp: nil)
+                }
+                saveKeys()
+            }
         case "mediaretry":
             if let id = node.attr("id"), let waiter = mediaRetryWaiters.removeValue(forKey: id) {
                 waiter.resume(returning: node)
@@ -1033,6 +1068,9 @@ public actor WhatsAppClient {
             guard let jid = WhatsAppJID(string: conversation.id), jid.server != WhatsAppJID.Server.broadcast, jid.server != WhatsAppJID.Server.newsletter else { continue }
             let chat = jid.description
             delivered[chat, default: 0] += conversation.messages.count
+            if let token = conversation.tcToken, !token.isEmpty {
+                storePrivacyToken(for: jid, token: token, timestamp: Int64(conversation.tcTokenTimestamp), senderTimestamp: Int64(conversation.tcTokenSenderTimestamp))
+            }
             if !isOnDemand { store.updateChat(chat) { stored in
                 if let name = conversation.name, !name.isEmpty { stored.name = name }
                 if let phone = conversation.pnJID { stored.phoneNumberJID = phone }
@@ -1107,6 +1145,54 @@ public actor WhatsAppClient {
             return plaintext
         }
         throw expired ? WhatsAppError.mediaExpired : WhatsAppError.download
+    }
+
+    // MARK: Privacy tokens (whatsmeow tctoken.go; validated with the probe's `send`, 2026-11-22)
+
+    static let tokenBucket: Int64 = 604_800
+
+    /// Tokens older than three weekly buckets before this one have expired.
+    static var tokenCutoff: Int64 {
+        (Int64(Date().timeIntervalSince1970) / tokenBucket - 3) * tokenBucket
+    }
+
+    /// Stored by LID user, as whatsmeow prefers; a phone-number JID is mapped when its LID is known.
+    private func tokenUser(_ jid: WhatsAppJID) -> String {
+        jid.server == WhatsAppJID.Server.user ? (lid(for: jid.nonAD)?.user ?? jid.user) : jid.user
+    }
+
+    private func storePrivacyToken(for jid: WhatsAppJID, token: Data, timestamp: Int64, senderTimestamp: Int64?) {
+        let user = tokenUser(jid)
+        var tokens = keys.privacyTokens ?? [:]
+        let previous = tokens[user]
+        guard (previous?.timestamp ?? 0) <= timestamp || previous?.token == nil else { return }
+        tokens[user] = .init(token: token, timestamp: timestamp, senderTimestamp: senderTimestamp ?? previous?.senderTimestamp ?? 0)
+        keys.privacyTokens = tokens
+    }
+
+    /// `<tctoken>` with the contact's unexpired token, for 1:1 sends, presence subscriptions and pictures.
+    private func privacyTokenNode(for jid: WhatsAppJID) -> WhatsAppNode? {
+        guard let stored = keys.privacyTokens?[tokenUser(jid)], let token = stored.token, !token.isEmpty, stored.timestamp >= Self.tokenCutoff else { return nil }
+        return WhatsAppNode("tctoken", bytes: token)
+    }
+
+    /// After a 1:1 send, our own token goes to the recipient once per weekly bucket (`issuePrivacyTokenAndSave`).
+    private func issuePrivacyTokenIfNeeded(to jid: WhatsAppJID) async {
+        let user = tokenUser(jid)
+        let now = Int64(Date().timeIntervalSince1970)
+        let sent = keys.privacyTokens?[user]?.senderTimestamp ?? 0
+        guard sent == 0 || now / Self.tokenBucket > sent / Self.tokenBucket else { return }
+        var token = WhatsAppNode("token", ["t": .string(String(now)), "type": "trusted_contact"])
+        token["jid"] = .jid(WhatsAppJID(user: user, server: WhatsAppJID.Server.lid))
+        do {
+            _ = try await iq("privacy", "set", [WhatsAppNode("tokens", children: [token])])
+            var tokens = keys.privacyTokens ?? [:]
+            tokens[user, default: .init(token: nil, timestamp: 0, senderTimestamp: 0)].senderTimestamp = now
+            keys.privacyTokens = tokens
+            saveKeys()
+        } catch {
+            logger.info("WhatsApp privacy token issue failed: \(String(describing: error), privacy: .public)")
+        }
     }
 
     // MARK: History on demand (whatsmeow BuildHistorySyncRequest, SendPeerMessage)
@@ -1515,7 +1601,9 @@ public actor WhatsAppClient {
     /// The preview picture's URL; `nil` when there is none to show (404) or it's hidden from the user (401).
     private func fetchAvatar(_ jid: WhatsAppJID) async throws -> URL? {
         do {
-            let response = try await iq("w:profile:picture", "get", target: jid.nonAD, [WhatsAppNode("picture", ["query": "url", "type": "preview"])])
+            let picture = privacyTokenNode(for: jid).map { WhatsAppNode("picture", ["query": "url", "type": "preview"], children: [$0]) }
+                ?? WhatsAppNode("picture", ["query": "url", "type": "preview"])
+            let response = try await iq("w:profile:picture", "get", target: jid.nonAD, [picture])
             guard let picture = response.child("picture"), picture.attr("status") == nil else { return nil }
             return picture.attr("url").flatMap(URL.init(string:))
         } catch let WhatsAppError.iq(code, _) where code == "404" || code == "401" {
@@ -1590,8 +1678,43 @@ public actor WhatsAppClient {
 
     /// Sends text to a one-to-one chat, addressed by LID: the recipient's devices get the message, the user's other
     /// devices a `DeviceSentMessage`. Group sending isn't validated in the probe yet.
-    public func sendText(_ text: String, to chat: String) async throws -> WhatsAppMessage {
-        guard let device, let ownJID = device.jid, let ownLID = device.lid, let account = device.account else { throw WhatsAppError.notLinked }
+    /// Sends text, as a reply when `replyTo` names a stored message (quoting it, as WhatsApp's apps do).
+    public func sendText(_ text: String, to chat: String, replyTo: String? = nil) async throws -> WhatsAppMessage {
+        let quoted = replyTo.flatMap { id in store.messages(in: chat).first { $0.id == id } }
+        let own = device?.jid?.nonAD.description ?? ""
+        let context = quoted.map { quoted in
+            WhatsAppProto.ContextInfo(stanzaID: quoted.id, participant: quoted.isFromMe ? own : quoted.sender, quotedMessage: .text(quoted.text ?? ""))
+        }
+        let message = WhatsAppProto.Message.text(text, contextInfo: context)
+        let (id, timestamp) = try await send(message, to: chat)
+        guard let ownJID = device?.jid else { throw WhatsAppError.notLinked }
+        let sent = WhatsAppMessage(id: id, sender: ownJID.nonAD.description, isFromMe: true, timestamp: timestamp, text: text, label: nil,
+                                   quotedId: quoted?.id, quotedSender: context?.participant)
+        store.upsert([sent], in: chat)
+        store.updateChat(chat) {
+            $0.unreadCount = 0
+            $0.readUpTo = timestamp
+        }
+        pending.chats.insert(chat)
+        flush()
+        return sent
+    }
+
+    /// Reacts to a message with an emoji, or takes the user's reaction back with an empty one.
+    public func sendReaction(_ emoji: String, to messageId: String, in chat: String) async throws {
+        guard let target = store.messages(in: chat).first(where: { $0.id == messageId }), let own = device?.jid?.nonAD.description else { throw WhatsAppError.unsupported }
+        let isGroup = chat.hasSuffix("@\(WhatsAppJID.Server.group)")
+        let key = WhatsAppProto.MessageKey(remoteJID: chat, fromMe: target.isFromMe, id: target.id, participant: isGroup && !target.isFromMe ? target.sender : nil)
+        _ = try await send(.reaction(to: key, text: emoji, senderTimestampMS: Int64(Date().timeIntervalSince1970 * 1000)), to: chat)
+        _ = store.modifyMessage(messageId, in: chat) { $0.reactions[own] = emoji.isEmpty ? nil : emoji }
+        pending.chats.insert(chat)
+        flush()
+    }
+
+    /// One-to-one send in LID addressing: the recipient's devices get the message and the user's other devices a
+    /// `DeviceSentMessage`, with the recipient's privacy token. Returns the id and the server's time.
+    private func send(_ message: WhatsAppProto.Message, to chat: String) async throws -> (String, Date) {
+        guard let device, device.jid != nil, let ownLID = device.lid, let account = device.account else { throw WhatsAppError.notLinked }
         guard var recipient = WhatsAppJID(string: chat) else { throw WhatsAppError.unsupported }
         guard recipient.server != WhatsAppJID.Server.group else { throw WhatsAppError.unsupported }
         var phoneNumber: WhatsAppJID?
@@ -1600,7 +1723,6 @@ public actor WhatsAppClient {
             phoneNumber = recipient
             recipient = lid.nonAD
         }
-        let message = WhatsAppProto.Message.text(text)
         let plaintext = message.proto.serialized()
         let deviceSent = WhatsAppProto.Message.deviceSent(message, destinationJID: recipient.description).proto.serialized()
         let ownUser = WhatsAppJID(user: ownLID.user, server: WhatsAppJID.Server.lid)
@@ -1630,6 +1752,9 @@ public actor WhatsAppClient {
         if includesIdentity {
             children.append(WhatsAppNode("device-identity", bytes: account))
         }
+        if let token = privacyTokenNode(for: recipient) {
+            children.append(token)
+        }
         var node = WhatsAppNode("message", ["id": .string(id), "type": "text"], children: children)
         node["to"] = .jid(recipient)
         if let phoneNumber {
@@ -1639,16 +1764,40 @@ public actor WhatsAppClient {
         if let error = ack.attr("error") {
             throw WhatsAppError.sendFailed(error)
         }
+        Task { await issuePrivacyTokenIfNeeded(to: recipient) }
         let timestamp = ack.attr("t").flatMap(Double.init).map { Date(timeIntervalSince1970: $0) } ?? Date()
-        let sent = WhatsAppMessage(id: id, sender: ownJID.nonAD.description, isFromMe: true, timestamp: timestamp, text: text, label: nil)
-        self.store.upsert([sent], in: chat)
-        self.store.updateChat(chat) {
-            $0.unreadCount = 0
-            $0.readUpTo = timestamp
+        return (id, timestamp)
+    }
+
+    // MARK: Presence and typing (whatsmeow presence.go; validated with the probe's `typing`, 2026-11-22)
+
+    /// Online while any WhatsApp chat is open in the foreground, as WhatsApp Web is while it has focus: presence
+    /// changes only when the first chat opens and the last one closes.
+    public func setAvailable(_ available: Bool) async {
+        openChats = max(openChats + (available ? 1 : -1), 0)
+        guard available ? openChats == 1 : openChats == 0 else { return }
+        var node = WhatsAppNode("presence", ["type": .string(available ? "available" : "unavailable")])
+        if let name = device?.pushName, !name.isEmpty {
+            node["name"] = .string(name)
         }
-        pending.chats.insert(chat)
-        flush()
-        return sent
+        try? await send(node)
+    }
+
+    /// Asks for a person's typing and online state while their chat is open, with their privacy token.
+    public func subscribePresence(_ chat: String) async {
+        guard let jid = WhatsAppJID(string: chat), jid.server != WhatsAppJID.Server.group else { return }
+        let target = jid.server == WhatsAppJID.Server.user ? (lid(for: jid)?.nonAD ?? jid) : jid
+        var node = privacyTokenNode(for: target).map { WhatsAppNode("presence", ["type": "subscribe"], children: [$0]) } ?? WhatsAppNode("presence", ["type": "subscribe"])
+        node["to"] = .jid(target)
+        try? await send(node)
+    }
+
+    /// `<chatstate to><composing/>` while the user types, `<paused/>` when they stop.
+    public func sendTyping(_ typing: Bool, in chat: String) async {
+        guard let jid = WhatsAppJID(string: chat) else { return }
+        var node = WhatsAppNode("chatstate", children: [WhatsAppNode(typing ? "composing" : "paused")])
+        node["to"] = .jid(jid)
+        try? await send(node)
     }
 
     /// Read receipts for others' messages up to `time`, one per sender (whatsmeow `MarkRead`); `read-self` when
@@ -1678,6 +1827,11 @@ public actor WhatsAppClient {
     }
 
     // MARK: Reading the store
+
+    /// The user's own JID, which keys their reactions.
+    public var ownUser: String? {
+        device?.jid?.nonAD.description
+    }
 
     /// A stored message, such as the anchor for an on-demand history request.
     public func message(_ id: String, in chat: String) -> WhatsAppMessage? {
