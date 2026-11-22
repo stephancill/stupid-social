@@ -26,7 +26,7 @@ extension View {
     /// A search field of the app's own floating at the bottom, as in Messages, presented while `isPresented` is true,
     /// with `accessory` (filter pills) above it while `showsAccessory`. iOS 26's bottom search field (`.searchable`,
     /// `.automatic`) stayed under the keyboard inside the home pager, whose pages don't avoid the keyboard themselves.
-    /// On a Mac it's the plain field pinned under the title, as `searchBar` is there.
+    /// It never presents the system search controller, so it's the same on a Mac.
     @ViewBuilder
     func bottomSearchBar(
         text: Binding<String>,
@@ -35,10 +35,7 @@ extension View {
         showsAccessory: Bool,
         @ViewBuilder accessory: () -> some View,
     ) -> some View {
-        if PlainSearchField.isNeeded {
-            searchBar(text: text, isPresented: isPresented, prompt: prompt)
-                .overlay(alignment: .bottom) { if showsAccessory { accessory() } }
-        } else if #available(iOS 26.0, *) {
+        if #available(iOS 26.0, *) {
             modifier(BottomSearchBar(text: text, isPresented: isPresented, prompt: prompt, showsAccessory: showsAccessory, accessory: accessory()))
         } else {
             searchable(text: text, isPresented: isPresented, prompt: prompt)
@@ -172,23 +169,44 @@ private struct BottomSearchBar<Accessory: View>: ViewModifier {
     let accessory: Accessory
     @State private var fieldHeight: CGFloat = 0
     @State private var accessoryHeight: CGFloat = 0
+    /// Whether the accessory takes space, which changes without animation; only its opacity fades. The dock resizes
+    /// to its content at once, while an animated layout moved the field from where it sat in the old frame, so the
+    /// field jumped up as the pills came and down as they went, then slid back.
+    @State private var accessoryInLayout = false
+    @State private var accessoryVisible = false
 
     func body(content: Content) -> some View {
         content
-            .contentMargins(.bottom, fieldHeight + (showsAccessory ? accessoryHeight : 0), for: .scrollContent)
+            .contentMargins(.bottom, fieldHeight + (accessoryInLayout ? accessoryHeight : 0), for: .scrollContent)
             .overlay {
                 KeyboardDock(content: VStack(spacing: 0) {
-                    if showsAccessory {
+                    if accessoryInLayout {
                         accessory
                             .onGeometryChange(for: CGFloat.self, of: \.size.height) { accessoryHeight = $0 }
-                            .transition(.opacity)
+                            .opacity(accessoryVisible ? 1 : 0)
+                            .onAppear { accessoryVisible = true }
+                            // The dock's hosting controller doesn't share this view's transactions.
+                            .animation(.smooth(duration: 0.3), value: accessoryVisible)
                     }
                     BottomSearchField(text: $text, isPresented: $isPresented, prompt: prompt)
                         .onGeometryChange(for: CGFloat.self, of: \.size.height) { fieldHeight = $0 }
                 }
-                // The dock's hosting controller doesn't share this view's transactions.
-                .animation(.smooth(duration: 0.3), value: showsAccessory))
+                // Kept on the dock's bottom edge: the dock takes the content's new height a frame before it draws it.
+                .frame(maxHeight: .infinity, alignment: .bottom))
                     .ignoresSafeArea(.container, edges: .bottom)
+            }
+            .onChange(of: showsAccessory, initial: true) { _, shows in
+                if shows {
+                    // Still in the layout while fading out: fade back in. Otherwise it fades in once it appears.
+                    if accessoryInLayout { accessoryVisible = true }
+                    accessoryInLayout = true
+                } else {
+                    accessoryVisible = false
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(300))
+                        if !accessoryVisible { accessoryInLayout = false }
+                    }
+                }
             }
     }
 }

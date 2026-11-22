@@ -1299,10 +1299,43 @@ extension View {
     /// Content fades under the navigation bar (the feed, Chats); a plain list otherwise gets a hard edge.
     @ViewBuilder
     func softScrollEdge() -> some View {
-        if #available(iOS 26.0, *) {
+        if ProcessInfo.processInfo.isiOSAppOnMac {
+            modifier(MacScrollEdgeFade())
+        } else if #available(iOS 26.0, *) {
             scrollEdgeEffectStyle(.soft, for: .top)
         } else {
             self
         }
+    }
+}
+
+/// The scroll edge effect on a Mac, where iOS draws none under the navigation bar, soft or hard (observed 2026-11-22,
+/// macOS 27.0.1): the background fading out under the bar once the list has scrolled.
+private struct MacScrollEdgeFade: ViewModifier {
+    @State private var topInset: CGFloat = 0
+    @State private var isScrolled = false
+
+    func body(content: Content) -> some View {
+        content
+            .onGeometryChange(for: CGFloat.self, of: \.safeAreaInsets.top) { topInset = $0 }
+            .onScrollGeometryChange(for: Bool.self, of: { $0.contentOffset.y + $0.contentInsets.top > 1 }) { _, scrolled in
+                isScrolled = scrolled
+            }
+            .overlay(alignment: .top) {
+                LinearGradient(
+                    stops: [
+                        .init(color: Color(.systemBackground), location: 0),
+                        .init(color: Color(.systemBackground).opacity(0.85), location: 0.6),
+                        .init(color: Color(.systemBackground).opacity(0), location: 1),
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom,
+                )
+                .frame(height: topInset + 16)
+                .ignoresSafeArea(edges: .top)
+                .opacity(isScrolled ? 1 : 0)
+                .animation(.easeInOut(duration: 0.15), value: isScrolled)
+                .allowsHitTesting(false)
+            }
     }
 }
