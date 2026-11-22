@@ -24,6 +24,24 @@ struct AccountFilterBar: View {
             .map(\.element)
     }
 
+    /// Accounts with items in the list, the one with the newest item first (ties keep the accounts' order), then any
+    /// selected one without items, so it can be turned off. The feed's order: which network was last heard from.
+    static func accountsByRecency(_ accounts: [Account], items: [(accountId: String, date: Date)], selection: Set<AccountFilter>) -> [Account] {
+        let newest = items.reduce(into: [String: Date]()) { newest, item in
+            newest[item.accountId] = max(newest[item.accountId] ?? item.date, item.date)
+        }
+        let withItems = accounts.enumerated()
+            .filter { newest[$0.element.id] != nil }
+            .sorted { lhs, rhs in
+                let lhsDate = newest[lhs.element.id] ?? .distantPast
+                let rhsDate = newest[rhs.element.id] ?? .distantPast
+                return lhsDate != rhsDate ? lhsDate > rhsDate : lhs.offset < rhs.offset
+            }
+            .map(\.element)
+        let selectedWithout = accounts.filter { newest[$0.id] == nil && selection.contains(.account($0.id)) }
+        return withItems + selectedWithout
+    }
+
     @ObservedObject var settingsViewModel: SettingsViewModel
     let accounts: [Account]
     let showsReminders: Bool
@@ -215,6 +233,8 @@ struct FilterPill<Filter: Hashable, Label: View>: View {
             }
             .lineLimit(1)
             .font(.subheadline)
+            // Muted until selected, so a row of names doesn't compete with the list under it.
+            .foregroundStyle(isSelected ? .primary : .secondary)
         }
         .buttonBorderShape(.capsule)
         .simultaneousGesture(LongPressGesture().onEnded { _ in

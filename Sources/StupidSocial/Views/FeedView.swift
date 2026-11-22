@@ -247,7 +247,11 @@ struct FeedView: View {
     }
 
     private var filterAccounts: [Account] {
-        AccountFilterBar.accounts(settingsViewModel.accounts, itemAccountIds: viewModel.items.map(\.item.accountId), selection: filterSelection)
+        AccountFilterBar.accountsByRecency(
+            settingsViewModel.accounts,
+            items: viewModel.items.map { (accountId: $0.item.accountId, date: $0.item.timestamp) },
+            selection: filterSelection,
+        )
     }
 
     /// Loads the avatars and previews of the rows below `index` before they scroll into view, about two screens
