@@ -42,6 +42,7 @@ public enum WhatsAppError: Error, Equatable {
     case mediaExpired
     /// The phone no longer has the file either.
     case mediaUnavailable
+    case upload
 }
 
 /// What changed in the store, for the Chats list and open chats.
@@ -1849,6 +1850,104 @@ public actor WhatsAppClient {
         pending.chats.insert(chat)
         flush()
         return sent
+    }
+
+    /// Uploads a file and sends it as a photo, video, voice message or document, with a caption and as a reply
+    /// when given (validated with the probe's `send-media`, 2026-11-22). The file goes into the media cache, so the
+    /// sent bubble shows it without downloading it again.
+    public func sendMedia(_ media: WhatsAppOutgoingMedia, caption: String?, to chat: String, replyTo: String? = nil, accountId: String) async throws -> WhatsAppMessage {
+        let uploaded = try await upload(media.data, kind: media.kind)
+        let kind: WhatsAppProto.MediaMessage.Kind = switch media.kind {
+        case .image: .image
+        case .video: .video
+        case .audio: .audio
+        case .document: .document
+        case .sticker: .sticker
+        }
+        // url, mimetype, caption, fileSHA256, fileLength, height, width, mediaKey, fileEncSHA256, directPath,
+        // jpegThumbnail, seconds, ptt, fileName.
+        let f = kind.fields
+        var proto = ProtoMessage()
+        f[0].map { proto.set($0, uploaded.url) }
+        f[1].map { proto.set($0, media.mimetype) }
+        if let caption, !caption.isEmpty { f[2].map { proto.set($0, caption) } }
+        f[3].map { proto.set($0, WhatsAppCipher.sha256(media.data)) }
+        f[4].map { proto.set($0, UInt64(media.data.count)) }
+        if let height = media.height { f[5].map { proto.set($0, height) } }
+        if let width = media.width { f[6].map { proto.set($0, width) } }
+        f[7].map { proto.set($0, uploaded.mediaKey) }
+        f[8].map { proto.set($0, uploaded.fileEncSHA256) }
+        f[9].map { proto.set($0, uploaded.directPath) }
+        if let thumbnail = media.thumbnail { f[10].map { proto.set($0, thumbnail) } }
+        if let seconds = media.seconds { f[11].map { proto.set($0, seconds) } }
+        if media.isVoice { f[12].map { proto.set($0, true) } }
+        if let fileName = media.fileName { f[13].map { proto.set($0, fileName) } }
+        // mediaKeyTimestamp.
+        let timestampField = switch media.kind {
+        case .image: 12
+        case .video: 14
+        case .audio, .sticker: 10
+        case .document: 11
+        }
+        proto.set(timestampField, Int64(Date().timeIntervalSince1970))
+        if let waveform = media.waveform, media.kind == .audio { proto.set(19, waveform) }
+        let quoted = replyTo.flatMap { id in store.messages(in: chat).first { $0.id == id } }
+        let own = device?.jid?.nonAD.description ?? ""
+        let context = quoted.map { WhatsAppProto.ContextInfo(stanzaID: $0.id, participant: $0.isFromMe ? own : $0.sender, quotedMessage: .text($0.text ?? "")) }
+        if let context { proto.set(17, context.proto) }
+        var wrapper = ProtoMessage()
+        wrapper.set(kind.field, proto)
+        let message = WhatsAppProto.Message(proto: wrapper)
+        let (id, timestamp) = try await send(message, to: chat)
+        let stored = WhatsAppMessage(id: id, sender: own, isFromMe: true, timestamp: timestamp, text: caption?.isEmpty == false ? caption : nil,
+                                     label: message.media.flatMap { _ in Self.label(of: message) }, quotedId: quoted?.id, media: message.media.map(Self.media),
+                                     quotedSender: context?.participant)
+        if let fileExtension = stored.media?.fileExtension {
+            let file = WhatsAppMediaCache.file(for: .init(accountId: accountId, chat: chat, messageId: id, fileExtension: fileExtension, isThumbnail: false))
+            try? FileManager.default.createDirectory(at: WhatsAppMediaCache.directory, withIntermediateDirectories: true)
+            try? media.data.write(to: file, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        }
+        store.upsert([stored], in: chat)
+        store.updateChat(chat) {
+            $0.unreadCount = 0
+            $0.readUpTo = timestamp
+        }
+        pending.chats.insert(chat)
+        flush()
+        return stored
+    }
+
+    /// Encrypts and uploads a file (whatsmeow Upload): AES-CBC under keys from a fresh media key and a 10-byte
+    /// HMAC, POSTed to the first media host with `media_conn`'s auth token.
+    private func upload(_ data: Data, kind: WhatsAppMedia.Kind) async throws -> (url: String, directPath: String, mediaKey: Data, fileEncSHA256: Data) {
+        let mediaKey = WhatsAppCipher.randomBytes(32)
+        let expanded = WhatsAppCipher.hkdf(mediaKey, length: 112, info: Data(kind.keyInfo.utf8))
+        let iv = expanded.prefix(16)
+        let cipherKey = expanded[expanded.startIndex + 16 ..< expanded.startIndex + 48]
+        let macKey = expanded[expanded.startIndex + 48 ..< expanded.startIndex + 80]
+        let ciphertext = try WhatsAppCipher.aesCBCEncrypt(key: Data(cipherKey), iv: Data(iv), data)
+        let body = ciphertext + WhatsAppCipher.hmacSHA256(key: Data(macKey), Data(iv) + ciphertext).prefix(10)
+        let encSHA256 = WhatsAppCipher.sha256(body)
+        let connection = try await iq("w:m", "set", [WhatsAppNode("media_conn")]).child("media_conn")
+        guard let auth = connection?.attr("auth"), let host = connection?.children.first(where: { $0.tag == "host" })?.attr("hostname") else { throw WhatsAppError.upload }
+        let token = encSHA256.base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = host
+        components.path = "/mms/\(kind.mmsType)/\(token)"
+        components.queryItems = [URLQueryItem(name: "auth", value: auth), URLQueryItem(name: "token", value: token)]
+        guard let url = components.url else { throw WhatsAppError.upload }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue(WhatsAppSocket.origin, forHTTPHeaderField: "Origin")
+        request.setValue(WhatsAppSocket.origin + "/", forHTTPHeaderField: "Referer")
+        request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        let (responseData, response) = try await URLSession.shared.upload(for: request, from: body)
+        guard (response as? HTTPURLResponse)?.statusCode == 200,
+              let json = try JSONSerialization.jsonObject(with: responseData) as? [String: Any],
+              let fileURL = json["url"] as? String, let directPath = json["direct_path"] as? String
+        else { throw WhatsAppError.upload }
+        return (fileURL, directPath, mediaKey, encSHA256)
     }
 
     /// Reacts to a message with an emoji, or takes the user's reaction back with an empty one.

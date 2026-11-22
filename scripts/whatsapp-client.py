@@ -2289,6 +2289,58 @@ async def command_send(args: argparse.Namespace) -> None:
         await account.close()
 
 
+async def upload_media(account: Account, data: bytes, info: bytes, mms_type: str) -> dict:
+    """Encrypts and uploads a file (whatsmeow Upload, rawUpload): AES-CBC under keys from a fresh media key, a
+    10-byte HMAC, POSTed to the first media host with the media_conn auth. Returns what the message needs."""
+    media_key = secrets.token_bytes(32)
+    expanded = hkdf(media_key, 112, info=info)
+    iv, cipher_key, mac_key = expanded[:16], expanded[16:48], expanded[48:80]
+    ciphertext = aes_cbc_encrypt(cipher_key, iv, data)
+    upload = ciphertext + hmac.new(mac_key, iv + ciphertext, hashlib.sha256).digest()[:10]
+    enc_sha256 = hashlib.sha256(upload).digest()
+    response = await account.client.iq("w:m", "set", [Node("media_conn", {})])
+    connection = response.child("media_conn")
+    host = [child.attr("hostname") for child in connection.children() if child.tag == "host"][0]
+    token = base64.urlsafe_b64encode(enc_sha256).decode()
+    url = f"https://{host}/mms/{mms_type}/{token}?" + urllib.parse.urlencode({"auth": connection.attr("auth"), "token": token})
+    request = urllib.request.Request(url, data=upload, method="POST", headers={"Origin": ORIGIN, "Referer": ORIGIN + "/", "Content-Type": "application/octet-stream"})
+    body = json.loads(await asyncio.to_thread(lambda: urllib.request.urlopen(request, timeout=120).read()))
+    return {"url": body["url"], "directPath": body["direct_path"], "mediaKey": media_key, "fileEncSHA256": enc_sha256,
+            "fileSHA256": hashlib.sha256(data).digest(), "fileLength": len(data)}
+
+
+async def command_send_media(args: argparse.Namespace) -> None:
+    """Uploads a file and sends it to the self chat as a photo or document (whatsmeow Upload + ImageMessage)."""
+    session = Session.load()
+    to = JID(session.lid.user, LID_SERVER)
+    with open(args.file, "rb") as file:
+        data = file.read()
+    account = Account(session, verbose=args.verbose)
+    await account.start()
+    try:
+        info, mms_type, _ = MEDIA_FIELDS[f"{args.kind}Message"]
+        uploaded = await upload_media(account, data, info, mms_type)
+        print(f"uploaded {len(data)} bytes → {uploaded['directPath'][:40]}…", flush=True)
+        message = waE2E.Message()
+        media = getattr(message, f"{args.kind}Message")
+        media.URL = uploaded["url"]
+        media.directPath = uploaded["directPath"]
+        media.mediaKey = uploaded["mediaKey"]
+        media.fileEncSHA256 = uploaded["fileEncSHA256"]
+        media.fileSHA256 = uploaded["fileSHA256"]
+        media.fileLength = uploaded["fileLength"]
+        media.mimetype = args.mimetype
+        media.mediaKeyTimestamp = int(time.time())
+        if args.kind == "image" and args.width:
+            media.width, media.height = args.width, args.height
+        if args.kind == "document":
+            media.fileName = os.path.basename(args.file)
+        await send_dm(account, to, message)
+        await asyncio.sleep(3)
+    finally:
+        await account.close()
+
+
 async def command_react(args: argparse.Namespace) -> None:
     """A reaction (whatsmeow BuildReaction) to a message in the self chat; an empty --emoji removes it."""
     session = Session.load()
@@ -3081,6 +3133,13 @@ def main() -> None:
     react.add_argument("--from-me", action="store_true", help="the reacted message is the account's own")
     react.set_defaults(handler=command_react)
     commands.add_parser("typing", help="send presence and typing in the self chat").set_defaults(handler=command_typing)
+    send_media = commands.add_parser("send-media", help="upload a file and send it to the self chat")
+    send_media.add_argument("--file", required=True)
+    send_media.add_argument("--kind", choices=["image", "document", "video", "audio"], default="image")
+    send_media.add_argument("--mimetype", default="image/jpeg")
+    send_media.add_argument("--width", type=int)
+    send_media.add_argument("--height", type=int)
+    send_media.set_defaults(handler=command_send_media)
     forget = commands.add_parser("forget-session", help="drop the Signal session with one of the account's own devices (to test retry receipts)")
     forget.add_argument("--device", type=int, required=True, help="the device number under the user's LID")
     forget.set_defaults(handler=command_forget_session)

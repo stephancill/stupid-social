@@ -7,7 +7,7 @@ import Foundation
 /// one-to-one chats (group sending isn't validated yet, so groups are read-only) and sends read receipts as
 /// messages are read.
 @MainActor
-public final class WhatsAppChatAdapter: ChatAdapter, ChatLiveUpdating, ChatReadOnlyAccess, ChatAudioPreviewing, ChatReactionSending, ChatTyping, ChatMembersListing {
+public final class WhatsAppChatAdapter: ChatAdapter, ChatLiveUpdating, ChatReadOnlyAccess, ChatAudioPreviewing, ChatReactionSending, ChatTyping, ChatMembersListing, ChatVoiceSending {
     public let network = ChatNetwork.whatsapp
     public var canReply: Bool {
         !isReadOnly
@@ -18,7 +18,10 @@ public final class WhatsAppChatAdapter: ChatAdapter, ChatLiveUpdating, ChatReadO
     }
 
     public private(set) var typingNames: [String] = []
-    public let acceptsAttachments = false
+    public var acceptsAttachments: Bool {
+        !isReadOnly
+    }
+
     public let pollInterval: Duration? = nil
     public var onChange: (() -> Void)?
     public var onConnectionLost: ((Error?) -> Void)?
@@ -292,7 +295,25 @@ public final class WhatsAppChatAdapter: ChatAdapter, ChatLiveUpdating, ChatReadO
     public func send(_ message: ChatOutgoing) async throws -> String? {
         pauseTyping?.cancel()
         lastTypingSent = nil
+        if let attachment = message.attachment {
+            let media = await WhatsAppOutgoingMedia.make(data: attachment.data, mimeType: attachment.mimeType, filename: attachment.filename, isImage: attachment.isImage)
+            let sent = try await client.sendMedia(media, caption: message.text, to: chatJID, replyTo: message.replyToId, accountId: accountId)
+            try history?.write([Self.record(sent)])
+            return sent.id
+        }
         let sent = try await client.sendText(message.text, to: chatJID, replyTo: message.replyToId)
+        try history?.write([Self.record(sent)])
+        return sent.id
+    }
+
+    /// Sent as Ogg Opus, as WhatsApp's apps send voice messages; encoded off the main thread.
+    public func send(voice: ChatVoiceNote, replyToId: String?) async throws -> String? {
+        pauseTyping?.cancel()
+        lastTypingSent = nil
+        let fileURL = voice.fileURL
+        let data = try await Task.detached { try OggOpusEncoder.encode(fileAt: fileURL) }.value
+        let media = WhatsAppOutgoingMedia.voice(oggOpus: data, duration: voice.duration, levels: voice.levels(64))
+        let sent = try await client.sendMedia(media, caption: nil, to: chatJID, replyTo: replyToId, accountId: accountId)
         try history?.write([Self.record(sent)])
         return sent.id
     }
