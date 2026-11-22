@@ -37,8 +37,8 @@ public final class WhatsAppChatAdapter: ChatAdapter, ChatLiveUpdating, ChatReadO
     public let chatJID: String
     /// The phone had nothing older than this message: paging back stops here.
     private var historyStart: String?
-    /// Messages stored before media was kept (labels only) were asked of the phone again once.
-    private var refreshedLegacyMedia = false
+    /// The message the last request for media-less messages was anchored on; asked again only from a newer one.
+    private var legacyMediaAnchor: String?
     /// The messages last rendered, by id, for the user's reactions.
     private var loaded: [String: WhatsAppMessage] = [:]
     private var ownUser: String?
@@ -82,12 +82,12 @@ public final class WhatsAppChatAdapter: ChatAdapter, ChatLiveUpdating, ChatReadO
         let title: String
         let avatarURL: URL?
         var historyStart: String?
-        var refreshedLegacyMedia: Bool?
+        var legacyMediaAnchor: String?
     }
 
     public func state() -> Data? {
         try? JSONEncoder().encode(State(names: names, avatars: avatars, readUpTo: readUpTo, title: info.title, avatarURL: info.avatarURL,
-                                        historyStart: historyStart, refreshedLegacyMedia: refreshedLegacyMedia))
+                                        historyStart: historyStart, legacyMediaAnchor: legacyMediaAnchor))
     }
 
     public func restore(state data: Data) {
@@ -98,7 +98,7 @@ public final class WhatsAppChatAdapter: ChatAdapter, ChatLiveUpdating, ChatReadO
         info.title = state.title
         info.avatarURL = state.avatarURL
         historyStart = state.historyStart
-        refreshedLegacyMedia = state.refreshedLegacyMedia ?? false
+        legacyMediaAnchor = state.legacyMediaAnchor
     }
 
     // MARK: Loading
@@ -158,17 +158,18 @@ public final class WhatsAppChatAdapter: ChatAdapter, ChatLiveUpdating, ChatReadO
         return try ChatPage(records: older.map(Self.record), earlier: received == 0 ? nil : earlierCursor(oldest: older.first))
     }
 
-    /// Messages stored before the app kept media show only labels. Once per chat, the phone is asked for the
-    /// messages before the newest, which come back with their media.
+    /// Messages stored before the app kept media show only labels. The phone is asked for the messages before
+    /// the newest, which come back with their media. History requests only return messages before their anchor,
+    /// and the phone ignores requests for single messages this device didn't fail to decrypt (observed
+    /// 2026-11-22), so a newest one stays a label until a later message arrives, then is asked for once per anchor.
     private func refreshLegacyMediaIfNeeded() {
-        guard !refreshedLegacyMedia else { return }
-        refreshedLegacyMedia = true
         Task {
             let messages = await client.chatPage(chatJID).messages
-            guard let newest = messages.last,
-                  let oldestLegacy = messages.firstIndex(where: { $0.media == nil && Self.isMediaLabel($0.label) })
+            guard let newest = messages.last, newest.id != legacyMediaAnchor,
+                  let oldestLegacy = messages.dropLast().firstIndex(where: { $0.media == nil && Self.isMediaLabel($0.label) })
             else { return }
-            let count = min(messages.count - oldestLegacy, 100)
+            legacyMediaAnchor = newest.id
+            let count = min(messages.count - 1 - oldestLegacy, 100)
             _ = try? await client.requestHistory(chat: chatJID, before: newest, count: count)
             await refreshNewest()
         }

@@ -2341,6 +2341,50 @@ async def command_send_media(args: argparse.Namespace) -> None:
         await account.close()
 
 
+async def command_resend(args: argparse.Namespace) -> None:
+    """Asks the phone for one message by its key (whatsmeow BuildUnavailableMessageRequest,
+    PLACEHOLDER_MESSAGE_RESEND) and prints what the answer holds (kinds, whether media has a path), never text."""
+    session = Session.load()
+    account = Account(session, verbose=args.verbose)
+    answered = asyncio.get_running_loop().create_future()
+
+    async def on_message(info: dict, message: Any) -> None:
+        response = message.protocolMessage.peerDataOperationRequestResponseMessage if message.HasField("protocolMessage") else None
+        if response is None or not response.peerDataOperationResult:
+            return
+        for result in response.peerDataOperationResult:
+            raw = result.placeholderMessageResendResponse.webMessageInfoBytes
+            if not raw:
+                print("answer without a message", flush=True)
+                continue
+            web = importlib.import_module("waWeb.WAWebProtobufsWeb_pb2").WebMessageInfo.FromString(raw)
+            part = media_of(web.message)
+            detail = f"{part[0]} path={'yes' if part[1].directPath else 'no'} key={'yes' if part[1].mediaKey else 'no'}" if part else describe_message(web.message)
+            print(f"resent {web.key.ID}: {detail}", flush=True)
+        if not answered.done():
+            answered.set_result(True)
+
+    account.on_message = on_message
+    await account.start()
+    try:
+        message = waE2E.Message()
+        protocol = message.protocolMessage
+        protocol.type = waE2E.ProtocolMessage.PEER_DATA_OPERATION_REQUEST_MESSAGE
+        operation = protocol.peerDataOperationRequestMessage
+        operation.peerDataOperationRequestType = waE2E.PeerDataOperationRequestType.PLACEHOLDER_MESSAGE_RESEND
+        key = operation.placeholderMessageResendRequest.add().messageKey
+        key.remoteJID = args.chat
+        key.fromMe = args.from_me
+        key.ID = args.id
+        await send_peer(account, message)
+        try:
+            await asyncio.wait_for(answered, args.listen)
+        except TimeoutError:
+            print("no answer", flush=True)
+    finally:
+        await account.close()
+
+
 async def command_react(args: argparse.Namespace) -> None:
     """A reaction (whatsmeow BuildReaction) to a message in the self chat; an empty --emoji removes it."""
     session = Session.load()
@@ -2500,6 +2544,8 @@ async def command_media(args: argparse.Namespace) -> None:
             extras.append(f"age={(time.time() - timestamp) / 86400:.0f}d")
             started = time.monotonic()
             try:
+                if not media.directPath:
+                    raise SignalError("no direct path (404)")
                 data = await account.download_media(media.directPath, media.fileEncSHA256, media.fileSHA256, media.mediaKey, info, mms_type)
             except Exception as error:  # noqa: BLE001
                 expired = any(code in str(error) for code in ("403", "404", "410"))
@@ -3133,6 +3179,12 @@ def main() -> None:
     react.add_argument("--from-me", action="store_true", help="the reacted message is the account's own")
     react.set_defaults(handler=command_react)
     commands.add_parser("typing", help="send presence and typing in the self chat").set_defaults(handler=command_typing)
+    resend = commands.add_parser("resend", help="ask the phone for one message by its key (prints kinds, never text)")
+    resend.add_argument("--chat", required=True)
+    resend.add_argument("--id", required=True)
+    resend.add_argument("--from-me", action="store_true")
+    resend.add_argument("--listen", type=float, default=30)
+    resend.set_defaults(handler=command_resend)
     send_media = commands.add_parser("send-media", help="upload a file and send it to the self chat")
     send_media.add_argument("--file", required=True)
     send_media.add_argument("--kind", choices=["image", "document", "video", "audio"], default="image")
