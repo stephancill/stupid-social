@@ -15,6 +15,7 @@ Sources/
       ContentView.swift             # Root view, container wiring
       FeedView.swift                # Main list + StoriesBar + story viewer triggers
       HomePager.swift               # UIPageViewController pager: Chats to the left of the feed
+      HomeTitleStrip.swift          # The pages' large title as one "Chats  Notifications" row that scrolls with a swipe
       ChatsView.swift               # Chats list across Apron rooms, Spotify chats and Instagram threads
       SearchView.swift              # Cross-network profile search and recently opened profiles
       SearchBar.swift               # Shared search field modifier (Search, Chats) and the drawer field's fill fix

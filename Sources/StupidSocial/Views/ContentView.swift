@@ -11,6 +11,7 @@ public struct ContentView: View {
     @AppStorage("homePage") private var page = HomePage.social
     @State private var isShowingChat = false
     @State private var isShowingFeedDetail = false
+    @State private var homeTitles = HomeTitleStripModel()
     @ObservedObject private var notificationRouter = NotificationRouter.shared
 
     public init() {}
@@ -55,6 +56,7 @@ public struct ContentView: View {
         HomePager(
             page: $page,
             isPagingEnabled: isPagingEnabled,
+            titles: homeTitles,
             chats: NavigationStack {
                 ChatsView(
                     viewModel: container.chatListViewModel,
@@ -75,6 +77,7 @@ public struct ContentView: View {
                     isShowingChat: $isShowingChat,
                     openRequest: $notificationRouter.pendingChat,
                 )
+                .homeTitleStrip(homeTitles)
             }
             // On the stack, so the chats it pushes have it too.
             .environment(\.feedService, container.feedViewModel.service),
@@ -128,6 +131,7 @@ public struct ContentView: View {
                     onRefresh: { await refreshFeedAndStories(container: container) },
                     isShowingDetail: $isShowingFeedDetail,
                 )
+                .homeTitleStrip(homeTitles)
             }
             .navigationDestination(for: HomeDestination.self) { destination in
                 switch destination {
