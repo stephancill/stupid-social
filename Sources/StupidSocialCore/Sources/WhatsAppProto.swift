@@ -789,6 +789,9 @@ public extension WhatsAppProto {
         public var timestampMS: Int64?
         /// `lidMigrationMappingSyncMessage.encodedMappingPayload`, a `LIDMigrationMappingSyncPayload`.
         public var lidMigrationMappingPayload: Data?
+        /// Messages the phone resent for an unavailable-message request: each a serialized `WebMessageInfo`
+        /// (`peerDataOperationRequestResponseMessage.peerDataOperationResult[].placeholderMessageResendResponse`).
+        public var resentMessages: [Data]
 
         public var kind: Kind? {
             type.flatMap(Kind.init)
@@ -802,6 +805,7 @@ public extension WhatsAppProto {
             editedMessage = proto.message(14).map(Message.init)
             timestampMS = proto.int64(15)
             lidMigrationMappingPayload = proto.message(23)?.data(1)
+            resentMessages = (proto.message(17)?.messages(3) ?? []).compactMap { $0.message(4)?.data(1) }
         }
     }
 

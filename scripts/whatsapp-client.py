@@ -2309,6 +2309,14 @@ async def command_react(args: argparse.Namespace) -> None:
         await account.close()
 
 
+def command_forget_session(args: argparse.Namespace) -> None:
+    session = Session.load()
+    address = JID(session.lid.user, LID_SERVER, device=args.device).signal_address()
+    sessions = session.data.get("signalSessions", {})
+    print(f"forgot {address}" if sessions.pop(address, None) is not None else f"no session for {address}; sessions: {sorted(k for k in sessions if k.startswith(session.lid.user))}", flush=True)
+    session.save()
+
+
 async def command_typing(args: argparse.Namespace) -> None:
     """Presence available, composing then paused in the self chat, then unavailable (whatsmeow SendPresence,
     SendChatPresence); prints chatstate and presence nodes that arrive meanwhile."""
@@ -2734,7 +2742,7 @@ class Account:
                 continue
             except SignalError as error:
                 log(f"couldn't decrypt {kind} {info['id']} from {address}: {error}")
-                await self.client.ack(node)
+                await self.send_retry_receipt(node, info)
                 return
             version = int(child.attr("v", "2"))
             if version != 2:
@@ -2790,6 +2798,49 @@ class Account:
             log(f"stored {len(payload.pnToLidMappings)} LID mappings")
         if info["category"] == "peer":
             await self.client.send(Node("receipt", {"id": info["id"], "type": "peer_msg", "to": self.session.jid.non_ad()}))
+
+    async def send_retry_receipt(self, node: Node, info: dict) -> None:
+        """Asks the sender to encrypt the message again (whatsmeow sendRetryReceipt): at most 4 times per message,
+        with a fresh one-time prekey and our identity from the second time on."""
+        identifier = info["id"]
+        retries = self.session.data.setdefault("retries", {})
+        count = retries.get(identifier, 0) + 1
+        in_message = [child for child in node.children() if child.tag == "enc"]
+        if count == 1 and len(in_message) == 1 and in_message[0].attr("count"):
+            count = int(in_message[0].attr("count")) + 1
+        retries[identifier] = count
+        self.session.save()
+        if count >= 5:
+            log(f"not sending more retry receipts for {identifier}")
+            await self.client.ack(node)
+            return
+        attrs = {"id": identifier, "to": node.attrs["from"], "type": "retry"}
+        for key in ("participant", "recipient"):
+            if key in node.attrs:
+                attrs[key] = node.attrs[key]
+        if info["type"] == "peer_msg" and info["fromMe"]:
+            attrs["category"] = "peer"
+        content = [
+            Node("retry", {"count": str(count), "id": identifier, "t": node.attrs.get("t", str(int(time.time()))), "v": "1"}),
+            Node("registration", {}, struct.pack(">I", self.session.data["registrationId"])),
+        ]
+        if count > 1:
+            key_id = self.session.data["nextPreKeyId"]
+            self.session.data["nextPreKeyId"] += 1
+            pair = KeyPair.generate()
+            self.session.data["preKeys"][str(key_id)] = pair.to_json()
+            self.session.save()
+            signed = self.session.data["signedPreKey"]
+            content.append(Node("keys", {}, [
+                Node("type", {}, bytes([DJB_TYPE])),
+                Node("identity", {}, self.session.identity_key.public),
+                Node("key", {}, [Node("id", {}, struct.pack(">I", key_id)[1:]), Node("value", {}, pair.public)]),
+                Node("skey", {}, [Node("id", {}, struct.pack(">I", signed["id"])[1:]), Node("value", {}, unb64(signed["public"])), Node("signature", {}, unb64(signed["signature"]))]),
+                Node("device-identity", {}, unb64(self.session.data["account"])),
+            ]))
+        await self.client.send(Node("receipt", attrs, content))
+        await self.client.ack(node)
+        print(f"sent retry receipt #{count} for {identifier} to {node.attrs['from']}{' with keys' if count > 1 else ''}", flush=True)
 
     async def send_message_receipt(self, node: Node, info: dict) -> None:
         attrs = {"id": info["id"], "to": node.attrs["from"]}
@@ -3030,6 +3081,9 @@ def main() -> None:
     react.add_argument("--from-me", action="store_true", help="the reacted message is the account's own")
     react.set_defaults(handler=command_react)
     commands.add_parser("typing", help="send presence and typing in the self chat").set_defaults(handler=command_typing)
+    forget = commands.add_parser("forget-session", help="drop the Signal session with one of the account's own devices (to test retry receipts)")
+    forget.add_argument("--device", type=int, required=True, help="the device number under the user's LID")
+    forget.set_defaults(handler=command_forget_session)
     send.add_argument("--listen", type=float, default=10)
     send.set_defaults(handler=command_send)
 

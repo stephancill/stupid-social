@@ -172,6 +172,13 @@ public actor WhatsAppClient {
     private var historyWaiters: [String: [CheckedContinuation<Int, Never>]] = [:]
     private var lastHistoryRequest: Date?
     private var openChats = 0
+    /// Retry receipts sent per message id.
+    private var retryCounts: [String: Int] = [:]
+    /// Resends per requesting device and message id.
+    private var incomingRetryCounts: [String: Int] = [:]
+    /// The newest messages sent from this device, so another device that couldn't decrypt one can get it again.
+    private var recentSent: [String: (recipient: String, message: WhatsAppProto.Message)] = [:]
+    private var recentSentOrder: [String] = []
     static let historyRequestSpacing: TimeInterval = 5
     /// Downloads in flight, so a file shown in several places downloads once.
     private var mediaDownloads: [String: Task<Data, Error>] = [:]
@@ -615,7 +622,11 @@ public actor WhatsAppClient {
             await handleMessage(node)
         case "receipt":
             await ack(node)
-            handleReceipt(node)
+            if node.attr("type") == "retry" {
+                await handleRetryReceipt(node)
+            } else {
+                handleReceipt(node)
+            }
         case "notification":
             await ack(node)
             await handleNotification(node)
@@ -831,6 +842,7 @@ public actor WhatsAppClient {
             } catch {
                 logger.info("WhatsApp couldn't decrypt \(child.attr("type") ?? "", privacy: .public): \(String(describing: error), privacy: .public)")
                 AppMetrics.whatsAppFailed("decrypt", error: error)
+                await sendRetryReceipt(for: node, id: id, source: source)
                 await ack(node)
                 return
             }
@@ -899,6 +911,14 @@ public actor WhatsAppClient {
                     directory.lidByPhoneNumber[String(mapping.pn)] = String(mapping.assignedLID)
                 }
             }
+        }
+        for data in message.resentMessages {
+            guard let info = try? WhatsAppProto.WebMessageInfo(data: data), let key = info.key, let id = key.id,
+                  let remote = key.remoteJID.flatMap(WhatsAppJID.init(string:)), let content = info.message else { continue }
+            let own = device?.jid?.nonAD.description ?? ""
+            let sender = key.fromMe == true ? own : (key.participant ?? info.participant ?? remote.description)
+            apply(content, id: id, chat: canonicalChat(remote), sender: WhatsAppJID(string: sender)?.nonAD.description ?? sender, isFromMe: key.fromMe == true,
+                  timestamp: Date(timeIntervalSince1970: TimeInterval(info.messageTimestamp)), live: true)
         }
         if node.attr("category") == "peer", let own = device?.jid?.nonAD {
             try? await send(WhatsAppNode("receipt", ["id": .string(id), "type": "peer_msg", "to": .jid(own)]))
@@ -1671,22 +1691,140 @@ public actor WhatsAppClient {
         let response = try await iq("encrypt", "get", [WhatsAppNode("key", children: users)])
         var bundles: [String: WhatsAppPreKeyBundle] = [:]
         for user in response.child("list")?.children ?? [] where user.tag == "user" && user.child("error") == nil {
-            guard let jid = user.jid("jid") else { continue }
-            let keys = user.child("keys") ?? user
-            func id(_ node: WhatsAppNode?) -> UInt32 {
-                (node?.child("id")?.bytes ?? Data()).reduce(UInt32(0)) { $0 << 8 | UInt32($1) }
-            }
-            guard let signed = keys.child("skey"), let identity = keys.child("identity")?.bytes,
-                  let registration = user.child("registration")?.bytes
-            else { continue }
-            let preKey = keys.child("key")
-            bundles[jid.signalAddress] = WhatsAppPreKeyBundle(
-                registrationId: registration.reduce(UInt32(0)) { $0 << 8 | UInt32($1) }, identity: identity, signedPreKeyId: id(signed),
-                signedPreKey: signed.child("value")?.bytes ?? Data(), signature: signed.child("signature")?.bytes ?? Data(),
-                preKeyId: preKey.map { id($0) }, preKey: preKey?.child("value")?.bytes,
-            )
+            guard let jid = user.jid("jid"), let bundle = Self.bundle(keys: user.child("keys") ?? user, registration: user.child("registration")) else { continue }
+            bundles[jid.signalAddress] = bundle
         }
         return bundles
+    }
+
+    /// A prekey bundle from `<keys>` (identity, `<key>`, `<skey>`) and `<registration>`, as key fetches and retry
+    /// receipts carry them (whatsmeow nodeToPreKeyBundle).
+    static func bundle(keys: WhatsAppNode, registration: WhatsAppNode?) -> WhatsAppPreKeyBundle? {
+        func id(_ node: WhatsAppNode?) -> UInt32 {
+            (node?.child("id")?.bytes ?? Data()).reduce(UInt32(0)) { $0 << 8 | UInt32($1) }
+        }
+        guard let signed = keys.child("skey"), let identity = keys.child("identity")?.bytes, let registration = registration?.bytes else { return nil }
+        let preKey = keys.child("key")
+        return WhatsAppPreKeyBundle(
+            registrationId: registration.reduce(UInt32(0)) { $0 << 8 | UInt32($1) }, identity: identity, signedPreKeyId: id(signed),
+            signedPreKey: signed.child("value")?.bytes ?? Data(), signature: signed.child("signature")?.bytes ?? Data(),
+            preKeyId: preKey.map { id($0) }, preKey: preKey?.child("value")?.bytes,
+        )
+    }
+
+    // MARK: Retries (whatsmeow retry.go)
+
+    /// Asks the sender to encrypt a message this device couldn't decrypt again: at most four times, with a fresh
+    /// one-time prekey and our identity from the second time on. The first time, the phone is also asked to resend
+    /// it (an unavailable-message request) after 5 s, in case the sender doesn't.
+    private func sendRetryReceipt(for node: WhatsAppNode, id: String, source: Source) async {
+        guard let device, let account = device.account else { return }
+        var count = (retryCounts[id] ?? 0) + 1
+        let encs = node.children.filter { $0.tag == "enc" }
+        if count == 1, encs.count == 1, let sent = encs[0].attr("count").flatMap(Int.init) {
+            count = sent + 1
+        }
+        retryCounts[id] = count
+        guard count < 5 else {
+            logger.info("WhatsApp not sending more retry receipts for a message")
+            return
+        }
+        var children = [
+            WhatsAppNode("retry", ["count": .string(String(count)), "id": .string(id), "t": .string(node.attr("t") ?? String(Int(Date().timeIntervalSince1970))), "v": "1"]),
+            WhatsAppNode("registration", bytes: withUnsafeBytes(of: device.registrationId.bigEndian) { Data($0) }),
+        ]
+        if count > 1 {
+            let preKeyId = keys.nextPreKeyId
+            keys.nextPreKeyId += 1
+            let pair = WhatsAppKeyPair.generate()
+            keys.preKeys[String(preKeyId)] = pair
+            saveKeys()
+            children.append(WhatsAppNode("keys", children: [
+                WhatsAppNode("type", bytes: Data([5])),
+                WhatsAppNode("identity", bytes: device.identityKey.publicKey),
+                WhatsAppNode("key", children: [WhatsAppNode("id", bytes: Self.uint24(preKeyId)), WhatsAppNode("value", bytes: pair.publicKey)]),
+                WhatsAppNode("skey", children: [
+                    WhatsAppNode("id", bytes: Self.uint24(device.signedPreKey.id)),
+                    WhatsAppNode("value", bytes: device.signedPreKey.keyPair.publicKey),
+                    WhatsAppNode("signature", bytes: device.signedPreKey.signature),
+                ]),
+                WhatsAppNode("device-identity", bytes: account),
+            ]))
+        }
+        var receipt = WhatsAppNode("receipt", ["id": .string(id), "type": "retry"], children: children)
+        receipt["to"] = node["from"]
+        receipt["participant"] = node["participant"]
+        receipt["recipient"] = node["recipient"]
+        if node.attr("type") == "peer_msg", source.isFromMe {
+            receipt["category"] = "peer"
+        }
+        try? await send(receipt)
+        if count == 1 {
+            Task {
+                try? await Task.sleep(for: .seconds(5))
+                await requestUnavailableMessage(id: id, source: source)
+            }
+        }
+    }
+
+    /// Asks the phone for a message this device couldn't decrypt (whatsmeow BuildUnavailableMessageRequest); the
+    /// phone answers with the message in a peer response, stored like history.
+    private func requestUnavailableMessage(id: String, source: Source) async {
+        guard store.messages(in: canonicalChat(source.chat)).first(where: { $0.id == id }) == nil else { return }
+        let key = WhatsAppProto.MessageKey(remoteJID: source.chat.description, fromMe: source.isFromMe, id: id,
+                                           participant: source.isGroup ? source.sender.nonAD.description : nil)
+        var request = ProtoMessage()
+        request.set(1, key.proto)
+        var operation = ProtoMessage()
+        operation.set(1, UInt64(4)) // PLACEHOLDER_MESSAGE_RESEND
+        operation.set(5, request)
+        var protocolMessage = ProtoMessage()
+        protocolMessage.set(2, UInt64(16)) // PEER_DATA_OPERATION_REQUEST_MESSAGE
+        protocolMessage.set(16, operation)
+        var wrapper = ProtoMessage()
+        wrapper.set(WhatsAppProto.Message.Field.protocolMessage, protocolMessage)
+        try? await sendPeer(wrapper, historyRequest: false)
+    }
+
+    /// Another device couldn't decrypt one of our messages: encrypt it again for that device (with the keys the
+    /// receipt carries, or a new session when there's none), at most ten times per device and message.
+    private func handleRetryReceipt(_ node: WhatsAppNode) async {
+        guard let retry = node.child("retry"), let id = retry.attr("id"), let requester = node.jid("participant") ?? node.jid("from"),
+              let recent = recentSent[id], let own = device?.jid, let ownLID = device?.lid, let account = device?.account
+        else { return }
+        let counterKey = "\(requester.description)/\(id)"
+        incomingRetryCounts[counterKey, default: 0] += 1
+        guard incomingRetryCounts[counterKey]! < 10 else { return }
+        let isOwnDevice = requester.user == own.user || requester.user == ownLID.user
+        let message = isOwnDevice ? WhatsAppProto.Message.deviceSent(recent.message, destinationJID: recent.recipient) : recent.message
+        let address = requester.server == WhatsAppJID.Server.user ? (lid(for: requester) ?? requester) : requester
+        var store = signal
+        do {
+            if let keys = node.child("keys"), let bundle = Self.bundle(keys: keys, registration: node.child("registration")) {
+                try store.buildSession(address: address.signalAddress, bundle: bundle)
+            } else if !store.hasSession(address: address.signalAddress) {
+                for (bundleAddress, bundle) in try await bundles(for: [address]) {
+                    try? store.buildSession(address: bundleAddress, bundle: bundle)
+                }
+            }
+            let encrypted = try store.encrypt(address: address.signalAddress, WhatsAppMessagePadding.pad(message.proto.serialized()))
+            signal = store
+            saveKeys()
+            var enc = WhatsAppNode("enc", ["v": "2", "type": .string(encrypted.type.rawValue)], bytes: encrypted.data)
+            enc["count"] = retry["count"]
+            var children = [enc]
+            if encrypted.type == .pkmsg {
+                children.append(WhatsAppNode("device-identity", bytes: account))
+            }
+            var resend = WhatsAppNode("message", ["id": .string(id), "type": "text", "device_fanout": "false"], children: children)
+            resend["to"] = node["from"]
+            resend["t"] = retry["t"]
+            resend["participant"] = node["participant"]
+            resend["recipient"] = node["recipient"]
+            try await send(resend)
+        } catch {
+            logger.info("WhatsApp retry resend failed: \(String(describing: error), privacy: .public)")
+        }
     }
 
     /// Sends text to a one-to-one chat, addressed by LID: the recipient's devices get the message, the user's other
@@ -1779,6 +1917,11 @@ public actor WhatsAppClient {
         }
         Task { await issuePrivacyTokenIfNeeded(to: recipient) }
         let timestamp = ack.attr("t").flatMap(Double.init).map { Date(timeIntervalSince1970: $0) } ?? Date()
+        recentSent[id] = (recipient.description, message)
+        recentSentOrder.append(id)
+        if recentSentOrder.count > 256 {
+            recentSent[recentSentOrder.removeFirst()] = nil
+        }
         return (id, timestamp)
     }
 
