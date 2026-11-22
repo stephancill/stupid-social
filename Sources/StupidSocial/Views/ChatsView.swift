@@ -79,7 +79,7 @@ struct ChatsView: View {
         // Just above the search bar at the bottom, rather than a row in the list: inserting a row as the search field
         // activated cancelled the search.
         .bottomBar(isShown: hasAppeared && isSearchPresented) {
-            AccountFilterBar(settingsViewModel: settingsViewModel, accounts: filterAccounts, showsReminders: false, selection: $filterSelection)
+            AccountFilterBar(settingsViewModel: settingsViewModel, accounts: filterAccounts, showsReminders: false, selection: $filterSelection, isFloating: true)
         }
         .overlay {
             if filteredChats.isEmpty, !query.isEmpty {

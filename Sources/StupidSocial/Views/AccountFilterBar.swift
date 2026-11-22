@@ -29,6 +29,9 @@ struct AccountFilterBar: View {
     let accounts: [Account]
     let showsReminders: Bool
     @Binding var selection: Set<AccountFilter>
+    /// Floating over a list that scrolls beneath it (Chats), where see-through bordered pills would be illegible:
+    /// the pills are glass on an opaque backing instead, and the filter icon, with nothing behind it, is left out.
+    var isFloating = false
     @AppStorage("redactionEnabled") private var redactionEnabled = false
     @ScaledMetric(relativeTo: .subheadline) private var clearButtonSize: CGFloat = 20
     /// The clear button's drawn width, including its style's padding, which the trailing margin makes room for.
@@ -42,10 +45,12 @@ struct AccountFilterBar: View {
 
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: spacing) {
-                Image(systemName: "line.3.horizontal.decrease")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .accessibilityHidden(true)
+                if !isFloating {
+                    Image(systemName: "line.3.horizontal.decrease")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                }
 
                 if showsReminders {
                     pill(for: .reminders) {
@@ -98,7 +103,17 @@ struct AccountFilterBar: View {
         .buttonBorderShape(.capsule)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
 
-        if isSelected {
+        if #available(iOS 26.0, *), isFloating {
+            // Glass alone still shows the rows' text through it; an opaque backing keeps the label readable.
+            Group {
+                if isSelected {
+                    button.buttonStyle(.glassProminent)
+                } else {
+                    button.buttonStyle(.glass)
+                }
+            }
+            .background(Color(.systemBackground), in: Capsule())
+        } else if isSelected {
             button.buttonStyle(.borderedProminent)
         } else {
             button.buttonStyle(.bordered)
@@ -117,7 +132,7 @@ struct AccountFilterBar: View {
         .buttonBorderShape(.circle)
         .accessibilityLabel("Clear Filter")
         if #available(iOS 26.0, *) {
-            button.buttonStyle(.glass)
+            button.buttonStyle(.glass).background(Color(.systemBackground), in: Circle())
         } else {
             button.buttonStyle(.bordered).tint(.secondary).background(.background, in: Circle())
         }
