@@ -29,6 +29,24 @@ final class HomeTitleStripModel {
     /// Each page list's top content inset with the large title showing in full, kept here rather than in the strip:
     /// SwiftUI makes a new strip when a page comes back on screen, possibly with its title collapsed.
     fileprivate let restingInsets = NSMapTable<UIScrollView, NSNumber>.weakToStrongObjects()
+    /// Each page's leading title as its own scroll would draw it: its centre on screen and how far it has shrunk
+    /// towards the bar. Mid-swipe both pages' strips draw the row from these blended, so its halves meet.
+    fileprivate var pageTitles: [Int: (center: CGFloat, collapse: CGFloat)] = [:]
+
+    /// How much of a page (0 Chats, 1 Notifications) is on screen, 0 to 1, from `position`.
+    fileprivate func visibility(ofPage page: Int) -> CGFloat {
+        let indices = page == 0 ? [0, 2] : [-1, 1]
+        return indices.map { max(0, 1 - abs(position - CGFloat($0))) }.max() ?? 0
+    }
+
+    /// Records a page's title and, when it changed mid-swipe, has the other page's strip follow it.
+    fileprivate func report(page: Int, center: CGFloat, collapse: CGFloat) {
+        let old = pageTitles[page]
+        pageTitles[page] = (center, collapse)
+        guard position.rounded() != position,
+              old.map({ abs($0.center - center) > 0.01 || abs($0.collapse - collapse) > 0.001 }) ?? true else { return }
+        strips.allObjects.filter { $0.pageIndex != page }.forEach { $0.setNeedsLayout() }
+    }
 
     /// The index in the row of the title at a point in `view`, on whichever page's strip is on screen there.
     func titleIndex(at point: CGPoint, in view: UIView) -> Int? {
@@ -237,7 +255,11 @@ final class HomeTitleStripView: UIView {
         CATransaction.setDisableActions(true)
         row.transform = .identity
         row.frame = bounds
-        let collapse = layoutCollapse(leadingCenterX: origins[1] - scroll - pageShift + widths[1] / 2, font: font)
+        let collapse = layoutCollapse(
+            leadingCenterX: origins[1] - scroll - pageShift + widths[1] / 2,
+            restingLeadingCenterX: origins[1] + widths[1] / 2,
+            font: font,
+        )
         // The other titles are gone by halfway, so only the leading one reaches the bar.
         let othersAlpha = max(0, 1 - 2 * collapse)
         for (slot, label) in labels.enumerated() {
@@ -269,7 +291,11 @@ final class HomeTitleStripView: UIView {
     /// content inset by the large title's height, with the offset following so the content stays put relative to
     /// it; once the inset bottoms out the bar hides the large title and shows its inline one (observed 2026-11-22
     /// on iOS 27). So the progress is how much of that inset is gone.
-    private func layoutCollapse(leadingCenterX: CGFloat, font: UIFont) -> CGFloat {
+    ///
+    /// Mid-swipe both pages' strips draw the row the same way: from the two pages' titles blended by how much of each
+    /// is on screen, leaving out a page whose title has collapsed (the bar hides it). Each drawing its own, the halves
+    /// met out of line when one list rested a little scrolled.
+    private func layoutCollapse(leadingCenterX: CGFloat, restingLeadingCenterX: CGFloat, font: UIFont) -> CGFloat {
         // Off screen (scrolled far away, or another screen pushed) the inline title keeps what it last showed.
         guard let scrollView, let bar = navigationBar, window != nil else { return 0 }
         let inset = scrollView.adjustedContentInset.top
@@ -278,19 +304,44 @@ final class HomeTitleStripView: UIView {
         let span = largeTitleView?.bounds.height ?? bounds.height
         let progress = min(1, max(0, (restingInset - inset) / span))
         if inlineTitle?.window == nil { inlineTitle = Self.inlineTitle(in: bar) }
-        guard progress > 0 else { return 0 }
 
         // The middle of the bar's top row (44pt, under the status bar), where its inline title sits.
         let barFrame = bar.convert(bar.bounds, to: nil)
-        let target = convert(CGPoint(x: barFrame.midX, y: barFrame.minY + 22), from: nil)
-        let scale = 1 + (Self.inlineFont.pointSize / font.pointSize - 1) * progress
-        let x = (target.x - leadingCenterX) * progress
-        let y = (target.y - bounds.midY) * progress
+        let target = barFrame.minY + 22
+        let center = convert(CGPoint(x: 0, y: bounds.midY), to: nil).y
+        if let pageIndex { model.report(page: pageIndex, center: center, collapse: progress) }
+
+        // The leading title's centre on screen and its progress, blended across the pages' visible titles.
+        var weights: CGFloat = 0, drawnCenter: CGFloat = 0, drawnProgress: CGFloat = 0
+        for (page, title) in model.pageTitles where title.collapse < 1 || page == pageIndex {
+            let weight = model.visibility(ofPage: page)
+            weights += weight
+            drawnCenter += weight * (title.center + (target - title.center) * title.collapse)
+            drawnProgress += weight * title.collapse
+        }
+        if weights > 0 {
+            drawnCenter /= weights
+            drawnProgress /= weights
+        } else {
+            drawnCenter = center + (target - center) * progress
+            drawnProgress = progress
+        }
+        guard drawnProgress > 0 || abs(drawnCenter - center) > 0.01 else { return progress }
+
+        let scale = 1 + (Self.inlineFont.pointSize / font.pointSize - 1) * drawnProgress
+        // Towards the bar's centre by the distance at rest, which a swipe doesn't change.
+        let x = (convert(CGPoint(x: barFrame.midX, y: 0), from: nil).x - restingLeadingCenterX) * drawnProgress
+        let y = drawnCenter - center
         // Scaled about the leading title's centre.
         row.transform = CGAffineTransform(translationX: leadingCenterX - bounds.midX + x, y: y)
             .scaledBy(x: scale, y: scale)
             .translatedBy(x: bounds.midX - leadingCenterX, y: 0)
         return progress
+    }
+
+    /// This strip's page: 0 Chats, 1 Notifications.
+    fileprivate var pageIndex: Int? {
+        model.pageViews.firstIndex { isDescendant(of: $0) }
     }
 
     /// The large title's own view: the scroll view's subview holding the strip.
