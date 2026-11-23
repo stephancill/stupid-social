@@ -1231,6 +1231,8 @@ public extension WhatsAppProto {
         public var archived: Bool?
         /// `markChatAsReadAction.read`.
         public var read: Bool?
+        /// `lockChatAction.locked`: WhatsApp hides locked chats behind a passcode.
+        public var locked: Bool?
         /// Whether `clearChatAction` is set.
         public var clearsChat: Bool
         /// Whether `deleteChatAction` is set.
@@ -1245,6 +1247,7 @@ public extension WhatsAppProto {
             pinned = proto.message(5).map { $0.bool(1) ?? false }
             archived = proto.message(17).map { $0.bool(1) ?? false }
             read = proto.message(20).map { $0.bool(1) ?? false }
+            locked = proto.message(50).map { $0.bool(1) ?? false }
             clearsChat = proto.has(21)
             deletesChat = proto.has(22)
         }

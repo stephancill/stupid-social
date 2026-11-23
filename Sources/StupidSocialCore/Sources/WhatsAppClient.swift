@@ -129,6 +129,9 @@ struct WhatsAppKeyState: Codable {
     var readReceipts = true
     /// Privacy tokens by LID user (whatsmeow tctoken.go). Optional so key files from before them still decode.
     var privacyTokens: [String: PrivacyToken]?
+    /// Whether app state was synced again from snapshots after history sync used to clear archives and mutes app
+    /// state had set. Optional so key files from before it decode, and sync once more.
+    var chatFlagsResynced: Bool?
 
     struct PrivacyToken: Codable {
         /// Their token for us, sent with messages, presence subscriptions and picture requests.
@@ -1121,9 +1124,11 @@ public actor WhatsAppClient {
                 if let phone = conversation.pnJID { stored.phoneNumberJID = phone }
                 stored.unreadCount = Int(conversation.unreadCount)
                 stored.markedUnread = conversation.markedAsUnread
-                stored.isArchived = conversation.archived
-                stored.isPinned = conversation.pinned > 0
-                stored.muteEnd = conversation.muteEndTime > 0 ? Int64(bitPattern: conversation.muteEndTime) : nil
+                // Only INITIAL_BOOTSTRAP carries archives; later chunks leave archive, pin and mute unset for
+                // every chat (observed 2026-11-23), so history only ever sets them and app state clears them.
+                if conversation.archived { stored.isArchived = true }
+                if conversation.pinned > 0 { stored.isPinned = true }
+                if conversation.muteEndTime > 0 { stored.muteEnd = Int64(bitPattern: conversation.muteEndTime) }
                 stored.readUpTo = nil
                 let time = Date(timeIntervalSince1970: TimeInterval(max(conversation.conversationTimestamp, conversation.lastMsgTimestamp)))
                 if time > (stored.lastTimestamp ?? .distantPast) { stored.lastTimestamp = time }
@@ -1397,6 +1402,11 @@ public actor WhatsAppClient {
         guard !syncingAppState else { return }
         syncingAppState = true
         defer { syncingAppState = false }
+        if keys.chatFlagsResynced != true {
+            // Snapshots carry every archive and mute, restoring those history sync cleared.
+            keys.collections = [:]
+            keys.chatFlagsResynced = true
+        }
         var failed = false
         for name in Self.collections {
             do {
@@ -1554,6 +1564,8 @@ public actor WhatsAppClient {
     private func applyAction(index: [String], value: WhatsAppProto.SyncActionValue?, removed: Bool) {
         guard index.count > 1, let value else { return }
         let target = index[1]
+        // A person's chat may be stored under their LID or their phone number; app state names either.
+        let chat = WhatsAppJID(string: target).map(canonicalChat) ?? target
         switch index[0] {
         case "contact":
             let name = removed ? nil : (value.contactAction?.fullName ?? value.contactAction?.firstName)
@@ -1569,20 +1581,22 @@ public actor WhatsAppClient {
             }
         case "mute":
             let end = value.muteAction.flatMap { $0.muted ? ($0.muteEndTimestamp ?? -1) : nil }
-            store.updateChat(target) { $0.muteEnd = removed ? nil : end }
+            store.updateChat(chat) { $0.muteEnd = removed ? nil : end }
         case "archive":
-            store.updateChat(target) { $0.isArchived = !removed && value.archived == true }
+            store.updateChat(chat) { $0.isArchived = !removed && value.archived == true }
         case "pin_v1":
-            store.updateChat(target) { $0.isPinned = !removed && value.pinned == true }
+            store.updateChat(chat) { $0.isPinned = !removed && value.pinned == true }
+        case "lock":
+            store.updateChat(chat) { $0.isLocked = !removed && value.locked == true ? true : nil }
         case "markChatAsRead":
             if value.read == true {
-                store.updateChat(target) {
+                store.updateChat(chat) {
                     $0.unreadCount = 0
                     $0.markedUnread = false
                     $0.readUpTo = max($0.readUpTo ?? .distantPast, value.timestamp.map { Date(timeIntervalSince1970: TimeInterval($0) / 1000) } ?? Date())
                 }
             } else if value.read == false {
-                store.updateChat(target) { $0.markedUnread = true }
+                store.updateChat(chat) { $0.markedUnread = true }
             }
         default:
             break
@@ -2313,7 +2327,7 @@ public actor WhatsAppClient {
     }
 
     public func chatSummaries(for chats: Set<String>) -> [ChatSummary] {
-        chats.compactMap { store.chat($0) }.map(summary(for:))
+        chats.compactMap { store.chat($0) }.filter { $0.isLocked != true }.map(summary(for:))
     }
 
     private func listPage() throws -> ChatListPage {
@@ -2322,7 +2336,7 @@ public actor WhatsAppClient {
         // Chats without messages or a time are empty shells from app state, such as old mutes.
         store.mergeDuplicateChats()
         let chats = store.chats.filter { chat in
-            !chat.jid.hasSuffix("@\(WhatsAppJID.Server.broadcast)") && !chat.jid.hasSuffix("@\(WhatsAppJID.Server.newsletter)")
+            !chat.jid.hasSuffix("@\(WhatsAppJID.Server.broadcast)") && !chat.jid.hasSuffix("@\(WhatsAppJID.Server.newsletter)") && chat.isLocked != true
                 && (chat.lastTimestamp != nil || !store.messages(in: chat.jid).isEmpty)
         }
         let summaries = chats.map(summary(for:))

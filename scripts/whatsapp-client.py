@@ -1706,7 +1706,7 @@ class AppStateSync:
 
 
 def summarize_app_state(mutations: list[dict], summary: dict) -> None:
-    """Folds mutations into chat metadata: contact names, mute, archive, pin, read state."""
+    """Folds mutations into chat metadata: contact names, mute, archive, pin, read state, locked chats."""
     for mutation in mutations:
         index, action = mutation["index"], mutation["action"]
         if not index:
@@ -1727,6 +1727,8 @@ def summarize_app_state(mutations: list[dict], summary: dict) -> None:
             summary["pinned"][target] = action.pinAction.pinned and not removed
         elif kind == "markChatAsRead":
             summary["read"][target] = action.markChatAsReadAction.read
+        elif kind == "lock":
+            summary.setdefault("locked", {})[target] = action.lockChatAction.locked and not removed
         summary["kinds"][kind] = summary["kinds"].get(kind, 0) + 1
 
 
@@ -1761,7 +1763,7 @@ async def command_appstate(args: argparse.Namespace) -> None:
     account = Account(session, verbose=args.verbose)
     await account.start()
     sync = AppStateSync(account)
-    summary = {"contacts": {}, "muted": {}, "archived": {}, "pinned": {}, "read": {}, "kinds": {}}
+    summary = {"contacts": {}, "muted": {}, "archived": {}, "pinned": {}, "read": {}, "locked": {}, "kinds": {}}
     if os.path.exists(APP_STATE_PATH) and not args.full:
         with open(APP_STATE_PATH) as file:
             summary = json.load(file)
@@ -1783,7 +1785,9 @@ async def command_appstate(args: argparse.Namespace) -> None:
     muted = sum(1 for value in summary["muted"].values() if value is not None)
     archived = sum(1 for value in summary["archived"].values() if value)
     pinned = sum(1 for value in summary["pinned"].values() if value)
-    print(f"{len(summary['contacts'])} contacts, {muted} muted, {archived} archived, {pinned} pinned; kinds {summary['kinds']}", flush=True)
+    locked = [target for target, value in summary.get("locked", {}).items() if value]
+    servers = sorted({target.split("@")[-1] for target in locked})
+    print(f"{len(summary['contacts'])} contacts, {muted} muted, {archived} archived, {pinned} pinned, {len(locked)} locked ({', '.join(servers)}); kinds {summary['kinds']}", flush=True)
 
 
 def load_chats(session: Session) -> list[dict]:
@@ -1823,6 +1827,25 @@ def load_chats(session: Session) -> list[dict]:
                       "pinned": bool(app_state["pinned"].get(chat_id, conversation.pinned)), "last": last, "messages": len(conversation.messages)})
     chats.sort(key=lambda chat: chat["last"], reverse=True)
     return chats
+
+
+def command_history_flags(args: argparse.Namespace) -> None:
+    """Archive, pin and mute for one chat in each saved history sync, in arrival order, next to app state's."""
+    for name in sorted(os.listdir(HISTORY_DIR)) if os.path.isdir(HISTORY_DIR) else []:
+        with open(os.path.join(HISTORY_DIR, name), "rb") as file:
+            history = waHistorySync.HistorySync.FromString(file.read())
+        if not history.conversations:
+            continue
+        archived = sum(1 for conversation in history.conversations if conversation.archived)
+        pinned = sum(1 for conversation in history.conversations if conversation.pinned)
+        muted = sum(1 for conversation in history.conversations if conversation.muteEndTime)
+        match = next((conversation for conversation in history.conversations if conversation.ID == args.chat), None)
+        flags = f"archived={match.archived} pinned={match.pinned} muteEndTime={match.muteEndTime}" if match else "absent"
+        print(f"{name}: {len(history.conversations)} chats, {archived} archived, {pinned} pinned, {muted} muted; {args.chat}: {flags}")
+    if os.path.exists(APP_STATE_PATH):
+        with open(APP_STATE_PATH) as file:
+            summary = json.load(file)
+        print(f"app state: archived={summary['archived'].get(args.chat)} muted={summary['muted'].get(args.chat)} pinned={summary['pinned'].get(args.chat)}")
 
 
 def command_chats(args: argparse.Namespace) -> None:
@@ -3181,6 +3204,9 @@ def main() -> None:
     appstate.add_argument("--full", action="store_true", help="start from snapshots instead of the stored versions")
     appstate.set_defaults(handler=command_appstate)
 
+    flags = commands.add_parser("history-flags", help="archive, pin and mute for one chat in each saved history sync and in app state")
+    flags.add_argument("--chat", required=True, help="the chat's JID")
+    flags.set_defaults(handler=command_history_flags)
     chats = commands.add_parser("chats", help="list chats from saved history and app state (names, unread, flags; no text)")
     chats.add_argument("--limit", type=int, default=30)
     chats.add_argument("--archived", action="store_true")

@@ -133,6 +133,9 @@ public struct WhatsAppChat: Codable, Hashable, Sendable {
     public var muteEnd: Int64?
     public var isArchived: Bool
     public var isPinned: Bool
+    /// Locked in WhatsApp, which hides it behind a passcode, so it's left out of Chats. Optional so older
+    /// directories decode.
+    public var isLocked: Bool?
     public var lastTimestamp: Date?
     /// The phone-number JID of a one-to-one chat addressed by LID, from history sync.
     public var phoneNumberJID: String?
@@ -452,6 +455,11 @@ final class WhatsAppStore {
                 if let readUpTo = merged.readUpTo {
                     target.readUpTo = max(target.readUpTo ?? .distantPast, readUpTo)
                 }
+                // App state that named the LID before the phone-number chat existed.
+                if merged.isArchived { target.isArchived = true }
+                if merged.isPinned { target.isPinned = true }
+                if merged.isLocked == true { target.isLocked = true }
+                if let muteEnd = merged.muteEnd, target.muteEnd == nil { target.muteEnd = muteEnd }
             }
             directory.chats[chat.jid] = nil
             messages[chat.jid] = nil
