@@ -227,6 +227,10 @@ private struct KeyboardDock<Content: View>: UIViewControllerRepresentable {
 
     final class Controller: UIViewController {
         let hosting: UIHostingController<Content>
+        /// Holds the content above the keyboard. Active only while the keyboard is up for a field in the content:
+        /// `keyboardLayoutGuide` follows any keyboard, so leaving a chat with its keyboard up showed the field at the
+        /// keyboard's height on the Chats list, sliding down only once that keyboard had gone.
+        private var aboveKeyboard: NSLayoutConstraint?
 
         init(content: Content) {
             hosting = UIHostingController(rootView: content)
@@ -255,14 +259,30 @@ private struct KeyboardDock<Content: View>: UIViewControllerRepresentable {
             view.keyboardLayoutGuide.usesBottomSafeArea = false
             let resting = hosting.view.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -28)
             resting.priority = .defaultHigh
+            let aboveKeyboard = hosting.view.bottomAnchor.constraint(
+                lessThanOrEqualTo: view.keyboardLayoutGuide.topAnchor,
+                constant: -8,
+            )
+            self.aboveKeyboard = aboveKeyboard
             NSLayoutConstraint.activate([
                 hosting.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
                 hosting.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-                hosting.view.bottomAnchor.constraint(lessThanOrEqualTo: view.keyboardLayoutGuide.topAnchor, constant: -8),
                 hosting.view.bottomAnchor.constraint(lessThanOrEqualTo: view.bottomAnchor, constant: -28),
                 resting,
             ])
             hosting.didMove(toParent: self)
+            // Posted for every keyboard shown or resized, before its animation, with the first responder already
+            // set. Hiding leaves the constraint as it is, so the content goes down with its own keyboard.
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(keyboardWillShow),
+                name: UIResponder.keyboardWillShowNotification,
+                object: nil,
+            )
+        }
+
+        @objc private func keyboardWillShow() {
+            aboveKeyboard?.isActive = hosting.view.containsFirstResponder
         }
     }
 
@@ -336,5 +356,11 @@ private struct BottomSearchField: View {
         .onChange(of: isPresented, initial: true) { _, presented in
             isFocused = presented
         }
+    }
+}
+
+private extension UIView {
+    var containsFirstResponder: Bool {
+        isFirstResponder || subviews.contains { $0.containsFirstResponder }
     }
 }
