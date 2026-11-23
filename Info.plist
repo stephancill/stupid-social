@@ -5,6 +5,7 @@
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
 		<string>tech.stupid.StupidSocial.chatRefresh</string>
+		<string>tech.stupid.StupidSocial.whatsappLink.*</string>
 	</array>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>

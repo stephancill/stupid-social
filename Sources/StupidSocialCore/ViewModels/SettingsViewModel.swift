@@ -477,7 +477,7 @@ public final class SettingsViewModel: ObservableObject {
         let client = WhatsAppClient.client(accountId: id, keychain: services.keychain.scoped(to: id))
         let viewModel = WhatsAppConnectionViewModel(client: client)
         viewModel.onLinked = { [weak self] linked in
-            self?.finishWhatsAppLink(linked, accountId: id)
+            await self?.finishWhatsAppLink(linked, accountId: id)
         }
         return viewModel
     }
@@ -487,8 +487,9 @@ public final class SettingsViewModel: ObservableObject {
     }
 
     /// Lists a WhatsApp account once it linked on this device and opens its connection, which logs in and
-    /// receives WhatsApp's history sync.
-    public func finishWhatsAppLink(_ linked: WhatsAppAccount, accountId: String) {
+    /// receives WhatsApp's history sync. Returns once that connection uploaded the device's prekeys (or gave up
+    /// waiting), so a link running in the background lasts until the phone can reach the device.
+    public func finishWhatsAppLink(_ linked: WhatsAppAccount, accountId: String) async {
         var account = store.account(id: accountId) ?? Account(id: accountId, network: .whatsapp)
         account.remoteId = linked.phoneNumber
         // WhatsApp has no handle; the number names the account.
@@ -499,6 +500,9 @@ public final class SettingsViewModel: ObservableObject {
         let component = services.components(for: account)
         component.whatsAppLiveFeed?.start()
         loadStatuses()
+        if let client = component.whatsAppClient, await !client.waitUntilReady(timeout: .seconds(30)) {
+            AppMetrics.whatsAppFailed("first_login", error: WhatsAppError.notConnected)
+        }
     }
 
     /// A Telegram sign-in for a new account. Telegram sign-ins stay on this device, under the account's id.

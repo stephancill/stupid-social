@@ -60,7 +60,7 @@ public enum AppMetrics {
     }
 
     /// A WhatsApp step that failed without failing a refresh, such as decrypting one message or a history sync.
-    static func whatsAppFailed(_ step: String, error: any Error) {
+    public static func whatsAppFailed(_ step: String, error: any Error) {
         StupidMetrics.error("whatsapp_error", error: error, properties: ["step": step])
     }
 

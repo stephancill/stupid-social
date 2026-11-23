@@ -1410,6 +1410,11 @@ class Linker:
         self.phone = phone
         self.pairing: dict | None = None
         self.code_requested = False
+        self.attach(client)
+
+    def attach(self, client: Client) -> None:
+        """Handles a (re)connected client's linking stanzas, keeping the pairing state of earlier connections."""
+        self.client = client
         client.handlers["iq"] = self.handle_iq
         client.handlers["notification"] = self.handle_notification
 
@@ -2604,8 +2609,9 @@ async def command_link(args: argparse.Namespace) -> None:
     session.data["waVersion"] = list(fetch_wa_version())
     session.save()
     client = Client(session, verbose=args.verbose)
-    Linker(client, args.phone)
+    linker = Linker(client, args.phone)
     await client.connect()
+    reconnected = False
     code_path = os.path.join(ROOT, "logs", "whatsapp-link-code.txt")
     qr_count, qr_paths = 0, []
     try:
@@ -2615,6 +2621,16 @@ async def command_link(args: argparse.Namespace) -> None:
                 with open(code_path, "w") as file:
                     file.write(value + "\n")
                 print(f"pairing code: {value} (WhatsApp → Linked devices → Link a device → Link with phone number instead)", flush=True)
+                if args.offline is not None and not reconnected:
+                    # What the app does when iOS suspends it: the socket dies, the keys and pairing stay.
+                    reconnected = True
+                    await client.close()
+                    print(f"disconnected; offline for {args.offline:.0f} s", flush=True)
+                    await asyncio.sleep(args.offline)
+                    client = Client(session, verbose=args.verbose)
+                    linker.attach(client)
+                    await client.connect()
+                    print("reconnected with the same keys; waiting for link_code_companion_reg", flush=True)
             elif kind == "qr":
                 import qrcode
 
@@ -3152,6 +3168,7 @@ def main() -> None:
     link.add_argument("--force", action="store_true", help="replace an existing linked session")
     link.add_argument("--open-qr", action="store_true", help="open each QR code image (logs/whatsapp-qr-N.png) in Preview")
     link.add_argument("--timeout", type=float, default=300)
+    link.add_argument("--offline", type=float, help="with --phone: after the code, close the socket for this many seconds, then reconnect with the same keys")
     link.add_argument("--listen", type=float, default=300, help="seconds to stay connected after linking (history sync arrives then)")
     link.set_defaults(handler=command_link)
 

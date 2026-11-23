@@ -165,6 +165,9 @@ public actor WhatsAppClient {
     private var idCounter = 0
     private var onChanges: (@Sendable (WhatsAppChanges) -> Void)?
     private var onLoggedIn: (@Sendable () -> Void)?
+    /// Logged in and the server has this device's prekeys, so the phone can open sessions with it and start the
+    /// history sync. False again when the connection ends.
+    private var isReady = false
     private var pending = WhatsAppChanges()
     private var mediaHosts: (hosts: [String], expires: Date)?
     /// Media retry requests waiting for the phone's `mediaretry` notification, by message id.
@@ -570,6 +573,7 @@ public actor WhatsAppClient {
         let stream = try await open(payload: payload)
         logger.info("WhatsApp connected")
         defer {
+            isReady = false
             socket?.close()
             socket = nil
             store.save()
@@ -653,9 +657,20 @@ public actor WhatsAppClient {
         }
     }
 
+    /// Waits until a connection has logged in and uploaded this device's prekeys, or `timeout` passed; returns
+    /// whether it did. Linking waits for this before it ends, so the phone can reach the new device.
+    public func waitUntilReady(timeout: Duration) async -> Bool {
+        let deadline = ContinuousClock.now + timeout
+        while !isReady, ContinuousClock.now < deadline, !Task.isCancelled {
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+        return isReady
+    }
+
     private func afterLogin() async {
         do {
             try await ensurePreKeys()
+            isReady = true
             try await iq("passive", "set", [WhatsAppNode("active")])
             if let privacy = try? await iq("privacy", "get", [WhatsAppNode("privacy")]) {
                 let category = privacy.child("privacy")?.children.first { $0.attr("name") == "readreceipts" }

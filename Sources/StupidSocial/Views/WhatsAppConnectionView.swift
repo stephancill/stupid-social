@@ -12,6 +12,9 @@ struct WhatsAppConnectionView: View {
     var isLinked = false
     let onDone: () -> Void
     @FocusState private var isFocused: Bool
+    @Environment(\.scenePhase) private var scenePhase
+    /// iOS 26's `WhatsAppLinkBackgroundTask` while a phone-number link runs; `AnyObject` so the view builds for iOS 18.
+    @State private var backgroundTask: AnyObject?
 
     var body: some View {
         Form {
@@ -43,11 +46,47 @@ struct WhatsAppConnectionView: View {
             Text(viewModel.errorMessage ?? "")
         }
         .onChange(of: viewModel.step) { _, step in
+            updateBackgroundTask(for: step)
+            if case let .code(code) = step {
+                // Pasting is quicker than typing, and the link only lasts about 30 s once the user leaves the app.
+                UIPasteboard.general.string = code.replacingOccurrences(of: "-", with: "")
+            }
             if step == .linked, account == nil {
                 onDone()
             }
         }
-        .onDisappear(perform: viewModel.cancel)
+        .onChange(of: scenePhase) { _, phase in
+            switch phase {
+            case .background: viewModel.appMoved(toBackground: true)
+            case .active: viewModel.appMoved(toBackground: false)
+            default: break
+            }
+        }
+        .onDisappear {
+            viewModel.cancel()
+            updateBackgroundTask(for: .start)
+        }
+    }
+
+    /// Shows the link's progress in the system's UI from the code appearing until the device is linked; starting
+    /// over or failing ends it.
+    private func updateBackgroundTask(for step: WhatsAppConnectionViewModel.Step) {
+        guard #available(iOS 26.0, *) else { return }
+        let task = backgroundTask as? WhatsAppLinkBackgroundTask
+        switch step {
+        case .code:
+            if task == nil {
+                backgroundTask = WhatsAppLinkBackgroundTask.begin()
+            }
+        case .finishing:
+            task?.advance(to: .finishing)
+        case .linked:
+            task?.finish(success: true)
+            backgroundTask = nil
+        case .start, .phoneNumber, .qr:
+            task?.finish(success: false)
+            backgroundTask = nil
+        }
     }
 
     @ViewBuilder
@@ -79,7 +118,7 @@ struct WhatsAppConnectionView: View {
                     viewModel.showQRCode()
                 }
             } footer: {
-                Text("Your WhatsApp number, with its country code, such as +27.")
+                Text("Your WhatsApp number, with its country code, such as +27. First, in WhatsApp, open Settings → Linked Devices → Link a Device and tap “Link with phone number instead”, then come back here for the code.")
             }
             .onAppear { isFocused = true }
         case let .code(code):
@@ -92,7 +131,7 @@ struct WhatsAppConnectionView: View {
                     UIPasteboard.general.string = code.replacingOccurrences(of: "-", with: "")
                 }
             } footer: {
-                Text("In WhatsApp, open Settings → Linked Devices → Link a Device, tap “Link with phone number instead” and enter this code.")
+                Text("Copied. Switch to WhatsApp and paste it right away: stupid social can only wait about 30 seconds in the background. If WhatsApp isn't on its code screen yet, open Settings → Linked Devices → Link a Device and tap “Link with phone number instead”.")
             }
             Section {
                 Button("Start Over", action: viewModel.cancel)

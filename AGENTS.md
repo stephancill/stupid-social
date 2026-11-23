@@ -10,6 +10,7 @@ Sources/
     ChatBackgroundRefresh.swift     # BGAppRefreshTask: reloads the Chats list and loads changed chats ahead
     ChatControlServer.swift         # Command-line chat access on a Mac: token-checked JSON lines on 127.0.0.1
     ChatInbox.swift                 # Moves messages the notification extension left in the App Group inbox into the chat store
+    WhatsAppLinkBackgroundTask.swift # iOS 26 continued processing task showing a phone-number link's progress in the system UI
     StupidSocialApp.swift           # iOS @main entry point
     Views/
       ContentView.swift             # Root view, container wiring
