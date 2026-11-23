@@ -1666,6 +1666,52 @@ class AppStateSync:
             mutations.append(mutation)
         return mutations
 
+    async def send(self, name: str, mutations: list[tuple[list[str], int, Any]]) -> None:
+        """Sends one patch of SET mutations (index, action version, SyncActionValue), as whatsmeow's EncodePatch and
+        sendAppState: encrypted with the newest app state key, at the collection's current version."""
+        await self.fetch(name, full=False)
+        stored = self.session.data["appState"][name]
+        state = {"version": stored["version"], "hash": bytearray(unb64(stored["hash"])), "macs": dict(stored["macs"])}
+        key_id_hex = max(self.session.data["appStateKeys"], key=lambda key: self.session.data["appStateKeys"][key]["timestamp"])
+        key_id = bytes.fromhex(key_id_hex)
+        keys = self.keys(key_id)
+        now = int(time.time() * 1000)
+        records, added, removed = [], [], []
+        for index, version, value in mutations:
+            value.timestamp = now
+            index_bytes = json.dumps(index, separators=(",", ":")).encode()
+            data = self.sync_action.SyncActionData(index=index_bytes, value=value, padding=b"", version=version)
+            iv = secrets.token_bytes(16)
+            content = iv + aes_cbc_encrypt(keys["value"], iv, data.SerializeToString())
+            value_mac = hmac.new(keys["valueMac"], bytes([1]) + key_id + content + struct.pack(">Q", len(key_id) + 1), hashlib.sha512).digest()[:32]
+            index_mac = hmac.new(keys["index"], index_bytes, hashlib.sha256).digest()
+            previous = state["macs"].get(b64(index_mac))
+            if previous:
+                removed.append(unb64(previous))
+            added.append(value_mac)
+            mutation = self.server_sync.SyncdMutation(operation=self.server_sync.SyncdMutation.SET)
+            mutation.record.index.blob = index_mac
+            mutation.record.value.blob = content + value_mac
+            mutation.record.keyID.ID = key_id
+            records.append(mutation)
+        lthash_apply(state["hash"], removed, subtract=True)
+        lthash_apply(state["hash"], added, subtract=False)
+        version = state["version"] + 1
+        patch = self.server_sync.SyncdPatch(mutations=records)
+        patch.keyID.ID = key_id
+        patch.snapshotMAC = self.snapshot_mac(bytes(state["hash"]), version, name, keys["snapshotMac"])
+        patch.patchMAC = hmac.new(keys["patchMac"], patch.snapshotMAC + b"".join(added) + struct.pack(">Q", version) + name.encode(), hashlib.sha256).digest()
+        response = await self.account.client.iq(
+            "w:sync:app:state",
+            "set",
+            [Node("sync", {}, [Node("collection", {"name": name, "version": state["version"], "return_snapshot": "false"}, [Node("patch", {}, patch.SerializeToString())])])],
+        )
+        collection = response.child("sync", "collection")
+        if collection.attr("type") == "error" or collection.child("error"):
+            raise SignalError(f"{name}: {collection.describe()}")
+        # The server answers with nothing to apply; fetching brings the patch back and checks its MACs.
+        await self.fetch(name, full=False)
+
     def apply_patch(self, name: str, state: dict, patch: Any) -> list[dict]:
         added, removed = [], []
         for index, mutation in enumerate(patch.mutations):
@@ -1730,6 +1776,46 @@ def summarize_app_state(mutations: list[dict], summary: dict) -> None:
         elif kind == "lock":
             summary.setdefault("locked", {})[target] = action.lockChatAction.locked and not removed
         summary["kinds"][kind] = summary["kinds"].get(kind, 0) + 1
+
+
+async def command_chat_setting(args: argparse.Namespace) -> None:
+    """Mutes or archives a chat through app state (whatsmeow BuildMute/BuildArchive); only the self chat unless
+    --allow-others."""
+    session = Session.load()
+    if not session or not session.jid:
+        raise SystemExit("not linked; run `link` first")
+    own = JID(session.jid.user, USER_SERVER)
+    target = own if args.chat == "self" else JID.parse(args.chat)
+    if target != own and not args.allow_others:
+        raise SystemExit("only the self chat unless --allow-others")
+    account = Account(session, verbose=args.verbose)
+    await account.start()
+    sync = AppStateSync(account)
+    actions = sync.sync_action
+    try:
+        if args.mute is not None:
+            value = actions.SyncActionValue()
+            value.muteAction.muted = args.mute == "on"
+            if args.mute == "on":
+                value.muteAction.muteEndTimestamp = -1
+            await sync.send("regular_high", [(["mute", str(target)], 2, value)])
+        if args.archive is not None:
+            value = actions.SyncActionValue()
+            value.archiveChatAction.archived = args.archive == "on"
+            value.archiveChatAction.messageRange.lastMessageTimestamp = int(time.time())
+            mutations = [(["archive", str(target)], 3, value)]
+            if args.archive == "on":
+                # Archiving unpins, as WhatsApp does.
+                unpin = actions.SyncActionValue()
+                unpin.pinAction.pinned = False
+                mutations.append((["pin_v1", str(target)], 5, unpin))
+            await sync.send("regular_low", mutations)
+        summary = {"contacts": {}, "muted": {}, "archived": {}, "pinned": {}, "read": {}, "locked": {}, "kinds": {}}
+        for name in ("regular_high", "regular_low"):
+            summarize_app_state(await sync.fetch(name, full=True), summary)
+        print(f"{target}: muted={summary['muted'].get(str(target))} archived={summary['archived'].get(str(target))} pinned={summary['pinned'].get(str(target))}", flush=True)
+    finally:
+        await account.close()
 
 
 async def fetch_groups(account: Account) -> dict:
@@ -3204,6 +3290,12 @@ def main() -> None:
     appstate.add_argument("--full", action="store_true", help="start from snapshots instead of the stored versions")
     appstate.set_defaults(handler=command_appstate)
 
+    setting = commands.add_parser("chat-setting", help="mute or archive a chat through app state (the self chat unless --allow-others)")
+    setting.add_argument("--chat", default="self", help="`self`, or a chat JID")
+    setting.add_argument("--mute", choices=["on", "off"])
+    setting.add_argument("--archive", choices=["on", "off"])
+    setting.add_argument("--allow-others", action="store_true")
+    setting.set_defaults(handler=command_chat_setting)
     flags = commands.add_parser("history-flags", help="archive, pin and mute for one chat in each saved history sync and in app state")
     flags.add_argument("--chat", required=True, help="the chat's JID")
     flags.set_defaults(handler=command_history_flags)

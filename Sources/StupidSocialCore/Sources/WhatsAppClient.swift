@@ -1460,6 +1460,116 @@ public actor WhatsAppClient {
         try await download(directPath: reference.directPath, encSHA256: reference.fileEncSHA256, sha256: reference.fileSHA256, mediaKey: reference.mediaKey, info: "WhatsApp App State Keys", mmsType: "md-app-state")
     }
 
+    // MARK: Changing app state (whatsmeow appstate/encode.go, sendAppState; validated with the probe's chat-setting)
+
+    /// Mutes a chat until unmuted, or unmutes it, on every device.
+    public func setMuted(chat: String, muted: Bool) async throws {
+        var action = ProtoMessage()
+        action.set(1, muted)
+        if muted { action.set(2, Int64(-1)) }
+        var value = ProtoMessage()
+        value.set(4, action)
+        try await sendAppState("regular_high", [(["mute", chat], 2, value)])
+    }
+
+    /// Archives or unarchives a chat on every device; archiving also unpins it, as WhatsApp does.
+    public func setArchived(chat: String, archived: Bool) async throws {
+        var range = ProtoMessage()
+        range.set(1, Int64(Date().timeIntervalSince1970))
+        var action = ProtoMessage()
+        action.set(1, archived)
+        action.set(2, range)
+        var value = ProtoMessage()
+        value.set(17, action)
+        var mutations: [(index: [String], version: Int32, value: ProtoMessage)] = [(["archive", chat], 3, value)]
+        if archived {
+            var pin = ProtoMessage()
+            pin.set(1, false)
+            var unpin = ProtoMessage()
+            unpin.set(5, pin)
+            mutations.append((["pin_v1", chat], 5, unpin))
+        }
+        try await sendAppState("regular_low", mutations)
+    }
+
+    /// Sends one patch of SET mutations at the collection's current version, encrypted with the newest app state
+    /// key, then syncs the collection, which brings the patch back, checks it and applies it to the store. A
+    /// conflict (another device changed the collection first) syncs and tries once more.
+    private func sendAppState(_ name: String, _ mutations: [(index: [String], version: Int32, value: ProtoMessage)], retry: Bool = true) async throws {
+        try await syncCollection(name)
+        guard let state = keys.collections[name],
+              let keyHex = keys.appStateKeys.max(by: { $0.value.timestamp < $1.value.timestamp })?.key,
+              let keyId = Data(hexString: keyHex)
+        else { throw WhatsAppError.unsupported }
+        let mutationKeys = try mutationKeys(keyId)
+        let timestamp = Int64(Date().timeIntervalSince1970 * 1000)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .withoutEscapingSlashes
+        var hash = state.hash
+        var records: [ProtoMessage] = []
+        var added: [Data] = []
+        var removed: [Data] = []
+        for mutation in mutations {
+            var value = mutation.value
+            value.set(1, timestamp)
+            let index = try encoder.encode(mutation.index)
+            var data = ProtoMessage()
+            data.set(1, index)
+            data.set(2, value)
+            data.set(3, Data())
+            data.set(4, mutation.version)
+            let iv = WhatsAppCipher.randomBytes(16)
+            let content = try iv + WhatsAppCipher.aesCBCEncrypt(key: mutationKeys.value, iv: iv, data.serialized())
+            let length = withUnsafeBytes(of: UInt64(keyId.count + 1).bigEndian) { Data($0) }
+            let valueMAC = Data(WhatsAppCipher.hmacSHA512(key: mutationKeys.valueMAC, Data([1]) + keyId + content + length).prefix(32))
+            let indexMAC = WhatsAppCipher.hmacSHA256(key: mutationKeys.index, index)
+            if let previous = state.macs[indexMAC.base64EncodedString()] { removed.append(previous) }
+            added.append(valueMAC)
+            var indexBlob = ProtoMessage()
+            indexBlob.set(1, indexMAC)
+            var valueBlob = ProtoMessage()
+            valueBlob.set(1, content + valueMAC)
+            var key = ProtoMessage()
+            key.set(1, keyId)
+            var record = ProtoMessage()
+            record.set(1, indexBlob)
+            record.set(2, valueBlob)
+            record.set(3, key)
+            var syncdMutation = ProtoMessage()
+            syncdMutation.set(1, 0)
+            syncdMutation.set(2, record)
+            records.append(syncdMutation)
+        }
+        Self.ltHash(&hash, removed, subtract: true)
+        Self.ltHash(&hash, added, subtract: false)
+        let version = state.version + 1
+        let snapshotMAC = Self.snapshotMAC(hash, version: version, name: name, key: mutationKeys.snapshotMAC)
+        var patchData = snapshotMAC
+        for mac in added {
+            patchData += mac
+        }
+        patchData += withUnsafeBytes(of: version.bigEndian) { Data($0) } + Data(name.utf8)
+        var patch = ProtoMessage()
+        for record in records {
+            patch.set(2, record)
+        }
+        patch.set(4, snapshotMAC)
+        patch.set(5, WhatsAppCipher.hmacSHA256(key: mutationKeys.patchMAC, patchData))
+        var key = ProtoMessage()
+        key.set(1, keyId)
+        patch.set(6, key)
+        let collection = WhatsAppNode("collection", ["name": .string(name), "version": .string(String(state.version)), "return_snapshot": .string("false")], children: [WhatsAppNode("patch", bytes: patch.serialized())])
+        let response = try await iq("w:sync:app:state", "set", [WhatsAppNode("sync", children: [collection])])
+        if let result = response.child("sync", "collection"), result.attr("type") == "error" || result.child("error") != nil {
+            guard retry else { throw WhatsAppError.iq(code: result.child("error")?.attr("code") ?? "", text: result.child("error")?.attr("text") ?? "") }
+            return try await sendAppState(name, mutations, retry: false)
+        }
+        try await syncCollection(name)
+        saveKeys()
+        pending.reloadList = true
+        flush()
+    }
+
     private struct MutationKeys {
         let index, value, valueMAC, snapshotMAC, patchMAC: Data
     }
@@ -2358,5 +2468,18 @@ extension WhatsAppClient: ChatListProvider {
 extension Data {
     var hexString: String {
         map { String(format: "%02x", $0) }.joined()
+    }
+
+    init?(hexString: String) {
+        guard hexString.count.isMultiple(of: 2) else { return nil }
+        var bytes: [UInt8] = []
+        var index = hexString.startIndex
+        while index < hexString.endIndex {
+            let next = hexString.index(index, offsetBy: 2)
+            guard let byte = UInt8(hexString[index ..< next], radix: 16) else { return nil }
+            bytes.append(byte)
+            index = next
+        }
+        self.init(bytes)
     }
 }

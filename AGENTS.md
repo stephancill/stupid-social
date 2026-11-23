@@ -158,8 +158,8 @@ Sources/
       WhatsAppCrypto.swift          # Curve25519 keys, XEdDSA on a native Ed25519 field, HKDF, AES-CBC/CTR/GCM, PBKDF2
       WhatsAppSignal.swift          # Signal protocol: X3DH sessions, double ratchet, prekey messages, sender keys, padding
       WhatsAppSocket.swift          # WebSocket with the Noise XX handshake, certificate check and encrypted frames
-      WhatsAppClient.swift          # WhatsApp linked device: linking, login, decrypting, receipts, history sync, app state, groups, sending
-      WhatsAppChatAdapter.swift     # WhatsApp chat adapter: messages from the local store, media, history on demand, live refresh, text, replies, reactions, typing, read receipts
+      WhatsAppClient.swift          # WhatsApp linked device: linking, login, decrypting, receipts, history sync, app state (read and write), groups, sending
+      WhatsAppChatAdapter.swift     # WhatsApp chat adapter: messages from the local store, media, history on demand, live refresh, text, replies, reactions, typing, read receipts, mute, archive
       WhatsAppMediaFiles.swift      # wamedia: URLs, the URLProtocol that downloads, decrypts and caches WhatsApp media
     Resources/
       TelegramSchema.tl             # Telegram TL schema (scripts/telegram-schema.py); TelegramAPI.json is gitignored

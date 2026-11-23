@@ -7,7 +7,7 @@ import Foundation
 /// one-to-one chats  and sends read receipts as
 /// messages are read.
 @MainActor
-public final class WhatsAppChatAdapter: ChatAdapter, ChatLiveUpdating, ChatReadOnlyAccess, ChatAudioPreviewing, ChatReactionSending, ChatTyping, ChatMembersListing, ChatVoiceSending {
+public final class WhatsAppChatAdapter: ChatAdapter, ChatLiveUpdating, ChatReadOnlyAccess, ChatAudioPreviewing, ChatReactionSending, ChatTyping, ChatMembersListing, ChatVoiceSending, ChatMuting, ChatArchiving {
     public let network = ChatNetwork.whatsapp
     public var canReply: Bool {
         !isReadOnly
@@ -412,5 +412,16 @@ public final class WhatsAppChatAdapter: ChatAdapter, ChatLiveUpdating, ChatReadO
 
     private static func duration(_ seconds: UInt32) -> String {
         String(format: "%d:%02d", seconds / 60, seconds % 60)
+    }
+}
+
+public extension WhatsAppChatAdapter {
+    /// Changes go through app state, so WhatsApp and the account's other devices follow.
+    func setMuted(_ muted: Bool) async throws {
+        try await client.setMuted(chat: chatJID, muted: muted)
+    }
+
+    func setArchived(_ archived: Bool) async throws {
+        try await client.setArchived(chat: chatJID, archived: archived)
     }
 }
