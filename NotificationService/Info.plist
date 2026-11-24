@@ -7,9 +7,9 @@
 	<key>CFBundleName</key>
 	<string>stupid social notifications</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0.1</string>
+	<string>1.1.0</string>
 	<key>CFBundleVersion</key>
-	<string>234</string>
+	<string>235</string>
 	<key>NSExtension</key>
 	<dict>
 		<key>NSExtensionAttributes</key>
