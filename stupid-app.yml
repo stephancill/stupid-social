@@ -51,6 +51,12 @@ resources:
   - Resources/WhatsAppBadge.png
   - Resources/WhatsAppBadge@2x.png
   - Resources/WhatsAppBadge@3x.png
+  # Notification sounds (scripts/notification-sounds.sh), at the bundle's root where the system looks for them.
+  - Resources/NotificationBamboo.caf
+  - Resources/NotificationChime.caf
+  - Resources/NotificationPing.caf
+  - Resources/NotificationPop.caf
+  - Resources/NotificationBell.caf
   # Telegram push templates for loc-key alerts (scripts/telegram-push-strings.py).
   - Resources/en.lproj
 extensions:

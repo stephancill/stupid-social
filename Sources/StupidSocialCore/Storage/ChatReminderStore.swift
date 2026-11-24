@@ -247,7 +247,7 @@ public enum ChatReminderStore {
         content.title = notification.title
         content.subtitle = notification.subtitle
         content.body = notification.body
-        content.sound = .default
+        content.sound = NotificationSound.current.notificationSound
         content.userInfo = [ChatReminder.userInfoKey: reminder.id]
         let interval = max(1, reminder.dueDate.timeIntervalSinceNow)
         let trigger = UNTimeIntervalNotificationTrigger(timeInterval: interval, repeats: false)

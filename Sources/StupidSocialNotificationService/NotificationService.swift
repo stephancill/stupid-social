@@ -20,6 +20,7 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
            let content = request.content.mutableCopy() as? UNMutableNotificationContent
         {
             telegram.prepare(content)
+            NotificationSound.apply(to: content)
             Self.storeTelegramMessage(userInfo: request.content.userInfo)
             self.contentHandler = contentHandler
             fallback = content
@@ -45,6 +46,7 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
             content.title = reminder.title
             content.subtitle = reminder.subtitle
             content.body = reminder.body
+            NotificationSound.apply(to: content)
             content.userInfo = [ChatReminderNotification.userInfoKey: reminder.id, ChatReminderNotification.reminderDataKey: payload]
             contentHandler(content)
             return
@@ -54,7 +56,13 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
               let notification = Self.notification(for: body),
               let content = request.content.mutableCopy() as? UNMutableNotificationContent
         else {
-            contentHandler(request.content)
+            // Left as it came, but with the chosen sound.
+            guard let content = request.content.mutableCopy() as? UNMutableNotificationContent else {
+                contentHandler(request.content)
+                return
+            }
+            NotificationSound.apply(to: content)
+            contentHandler(content)
             return
         }
         content.title = notification.title
@@ -63,6 +71,7 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
         content.threadIdentifier = notification.threadIdentifier
         content.categoryIdentifier = ApronPushNotification.categoryIdentifier
         content.userInfo = notification.userInfo
+        NotificationSound.apply(to: content)
         self.contentHandler = contentHandler
         fallback = content
 

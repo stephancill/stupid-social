@@ -1,4 +1,6 @@
+import AudioToolbox
 import StupidSocialCore
+import StupidSocialPush
 import SwiftUI
 
 struct SettingsView: View {
@@ -15,17 +17,18 @@ struct SettingsView: View {
     @State private var isAddingAccount = false
     @State private var sharesUsageData = AppMetrics.isEnabled
     @State private var showsAdvanced = false
+    @State private var notificationSound = NotificationSound.current
 
     var body: some View {
         Form {
             Section {
-                // While any account needs reconnecting, only those show here; the rest are a push away.
+                // Only accounts that need reconnecting show here; every account is a push away.
                 let invalidAccounts = viewModel.accounts.filter { viewModel.status(for: $0.id) == .invalidCredentials }
-                ForEach(invalidAccounts.isEmpty ? viewModel.accounts : invalidAccounts) { account in
+                ForEach(invalidAccounts) { account in
                     SettingsAccountLink(viewModel: viewModel, apronServersViewModel: apronServersViewModel, account: account)
                 }
 
-                if !invalidAccounts.isEmpty {
+                if !viewModel.accounts.isEmpty {
                     NavigationLink {
                         AllAccountsView(viewModel: viewModel, apronServersViewModel: apronServersViewModel)
                     } label: {
@@ -59,6 +62,18 @@ struct SettingsView: View {
                 }
             } header: {
                 Text("Accounts")
+            }
+
+            Section {
+                // Its own page rather than a navigation-link picker, which goes back on a pick: the user tries
+                // the sounds one after another.
+                NavigationLink {
+                    NotificationSoundView(selection: $notificationSound)
+                } label: {
+                    LabeledContent("Sound", value: notificationSound.displayName)
+                }
+            } header: {
+                Text("Notifications")
             }
 
             if devModeEnabled {
@@ -158,6 +173,64 @@ struct SettingsView: View {
     }
 }
 
+/// Every sound, played on each tap, even the one already chosen; stays open so each can be tried.
+private struct NotificationSoundView: View {
+    @Binding var selection: NotificationSound
+
+    var body: some View {
+        Form {
+            ForEach(NotificationSound.allCases) { sound in
+                Button {
+                    selection = sound
+                    NotificationSound.current = sound
+                    NotificationSoundPreview.play(sound)
+                } label: {
+                    HStack {
+                        Text(sound.displayName)
+                            .foregroundStyle(.primary)
+                        Spacer()
+                        if sound == selection {
+                            Image(systemName: "checkmark")
+                                .fontWeight(.semibold)
+                                .foregroundStyle(Color.accentColor)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .tint(.primary)
+                .accessibilityAddTraits(sound == selection ? .isSelected : [])
+            }
+        }
+        .navigationTitle("Sound")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+/// Plays a sound as a notification would, when it's picked.
+@MainActor
+private enum NotificationSoundPreview {
+    /// The system's default notification sound (Tri-tone).
+    private static let defaultSoundID: SystemSoundID = 1007
+    private static var soundIDs: [NotificationSound: SystemSoundID] = [:]
+
+    static func play(_ sound: NotificationSound) {
+        if sound == .default {
+            AudioServicesPlaySystemSound(defaultSoundID)
+            return
+        }
+        guard let fileName = sound.fileName else { return }
+        if let id = soundIDs[sound] {
+            AudioServicesPlaySystemSound(id)
+            return
+        }
+        guard let url = Bundle.main.url(forResource: fileName, withExtension: nil) else { return }
+        var id: SystemSoundID = 0
+        guard AudioServicesCreateSystemSoundID(url as CFURL, &id) == kAudioServicesNoError else { return }
+        soundIDs[sound] = id
+        AudioServicesPlaySystemSound(id)
+    }
+}
+
 /// Up to five network badges overlapping, each ringed in the row's colour, then "+N" for the rest.
 private struct NetworkBadgeStack: View {
     let networks: [SocialNetwork]
@@ -190,7 +263,7 @@ private struct NetworkBadgeStack: View {
     }
 }
 
-/// Every account, from Settings while some need reconnecting and the Accounts section shows only those.
+/// Every account, from Settings, whose Accounts section shows only those that need reconnecting.
 private struct AllAccountsView: View {
     @ObservedObject var viewModel: SettingsViewModel
     @ObservedObject var apronServersViewModel: ApronServersViewModel

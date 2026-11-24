@@ -71,6 +71,7 @@ Sources/
     ApronPushStore.swift
     ApronPushNotification.swift
     ChatReminderPush.swift          # Reminder push registration (App Group) and the reminder notification's content
+    NotificationSound.swift         # The notification sound chosen in Settings (App Group defaults), applied by the extension
     SharedChatStore.swift           # Opens the app's chat store; the App Group inbox where the extension leaves pushed messages
     TelegramPushNotification.swift  # Telegram push → sender and text; TelegramAvatarStore for the extension
     CommunicationNotification.swift # INSendMessageIntent donation and content update, shared with Debug

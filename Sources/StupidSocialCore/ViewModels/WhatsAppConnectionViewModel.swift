@@ -1,4 +1,5 @@
 import Foundation
+import StupidSocialPush
 import UserNotifications
 
 /// Linking WhatsApp as a device: a QR code to scan from another phone, or a code to type into WhatsApp on this
@@ -153,7 +154,7 @@ public final class WhatsAppConnectionViewModel: ObservableObject {
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
-        content.sound = .default
+        content.sound = NotificationSound.current.notificationSound
         let trigger = delay.map { UNTimeIntervalNotificationTrigger(timeInterval: $0, repeats: false) }
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: content, trigger: trigger))
     }
