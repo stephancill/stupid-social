@@ -985,8 +985,11 @@ public actor WhatsAppClient {
         let label = text == nil ? Self.label(of: content) ?? "Unsupported message" : nil
         let context = content.extendedText?.contextInfo ?? content.media?.contextInfo
         let quotedSender = context?.participant.flatMap { WhatsAppJID(string: $0)?.nonAD.description }
+        let business = content.business
+        let buttons = business?.buttons.map(Self.button)
         let stored = WhatsAppMessage(id: id, sender: sender, isFromMe: isFromMe, timestamp: timestamp, text: text, label: label, quotedId: context?.stanzaID,
-                                     reactions: reactions, media: content.media.map(Self.media), quotedSender: quotedSender)
+                                     reactions: reactions, media: (content.media ?? business?.media).map(Self.media), quotedSender: quotedSender,
+                                     buttons: buttons?.isEmpty == false ? buttons : nil)
         if store.upsert([stored], in: chat), live {
             store.updateChat(chat) { chat in
                 if isFromMe {
@@ -1018,24 +1021,36 @@ public actor WhatsAppClient {
     }
 
     static func text(of message: WhatsAppProto.Message) -> String? {
-        let text = message.conversation ?? message.extendedText?.text ?? message.media?.caption
+        let text = message.conversation ?? message.extendedText?.text ?? message.media?.caption ?? message.business?.text
         return text?.isEmpty == false ? text : nil
     }
 
-    static func label(of message: WhatsAppProto.Message) -> String? {
-        if let media = message.media {
-            switch media.kind {
-            case .image: return "Photo"
-            case .video: return "Video"
-            case .audio: return media.ptt == true ? "Voice message" : "Audio"
-            case .document: return media.fileName.map { "Document: \($0)" } ?? "Document"
-            case .sticker: return "Sticker"
-            }
+    static func button(_ button: WhatsAppProto.BusinessMessage.Button) -> WhatsAppButton {
+        switch button.action {
+        case let .url(url): WhatsAppButton(title: button.title, action: .url, value: url)
+        case let .call(number): WhatsAppButton(title: button.title, action: .call, value: number)
+        case let .copy(code): WhatsAppButton(title: button.title, action: .copy, value: code)
+        case .reply: WhatsAppButton(title: button.title, action: .reply, value: nil)
         }
+    }
+
+    static func label(of message: WhatsAppProto.Message) -> String? {
+        if let media = message.media { return label(of: media) }
         if message.contact != nil || message.contactsArray != nil { return "Contact" }
         if let location = message.location { return location.isLive ? "Live location" : "Location" }
         if let poll = message.poll { return poll.name.map { "Poll: \($0)" } ?? "Poll" }
+        if let media = message.business?.media { return label(of: media) }
         return nil
+    }
+
+    private static func label(of media: WhatsAppProto.MediaMessage) -> String {
+        switch media.kind {
+        case .image: "Photo"
+        case .video: "Video"
+        case .audio: media.ptt == true ? "Voice message" : "Audio"
+        case .document: media.fileName.map { "Document: \($0)" } ?? "Document"
+        case .sticker: "Sticker"
+        }
     }
 
     private func handleReceipt(_ node: WhatsAppNode) {
@@ -2372,6 +2387,17 @@ public actor WhatsAppClient {
             store.update { $0.avatars[key] = WhatsAppStore.Avatar(url: fetched, checkedAt: Date(), expires: Self.expiry(of: fetched) ?? Date().addingTimeInterval(7 * 24 * 3600)) }
         }
         return (name, store.avatarURL(for: key))
+    }
+
+    /// A person's number with a leading "+", from their phone-number JID or the number their LID is mapped to.
+    public func phoneNumber(of jid: String) -> String? {
+        guard let parsed = WhatsAppJID(string: jid) else { return nil }
+        let user = switch parsed.server {
+        case WhatsAppJID.Server.user: parsed.user
+        case WhatsAppJID.Server.lid: store.phoneNumberUser(forLIDUser: parsed.user)
+        default: nil as String?
+        }
+        return user.map { "+\($0)" }
     }
 
     /// The user's own JID, which keys their reactions.

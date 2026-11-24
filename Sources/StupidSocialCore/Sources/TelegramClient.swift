@@ -195,6 +195,8 @@ public struct TelegramProfile: Sendable, Equatable {
     public let status: ChatPresence?
     public let isBot: Bool
     public let isYou: Bool
+    /// With a leading "+", when they share it with the user (contacts, or their privacy settings allow it).
+    public let phoneNumber: String?
     /// The private chat with them; `nil` when Telegram gave no usable access hash.
     public let peer: TelegramPeer?
 }
@@ -1262,8 +1264,13 @@ public actor TelegramClient: ChatListProvider {
 
     /// A user's profile with their bio (`users.getFullUser`), for someone seen in a chat or member list
     /// (validated with the probe's `profile`).
-    public func profile(userId: Int64) async throws -> TelegramProfile {
+    /// `chatPeer` is the private chat with them, whose access hash names them when this session hasn't seen them
+    /// yet: a chat drawn from the local store after launch fetches no users until it pages from the network.
+    public func profile(userId: Int64, chatPeer: TelegramPeer? = nil) async throws -> TelegramProfile {
         try requireAccount()
+        if inputUsers[userId] == nil, let chatPeer, chatPeer.kind == .user, chatPeer.id == userId {
+            inputUsers[userId] = TLObject("inputUser", ["user_id": .long(userId), "access_hash": .long(chatPeer.accessHash)])
+        }
         let input = userId == stored.account?.userId ? TLObject("inputUserSelf") : inputUsers[userId]
         guard let input else { throw TelegramError.unknownUser }
         guard let result = try await invoke(TLObject("users.getFullUser", ["id": .object(input)])).object else {
@@ -1297,6 +1304,7 @@ public actor TelegramClient: ChatListProvider {
             status: user.flatMap(Self.userStatus),
             isBot: user?.flag("bot") ?? false,
             isYou: userId == stored.account?.userId,
+            phoneNumber: user?["phone"]?.string.flatMap { $0.isEmpty ? nil : "+\($0)" },
             peer: hash.map { TelegramPeer(kind: .user, id: userId, accessHash: $0) },
         )
     }

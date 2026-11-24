@@ -93,6 +93,9 @@ struct TelegramProfileView: View {
                 .padding(.vertical, 8)
                 .listRowBackground(Color.clear)
             }
+            if let phoneNumber = profile.phoneNumber {
+                PhoneNumberSection(phoneNumber: phoneNumber)
+            }
             if let about = profile.about {
                 Section("Bio") {
                     Text(AttributedString(linkingWebURLsIn: about))

@@ -21,8 +21,10 @@ public struct WhatsAppMessage: Codable, Hashable, Sendable {
     public var media: WhatsAppMedia?
     /// The quoted message's sender, for drawing and sending replies.
     public var quotedSender: String?
+    /// A business message's buttons, such as a link to open.
+    public var buttons: [WhatsAppButton]?
 
-    public init(id: String, sender: String, isFromMe: Bool, timestamp: Date, text: String?, label: String?, quotedId: String? = nil, isDeleted: Bool = false, editedAt: Date? = nil, reactions: [String: String] = [:], media: WhatsAppMedia? = nil, quotedSender: String? = nil) {
+    public init(id: String, sender: String, isFromMe: Bool, timestamp: Date, text: String?, label: String?, quotedId: String? = nil, isDeleted: Bool = false, editedAt: Date? = nil, reactions: [String: String] = [:], media: WhatsAppMedia? = nil, quotedSender: String? = nil, buttons: [WhatsAppButton]? = nil) {
         self.id = id
         self.sender = sender
         self.isFromMe = isFromMe
@@ -35,6 +37,26 @@ public struct WhatsAppMessage: Codable, Hashable, Sendable {
         self.reactions = reactions
         self.media = media
         self.quotedSender = quotedSender
+        self.buttons = buttons
+    }
+}
+
+/// A button under a business message: a link, a number to call, a code to copy, or a reply to the business,
+/// which the app shows but doesn't send.
+public struct WhatsAppButton: Codable, Hashable, Sendable {
+    public enum Action: String, Codable, Sendable {
+        case url, call, copy, reply
+    }
+
+    public let title: String
+    public let action: Action
+    /// The URL, phone number or code; nil for a reply.
+    public let value: String?
+
+    public init(title: String, action: Action, value: String?) {
+        self.title = title
+        self.action = action
+        self.value = value
     }
 }
 

@@ -58,6 +58,7 @@ struct ChatInfoView: View {
     @ObservedObject var viewModel: ChatViewModel
     @AppStorage("redactionEnabled") private var redactionEnabled = false
     @State private var details: (description: String?, members: [ChatMemberSummary])?
+    @State private var phoneNumber: String?
     @State private var query = ""
 
     var body: some View {
@@ -73,6 +74,9 @@ struct ChatInfoView: View {
                     DetailActionRow { ChatSettingsButtons(viewModel: viewModel) }
                 }
             }
+            if let phoneNumber {
+                PhoneNumberSection(phoneNumber: phoneNumber)
+            }
             if let members = details?.members, !members.isEmpty {
                 let filtered = query.isEmpty ? members : members.filter { $0.name.localizedStandardContains(query) }
                 MembersSection(query: $query, hasResults: !filtered.isEmpty) {
@@ -84,6 +88,7 @@ struct ChatInfoView: View {
         }
         .navigationBarTitleDisplayMode(.inline)
         .task {
+            phoneNumber = await (viewModel as? any ChatPhoneNumberProviding)?.phoneNumber()
             details = await (viewModel as? any ChatMembersListingProviding)?.groupDetails()
         }
     }
@@ -98,6 +103,33 @@ protocol ChatMembersListingProviding {
 extension AdapterChatViewModel: ChatMembersListingProviding {
     func groupDetails() async -> (description: String?, members: [ChatMemberSummary])? {
         await (adapter as? any ChatMembersListing)?.groupDetails()
+    }
+}
+
+/// A chat view model whose adapter knows the other person's phone number.
+@MainActor
+protocol ChatPhoneNumberProviding {
+    func phoneNumber() async -> String?
+}
+
+extension AdapterChatViewModel: ChatPhoneNumberProviding {
+    func phoneNumber() async -> String? {
+        await (adapter as? any ChatPhoneNumberSharing)?.phoneNumber()
+    }
+}
+
+/// A person's phone number in their details, copied with a long press.
+struct PhoneNumberSection: View {
+    @AppStorage("redactionEnabled") private var redactionEnabled = false
+    let phoneNumber: String
+
+    var body: some View {
+        Section {
+            LabeledContent("Phone") {
+                Text(redactionEnabled ? "Redacted" : phoneNumber)
+                    .textSelection(.enabled)
+            }
+        }
     }
 }
 

@@ -470,11 +470,14 @@ public extension WhatsAppProto {
             static let protocolMessage = 12
             static let contactsArray = 13
             static let liveLocation = 18
+            static let template = 25
             static let sticker = 26
             static let deviceSent = 31
             static let messageContextInfo = 35
             static let viewOnce = 37
             static let ephemeral = 40
+            static let buttons = 42
+            static let interactive = 45
             static let reaction = 46
             static let pollCreation = 49
             static let documentWithCaption = 53
@@ -489,7 +492,7 @@ public extension WhatsAppProto {
             static let modelled = Set(wrappers + [
                 conversation, senderKeyDistribution, image, contact, location, extendedText, document, audio, video,
                 protocolMessage, contactsArray, liveLocation, sticker, deviceSent, messageContextInfo, reaction,
-                pollCreation, pollCreationV2, pollCreationV3,
+                pollCreation, pollCreationV2, pollCreationV3, template, buttons, interactive,
             ])
         }
 
@@ -548,6 +551,17 @@ public extension WhatsAppProto {
 
         public var poll: PollCreationMessage? {
             [Field.pollCreation, Field.pollCreationV2, Field.pollCreationV3].lazy.compactMap { proto.message($0) }.first.map(PollCreationMessage.init)
+        }
+
+        /// A business's template, buttons or interactive message.
+        public var business: BusinessMessage? {
+            if let template = proto.message(Field.template) {
+                return BusinessMessage(template: template)
+            }
+            if let buttons = proto.message(Field.buttons) {
+                return BusinessMessage(buttons: buttons)
+            }
+            return proto.message(Field.interactive).map(BusinessMessage.init(interactive:))
         }
 
         /// The message inside the first `FutureProofMessage` wrapper (ephemeral, view once, document with
@@ -873,6 +887,104 @@ public extension WhatsAppProto {
         public init(proto: ProtoMessage) {
             name = proto.string(2)
             options = proto.messages(3).compactMap { $0.string(1) }
+        }
+    }
+
+    /// What a business sends as a `TemplateMessage`, `ButtonsMessage` or `InteractiveMessage`: a header (a title,
+    /// or a photo, video or document), the body, a footer and buttons under it. Template messages from verified
+    /// businesses, such as notices with a link button, come as hydrated templates.
+    struct BusinessMessage: Sendable, Equatable {
+        public struct Button: Sendable, Equatable {
+            public enum Action: Sendable, Equatable {
+                case url(String)
+                case call(String)
+                case copy(String)
+                /// Answers the business with a reply the app doesn't send.
+                case reply
+            }
+
+            public var title: String
+            public var action: Action
+        }
+
+        public var title: String?
+        public var body: String?
+        public var footer: String?
+        public var media: MediaMessage?
+        public var buttons: [Button] = []
+
+        /// The text shown in the bubble: title, body and footer, each its own paragraph.
+        public var text: String? {
+            let parts = [title, body, footer].compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+            return parts.isEmpty ? nil : parts.joined(separator: "\n\n")
+        }
+
+        /// `TemplateMessage`: `hydratedFourRowTemplate` (2), `hydratedTemplate` (4) or `interactiveMessageTemplate` (5).
+        /// The unhydrated `fourRowTemplate` (1) holds localizable placeholders and has nothing to show.
+        init(template: ProtoMessage) {
+            if let hydrated = template.message(2) ?? template.message(4) {
+                self.init(hydrated: hydrated)
+            } else {
+                self.init(interactive: template.message(5) ?? ProtoMessage())
+            }
+        }
+
+        /// `HydratedFourRowTemplate`: title (document 1, text 2, image 3, video 4), content 6, footer 7 and
+        /// `HydratedTemplateButton`s 8 (quick reply 1, URL 2, call 3; each with `displayText` 1).
+        init(hydrated: ProtoMessage) {
+            title = hydrated.string(2)
+            media = Self.media(document: hydrated.message(1), image: hydrated.message(3), video: hydrated.message(4))
+            body = hydrated.string(6)
+            footer = hydrated.string(7)
+            buttons = hydrated.messages(8).compactMap { button in
+                if let url = button.message(2), let title = url.string(1), let link = url.string(2) {
+                    return Button(title: title, action: .url(link))
+                }
+                if let call = button.message(3), let title = call.string(1), let number = call.string(2) {
+                    return Button(title: title, action: .call(number))
+                }
+                return button.message(1)?.string(1).map { Button(title: $0, action: .reply) }
+            }
+        }
+
+        /// `ButtonsMessage`: header text 1 (or document 2, image 3, video 4), content 6, footer 7, and buttons 9
+        /// whose `buttonText.displayText` (2.1) is the title; they all answer the business.
+        init(buttons message: ProtoMessage) {
+            title = message.string(1)
+            media = Self.media(document: message.message(2), image: message.message(3), video: message.message(4))
+            body = message.string(6)
+            footer = message.string(7)
+            buttons = message.messages(9).compactMap { $0.message(2)?.string(1).map { Button(title: $0, action: .reply) } }
+        }
+
+        /// `InteractiveMessage`: header 1 (title 1, document 3, image 4, video 7), body 2 (text 1), footer 3 (text 1),
+        /// and a `NativeFlowMessage` (6) whose buttons (1) are a name and JSON parameters (WhatsApp Web's
+        /// `cta_url`, `cta_call`, `cta_copy`, `quick_reply`).
+        init(interactive: ProtoMessage) {
+            let header = interactive.message(1)
+            title = header?.string(1)
+            media = header.flatMap { Self.media(document: $0.message(3), image: $0.message(4), video: $0.message(7)) }
+            body = interactive.message(2)?.string(1)
+            footer = interactive.message(3)?.string(1)
+            buttons = (interactive.message(6)?.messages(1) ?? []).compactMap { button in
+                guard let name = button.string(1),
+                      let json = button.string(2)?.data(using: .utf8),
+                      let params = (try? JSONSerialization.jsonObject(with: json)) as? [String: Any],
+                      let title = params["display_text"] as? String
+                else { return nil }
+                switch name {
+                case "cta_url": return (params["url"] as? String).map { Button(title: title, action: .url($0)) }
+                case "cta_call": return (params["phone_number"] as? String).map { Button(title: title, action: .call($0)) }
+                case "cta_copy": return (params["copy_code"] as? String).map { Button(title: title, action: .copy($0)) }
+                default: return Button(title: title, action: .reply)
+                }
+            }
+        }
+
+        private static func media(document: ProtoMessage?, image: ProtoMessage?, video: ProtoMessage?) -> MediaMessage? {
+            if let image { return MediaMessage(kind: .image, proto: image) }
+            if let video { return MediaMessage(kind: .video, proto: video) }
+            return document.map { MediaMessage(kind: .document, proto: $0) }
         }
     }
 

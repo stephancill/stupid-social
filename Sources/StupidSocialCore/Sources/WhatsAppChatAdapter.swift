@@ -7,7 +7,7 @@ import Foundation
 /// one-to-one chats  and sends read receipts as
 /// messages are read.
 @MainActor
-public final class WhatsAppChatAdapter: ChatAdapter, ChatLiveUpdating, ChatReadOnlyAccess, ChatAudioPreviewing, ChatReactionSending, ChatTyping, ChatMembersListing, ChatVoiceSending, ChatMuting, ChatArchiving {
+public final class WhatsAppChatAdapter: ChatAdapter, ChatLiveUpdating, ChatReadOnlyAccess, ChatAudioPreviewing, ChatReactionSending, ChatTyping, ChatMembersListing, ChatPhoneNumberSharing, ChatVoiceSending, ChatMuting, ChatArchiving {
     public let network = ChatNetwork.whatsapp
     public var canReply: Bool {
         !isReadOnly
@@ -161,7 +161,8 @@ public final class WhatsAppChatAdapter: ChatAdapter, ChatLiveUpdating, ChatReadO
         return try ChatPage(records: older.map(Self.record), earlier: received == 0 ? nil : earlierCursor(oldest: older.first))
     }
 
-    /// Messages stored before the app kept media show only labels. The phone is asked for the messages before
+    /// Messages stored before the app kept media, or before it read business messages, show only labels. The phone
+    /// is asked for the messages before
     /// the newest, which come back with their media. History requests only return messages before their anchor,
     /// and the phone ignores requests for single messages this device didn't fail to decrypt (observed
     /// 2026-11-22), so a newest one stays a label until a later message arrives, then is asked for once per anchor.
@@ -169,7 +170,7 @@ public final class WhatsAppChatAdapter: ChatAdapter, ChatLiveUpdating, ChatReadO
         Task {
             let messages = await client.chatPage(chatJID).messages
             guard let newest = messages.last, newest.id != legacyMediaAnchor,
-                  let oldestLegacy = messages.dropLast().firstIndex(where: { $0.media == nil && Self.isMediaLabel($0.label) })
+                  let oldestLegacy = messages.dropLast().firstIndex(where: { Self.isLegacyLabel($0) })
             else { return }
             legacyMediaAnchor = newest.id
             let count = min(messages.count - 1 - oldestLegacy, 100)
@@ -178,9 +179,9 @@ public final class WhatsAppChatAdapter: ChatAdapter, ChatLiveUpdating, ChatReadO
         }
     }
 
-    private static func isMediaLabel(_ label: String?) -> Bool {
-        guard let label else { return false }
-        return ["Photo", "Video", "Audio", "Voice message", "Sticker"].contains(label) || label.hasPrefix("Document")
+    private static func isLegacyLabel(_ message: WhatsAppMessage) -> Bool {
+        guard message.media == nil, let label = message.label else { return false }
+        return ["Photo", "Video", "Audio", "Voice message", "Sticker", "Unsupported message"].contains(label) || label.hasPrefix("Document")
     }
 
     public func startFollowing() async {
@@ -266,6 +267,10 @@ public final class WhatsAppChatAdapter: ChatAdapter, ChatLiveUpdating, ChatReadO
     }
 
     // MARK: Members
+
+    public func phoneNumber() async -> String? {
+        isGroup ? nil : await client.phoneNumber(of: chatJID)
+    }
 
     public func groupDetails() async -> (description: String?, members: [ChatMemberSummary])? {
         guard isGroup else { return nil }
@@ -384,8 +389,21 @@ public final class WhatsAppChatAdapter: ChatAdapter, ChatLiveUpdating, ChatReadO
         } else {
             nil
         }
+        let buttons = message.isDeleted ? [] : (message.buttons ?? []).enumerated().map { index, button in
+            [ChatMessageButton(id: String(index), title: button.title, action: Self.action(of: button))]
+        }
         return ChatMessage(id: message.id, sender: sender, timestamp: message.timestamp, text: text, embeds: embeds, replyToId: message.quotedId,
-                           isDeleted: message.isDeleted, isOwn: message.isFromMe, isEdited: message.editedAt != nil)
+                           isDeleted: message.isDeleted, isOwn: message.isFromMe, isEdited: message.editedAt != nil, buttons: buttons)
+    }
+
+    /// Replies to a business aren't sent, so those buttons show dimmed.
+    private static func action(of button: WhatsAppButton) -> ChatMessageButton.Action {
+        switch button.action {
+        case .url: button.value.flatMap(URL.init(string:)).map { .link($0) } ?? .unsupported
+        case .call: button.value.flatMap { URL(string: "tel:\($0.filter { $0.isNumber || $0 == "+" })") }.map { .link($0) } ?? .unsupported
+        case .copy: button.value.map { .copy($0) } ?? .unsupported
+        case .reply: .unsupported
+        }
     }
 
     private func embeds(for media: WhatsAppMedia, message: WhatsAppMessage) -> [ChatEmbed] {

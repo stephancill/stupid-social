@@ -312,8 +312,31 @@ final class WhatsAppCodecTests: XCTestCase {
         XCTAssertEqual(poll.name, "Lunch?")
         XCTAssertEqual(poll.options, ["Yes", "No"])
         let unknown = try P.Message(data: Data(hex: Vectors.messageUnknown))
-        XCTAssertEqual(unknown.unknownFieldNumbers, [42])
+        XCTAssertEqual(unknown.unknownFieldNumbers, [])
+        XCTAssertEqual(unknown.business?.text, "buttons")
         XCTAssertNotNil(unknown.messageContextInfo)
+    }
+
+    func testBusinessMessagesDecode() throws {
+        let template = try XCTUnwrap(P.Message(data: Data(hex: Vectors.messageTemplate)).business)
+        XCTAssertEqual(template.text, "Your documents are available.\n\nFooter")
+        XCTAssertEqual(template.media?.kind, .image)
+        XCTAssertEqual(template.media?.directPath, "/v/t62/x")
+        XCTAssertEqual(template.buttons, [
+            .init(title: "Register now", action: .url("https://example.com/r")),
+            .init(title: "Call us", action: .call("+27 11 000 0000")),
+            .init(title: "Stop", action: .reply),
+        ])
+        XCTAssertEqual(WhatsAppClient.text(of: P.Message(data: Data(hex: Vectors.messageTemplate))), "Your documents are available.\n\nFooter")
+
+        let interactive = try XCTUnwrap(P.Message(data: Data(hex: Vectors.messageInteractive)).business)
+        XCTAssertEqual(interactive.text, "Welcome\n\nBody text\n\nFooter")
+        XCTAssertNil(interactive.media)
+        XCTAssertEqual(interactive.buttons, [
+            .init(title: "Open", action: .url("https://example.com/o")),
+            .init(title: "Copy code", action: .copy("ABC123")),
+            .init(title: "Yes", action: .reply),
+        ])
     }
 
     func testProtocolMessagesDecode() throws {
@@ -517,6 +540,10 @@ private enum Vectors {
     static let messageLocation = "2a1d093333333333f340c01166666666666632401a09536f6d657768657265"
     static let messagePoll = "82041512064c756e63683f1a050a035965731a040a024e6f"
     static let messageUnknown = "9a02061a0400000000d202093207627574746f6e73"
+    /// whatsmeow's `TemplateMessage.hydratedTemplate`: image title, content, footer, URL, call and quick reply buttons.
+    static let messageTemplate = "ca0199012296011a16120a696d6167652f6a7065675a082f762f7436322f78321d596f757220646f63756d656e74732061726520617661696c61626c652e3a06466f6f746572422712250a0c5265676973746572206e6f77121568747470733a2f2f6578616d706c652e636f6d2f72421c1a1a0a0743616c6c207573120f2b3237203131203030302030303030420e0a0c0a0453746f70120473746f70"
+    /// whatsmeow's `InteractiveMessage`: header title, body, footer and native flow `cta_url`, `cta_copy`, `quick_reply`.
+    static let messageInteractive = "ea02df010a090a0757656c636f6d65120b0a09426f647920746578741a080a06466f6f74657232ba010a430a076374615f75726c12387b22646973706c61795f74657874223a20224f70656e222c202275726c223a202268747470733a2f2f6578616d706c652e636f6d2f6f227d0a400a086374615f636f707912347b22646973706c61795f74657874223a2022436f707920636f6465222c2022636f70795f636f6465223a2022414243313233227d0a310a0b717569636b5f7265706c7912227b22646973706c61795f74657874223a2022596573222c20226964223a202279227d"
     static let messageEdit = "d203330a31622f0a150a07313233406c696410011a083345423043434343100e720d0a0b656469746564207465787478e7d795ffbc31"
     static let messageRevoke = "62170a130a07313233406c69641a0833454230444444441000"
     static let messageHistoryNotification = "628b0110053286010a2004040404040404040404040404040404040404040404040404040404040404041080201a200505050505050505050505050505050505050505050505050505050505050505222006060606060606060606060606060606060606060606060606060606060606062a072f762f686973743003380242044f52494748285a06696e6c696e65"

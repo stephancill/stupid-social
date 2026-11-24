@@ -10,17 +10,20 @@ public final class TelegramProfileViewModel: ObservableObject {
 
     private let client: TelegramClient
     public let target: String
+    /// The private chat it was opened from, which names the person to Telegram.
+    private let chatPeer: TelegramPeer?
 
-    public init(client: TelegramClient, target: String) {
+    public init(client: TelegramClient, target: String, chatPeer: TelegramPeer? = nil) {
         self.client = client
         self.target = target
+        self.chatPeer = chatPeer
     }
 
     public func load() async {
         errorMessage = nil
         do {
             profile = switch Self.parse(target) {
-            case let .user(id): try await client.profile(userId: id)
+            case let .user(id): try await client.profile(userId: id, chatPeer: chatPeer)
             case let .username(username): try await client.profile(username: username)
             case nil: throw TelegramError.unknownUser
             }
@@ -51,6 +54,6 @@ public final class TelegramProfileViewModel: ObservableObject {
 public extension TelegramMembersViewModel {
     /// The profile of someone in this chat, by the id its messages or mentions give them.
     func profile(for target: String) -> TelegramProfileViewModel {
-        TelegramProfileViewModel(client: client, target: target)
+        TelegramProfileViewModel(client: client, target: target, chatPeer: peer.kind == .user ? peer : nil)
     }
 }

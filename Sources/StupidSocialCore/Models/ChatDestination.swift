@@ -104,6 +104,13 @@ public protocol ChatMembersListing: ChatAdapter {
     func groupDetails() async -> (description: String?, members: [ChatMemberSummary])?
 }
 
+/// A one-to-one chat whose other person's phone number the network shares, shown in the chat's details.
+@MainActor
+public protocol ChatPhoneNumberSharing: ChatAdapter {
+    /// In international form with a leading "+"; nil for groups and when the number isn't known.
+    func phoneNumber() async -> String?
+}
+
 /// A one-to-one chat with someone who has a profile on the network, which the chat's title opens. Nil until the
 /// chat knows them, and for groups.
 @MainActor
