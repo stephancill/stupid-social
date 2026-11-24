@@ -24,7 +24,7 @@ public enum XNotificationCategory: String, CaseIterable, Codable, Sendable {
         case .reaction: .reactions
         case .post: .tweets
         case .follow: .follows
-        case .message, .music, .unknown: nil
+        case .message, .music, .fork, .unknown: nil
         }
     }
 }

@@ -20,10 +20,11 @@ public final class GitHubNotificationSource: NotificationFetching, ProfileFetchi
         guard let credentials = try credentialStore.loadGitHubCredentials() else { return [] }
         do {
             let accountId = credentials.username ?? "github"
-            let items = try await fetch(credentials: credentials).notificationItems.map { item in
-                notificationItem(from: item, accountId: accountId)
-            }
-            return mergeByRepository(items)
+            let items = try await fetch(credentials: credentials).notificationItems
+            // Forks stay one row each: a fork card names the fork, not the forked repository.
+            let stars = items.filter { $0.kind != .forkedRepository }.map { notificationItem(from: $0, accountId: accountId) }
+            let forks = items.filter { $0.kind == .forkedRepository }.map { notificationItem(from: $0, accountId: accountId) }
+            return (mergeByRepository(stars) + forks).sorted { $0.timestamp > $1.timestamp }
         } catch SourceError.notConfigured {
             markInvalid()
             throw SourceError.notConfigured
@@ -160,16 +161,16 @@ public final class GitHubNotificationSource: NotificationFetching, ProfileFetchi
             network: .github,
             accountId: accountId,
             sourceId: item.id,
-            type: .reaction,
+            type: item.kind == .forkedRepository ? .fork : .reaction,
             timestamp: item.timestamp,
-            text: "\(actor.username ?? "Someone") starred your repository",
+            text: "\(actor.username ?? "Someone") \(item.kind == .forkedRepository ? "forked" : "starred") your repository",
             actors: [actor],
             target: NotificationTarget(
                 id: item.targetName,
                 text: item.targetName,
                 url: item.targetURL,
                 imageURL: item.targetAvatarURL,
-                author: viewer,
+                author: item.kind == .forkedRepository ? actor : viewer,
                 postedAt: item.timestamp,
             ),
         )

@@ -551,6 +551,22 @@ def viewer_from_feed(html: str) -> str | None:
     return None
 
 
+def extract_forked_your_repo(html: str) -> list[dict[str, Any]]:
+    """Return every "forked your repository" notification from the For You feed.
+
+    GitHub gathers a fork of one of the viewer's repositories as
+    ``forked_viewer_repo`` (a followed user's fork of someone else's repo is
+    ``repository_mysql``). The card links only the fork, not the parent; its
+    text reads "NAME forked your repository"."""
+    result = []
+    for item in parse_structured_html(html)["items"]:
+        actor = item.get("actor") or {}
+        target = item.get("target") or {}
+        if item.get("type") == "FORKED_REPOSITORY" and item.get("gatherer") == "forked_viewer_repo" and actor.get("name") and target.get("name"):
+            result.append({"kind": "forked", "actor": actor["name"], "target": target["name"], "created_at": item.get("created_at")})
+    return result
+
+
 def summarize_html(html: str) -> dict[str, Any]:
     structured = parse_structured_html(html)
     timestamps = [item["created_at"] for item in structured["items"] if item["created_at"]]
@@ -781,9 +797,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     notifications = subparsers.add_parser(
         "notifications",
-        help="Fetch the feed and print 'starred YOUR repository' notifications ",
+        help="Fetch the feed and print 'starred/forked YOUR repository' notifications.",
     )
     notifications.add_argument("--output", help="Write notification JSON to this path.")
+    notifications.add_argument("--html", help="Read previously saved feed HTML instead of fetching it.")
     validate = subparsers.add_parser(
         "validate",
         help="Check whether the stored session is still authenticated (no redirects followed).",
@@ -833,7 +850,7 @@ def main() -> None:
             print(json.dumps(result, indent=2, sort_keys=True))
             return
 
-        credentials = load_credentials(args)
+        credentials = {} if args.command == "notifications" and args.html else load_credentials(args)
         client = GitHubWebClient(credentials, accept_language=args.accept_language)
         if args.command == "bootstrap":
             print(json.dumps(client.bootstrap(), indent=2, sort_keys=True))
@@ -862,9 +879,15 @@ def main() -> None:
                 print(json.dumps(summary, indent=2, sort_keys=True))
             return
         if args.command == "notifications":
-            html, _ = client.for_you_feed()
-            viewer = credentials.get("username") or (viewer_from_feed(html) if html else None)
-            notifications_list = extract_starred_your_repo(html, viewer) if html else []
+            if args.html:
+                with open(args.html, "r", encoding="utf-8") as handle:
+                    html = handle.read()
+                viewer = viewer_from_feed(html)
+            else:
+                html, _ = client.for_you_feed()
+                viewer = credentials.get("username") or (viewer_from_feed(html) if html else None)
+            stars = [{"kind": "starred", **entry} for entry in extract_starred_your_repo(html, viewer)] if html else []
+            notifications_list = stars + (extract_forked_your_repo(html) if html else [])
             write_json(args.output, notifications_list)
             print(json.dumps(notifications_list, indent=2, sort_keys=True))
             return

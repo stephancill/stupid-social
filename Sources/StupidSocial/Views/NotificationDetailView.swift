@@ -157,6 +157,8 @@ struct NotificationDetailView: View {
             return "Like"
         case .follow:
             return "Follow"
+        case .fork:
+            return "Fork"
         case .post:
             return "Tweet"
         case .message:
@@ -651,10 +653,11 @@ private struct GitHubRepoDetailView: View {
                     .frame(maxWidth: .infinity, minHeight: 120)
             } else {
                 if let imageURL = displayImageURL {
-                    CachedAsyncImage(url: imageURL) {
-                        Color.secondary.opacity(0.15)
+                    // GitHub's social preview is 1200×600; it is rate limited per IP (429), so a failed one is left out.
+                    CachedAsyncImage(url: imageURL, contentMode: .fit) {
+                        Color.secondary.opacity(0.15).aspectRatio(2, contentMode: .fit)
                     } failure: {
-                        Color.secondary.opacity(0.15)
+                        EmptyView()
                     }
                     .frame(maxWidth: .infinity)
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))

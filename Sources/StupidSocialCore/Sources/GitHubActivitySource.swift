@@ -261,7 +261,7 @@ public enum GitHubActivityParser {
             }
         }
 
-        let complete = normalized.compactMap { entry -> GitHubActivityItem? in
+        let complete = normalized.compactMap { entry -> (item: GitHubActivityItem, gatherer: String?)? in
             let item = entry.item
             let actor = entry.position.flatMap { actorByRollupPosition[$0] }
                 ?? (item.actor.username == nil ? actorByFollowResourceId[item.actor.id] : item.actor)
@@ -276,11 +276,14 @@ public enum GitHubActivityParser {
             {
                 updated = updated.withFollowUserMetadata(meta)
             }
-            return updated
+            return (updated, entry.gatherer)
         }
 
-        let storyCandidates = complete.filter { !isStarOfYourRepository($0, viewerUsername: viewerUsername) }
-        let recordNotifications = complete.filter { isStarOfYourRepository($0, viewerUsername: viewerUsername) }
+        let isNotification = { (entry: (item: GitHubActivityItem, gatherer: String?)) in
+            isStarOfYourRepository(entry.item, viewerUsername: viewerUsername) || isForkOfYourRepository(entry.item, gatherer: entry.gatherer)
+        }
+        let storyCandidates = complete.filter { !isNotification($0) }.map(\.item)
+        let recordNotifications = complete.filter(isNotification).map(\.item)
         let notificationItems = mergedYourRepositoryNotifications(
             recordItems: recordNotifications,
             html: html,
@@ -439,6 +442,12 @@ public enum GitHubActivityParser {
         guard item.kind == .starredRepository, let viewerUsername, !viewerUsername.isEmpty else { return false }
         guard let owner = item.targetName.split(separator: "/").first else { return false }
         return owner.caseInsensitiveCompare(viewerUsername) == .orderedSame
+    }
+
+    /// GitHub gathers a fork of one of the viewer's repositories as `forked_viewer_repo`; the card links only the
+    /// fork, so the gatherer is what says it is the viewer's. A followed user's other forks are `repository_mysql`.
+    private static func isForkOfYourRepository(_ item: GitHubActivityItem, gatherer: String?) -> Bool {
+        item.kind == .forkedRepository && gatherer == "forked_viewer_repo"
     }
 
     private static func normalize(_ card: ParsedCard) -> GitHubActivityItem? {

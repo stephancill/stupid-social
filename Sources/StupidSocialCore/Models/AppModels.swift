@@ -41,6 +41,7 @@ public enum NotificationType: String, Codable, CaseIterable, Sendable {
     case reply
     case reaction
     case follow
+    case fork
     case post
     case message
     case music

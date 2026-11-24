@@ -190,6 +190,24 @@ final class GitHubActivityParserTests: XCTestCase {
         XCTAssertEqual(result.storyGroups.flatMap(\.activities).map(\.targetName), ["TomiXRM/git-grapher"])
     }
 
+    /// A fork card links only the fork; GitHub's `forked_viewer_repo` gatherer says it forks one of the viewer's repos.
+    func testMovesForkOfViewerRepositoryToNotifications() throws {
+        let html = [
+            card(cardType: "FORKED_REPOSITORY", createdAt: "2026-11-23T21:02:34.000-08:00", recordId: "1469674058",
+                 actorHref: "/Norvon", actorId: "15613351", repoHref: "/Norvon/ios-keyboard-dictation", position: 0, subPosition: nil,
+                 gatherer: "forked_viewer_repo"),
+            card(cardType: "FORKED_REPOSITORY", createdAt: "2026-11-23T22:42:39.000-08:00", recordId: "1469759376",
+                 actorHref: "/gabrieltemtsen", actorId: "57184013", repoHref: "/gabrieltemtsen/tollway", position: 1, subPosition: nil,
+                 gatherer: "repository_mysql"),
+        ].joined()
+
+        let result = try GitHubActivityParser.parse(html, viewerUsername: "stephancill")
+
+        XCTAssertEqual(result.notificationItems.map(\.targetName), ["Norvon/ios-keyboard-dictation"])
+        XCTAssertEqual(result.notificationItems.map(\.kind), [.forkedRepository])
+        XCTAssertEqual(result.storyGroups.flatMap(\.activities).map(\.targetName), ["gabrieltemtsen/tollway"])
+    }
+
     func testWithoutViewerUsernameEverythingStaysStories() throws {
         let html = card(cardType: "STARRED_REPOSITORY", createdAt: "2026-08-29T05:30:41.000-07:00", recordId: "star-a",
                         actorHref: "/SystemWOWS", actorId: "700", repoHref: "/stephancill/pfwc", position: 0, subPosition: nil)

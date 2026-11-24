@@ -978,7 +978,7 @@ private struct NotificationRow: View {
         {
             messageImagePreview(url: imageUrl)
         } else if let targetText = displayItem.item.target?.text, !targetText.isEmpty,
-                  displayItem.item.type == .reaction || displayItem.item.type == .reply || displayItem.item.type == .mention || displayItem.item.type == .message || displayItem.item.type == .music
+                  displayItem.item.type == .reaction || displayItem.item.type == .fork || displayItem.item.type == .reply || displayItem.item.type == .mention || displayItem.item.type == .message || displayItem.item.type == .music
         {
             Text(DebugRedaction.text(targetText, actors: displayItem.item.actors, enabled: redactionEnabled))
                 .font(.subheadline)
@@ -1008,7 +1008,7 @@ private struct NotificationRow: View {
             return true
         }
         if let targetText = displayItem.item.target?.text, !targetText.isEmpty,
-           displayItem.item.type == .reaction || displayItem.item.type == .reply || displayItem.item.type == .mention || displayItem.item.type == .message || displayItem.item.type == .music
+           displayItem.item.type == .reaction || displayItem.item.type == .fork || displayItem.item.type == .reply || displayItem.item.type == .mention || displayItem.item.type == .message || displayItem.item.type == .music
         {
             return true
         }
@@ -1046,6 +1046,8 @@ private struct NotificationRow: View {
             sanitizedItemText
         case .follow:
             "\(actorSummary) followed you"
+        case .fork:
+            sanitizedItemText
         case .post:
             sanitizedItemText
         case .message:
@@ -1092,6 +1094,7 @@ private struct NotificationRow: View {
 
     private var previewText: String? {
         if displayItem.item.type == .reaction
+            || displayItem.item.type == .fork
             || displayItem.item.type == .reply
             || displayItem.item.type == .mention
             || displayItem.item.type == .post
@@ -1180,6 +1183,8 @@ private struct NotificationTypeIcon: View {
             "at"
         case .follow:
             "person.fill.badge.plus"
+        case .fork:
+            "arrow.triangle.branch"
         case .post:
             "bubble.left.and.bubble.right.fill"
         case .message:
@@ -1204,6 +1209,8 @@ private struct NotificationTypeIcon: View {
             .purple
         case .follow:
             .green
+        case .fork:
+            .indigo
         case .post:
             .primary
         case .message:
@@ -1228,6 +1235,8 @@ private struct NotificationTypeIcon: View {
             "Mention"
         case .follow:
             "Follow"
+        case .fork:
+            "Fork"
         case .post:
             "Tweet"
         case .message:
