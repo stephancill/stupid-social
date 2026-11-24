@@ -404,14 +404,17 @@ struct UnifiedStoryViewer: View {
             topBarContent
         }
         .padding(.top, 10)
-        .background(
+        // Runs well past the bar, so its white text stays readable over a light photo.
+        .background(alignment: .top) {
             LinearGradient(
-                colors: [Color.black.opacity(0.55), Color.black.opacity(0)],
+                colors: [Color.black.opacity(0.5), Color.black.opacity(0.25), Color.black.opacity(0)],
                 startPoint: .top,
                 endPoint: .bottom,
             )
-            .ignoresSafeArea(),
-        )
+            .padding(.bottom, -80)
+            .ignoresSafeArea()
+            .allowsHitTesting(false)
+        }
         .frame(maxHeight: .infinity, alignment: .top)
     }
 

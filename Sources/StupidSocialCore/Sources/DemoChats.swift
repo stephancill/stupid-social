@@ -39,6 +39,7 @@ enum DemoChats {
     static let kade = person("kade", "Kade", men: 75)
     static let nova = person("nova", "Nova", women: 8)
     static let theo = person("theo", "Theo", men: 12)
+    static let priya = person("priya", "Priya Shah", women: 68)
 
     static let customEmojis: [String: ChatCustomEmoji] = [
         ":apron:": ChatCustomEmoji(key: ":apron:", url: URL(string: "https://media.apron.chat/e/nrIp9696F6rvBbltXXvS6A")!, category: "Apron"),
@@ -139,6 +140,24 @@ enum DemoChats {
             reactions: ["t2": [ChatReaction(emoji: "👍", count: 1, includesYou: false)]],
         ),
         Chat(
+            id: "whatsapp-nova", network: .whatsapp, title: "Nova", avatarURL: nova.avatarURL, unreadCount: 1,
+            messages: { now in
+                [
+                    message("w1", you, now, minutes: 26, "still on for tomorrow?"),
+                    message("w2", nova, now, minutes: 8, "yes! picking you up at 8, bring the chalk"),
+                ]
+            },
+        ),
+        Chat(
+            id: "discord-trailmap", network: .discord, title: "dev", titlePrefix: "trailmap", isGroup: true,
+            messages: { now in
+                [
+                    message("d1", you, now, minutes: 70, "anyone else seeing the tiles flicker on zoom?"),
+                    message("d2", kade, now, minutes: 52, "new build is up, tiles load offline now"),
+                ]
+            },
+        ),
+        Chat(
             id: "x-jules", network: .x, title: "Jules", avatarURL: jules.avatarURL, unreadCount: 1,
             messages: { now in
                 [
@@ -157,6 +176,15 @@ enum DemoChats {
                 ]
             },
             reactions: ["i1": [ChatReaction(emoji: "😍", count: 1, includesYou: true)]],
+        ),
+        Chat(
+            id: "linkedin-priya", network: .linkedin, title: "Priya Shah", avatarURL: priya.avatarURL,
+            messages: { now in
+                [
+                    message("l1", priya, now, minutes: 170, "saw trailmap on your profile, we're mapping trails for our parks team"),
+                    message("l2", priya, now, minutes: 169, "coffee next week?"),
+                ]
+            },
         ),
         Chat(
             id: "spotify-riley", network: .spotify, title: "Riley", avatarURL: riley.avatarURL,
