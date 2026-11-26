@@ -6,8 +6,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/stephancill/stupid-chatkit",
       "state" : {
-        "revision" : "b7c11a69e3d54afada95475523c9c1edb37a58d6",
-        "version" : "0.10.3"
+        "revision" : "5e0ee5961a0fe1434db99f1c6238193a4b6b3998",
+        "version" : "0.10.4"
       }
     },
     {
