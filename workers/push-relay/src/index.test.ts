@@ -308,3 +308,104 @@ describe("push relay", () => {
     expect([...objects.values()][0]!.data.size).toBe(1);
   });
 });
+
+describe("forwards", () => {
+  const forwardId = "bot_0123456789abcdef";
+  const target = "https://bot.example/push/secret";
+
+  async function forwardEnv(vapidKey: string) {
+    const env = await makeEnv();
+    env.FORWARD_TARGETS = JSON.stringify({ [forwardId]: { url: target, vapidKey } });
+    return env;
+  }
+
+  test("forwards a push signed by the target's VAPID key", async () => {
+    const vapid = await makeVapid();
+    const env = await forwardEnv(vapid.publicKey);
+    const sent: Request[] = [];
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      sent.push(new Request(input, init));
+      return new Response(null, { status: 202 });
+    }) as unknown as typeof fetch;
+
+    const body = new Uint8Array(200).fill(9);
+    const response = await relay.fetch(
+      push(
+        `${origin}/forward/${forwardId}`,
+        await vapid.authorization({ aud: origin, exp: exp() }),
+        body,
+      ),
+      env,
+    );
+    expect(response.status).toBe(201);
+    expect(sent).toHaveLength(1);
+    const forwarded = sent[0]!;
+    expect(forwarded.url).toBe(target);
+    expect(forwarded.method).toBe("POST");
+    expect(forwarded.headers.get("content-encoding")).toBe("aes128gcm");
+    expect(forwarded.headers.get("ttl")).toBe("86400");
+    expect(forwarded.headers.get("urgency")).toBe("high");
+    expect(forwarded.headers.get("authorization")).toBeNull();
+    expect(new Uint8Array(await forwarded.arrayBuffer())).toEqual(body);
+  });
+
+  test("refuses unknown IDs and other senders without forwarding", async () => {
+    const registered = await makeVapid();
+    const other = await makeVapid();
+    const env = await forwardEnv(registered.publicKey);
+    globalThis.fetch = mock(
+      async () => new Response(null, { status: 200 }),
+    ) as unknown as typeof fetch;
+
+    const unknown = await relay.fetch(
+      push(
+        `${origin}/forward/unknown_0123456789`,
+        await registered.authorization({ aud: origin, exp: exp() }),
+      ),
+      env,
+    );
+    expect(unknown.status).toBe(404);
+    const wrongKey = await relay.fetch(
+      push(
+        `${origin}/forward/${forwardId}`,
+        await other.authorization({ aud: origin, exp: exp() }),
+      ),
+      env,
+    );
+    expect(wrongKey.status).toBe(403);
+    const unsigned = await relay.fetch(push(`${origin}/forward/${forwardId}`, ""), env);
+    expect(unsigned.status).toBe(403);
+    const noTargets = await relay.fetch(
+      push(
+        `${origin}/forward/${forwardId}`,
+        await registered.authorization({ aud: origin, exp: exp() }),
+      ),
+      await makeEnv(),
+    );
+    expect(noTargets.status).toBe(404);
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  test("maps the target's answer like a push service", async () => {
+    const vapid = await makeVapid();
+    const env = await forwardEnv(vapid.publicKey);
+    const answer = async (status: number) => {
+      globalThis.fetch = mock(
+        async () => new Response(null, { status }),
+      ) as unknown as typeof fetch;
+      return (
+        await relay.fetch(
+          push(
+            `${origin}/forward/${forwardId}`,
+            await vapid.authorization({ aud: origin, exp: exp() }),
+          ),
+          env,
+        )
+      ).status;
+    };
+    expect(await answer(404)).toBe(410);
+    expect(await answer(410)).toBe(410);
+    expect(await answer(429)).toBe(429);
+    expect(await answer(500)).toBe(502);
+  });
+});
