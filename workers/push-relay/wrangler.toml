@@ -9,7 +9,7 @@ routes = [{ pattern = "push.stupidtech.net", custom_domain = true }]
 APNS_TOPIC = "tech.stupid.StupidSocial"
 APNS_KEY_ID = "U7W6CW4B57"
 APNS_TEAM_ID = "6JKMV57Y77"
-# RELAY_SECRET and APNS_PRIVATE_KEY are secrets.
+# RELAY_SECRET, APNS_PRIVATE_KEY and FORWARD_TARGETS (optional) are secrets.
 
 [[durable_objects.bindings]]
 name = "SCHEDULED_PUSHES"

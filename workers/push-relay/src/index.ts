@@ -6,6 +6,10 @@ import { z } from "zod";
  * Extension decrypts it. Endpoints keep no state: an endpoint's ID is the APNs device token, its environment and
  * the one VAPID key allowed to push to it, sealed with RELAY_SECRET.
  *
+ * Forwards (`/forward/<id>`) are endpoints for services rather than devices, such as a chat bot that sleeps until it
+ * is mentioned: `FORWARD_TARGETS` maps each ID to an https URL and the one VAPID key allowed to push to it, and the
+ * relay POSTs the still-encrypted push there.
+ *
  * Scheduled pushes are the one stored thing: the app's chat reminders, which one of the user's devices encrypts for
  * the others and leaves here until they're due. Each is a Durable Object named by the sender's VAPID key and the
  * reminder, which sends its pushes when its alarm fires and then deletes itself.
@@ -17,6 +21,8 @@ export type Env = {
   APNS_PRIVATE_KEY: string;
   APNS_TOPIC: string;
   SCHEDULED_PUSHES: DurableObjectNamespace;
+  /** Secret JSON: `{"<id>": {"url": "https://…", "vapidKey": "<base64url P-256 point>"}}`. */
+  FORWARD_TARGETS?: string;
 };
 
 const environments = ["sandbox", "production"] as const;
@@ -65,6 +71,10 @@ export default {
     const match = url.pathname.match(/^\/apron\/([A-Za-z0-9_-]+)$/);
     if (request.method === "POST" && match?.[1]) {
       return deliver(request, env, url, match[1]);
+    }
+    const forward = url.pathname.match(/^\/forward\/([A-Za-z0-9_-]{16,128})$/);
+    if (request.method === "POST" && forward?.[1]) {
+      return forwardPush(request, env, url, forward[1]);
     }
     const scheduled = url.pathname.match(/^\/scheduled\/([A-Za-z0-9_-]{1,64})$/);
     if ((request.method === "PUT" || request.method === "DELETE") && scheduled?.[1]) {
@@ -225,6 +235,87 @@ async function deliver(request: Request, env: Env, url: URL, id: string): Promis
     return new Response("Too Many Requests", { status: 429 });
   }
   return new Response("Bad Gateway", { status: 502 });
+}
+
+// MARK: Forwards
+
+type ForwardTarget = { url: string; vapidKey: Uint8Array };
+
+const forwardTargetsSchema = z.record(
+  z.string().regex(/^[A-Za-z0-9_-]{16,128}$/),
+  z.object({
+    url: z.string().url().startsWith("https://"),
+    vapidKey: z.string().regex(/^[A-Za-z0-9_-]{87}$/),
+  }),
+);
+
+function forwardTarget(env: Env, id: string): ForwardTarget | null {
+  if (!env.FORWARD_TARGETS) {
+    return null;
+  }
+  let parsed: z.infer<typeof forwardTargetsSchema>;
+  try {
+    parsed = forwardTargetsSchema.parse(JSON.parse(env.FORWARD_TARGETS));
+  } catch {
+    console.error("FORWARD_TARGETS is not valid");
+    return null;
+  }
+  const target = Object.hasOwn(parsed, id) ? parsed[id] : undefined;
+  return target ? { url: target.url, vapidKey: base64UrlDecode(target.vapidKey) } : null;
+}
+
+/**
+ * `POST /forward/<id>`: checks the push like a device push (the target's VAPID key, aes128gcm, size), then POSTs the
+ * ciphertext to the target with its Web Push headers. The target's answer maps back as a push service's would.
+ */
+async function forwardPush(request: Request, env: Env, url: URL, id: string): Promise<Response> {
+  const target = forwardTarget(env, id);
+  if (!target) {
+    return new Response("Not Found", { status: 404 });
+  }
+  const vapid = await verifyVapid(request.headers.get("Authorization"), url.origin);
+  if (!vapid || !equalBytes(vapid, target.vapidKey)) {
+    return new Response("Forbidden", { status: 403 });
+  }
+  if (request.headers.get("Content-Encoding") !== "aes128gcm") {
+    return new Response("Unsupported Media Type", { status: 415 });
+  }
+  const body = new Uint8Array(await request.arrayBuffer());
+  if (body.length === 0 || body.length > maxBodyBytes) {
+    return new Response("Payload Too Large", { status: 413 });
+  }
+  const headers = new Headers({
+    "Content-Type": "application/octet-stream",
+    "Content-Encoding": "aes128gcm",
+  });
+  for (const name of ["TTL", "Urgency", "Topic"]) {
+    const value = request.headers.get(name);
+    if (value) headers.set(name, value);
+  }
+  let response: Response;
+  try {
+    response = await fetch(target.url, {
+      method: "POST",
+      headers,
+      body,
+      redirect: "manual",
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch (error) {
+    console.error("forward failed", id, error);
+    return new Response("Bad Gateway", { status: 502 });
+  }
+  if (response.ok) {
+    return new Response(null, { status: 201 });
+  }
+  // A target that is gone: the Apron server removes registrations that answer 404 or 410 (§4.9.1).
+  if (response.status === 404 || response.status === 410) {
+    return new Response("Gone", { status: 410 });
+  }
+  console.error("forward target refused push", id, response.status);
+  return new Response(response.status === 429 ? "Too Many Requests" : "Bad Gateway", {
+    status: response.status === 429 ? 429 : 502,
+  });
 }
 
 // MARK: Endpoint IDs
