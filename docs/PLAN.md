@@ -224,8 +224,8 @@ Observed X behavior:
 ### Chat Info
 
 - Tapping a chat's title opens its details on every network: Apron rooms, Discord server channels and Telegram groups show their own details screen, the other person's profile opens in Telegram and Discord DMs, and other chats show the chat's picture, title and subtitle.
-- Where the network itself supports it, the details offer Mute (the network's mute, until turned off) and Archive or Unarchive (the network's archive, so the chat moves in the network's own apps too). Networks without an archive offer none: the app has no archive of its own. A change shows on the chat's row at once.
-- Mute: Telegram, X Chat, Discord (channels and DMs; not a channel in a muted server) and Bluesky. Archive: Telegram (not Saved Messages) and X Chat. Apron rooms keep their Notifications level instead. LinkedIn and Instagram are planned: their accounts couldn't be checked live.
+- Where the network itself supports it, the details offer Mute (the network's mute, until turned off) and Archive or Unarchive (the network's archive, so the chat moves in the network's own apps too). Every other chat offers Archive or Unarchive in the app's own archive: the chat moves behind the Archived Chats row in this app only, on all of the user's devices through iCloud, and stays there when new messages arrive. A change shows on the chat's row at once.
+- Mute: Telegram, X Chat, Discord (channels and DMs; not a channel in a muted server) and Bluesky. Archive on the network: Telegram (not Saved Messages), X Chat and WhatsApp; in the app's archive: Instagram, Bluesky, LinkedIn, Spotify, Discord and Apron (from the room's details). Apron rooms keep their Notifications level instead of Mute. LinkedIn and Instagram are planned: their accounts couldn't be checked live.
 
 ### Sending
 

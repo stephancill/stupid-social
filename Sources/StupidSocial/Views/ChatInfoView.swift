@@ -224,14 +224,15 @@ struct DetailActionRow<Content: View>: View {
 }
 
 extension ChatViewModel {
-    /// Whether the chat's details offer Mute or Archive: its network can change them and its Chats row says which
-    /// they are.
+    /// Whether the chat's details offer Mute or Archive: its network (or, for Archive, the app's archive) can change
+    /// them and its Chats row says which they are.
     var hasChatSettings: Bool {
         (canMute && isMuted != nil) || (canArchive && isArchived != nil)
     }
 }
 
-/// Mute and Archive buttons for a chat's details, each shown only where the chat's network can change it. Goes in
+/// Mute and Archive buttons for a chat's details: Mute where the chat's network can change it, Archive on the network
+/// or, for a network without an archive, in the app's own (`ChatArchiveStore`). Goes in
 /// a `DetailActionRow`, after any other buttons. A tap shows its result at once; a failed change goes back and says
 /// why.
 struct ChatSettingsButtons: View {
