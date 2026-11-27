@@ -32,7 +32,7 @@ struct ApronChatView: View {
             keepsConnection: showsMembers || profileUser != nil,
         )
         .navigationDestination(isPresented: $showsMembers) {
-            ApronMembersView(viewModel: room)
+            ApronMembersView(viewModel: room, chat: viewModel)
                 .environment(\.serverChats, serverChats)
         }
         .navigationDestination(item: $profileUser) { user in

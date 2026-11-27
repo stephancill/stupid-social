@@ -6,6 +6,8 @@ import SwiftUI
 struct ApronMembersView: View {
     @AppStorage("redactionEnabled") private var redactionEnabled = false
     @ObservedObject var viewModel: ApronRoomViewModel
+    /// The room's chat, for Archive (the app's own, as Apron has none).
+    var chat: ChatViewModel?
     @State private var query = ""
     @State private var isEditing = false
 
@@ -71,7 +73,11 @@ struct ApronMembersView: View {
             description: viewModel.roomDescription,
             avatarURL: viewModel.avatarURL,
             colorKey: viewModel.avatarColorKey,
-        )
+        ) {
+            if let chat, chat.hasChatSettings {
+                DetailActionRow { ChatSettingsButtons(viewModel: chat) }
+            }
+        }
     }
 
     /// The room's notification level, kept by the server for all of the user's devices.

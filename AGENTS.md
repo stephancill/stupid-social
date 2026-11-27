@@ -178,6 +178,7 @@ Sources/
       ApronReadStore.swift            # Apron read cursors (server truth or iCloud KVS)
       ApronReactionStore.swift        # Which reactions to your newest 1000 Apron messages you've seen, synced through iCloud KVS
       ChatReminderStore.swift         # Message reminders: local notifications and due items in the feed, synced through iCloud KVS
+      ChatArchiveStore.swift          # The app's own chat archive for networks without one, synced through iCloud KVS
       WhatsAppStore.swift             # WhatsApp chats, messages and names on this device (Application Support/WhatsApp/<account id>)
     ViewModels/
       FeedViewModel.swift

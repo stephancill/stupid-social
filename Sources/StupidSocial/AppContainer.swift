@@ -59,7 +59,7 @@ final class AppContainer {
                 return [ChatListSource(provider: DemoChatListProvider(), accountId: DemoData.viewerAccountId, label: "Preview")]
             }
             return [ChatListSource(provider: apronSource, accountId: nil, label: SocialNetwork.apron.displayName)] + services.chatListSources
-        })
+        }, localArchive: ChatArchiveStore())
         services.chatList = chatListViewModel
         // Links to posts draw as the post in every chat: X and Instagram posts loaded through the first signed-in
         // account of the network, Bluesky posts from its public AppView.
